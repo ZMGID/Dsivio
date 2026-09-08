@@ -1874,11 +1874,17 @@ export const chatApi = {
     return result.conversation
   },
 
-  async optimizePrompt(text: string, conversationId?: string | null): Promise<string> {
+  async optimizePrompt(
+    text: string,
+    conversationId?: string | null,
+    options?: { assistantId?: string | null; purpose?: 'question' | 'image_brief' },
+  ): Promise<string> {
     if (!isTauriRuntime()) return mockChatApi.optimizePrompt(text)
     return invoke<string>('chat_optimize_prompt', {
       text,
       conversationId: conversationId ?? null,
+      assistantId: options?.assistantId ?? null,
+      purpose: options?.purpose ?? null,
     })
   },
 

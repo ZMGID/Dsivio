@@ -470,6 +470,11 @@ export interface InputBarProps {
   onOpenGitPanel?: () => void
   /** 功能栏右侧的用量注入区（会话输入/缓存命中/输出）：渲染在模式胶囊与上下文指示器左侧 */
   usageSlot?: ReactNode
+  /**
+   * 窗口级 OS 拖放是否归输入框。聊天树在设置/图片等工作台下会被 keep-alive 藏起来，
+   * 监听却还在；关掉后素材只会进当前页，不会再落到「Ask me anything」。
+   */
+  acceptOsDrops?: boolean
 }
 
 export const InputBar = memo(function InputBar({
@@ -537,6 +542,7 @@ export const InputBar = memo(function InputBar({
   gitLang,
   onOpenGitPanel,
   usageSlot,
+  acceptOsDrops = true,
 }: InputBarProps) {
   const t = useT()
   // 生成中的排队模式：Enter 改成入队，且只锁「要打后端」的入口。附件的选择 / 粘贴 / 拖入
@@ -1728,13 +1734,21 @@ export const InputBar = memo(function InputBar({
     setSlashSelectedIndex(Math.max(filteredSlashCommands.length - 1, 0))
   }, [filteredSlashCommands.length, slashSelectedIndex])
 
+  const acceptOsDropsRef = useRef(acceptOsDrops)
+  acceptOsDropsRef.current = acceptOsDrops
+  useEffect(() => {
+    if (!acceptOsDrops) setDragActive(false)
+  }, [acceptOsDrops])
   useEffect(() => {
     if (!isTauriRuntime()) return
     let cancelled = false
     let unlisten: (() => void) | undefined
 
     getCurrentWebview().onDragDropEvent((event) => {
-      if (cancelled || composerLocked) return
+      if (cancelled || composerLocked || !acceptOsDropsRef.current) {
+        if (event.payload.type === 'leave' || event.payload.type === 'drop') setDragActive(false)
+        return
+      }
 
       if (event.payload.type === 'enter' || event.payload.type === 'over') {
         setDragActive(true)
