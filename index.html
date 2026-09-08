@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- Kivio 桌面应用入口 HTML 文件 -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kivio Desktop</title>
+    <script>
+      (function () {
+        var ua = navigator.userAgent
+        if (/Windows/i.test(ua)) document.documentElement.classList.add('windows')
+        else if (/Mac|iPhone|iPad|iPod/i.test(ua)) document.documentElement.classList.add('macos')
+      })()
+    </script>
+  </head>
+  <body>
+    <!-- React 应用的挂载根节点 -->
+    <div id="root"></div>
+    <!-- 主入口脚本：加载 React 应用的根组件 -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

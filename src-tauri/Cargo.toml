@@ -1,0 +1,189 @@
+# Kivio Rust 后端 Cargo 配置
+[package]
+name = "kivio"
+version = "2.9.8"
+description = "Kivio Desktop - Screen-level AI assistant for macOS/Windows"
+authors = ["ZM"]
+license = "GPL-3.0-or-later"
+edition = "2021"
+# `tauri dev` 跑裸 `cargo run`，没有 default-run 会因「不知道跑哪个 binary」直接报错退出。
+default-run = "kivio"
+
+[lib]
+name = "kivio"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kivio"
+path = "src/main.rs"
+
+[[bin]]
+name = "export-chat-protocol"
+path = "src/bin/export_chat_protocol.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri 核心及插件
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# DeepSeek Harness 的用户设置是 YAML；模型探测必须结构化读取 models/providers 数组，
+# 不能用逐行字符串扫描（注释、引号、嵌套 route 都会误判）。
+serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
+# OpenCode 官方配置允许 JSONC；与 cc-switch 一样用 JSON5 解析器兼容注释与尾逗号。
+json5 = "0.4"
+schemars = "1.2.2"
+ts-rs = { version = "12.0.1", features = ["serde-json-impl"] }
+# gzip：api.rs 请求体压缩开关 + rapidocr 模型解包（跨平台）
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-store = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+chrono = "0.4"
+
+# MCP 官方 Rust SDK：唯一的 MCP wire 实现（stdio 子进程 + Streamable HTTP）。
+# 版本写死不用 caret —— 3.x 仍在破坏性演进，升版本当独立任务做。
+# 关掉 default features（含 server，我们只做 client）。
+rmcp = { version = "3.0.1", default-features = false, features = [
+  "client",
+  "client-side-sse",
+  "reqwest",
+  "transport-child-process",
+  "transport-streamable-http-client",
+  "transport-streamable-http-client-reqwest",
+  "which-command",
+] }
+
+# HTTP 客户端与异步运行时
+reqwest = { version = "0.13", features = ["json", "rustls", "multipart", "form"] }
+tokio = { version = "1", features = ["time", "process", "io-util", "net", "sync", "rt-multi-thread", "macros"] }
+futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+scraper = "0.23"
+html-escape = "0.2"
+regex = "1"
+ignore = "0.4"
+# Dock：workspace 文件监听（notify）+ git 命令超时杀进程树（wait-timeout）。
+notify = "7"
+wait-timeout = "0.2"
+# Dock 终端面板：跨平台 PTY（macOS/Linux forkpty，Windows ConPTY）。
+portable-pty = "0.8"
+
+# 跨平台 app-data 目录定位。
+directories = "5"
+
+# 解析 Codex 的 config.toml（从本地 CLI 导入 MCP）。
+toml = "0.8"
+
+unicode-normalization = "0.1"
+
+# 工具库
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
+# 连接器 OAuth（PKCE + DCR + loopback）：sha2 算 code_challenge，rand 生成 code_verifier，
+# url 构造/解析 authorize URL 与回调 query。
+sha2 = "0.10"
+rand = "0.8"
+url = "2.5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+arboard = "3"
+enigo = "0.1.3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# 知识库 PDF 文本抽取（纯文本，扫描件留待 OCR fallback）。
+pdf-extract = "0.7"
+# 知识库 xlsx 解析（docx 复用已有 zip + 手写 w:t 抽取；html 复用 native_tools::fetch 的 scraper）。
+calamine = "0.26"
+# 知识库存储：SQLite 单文件（bundled 自带 FTS5）+ sqlite-vec 向量扩展（编译期静态链接，无 native 库分发）。
+rusqlite = { version = "0.32", features = ["bundled"] }
+sqlite-vec = "0.1"
+
+# RapidOCR 离线识别：用 oar-ocr 封装好的 PaddleOCR pipeline。
+# default-features = false 关掉 download-binaries，避免 cargo build 时下载 onnxruntime。
+# 直接依赖 ort 并启用 load-dynamic，运行时通过 ort::init_from(dylib_path) 加载用户在
+# 设置页面下载到 app data 目录的 dylib，安装包不带任何 ONNX Runtime 二进制。
+oar-ocr = { version = "0.8", default-features = false, features = ["simd"] }
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-23"] }
+
+# macOS 平台特有依赖（系统 API 调用）
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSError", "NSObject", "NSString"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationTrigger", "UNUserNotificationCenter"] }
+cocoa = "0.26"
+objc = "0.2"
+# objc 0.2.7 内部用的就是 objc_exception 0.1：提供裸 @try/@catch（C 层），用于在 FFI 边界拦截
+# overlay 主线程 objc 调用抛出的 NSException——catch_unwind 接不住外来异常会 abort。直接依赖它而
+# 不开 objc 的 `exception` feature（那会把每个 msg_send! 都包起来并 panic，副作用太大）。
+objc_exception = "0.1"
+core-graphics = "0.24"
+core-foundation = "0.10"
+# ScreenCaptureKit 截图：macOS 14+ 走 SCScreenshotManager 取代 `screencapture` CLI
+screencapturekit = { version = "1.5", features = ["macos_14_0"] }
+
+# Unix 平台特有依赖：进程组管理（setsid + kill(-pgid)）在 macOS 与 Linux 上都用 libc。
+# 必须放在 cfg(unix) 而非 cfg(target_os = "macos")，否则 native_tools/shell.rs 的
+# #[cfg(unix)] 代码在 Linux 构建会报 `use of undeclared crate libc`。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windows 平台特有依赖（屏幕截图、选中文本捕获）
+[target.'cfg(target_os = "windows")'.dependencies]
+xcap = "0.8"
+# 直接调用以拿到 Mica 的真实结果。0.8+ 会传播 DwmSetWindowAttribute 的 HRESULT；
+# 旧版只按系统 build 判支持并丢弃调用失败，前端会误把透明外壳打开。
+window-vibrancy = "0.8"
+windows = { version = "0.61.3", features = [
+  "Foundation",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage",
+  "Storage_Streams",
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com",
+  "Win32_System_Console",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Registry",
+  "Win32_System_Threading",
+  "Win32_System_WinRT",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Shell",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[dev-dependencies]
+tempfile = "3"
+# 测试用：test-util 提供 tokio 暂停时钟（start_paused），让重试退避 sleep 在单测中瞬时跳过。
+tokio = { version = "1", features = ["test-util", "macros", "rt", "rt-multi-thread", "time"] }
+# 测试用：构造 reqwest::Response（不走网络）以驱动 retry/failover 单测。与 reqwest 传递依赖同版本。
+http = "1"
+
+# dev 构建只把「依赖库」按 opt-level 3 编译，本 crate 仍保持 debug（增量编译快、可调试）。
+# 解决 `npm run dev` 下 Lens / 快速翻译冻结帧截图慢的问题：image/png/xcap 这类纯 CPU 的
+# 图像编码在未优化的 debug 依赖里慢几十倍（整屏 PNG 编码可达数秒）。优化依赖后接近 release。
+# 仅影响 dev 体验，不改变 release 安装包的产物。首次构建会因依赖按优化重编一次而变慢。
+[profile.dev.package."*"]
+opt-level = 3
+
+# release 产物优化：缩小二进制、加快冷启动 mmap。纯产物层优化，不改运行时行为。
+# strip 去符号表（实测省 ~8%）；lto="thin" + codegen-units=1 跨 crate 内联去冗余；
+# opt-level="s" 偏体积。panic 仍保持默认 unwind —— 不设 "abort"，因为 macOS overlay 走
+# catch_unwind / ObjC 异常拦截（见 lib.rs），abort 会破坏其 unwind 语义。
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+opt-level = "s"

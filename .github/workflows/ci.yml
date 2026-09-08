@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+    # README / docs 改动不跑完整质量门（macOS + cargo test ~20min）。
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+
+jobs:
+  quality:
+    # 应用只发 macOS / Windows；在 macOS runner 上跑全部检查，使 cargo test 在真实目标平台编译
+    # （Linux 分支如 rapidocr 的 ONNX 动态库下载是不维护的死代码，无法在 Linux 编过）。
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Swift sidecar
+        run: npm run build:swift
+
+      - name: Lint
+        run: npm run lint
+
+      # typecheck 本身就串了 protocol:check（见 package.json），生成物漂移在这一步拦住。
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Frontend tests
+        run: npm run test
+
+      # tauri-build 会校验 externalBin（kivio-ocr-helper）对应当前 target triple 的二进制存在。
+      # 上面的 build:swift 在 macOS 上构建真实 Swift sidecar 满足校验，否则这一步会在 build-script 阶段失败。
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
