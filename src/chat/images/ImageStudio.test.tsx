@@ -122,6 +122,29 @@ describe('Image workspace state gates', () => {
 })
 
 describe('Built-in image workflows', () => {
+  it('refreshes shared chat templates on focus without replacing the unsaved image brief', async () => {
+    render(<ImageStudio />)
+    await waitFor(() => expect(screen.getByRole('button', { name: '生成画面方案' })).toBeEnabled())
+    fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: '尚未保存的需求' } })
+    const next = bootstrap()
+    next.templates = [
+      {
+        id: 'chat-template',
+        directory: 'templates/chat-template',
+        builtin: false,
+        data: { name: '聊天新建模板', mode: 'smart', slots: [{ id: 'h1', brief: '场景主图' }] },
+      },
+    ]
+    vi.mocked(api.imageStudioBootstrap).mockResolvedValue(next)
+    fireEvent(window, new Event('focus'))
+    await waitFor(() => expect(screen.getByRole('button', { name: '模板库 1' })).toBeInTheDocument())
+    expect(screen.getByLabelText('图片要求')).toHaveValue('尚未保存的需求')
+    const saved = fixture()
+    saved.brief = { ...emptyBrief('gen'), requirement: '尚未保存的需求' }
+    vi.mocked(api.imageStudioSave).mockResolvedValue(saved)
+    fireEvent.click(screen.getByRole('button', { name: '模板库 1' }))
+    expect(await screen.findByRole('heading', { name: '聊天新建模板' })).toBeInTheDocument()
+  })
   it('uses the shared theme, scrollbar, input and select controls', async () => {
     render(<ImageStudio />)
     await waitFor(() => expect(screen.getByRole('button', { name: '生成画面方案' })).toBeEnabled())

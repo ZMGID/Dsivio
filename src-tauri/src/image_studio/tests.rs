@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn shared_templates_discover_chat_files_and_prefer_current_standard_over_stale_record() {
+    let base = std::env::temp_dir().join(format!("dsivio-shared-test-{}", storage::id()));
+    let directory = base.join("templates/chat-created");
+    std::fs::create_dir_all(&directory).unwrap();
+    let data = json!({"name":"聊天模板","mode":"smart","slots":[{"id":"h1","brief":"内容"}],"custom":{"keep":true}});
+    storage::write(&directory.join("template.json"), &data).unwrap();
+    let mut templates = vec![];
+    storage::scan_templates(&base, &base.join("templates"), 0, &mut templates).unwrap();
+    assert_eq!(templates.len(), 1);
+    let original_id = templates[0].id.clone();
+    storage::write(&directory.join("record.json"), &templates[0]).unwrap();
+    let mut updated = data.clone();
+    updated["name"] = json!("聊天中改名");
+    storage::write(&directory.join("template.json"), &updated).unwrap();
+    templates.clear();
+    storage::scan_templates(&base, &base.join("templates"), 0, &mut templates).unwrap();
+    assert_eq!(templates[0].id, original_id);
+    assert_eq!(templates[0].data, updated);
+    // A half-written file must not take the entire library offline.
+    std::fs::write(directory.join("template.json"), "{").unwrap();
+    templates.clear();
+    storage::scan_templates(&base, &base.join("templates"), 0, &mut templates).unwrap();
+    assert!(templates.is_empty());
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn bundled_backpack_templates_materialize_all_reference_images_and_copy_assets() {
     let base = std::env::temp_dir().join(format!("dsivio-builtin-test-{}", storage::id()));
     let templates = builtins::templates(&base).unwrap();
@@ -11,7 +38,9 @@ fn bundled_backpack_templates_materialize_all_reference_images_and_copy_assets()
             let slots = template.data["slots"].as_array().unwrap();
             assert_eq!(slots.len(), 9);
             for slot in slots {
-                let path = base.join(&template.directory).join(slot["example"].as_str().unwrap());
+                let path = base
+                    .join(&template.directory)
+                    .join(slot["example"].as_str().unwrap());
                 let bytes = std::fs::read(path).unwrap();
                 assert!(image::load_from_memory(&bytes).is_ok());
             }

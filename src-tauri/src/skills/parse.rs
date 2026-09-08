@@ -202,6 +202,15 @@ mod tests {
     }
 
     #[test]
+    fn bundled_dsimage_is_discoverable_with_shared_workspace_guidance() {
+        let raw = include_str!("../../resources/skills/dsimage/SKILL.md");
+        let parsed = parse_skill_markdown(raw, "builtin", None, Vec::new()).unwrap();
+        assert_eq!(parsed.meta.id, "dsimage");
+        assert!(parsed.body.contains("guides/studio.md"));
+        assert!(parsed.body.contains("共用模板"));
+    }
+
+    #[test]
     fn split_frontmatter_returns_raw_when_missing_delimiters() {
         let raw = "# Title\n\nBody";
         let (fm, body) = split_frontmatter(raw);

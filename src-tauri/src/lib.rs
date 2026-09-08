@@ -245,6 +245,9 @@ pub fn run() {
         })
         .setup(|app| {
             let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
+            if let Err(error) = image_studio::initialize_skill_workspace(app.handle()) {
+                eprintln!("Image Skill workspace initialization failed: {error}");
+            }
 
             // Windows：退出后台执行速度节流（EcoQoS）。无可见窗口时进程会被 Win11 当后台空闲
             // 进程节流,饿死全局热键的 WM_HOTKEY 消息泵 → 热键失灵（托盘点击是 shell 唤醒故仍

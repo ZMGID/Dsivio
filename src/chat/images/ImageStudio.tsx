@@ -133,6 +133,35 @@ export default function ImageStudio() {
     if (!loading) storeStudioDraft({ brief, taskId: task?.id, revision: task?.revision, plans: editedPlans })
   }, [brief, task?.id, task?.revision, loading, editedPlans])
   useEffect(() => {
+    if (!native || loading) return
+    let alive = true
+    let inFlight = false
+    const refresh = async () => {
+      if (inFlight || document.visibilityState === 'hidden') return
+      inFlight = true
+      try {
+        const data = await api.imageStudioBootstrap()
+        if (alive) {
+          setTemplates(data.templates)
+          setTasks(data.tasks)
+          setConfig(data.config)
+          setProviders(data.providers)
+        }
+      } catch {
+        /* A template being saved in chat may be temporarily unavailable. */
+      } finally {
+        inFlight = false
+      }
+    }
+    const timer = setInterval(() => void refresh(), 3000)
+    window.addEventListener('focus', refresh)
+    return () => {
+      alive = false
+      clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [native, loading])
+  useEffect(() => {
     setView(brief.feature)
   }, [brief.feature])
   useEffect(() => {
