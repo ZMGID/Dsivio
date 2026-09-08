@@ -26,7 +26,11 @@ vi.mock('../../api/tauri', () => ({
     imageStudioPreview: vi.fn(),
     imageStudioSavePlans: vi.fn(),
     imageStudioImport: vi.fn(),
+    imageStudioConfig: vi.fn(),
   },
+}))
+vi.mock('../../api/settingsCache', () => ({
+  getSettingsCached: vi.fn().mockResolvedValue({ providers: [] }),
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
 vi.mock('../api', () => ({
