@@ -47,7 +47,6 @@ import {
   type ImageFeature,
   type ImagePlan,
   type ImageProduct,
-  type ImageProvider,
   type ImageResult,
   type ImageTask,
   type ImageTemplate,
@@ -80,7 +79,6 @@ export default function ImageStudio() {
   const [tasks, setTasks] = useState<ImageTask[]>([])
   const [templates, setTemplates] = useState<ImageTemplate[]>(initialTemplates)
   const [config, setConfig] = useState<ImageConfig>(DEFAULT_CONFIG)
-  const [providers, setProviders] = useState<ImageProvider[]>([])
   const [group, setGroup] = useState('未分类')
   const [pending, setPending] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -132,7 +130,6 @@ export default function ImageStudio() {
           setTasks(data.tasks)
           setTemplates(data.templates)
           setConfig(data.config)
-          setProviders(data.providers)
           const draft = readStudioDraft()
           const saved = draft?.taskId ? data.tasks.find((t) => t.id === draft.taskId) : null
           if (saved) {
@@ -173,7 +170,6 @@ export default function ImageStudio() {
           setTemplates(data.templates)
           setTasks(data.tasks)
           setConfig(data.config)
-          setProviders(data.providers)
         }
       } catch {
         /* A template being saved in chat may be temporarily unavailable. */
@@ -1339,7 +1335,6 @@ export default function ImageStudio() {
       {settingsOpen && (
         <ConfigPanel
           config={config}
-          providers={providers}
           onClose={() => setSettingsOpen(false)}
           onSave={async (c) => {
             if (!native) throw new Error('请在 Dsivio 桌面窗口中保存配置')

@@ -9,11 +9,14 @@ import {
 } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Check, FolderOpen, Image as ImageIcon, Plus, Save, Settings2, X } from 'lucide-react'
-import { api, isTauriRuntime } from '../../api/tauri'
+import { api, isTauriRuntime, type ModelProvider } from '../../api/tauri'
+import { getSettingsCached } from '../../api/settingsCache'
 import { Button, IconButton } from '../../components/Button'
 import { Select } from '../../settings/components'
-import type { ImageConfig, ImageProvider, ImageTemplate, ImageTemplateSlot } from './types'
+import { ModelPairSelect } from '../../settings/ModelPairSelect'
+import type { ImageConfig, ImageTemplate, ImageTemplateSlot } from './types'
 import { builtinImageUrl } from './builtinTemplates'
+import { inferImageStudioProtocol, isImageGenerationModel, isVisionModel } from './studioModels'
 
 /** Adapt option children to the application's shared Select; no separate menu styling. */
 export function StudioSelect({
@@ -178,20 +181,30 @@ export function AssetImage({
 
 export function ConfigPanel({
   config,
-  providers,
   onSave,
   onClose,
 }: {
   config: ImageConfig
-  providers: ImageProvider[]
   onSave: (c: ImageConfig) => Promise<void>
   onClose: () => void
 }) {
   const [draft, setDraft] = useState(config)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
-  const update = (key: keyof ImageConfig, value: string) =>
-    setDraft((d) => ({ ...d, [key]: value }))
+  const [providers, setProviders] = useState<ModelProvider[]>([])
+  useEffect(() => {
+    let alive = true
+    void getSettingsCached()
+      .then((settings) => {
+        if (alive) setProviders(settings.providers || [])
+      })
+      .catch(() => {
+        if (alive) setProviders([])
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
   return (
     <div className="kv-modal-backdrop kv-modal-backdrop--portal is-overlay" onClick={onClose}>
       <section
@@ -211,87 +224,49 @@ export function ConfigPanel({
           </IconButton>
         </div>
         <p className="is-muted">
-          配置一次，所有图片功能共用。密钥沿用应用「设置 → 供应商」中的配置。
+          配置一次，所有图片功能共用。只列出已标记生图能力的模型；密钥和适配器沿用「设置 → 模型」。
         </p>
-        <Field label="图片供应商">
-          <StudioSelect
-            value={draft.providerId}
-            onChange={(e) => update('providerId', e.target.value)}
-          >
-            <option value="">选择供应商</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-                {p.ready ? '' : ' · 未配置凭据'}
-              </option>
-            ))}
-          </StudioSelect>
-        </Field>
-        <Field label="图片模型">
-          <input
-            className="kv-input"
-            list="is-image-models"
-            value={draft.model}
-            onChange={(e) => update('model', e.target.value)}
-            placeholder="选择或输入图片模型名称"
-          />
-          <datalist id="is-image-models">
-            {providers
-              .find((p) => p.id === draft.providerId)
-              ?.models.map((m) => (
-                <option key={m} value={m} />
-              ))}
-          </datalist>
-        </Field>
-        <Field
-          label="图片接口协议"
-          hint="选择你已经跑通的图片网关协议。供应商地址和请求头在应用设置中维护。"
-        >
-          <StudioSelect value={draft.protocol} onChange={(e) => update('protocol', e.target.value)}>
-            <option value="openai">OpenAI 标准（生成 / 编辑）</option>
-            <option value="grok">Grok 图片</option>
-            <option value="gemini">Gemini 原生（dsimage responseFormat）</option>
-            <option value="gemini-chat">Gemini Chat 兼容</option>
-            <option value="async">异步图片网关（task_id）</option>
-          </StudioSelect>
-        </Field>
-        <div className="is-divider" />
-        <Field label="Agent 供应商" hint="用于商品识别、画面规划和质检，请选择支持看图的模型。">
-          <StudioSelect
-            value={draft.agentProviderId}
-            onChange={(e) =>
+        <div className="is-field">
+          <span>图片模型</span>
+          <ModelPairSelect
+            className="w-full"
+            ariaLabel="图片模型"
+            providerId={draft.providerId}
+            model={draft.model}
+            providers={providers}
+            inheritLabel="选择生图模型"
+            filterModel={isImageGenerationModel}
+            onChange={(providerId, model) =>
               setDraft((d) => ({
                 ...d,
-                agentProviderId: e.target.value,
-                agentModel: e.target.value ? d.agentModel : '',
+                providerId,
+                model,
+                protocol: inferImageStudioProtocol(
+                  providers.find((p) => p.id === providerId),
+                  model,
+                ),
               }))
             }
-          >
-            <option value="">使用当前聊天模型</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </StudioSelect>
-        </Field>
-        {draft.agentProviderId && (
-          <Field label="Agent 模型">
-            <input
-              className="kv-input"
-              value={draft.agentModel}
-              list="is-agent-models"
-              onChange={(e) => update('agentModel', e.target.value)}
-            />
-            <datalist id="is-agent-models">
-              {providers
-                .find((p) => p.id === draft.agentProviderId)
-                ?.models.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-            </datalist>
-          </Field>
-        )}
+          />
+          <small>仅显示模型库 / 适配器标记为生图的模型。没有生图模型的供应商不会出现。</small>
+        </div>
+        <div className="is-divider" />
+        <div className="is-field">
+          <span>Agent 模型</span>
+          <ModelPairSelect
+            className="w-full"
+            ariaLabel="Agent 模型"
+            providerId={draft.agentProviderId}
+            model={draft.agentModel}
+            providers={providers}
+            inheritLabel="使用当前聊天模型"
+            filterModel={isVisionModel}
+            onChange={(agentProviderId, agentModel) =>
+              setDraft((d) => ({ ...d, agentProviderId, agentModel }))
+            }
+          />
+          <small>用于商品识别、画面规划和质检，请选择支持看图的模型。</small>
+        </div>
         {error && (
           <p role="alert" className="is-error">
             {error}
@@ -304,7 +279,14 @@ export function ConfigPanel({
             disabled={pending}
             onClick={() => {
               setPending(true)
-              void onSave(draft)
+              const next = {
+                ...draft,
+                protocol: inferImageStudioProtocol(
+                  providers.find((p) => p.id === draft.providerId),
+                  draft.model,
+                ),
+              }
+              void onSave(next)
                 .catch((e) => setError(String(e)))
                 .finally(() => setPending(false))
             }}
