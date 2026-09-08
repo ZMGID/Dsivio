@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "comfy-mcp": {
+      "command": "python",
+      "args": [
+        "-B",
+        "${PLUGIN_ROOT}/scripts/mcp_comfy.py"
+      ]
+    },
+    "video-analyzer": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-video-analyzer@0.10.0"
+      ]
+    }
+  }
+}

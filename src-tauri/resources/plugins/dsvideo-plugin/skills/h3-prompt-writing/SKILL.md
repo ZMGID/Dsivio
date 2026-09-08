@@ -1,0 +1,40 @@
+---
+name: h3-prompt-writing
+description: Write MiniMax H3 video generation prompts for T2VA, I2VA, FL2VA, L2VA, and Ref2VA. Use when rewriting multimodal requests into H3 prompt structures, composing integrated_multimodal_description, overall_soundscape, and non_diegetic_music, aligning keyframes, or defining reference labels for images, videos, and audio.
+---
+
+## Dsivio 内置适配（优先于下文原插件路径约定）
+本插件已内置。不要在聊天中安装或更新插件。先阅读 `${PLUGIN_ROOT}/STUDIO.md`。
+聊天与视频页面共享模板、任务和供应商配置。模板的查找和保存必须使用共享工作区，禁止写入插件 skills/templates 或缓存目录；下文模板路径只作内置样例阅读。
+
+
+# H3 Prompt Writing
+
+## Workflow
+
+1. If the input is only a rough idea, story, or image without an executable shot plan, read the sibling `video-director` skill first. Use its selected directing plan as the source of truth; do not invent a second concept during prompt conversion.
+2. Identify the input mode: T2VA, I2VA, FL2VA, L2VA, or full-reference Ref2VA.
+3. For base text/keyframe modes, read `references/base-en.txt` and follow its final prompt structure.
+4. For full-reference mode, read `references/ref-en.txt` and follow its six-section rewrite format.
+5. Preserve the exact field names, section order, labels, timing, actions, transitions, and ending from the selected guide and directing plan.
+
+## Base Modes
+
+- T2VA: build the full audiovisual timeline from text.
+- I2VA: start from the first frame and develop forward from it.
+- FL2VA: describe the continuous path between the first and last frames.
+- L2VA: infer a plausible opening and converge to the supplied last frame.
+
+Use `integrated_multimodal_description`, `overall_soundscape`, and `non_diegetic_music` in the order shown in `references/base-en.txt`.
+
+## Full-Reference Mode
+
+Ref2VA rewrites use `subject_definitions`, `summary`, `retention_analysis`, `detailed_description`, `overall_soundscape`, and `non_diegetic_music` in that order. Reference labels stay consistent across all sections.
+
+Read `references/ref-en.txt` for label rules, retention analysis, and complete examples.
+
+## Output Rules
+
+- Write rewrite sections in English; preserve dialogue, lyrics, and visible scene text in their original language.
+- Describe each shot by composition, subjects, environment, actions, camera, sound, and the exact point where referenced content appears.
+- Avoid plot summaries, unresolved reference labels, and timing that does not match the requested duration.

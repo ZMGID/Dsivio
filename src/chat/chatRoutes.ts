@@ -64,6 +64,10 @@ export function isChatNotesPath(path: string): boolean {
   return path === 'chat/notes' || path.startsWith('chat/notes/')
 }
 
+export function isChatVideosPath(path: string): boolean {
+  return path === 'chat/videos' || path.startsWith('chat/videos/')
+}
+
 export function isChatImagesPath(path: string): boolean {
   return path === 'chat/images' || path.startsWith('chat/images/')
 }
@@ -84,6 +88,7 @@ export function getRouteConversationId(): string | null {
   if (rest === 'plugins' || rest.startsWith('plugins/')) return null
   if (rest === 'mcp' || rest.startsWith('mcp/')) return null
   if (rest === 'notes' || rest.startsWith('notes/')) return null
+  if (rest === 'videos' || rest.startsWith('videos/')) return null
   if (rest === 'images' || rest.startsWith('images/')) return null
   if (rest === 'onboarding' || rest.startsWith('onboarding/')) return null
   if (rest === 'popout' || rest.startsWith('popout/')) return null

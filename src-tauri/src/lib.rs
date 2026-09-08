@@ -14,6 +14,7 @@ pub mod fonts;
 pub mod lens;
 pub mod lens_commands;
 pub mod image_studio;
+pub mod video_studio;
 #[cfg(target_os = "macos")]
 pub mod macos_ocr;
 pub mod mcp;
@@ -244,6 +245,7 @@ pub fn run() {
             _ => {}
         })
         .setup(|app| {
+            if let Err(error) = video_studio::initialize(app.handle()) { eprintln!("Video plugin initialization failed: {error}"); }
             let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
             if let Err(error) = image_studio::initialize_skill_workspace(app.handle()) {
                 eprintln!("Image Skill workspace initialization failed: {error}");
@@ -293,6 +295,7 @@ pub fn run() {
             }
 
             let mut settings = load_settings(&app.handle());
+            video_studio::sync_settings(&mut settings);
             // 一次性内置专家迁移（v1）：清空旧专家索引（含用户自建——用户明确选择），
             // 装入 4 个内置专家（写作/编程/研究/数据）。靠 settings flag 幂等，成功后立即写盘，
             // 否则下次启动会再次覆盖。持久化失败则回滚内存 flag，下次重试（仍是覆盖为这 4 个，可接受）。
@@ -749,6 +752,7 @@ pub fn run() {
             plugins::plugins_set_enabled,
             plugins::plugins_uninstall,
             notes::notes_list,
+            video_studio::video_studio,
             image_studio::image_studio_bootstrap,
             image_studio::image_studio_get,
             image_studio::image_studio_save,

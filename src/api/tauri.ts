@@ -2,6 +2,7 @@
 // 所有 invoke 调用和事件监听都集中在这里，作为前后端的统一接口层
 
 import { invoke } from '@tauri-apps/api/core'
+import type { VideoBootstrap, VideoTask, VideoTemplate, VideoProvider } from '../chat/videos/types'
 import { listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
@@ -1927,6 +1928,14 @@ async function onChatProtocol(
 // ========== API 导出 ==========
 
 export const api = {
+  videoStudioBootstrap: () => invoke<VideoBootstrap>('video_studio', { action: 'bootstrap', input: {} }),
+  videoStudioTask: (action: string, input: Record<string, unknown>) => invoke<VideoTask>('video_studio', { action, input }),
+  videoStudioConfig: (input: Record<string, unknown>) => invoke<Record<string, VideoProvider>>('video_studio', { action: 'config', input }),
+  videoStudioTemplate: (action: 'template_save' | 'template_import', input: Record<string, unknown>) => invoke<VideoTemplate>('video_studio', { action, input }),
+  videoStudioOpen: (id?: string) => invoke<void>('video_studio', { action: 'open', input: { id } }),
+  videoStudioPreview: (id: string) => invoke<string>('video_studio', { action: 'preview', input: { id } }),
+  videoStudioImage: (path: string) => invoke<string>('video_studio', { action: 'image_preview', input: { path } }),
+  videoStudioInstallComfy: () => invoke<{ installed: boolean }>('video_studio', { action: 'install_comfy', input: {} }),
   imageStudioBootstrap: () => invoke<ImageBootstrap>('image_studio_bootstrap'),
   imageStudioGet: (id: string) => invoke<ImageTask>('image_studio_get', { id }),
   imageStudioSave: (brief: ImageBrief, id?: string, revision?: number) => invoke<ImageTask>('image_studio_save', { id: id ?? null, revision: revision ?? null, brief }),
