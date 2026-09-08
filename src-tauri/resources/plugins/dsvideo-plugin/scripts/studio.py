@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+"""Dsivio video workspace. JSON stdin/stdout; shared by the desktop and chat skills.
+
+No credentials in task files. Submission is persisted BEFORE the network call;
+an uncertain submission is never automatically repeated.
+"""
+import argparse
+import importlib.util
+import hashlib
+import json
+import os
+import re
+from pathlib import Path
+import shutil
+import sys
+import time
+import uuid
+from urllib.parse import urljoin
+
+from dsvideo_config import get_provider, save_provider, normalize_base_url, config_path
+import runtime
+
+PLUGIN = Path(__file__).resolve().parents[1]
+DATA_HOME = Path(os.environ.get('APPDATA') or (Path.home() / 'Library/Application Support' if sys.platform == 'darwin' else os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share'))
+ROOT = Path(os.environ.get('DSVIDEO_STUDIO_ROOT') or DATA_HOME / 'com.zmair.kivio' / 'video-studio')
+
+
+def module(name, folder):
+    spec = importlib.util.spec_from_file_location(name, PLUGIN / 'skills' / folder / 'scripts' / (name + '.py'))
+    value = importlib.util.module_from_spec(spec)
+    sys.modules[name] = value
+    spec.loader.exec_module(value)
+    return value
+
+
+grok = module('grok_video', 'grok-video-api')
+mini = module('minimax_h3', 'minimax-h3-api')
+
+
+def write(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
+    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(tmp, path)
+
+
+def read(path):
+    return json.loads(path.read_text(encoding='utf-8-sig'))
+
+
+def task_path(id):
+    return ROOT / 'tasks' / (str(uuid.UUID(id)) + '.json')
+
+
+def persist(t):
+    t['revision'] = t.get('revision', 0) + 1
+    t['updatedAt'] = int(time.time() * 1000)
+    write(task_path(t['id']), t)
+    return t
+
+
+def settings():
+    return {name: {**{k: v for k, v in get_provider(name).items() if k in ('base_url', 'model')},
+                   'ready': bool(get_provider(name).get('api_key'))}
+            for name in ('grok', 'minimax', 'comfy')}
+
+
+def import_brief(brief):
+    b = dict(brief)
+    images = []
+    for source in b.get('images', []):
+        p = Path(source)
+        if p.suffix.lower() not in ('.jpg', '.jpeg', '.png', '.webp') or p.stat().st_size > 30 * 1024 * 1024:
+            raise ValueError('参考图需为 PNG/JPG/WebP 且每张不超过 30 MB')
+        raw = p.read_bytes()
+        dest = ROOT / 'assets' / (hashlib.sha256(raw).hexdigest() + p.suffix.lower())
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(raw)
+        images.append(str(dest))
+    b['images'] = images
+    return b
+
+
+def bootstrap():
+    for folder in ('tasks', 'templates', 'outputs'):
+        (ROOT / folder).mkdir(parents=True, exist_ok=True)
+    target = ROOT / 'templates' / 'bedroom-ugc-product-presenter-15s.json'
+    if not target.exists():
+        value = read(PLUGIN / 'skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json')
+        value['kind'] = 'generation'
+        write(target, value)
+    def listing(folder):
+        result = []
+        for path in (ROOT / folder).glob('*.json'):
+            try:
+                result.append(read(path))
+            except (ValueError, OSError):
+                pass
+        return result
+    return {'tasks': sorted(listing('tasks'), key=lambda t: t.get('updatedAt', 0), reverse=True),
+            'templates': listing('templates'), 'config': settings(), 'root': str(ROOT),
+            'configPath': str(config_path()), 'dependencies': {
+                'python': sys.version.split()[0], 'comfy': bool(runtime.comfy_command()),
+                'node': bool(shutil.which('node')), 'ffmpeg': bool(shutil.which('ffmpeg'))}}
+
+
+def validate(t):
+    b = t['brief']
+    route = b.get('route')
+    if route not in ('grok', 'minimax', 'comfy'):
+        raise ValueError('请明确选择生成路线')
+    count = len(b.get('images', []))
+    if count > {'grok': 1, 'minimax': 9, 'comfy': 3}[route]:
+        raise ValueError('当前路线不支持这么多参考图，请调整素材或路线')
+    low = {'grok': 1, 'minimax': 4, 'comfy': 2}[route]
+    if not low <= int(b['duration']) <= 15:
+        raise ValueError(f'当前路线支持 {low}–15 秒')
+    allowed = {'grok': grok.RESOLUTIONS, 'minimax': mini.RESOLUTIONS, 'comfy': ['0.5', '1']}[route]
+    if b.get('resolution') not in allowed:
+        raise ValueError('请选择此路线支持的清晰度')
+    return b, route
+
+
+def client(route, snapshot=None):
+    p = get_provider(route)
+    base = (snapshot or p).get('base_url') or ('https://api.x.ai' if route == 'grok' else 'https://api.minimaxi.com')
+    if snapshot and normalize_base_url(base) != normalize_base_url(p.get('base_url') or base):
+        raise ValueError('供应商地址已改变，请恢复原地址后查询此任务')
+    if not p.get('api_key'):
+        raise ValueError('请先在视频设置中配置此路线的 API Key')
+    cls = grok.GrokVideoClient if route == 'grok' else mini.MiniMaxClient
+    return cls(base, p['api_key'])
+
+
+def request(t):
+    b, route = validate(t)
+    args = dict(prompt=t['prompt'], duration=int(b['duration']), resolution=b['resolution'], ratio=b['ratio'])
+    if route == 'grok':
+        return grok.build_video_request(**args, image=next(iter(b.get('images', [])), None),
+                                       model=get_provider(route).get('model') or grok.MODEL)
+    return mini.build_video_request(**args, reference_images=b.get('images', []))
+
+
+def handle(action, data):
+    if action == 'install_comfy':
+        return runtime.install()
+    if action == 'bootstrap':
+        return bootstrap()
+    if action == 'config':
+        name = data['name']
+        if name not in ('grok', 'minimax', 'comfy'):
+            raise ValueError('未知路线')
+        p = get_provider(name)
+        p['base_url'] = normalize_base_url(data['base_url'])
+        p['studio_revision'] = str(uuid.uuid4())
+        if data.get('api_key'):
+            p['api_key'] = data['api_key']
+        if name == 'grok':
+            p['model'] = data.get('model') or grok.MODEL
+        save_provider(name, p)
+        return settings()
+    if action == 'template_import':
+        value = read(Path(data['path']))
+        if not value.get('name') or not (value.get('shots') or value.get('script')):
+            raise ValueError('模板需要 name 和 shots 或 script')
+        value['id'] = str(uuid.uuid4())
+        value['kind'] = data.get('kind', 'reference')
+        write(ROOT / 'templates' / (value['id'] + '.json'), value)
+        return value
+    if action == 'create':
+        bootstrap()
+        return persist({'id': str(uuid.uuid4()), 'brief': import_brief(data['brief']), 'script': '', 'prompt': '',
+                        'status': 'draft', 'approved': False})
+    t = read(task_path(data['id']))
+    if action == 'get':
+        return t
+    if data.get('revision') != t['revision']:
+        raise ValueError('任务已在其他窗口更新，请重新打开任务')
+    if action in ('save', 'plan_result', 'approve', 'prompt_result', 'quote', 'analysis_result'):
+        if t['status'] in ('submitting', 'running', 'succeeded', 'uncertain'):
+            raise ValueError('已提交的任务不能修改，请新建任务')
+    if action == 'save':
+        t.update(brief=import_brief(data['brief']), script=data.get('script', ''), approved=False, prompt='', quote=None, status='draft')
+    elif action in ('plan_result', 'analysis_result'):
+        t.update(script=data['script'], approved=False, prompt='', quote=None, status='draft')
+        if action == 'analysis_result':
+            t['analysis'] = data.get('analysis')
+    elif action == 'approve':
+        if not t['script'].strip():
+            raise ValueError('请先完成剧本')
+        validate(t)
+        t.update(approved=True, status='approved', prompt='', quote=None)
+    elif action == 'prompt_result':
+        if not t['approved']:
+            raise ValueError('需要先确认当前剧本')
+        t['prompt'] = data['prompt']
+    elif action == 'quote':
+        b, route = validate(t)
+        if not t.get('prompt') or not t['approved']:
+            raise ValueError('请先确认剧本并转换提示词')
+        if route == 'comfy':
+            t['quote'] = {'note': '本地工作流；算力与工作流节点费用取决于你的 ComfyUI 配置。', 'base_url': get_provider('comfy').get('base_url') or 'http://127.0.0.1:8188'}
+        else:
+            c = client(route)
+            q = grok.cost_quote(duration=int(b['duration']), image_count=len(b['images'])) if route == 'grok' else mini.cost_quote(duration=int(b['duration']), reference_image_count=len(b['images']))
+            if route == 'minimax' and normalize_base_url(c.base_url) != 'https://api.minimaxi.com':
+                raise ValueError('当前报价仅适用 MiniMax 国内官方地址；国际站或代理请在聊天中核实价格后使用')
+            if route == 'grok' and (normalize_base_url(c.base_url) != 'https://api.x.ai' or (get_provider(route).get('model') or grok.MODEL) != grok.MODEL):
+                raise ValueError('自定义网关或模型价格未知，请在聊天中核实价格后使用')
+            q['balance'] = c.get_balance().get('available_amount') if route == 'minimax' else None
+            q['base_url'] = c.base_url
+            q['note'] = '插件内置费率估算，最终以供应商账单为准。Grok 不提供余额查询接口。' if route == 'grok' else '插件内置费率估算，最终以供应商账单为准。'
+            t['quote'] = q
+        t['quote']['at'] = time.time()
+        t['quote']['providerRevision'] = get_provider(route).get('studio_revision')
+        t['quote']['model'] = get_provider(route).get('model')
+    elif action == 'submit':
+        b, route = validate(t)
+        if t['status'] != 'approved' or not t.get('prompt') or not t.get('quote') or data.get('confirmSpend') is not True:
+            raise ValueError('需要确认当前剧本、提示词和费用后再生成')
+        if time.time() - t['quote']['at'] > 600:
+            raise ValueError('报价已过期，请刷新报价')
+        if (t['quote'].get('providerRevision') != get_provider(route).get('studio_revision') or
+                t['quote'].get('model') != get_provider(route).get('model')):
+            raise ValueError('供应商配置已改变，请重新查询费用')
+        t['remote'] = {'route': route, 'base_url': t['quote']['base_url']}
+        if route == 'comfy':
+            t['status'] = 'submitting'
+            return persist(t)
+        c = client(route, t['remote'])
+        payload = request(t)
+        t['requested'] = {k: payload[k] for k in ('duration', 'resolution', 'model') if k in payload}
+        t['status'] = 'submitting'
+        persist(t)
+        try:
+            t['remote']['id'] = c.create_video(payload)
+            t['status'] = 'running'
+        except Exception:
+            t['status'] = 'uncertain'
+            t['error'] = '提交未获得可靠回执，请到供应商控制台核查，勿重复生成。'
+        return persist(t)
+    elif action == 'comfy_workflow':
+        if t['status'] != 'submitting' or t['remote']['route'] != 'comfy':
+            raise ValueError('无待提交的 ComfyUI 任务')
+        m = module('prepare_workflow', 'ecom-h3-video')
+        flow = m.prepare_workflow(read(PLUGIN / 'skills/ecom-h3-video/assets/minimax-h3-workflow.json'),
+                                  prompt=t['prompt'], duration=int(t['brief']['duration']), ratio=t['brief']['ratio'],
+                                  images=data['images'], megapixels=float(t['brief']['resolution']))
+        path = ROOT / 'outputs' / t['id'] / 'workflow.json'
+        write(path, flow)
+        return {'path': str(path)}
+    elif action == 'comfy_submitted':
+        if t['status'] != 'submitting':
+            raise ValueError('任务已经提交')
+        t['remote']['id'] = data['remoteId']
+        t['status'] = 'running'
+    elif action == 'uncertain':
+        t['status'] = 'uncertain'
+        t['error'] = '未获得可靠提交回执，请核查 ComfyUI 队列后处理；不会自动重新生成。'
+    elif action == 'preflight_failed':
+        if t['status'] != 'submitting' or t.get('remote', {}).get('id'):
+            raise ValueError('无法回退已提交任务')
+        t.update(status='approved', error='素材或工作流准备失败，请检查 Comfy MCP 依赖和服务地址。本次未提交生成。')
+    elif action == 'recover':
+        if t['status'] not in ('uncertain', 'submitting') or not t.get('remote'):
+            raise ValueError('此任务不需要补录编号')
+        remote_id = str(data.get('remoteId', '')).strip()
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', remote_id):
+            raise ValueError('请输入控制台中的有效任务编号')
+        t['remote']['id'] = remote_id
+        t.update(status='running', error='')
+    elif action == 'poll':
+        if not t.get('remote', {}).get('id'):
+            raise ValueError('没有远程任务编号，不能恢复查询')
+        r = t['remote']
+        if r['route'] == 'comfy':
+            return t
+        c = client(r['route'], r)
+        result = c.get_video(r['id']) if r['route'] == 'grok' else c.get_task(r['id'])
+        status = result.get('status')
+        if status in ('done', 'succeeded'):
+            m = grok if r['route'] == 'grok' else mini
+            (m.verify_result if r['route'] == 'grok' else m.verify_task_contract)(result, t['requested'], r['id'])
+            url = (result.get('video') if r['route'] == 'grok' else result.get('content') or {}).get('url')
+            if not url:
+                raise ValueError('生成完成但服务没有返回视频地址')
+            dest = ROOT / 'outputs' / t['id'] / 'video.mp4'
+            m.download_video(urljoin(c.base_url + '/', url), dest)
+            t.update(status='succeeded', output=str(dest))
+        elif status in ('failed', 'cancelled', 'expired', 'error'):
+            t.update(status='failed', error='供应商任务失败：' + str(status))
+        return persist(t)
+    elif action in ('comfy_complete', 'comfy_failed'):
+        if action == 'comfy_complete':
+            t.update(status='succeeded', output=data['output'])
+        else:
+            t.update(status='failed', error='ComfyUI 返回任务失败或取消，请检查服务端执行记录。')
+        try:
+            t['cleanup'] = module('free_comfy_memory', 'ecom-h3-video').free_comfy_memory(t['remote']['base_url'])
+        except Exception:
+            t['cleanup'] = {'status': '无法释放显存，请检查服务器；成片已保留'}
+    elif action == 'template_save':
+        kind = 'reference' if t['brief'].get('mode') == 'analysis' else 'generation'
+        if kind == 'generation' and (t['status'] != 'succeeded' or not data.get('approvedOutput')):
+            raise ValueError('生成模板须在确认成片后保存')
+        if not t['script'].strip():
+            raise ValueError('没有可保存的剧本')
+        value = {'id': str(uuid.uuid4()), 'name': data['name'], 'kind': kind, 'script': t['script'],
+                 'spec': {'duration_seconds': t['brief']['duration'], 'aspect_ratio': t['brief']['ratio']} if kind == 'generation' else {}}
+        write(ROOT / 'templates' / (value['id'] + '.json'), value)
+        return value
+    else:
+        raise ValueError('未知操作：' + action)
+    return persist(t)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action')
+    args = parser.parse_args()
+    ROOT.mkdir(parents=True, exist_ok=True)
+    # A cross-process lock keeps chat and desktop mutations serialized.
+    with (ROOT / '.lock').open('a+b') as lock:
+        lock.seek(0)
+        if os.name == 'nt':
+            import msvcrt
+            if lock.read(1) == b'':
+                lock.write(b'0')
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            print(json.dumps(handle(args.action, json.load(sys.stdin)), ensure_ascii=False))
+        finally:
+            if os.name == 'nt':
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as exc:
+        # Providers may include request data in exceptions; never echo API errors/keys.
+        print(json.dumps({'error': str(exc) if isinstance(exc, ValueError) else
+                          '视频操作失败，请检查配置、依赖和网络。远程任务可通过任务编号继续查询。'}, ensure_ascii=False))
+        sys.exit(1)

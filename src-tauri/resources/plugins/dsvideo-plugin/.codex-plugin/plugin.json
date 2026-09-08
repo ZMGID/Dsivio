@@ -1,0 +1,40 @@
+{
+  "name": "dsvideo-plugin",
+  "version": "0.1.3-dsivio.1",
+  "description": "通用短视频导演与出片：先设计可执行分镜，再选择本地 ComfyUI、MiniMax API 或 Grok API。",
+  "author": {
+    "name": "ZMGID"
+  },
+  "homepage": "https://github.com/ZMGID/dsvideo-plugin",
+  "repository": "https://github.com/ZMGID/dsvideo-plugin",
+  "license": "MIT",
+  "keywords": [
+    "ecommerce",
+    "minimax",
+    "grok",
+    "xai",
+    "h3",
+    "comfyui",
+    "video"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "dsvideo",
+    "shortDescription": "生成前选择 ComfyUI、MiniMax 或 Grok API 并显示报价",
+    "longDescription": "从一句想法、故事或图片先设计通用短视频导演方案，再选择本地 ComfyUI、MiniMax API 或 Grok Imagine Video API 出片。付费 API 提交前显示可用余额与预计费用。",
+    "developerName": "ZMGID",
+    "category": "Media",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/ZMGID/dsvideo-plugin",
+    "defaultPrompt": [
+      "生成一条视频，先显示本地与 API 选项及 API 预计费用",
+      "用 Grok API 把产品图做成视频，先显示三档分辨率报价",
+      "按 9:16 把产品图做成 H3 视频，先让我选择生成路线",
+      "显示 MiniMax API 余额与本次预计费用后再决定是否使用"
+    ]
+  }
+}

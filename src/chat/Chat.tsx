@@ -20,6 +20,7 @@ import {
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatImagesPath,
+  isChatVideosPath,
   isChatOnboardingRoute,
   isChatPluginCenterPath,
   isChatSessionCenterPath,
@@ -232,8 +233,9 @@ const AutomationCenter = lazy(() => import('./automation/AutomationCenter').then
   default: module.AutomationCenter,
 })))
 
+const VideoStudio = lazy(() => import('./videos/VideoStudio'))
 const ImageStudio = lazy(() => import('./images/ImageStudio'))
-type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'onboarding' | 'images'
+type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'onboarding' | 'images' | 'videos'
 
 interface ChatProps {
   onSettingsChange: () => void
@@ -640,6 +642,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (isChatKnowledgeCenterPath(path)) return 'knowledge'
     if (isChatNotesPath(path)) return 'notes'
     if (isChatImagesPath(path)) return 'images'
+    if (isChatVideosPath(path)) return 'videos'
     if (isChatAutomationsPath(path)) return 'automations'
     // 旧 `#chat/sessions`：对话库已迁设置
     if (isChatSessionCenterPath(path)) return 'settings'
@@ -5392,6 +5395,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           onForceDropConversation={handleSidebarForceDropConversation}
           onConversationsLoaded={handleSidebarConversationsLoaded}
           onOpenExtensionsItem={handleSidebarOpenExtensionsItem}
+          onOpenVideos={() => setHash('#chat/videos')}
+          videosActive={chatView === 'videos'}
           onOpenImages={() => setHash('#chat/images')}
           imagesActive={chatView === 'images'}
           onOpenSettings={handleSidebarOpenSettings}
@@ -5480,6 +5485,11 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             <Suspense fallback={null}>
               <KnowledgeCenter />
             </Suspense>
+          </div>
+        ) : chatView === 'videos' ? (
+          <div key="center" className={centerPageClass}>
+            {centerPageTopStrip}
+            <Suspense fallback={null}><VideoStudio /></Suspense>
           </div>
         ) : chatView === 'images' ? (
           <div key="center" className={centerPageClass}>

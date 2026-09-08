@@ -16,6 +16,7 @@ import {
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatImagesPath,
+  isChatVideosPath,
   isChatOnboardingRoute,
   isChatPluginCenterPath,
   isChatPopoutRoute,
@@ -42,6 +43,7 @@ describe('chatRoutes 判定', () => {
       ['chat/knowledge', isChatKnowledgeCenterPath],
       ['chat/notes', isChatNotesPath],
       ['chat/images', isChatImagesPath],
+      ['chat/videos', isChatVideosPath],
       ['chat/onboarding', isChatOnboardingRoute],
       ['chat/popout', isChatPopoutRoute],
     ]
@@ -81,6 +83,8 @@ describe('chatRoutes 判定', () => {
 
 describe('hashPath', () => {
   it('图片中心的深链接不会被当作聊天会话', () => {
+    withHash('#chat/videos/task-123')
+    expect(getRouteConversationId()).toBe(null)
     withHash('#chat/images/task-123')
     expect(isChatImagesPath(hashPath())).toBe(true)
     expect(getRouteConversationId()).toBeNull()

@@ -42,6 +42,23 @@ fn packages_root() -> Result<PathBuf, String> {
         .map(|p| p.join("packages"))
         .ok_or("Application data directory unavailable".into())
 }
+
+/// App-owned package content updates independently of user data and enabled state.
+pub fn ensure_builtin(id: &str, source: &Path) -> Result<Resolved, String> {
+    let dir = package_dir(id)?;
+    fs::create_dir_all(dir.join("data")).map_err(|e| e.to_string())?;
+    let previous = load(id).ok();
+    copy_tree(source, &dir.join("content"), &mut (100 * 1024 * 1024), 0)?;
+    let package = Package {
+        id: id.into(), name: "dsvideo".into(), description: "内置视频工作台与聊天技能".into(),
+        version: None, format: "codex".into(), source: "builtin:dsvideo".into(), revision: None,
+        enabled: previous.map(|p| p.package.enabled).unwrap_or(true),
+        components: BTreeMap::new(), diagnostics: vec![],
+    };
+    let resolved = resolve(&dir.join("content"), package, &dir.join("data"))?;
+    write_json(&dir.join("record.json"), &resolved.package)?;
+    Ok(resolved)
+}
 fn package_dir(id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "Invalid package id")?;
     Ok(packages_root()?.join(id))

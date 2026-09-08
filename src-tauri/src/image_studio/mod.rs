@@ -1,6 +1,6 @@
 //! Built-in image workspace: typed input, Agent planning, persisted sample gates,
 //! and native image execution. Does not depend on installed skills or Python.
-mod agent;
+pub(crate) mod agent;
 mod builtins;
 mod engine;
 mod storage;

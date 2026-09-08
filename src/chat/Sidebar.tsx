@@ -10,6 +10,7 @@ import {
   MoreHorizontal,
   NotebookPen,
   Image as ImageIcon,
+  Film,
   Plus,
   Search,
   Settings,
@@ -208,6 +209,8 @@ export interface SidebarProps {
   onConversationsLoaded?: () => void
   onOpenSettings: () => void
   onOpenExtensionsItem: (item: ExtensionsNavItem) => void
+  onOpenVideos?: () => void
+  videosActive?: boolean
   onOpenImages?: () => void
   imagesActive?: boolean
   onSelectLang: (lang: Lang) => void
@@ -620,6 +623,8 @@ export const Sidebar = memo(function Sidebar({
   onConversationsLoaded,
   onOpenSettings,
   onOpenExtensionsItem,
+  onOpenVideos,
+  videosActive = false,
   onOpenImages,
   imagesActive = false,
   onSelectLang,
@@ -1409,6 +1414,7 @@ export const Sidebar = memo(function Sidebar({
           active={searchOpen}
           iconMotion="group-hover:scale-110"
         />
+        {onOpenVideos && <NavRow icon={<Film size={16} />} label="视频" onClick={onOpenVideos} active={videosActive} />}
         {onOpenImages && <NavRow
           icon={<ImageIcon size={17} strokeWidth={1.75} />}
           label={lang === 'en' ? 'Images' : '图片'}
