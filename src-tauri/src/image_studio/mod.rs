@@ -23,6 +23,13 @@ use tauri::{AppHandle, Manager};
 use types::*;
 
 static ACTIVE: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+
+pub fn initialize_skill_workspace(app: &AppHandle) -> Result<(), String> {
+    let _guard = lock()?;
+    storage::templates()?;
+    let settings_file = app.path().app_data_dir().map_err(|e| e.to_string())?.join("settings.json");
+    storage::write(&storage::root()?.join("runtime.json"), &json!({ "settingsFile": settings_file }))
+}
 fn active() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     ACTIVE.get_or_init(Default::default)
 }
@@ -515,7 +522,7 @@ async fn execute(
             directory,
             builtin: false,
         };
-        storage::write(&dest.join("record.json"), &template)?;
+        storage::save_template(&template)?;
         t.progress = "规则模板已保存到模板库，请检查后复用".into();
         return Ok(());
     }
@@ -853,7 +860,7 @@ pub async fn image_studio_template_import(path: String) -> Result<Template, Stri
             builtin: false,
         };
         let _lock = lock()?;
-        storage::write(&dest.join("record.json"), &t)?;
+        storage::save_template(&t)?;
         Ok(t)
     })
     .await
@@ -890,12 +897,7 @@ pub fn image_studio_template_save(mut template: Template) -> Result<Template, St
             ))?;
         }
     }
-    storage::write(
-        &storage::root()?
-            .join(&template.directory)
-            .join("record.json"),
-        &template,
-    )?;
+    storage::save_template(&template)?;
     Ok(template)
 }
 
@@ -946,7 +948,7 @@ pub fn image_studio_freeze(
         builtin: false,
     };
     storage::validate_template(&tpl.data)?;
-    storage::write(&dest.join("record.json"), &tpl)?;
+    storage::save_template(&tpl)?;
     Ok(tpl)
 }
 

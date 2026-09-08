@@ -83,17 +83,101 @@ pub fn config() -> Result<StudioConfig, String> {
     }
 }
 pub fn templates() -> Result<Vec<Template>, String> {
-    let mut all = super::builtins::templates(&root()?)?;
-    for e in fs::read_dir(root()?.join("templates"))
-        .map_err(|e| e.to_string())?
-        .flatten()
-    {
-        let p = e.path().join("record.json");
-        if p.exists() {
-            all.push(read(&p)?);
+    let base = root()?;
+    let mut all = super::builtins::templates(&base)?;
+    scan_templates(&base, &base.join("templates"), 0, &mut all)?;
+    Ok(all)
+}
+
+/// template.json is the shared source of truth; record.json only preserves UI identity.
+pub(super) fn scan_templates(
+    base: &Path,
+    folder: &Path,
+    depth: usize,
+    all: &mut Vec<Template>,
+) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    if depth > 2 {
+        return Ok(());
+    }
+    for entry in fs::read_dir(folder).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        if path.is_symlink() || !path.is_dir() {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(base)
+            .map_err(|e| e.to_string())?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if all.iter().any(|t| t.directory == relative) {
+            continue;
+        }
+        let metadata = read::<Template>(&path.join("record.json")).ok();
+        let standard = path.join("template.json");
+        // Migrate UI templates created before the shared directory contract.
+        if !standard.exists() {
+            if let Some(ref record) = metadata {
+                write(&standard, &record.data)?;
+            }
+        }
+        if standard.is_file() {
+            if let Ok(mut data) = read::<Value>(&standard) {
+                if depth > 0 {
+                    let Ok(requirements) = read::<Value>(&folder.join("要求.json")) else {
+                        continue;
+                    };
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if !requirements["templates"]
+                        .as_array()
+                        .is_some_and(|names| names.iter().any(|n| n.as_str() == Some(&name)))
+                    {
+                        continue;
+                    }
+                    for field in ["language", "style", "brand"] {
+                        if data[field].is_null()
+                            || data[field] == ""
+                            || data[field] == serde_json::json!({})
+                        {
+                            if !requirements[field].is_null() {
+                                data[field] = requirements[field].clone();
+                            }
+                        }
+                    }
+                    if !data["output"].is_object() {
+                        data["output"] = serde_json::json!({});
+                    }
+                    for field in ["resolution", "format", "quality", "deliver"] {
+                        if data["output"][field].is_null() || data["output"][field] == "" {
+                            if !requirements["generation"][field].is_null() {
+                                data["output"][field] = requirements["generation"][field].clone();
+                            }
+                        }
+                    }
+                }
+                if validate_template(&data).is_ok() {
+                    let id = metadata.map(|t| t.id).unwrap_or_else(|| {
+                        format!("skill-{:x}", Sha256::digest(relative.as_bytes()))
+                    });
+                    all.push(Template {
+                        id,
+                        directory: relative,
+                        builtin: false,
+                        data,
+                    });
+                }
+            }
+        } else {
+            scan_templates(base, &path, depth + 1, all)?;
         }
     }
-    Ok(all)
+    Ok(())
+}
+
+pub fn save_template(template: &Template) -> Result<(), String> {
+    let directory = root()?.join(&template.directory);
+    write(&directory.join("template.json"), &template.data)?;
+    write(&directory.join("record.json"), template)
 }
 pub fn validate_template(data: &Value) -> Result<(), String> {
     if !matches!(data["mode"].as_str(), Some("smart" | "replace")) {
