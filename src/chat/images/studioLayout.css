@@ -1,0 +1,182 @@
+/* Shared geometry for image/video workflows. Button chrome stays in global primitives. */
+.image-studio .is-main {
+  container-name: studio;
+  container-type: inline-size;
+  padding: 24px;
+}
+.image-studio :is(.is-work-heading, .vs-heading, .is-section-heading) {
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.image-studio :is(.is-work-heading, .vs-heading) {
+  margin-bottom: 24px;
+}
+.image-studio :is(.is-work-heading h2, .vs-heading h2, .is-template-page h2) {
+  font-size: 20px;
+  line-height: 1.4;
+}
+.image-studio :is(.is-actions, .vs-actions, .is-dialog-actions) {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.image-studio .is-work-toolbar {
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.image-studio .is-task-actions {
+  justify-content: flex-end;
+}
+.image-studio :is(.is-brief-layout, .vs-layout) {
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 20px;
+  align-items: stretch;
+}
+.image-studio :is(.is-editor-column, .vs-editor-column) {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+.image-studio :is(.is-section, .vs-panel, .is-plan-card) {
+  padding: 20px;
+}
+.image-studio .vs-layout .vs-panel {
+  margin-bottom: 0;
+}
+.image-studio .vs-editor-column > .vs-panel:last-child {
+  flex: 1;
+}
+.image-studio .vs-options {
+  align-self: stretch;
+  display: block;
+  grid-row: auto;
+}
+.image-studio .is-field {
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.image-studio .is-field .is-field {
+  margin-bottom: 0;
+}
+.image-studio .is-two-cols {
+  align-items: start;
+  gap: 16px;
+}
+.image-studio .is-ratios {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.image-studio :is(.is-creation-footer, .studio-primary-actions) {
+  grid-column: 1 / -1;
+  position: sticky;
+  bottom: -24px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.image-studio .is-creation-footer > div {
+  margin-right: auto;
+}
+.image-studio .studio-primary-actions > .primary {
+  order: 1;
+}
+.image-studio .vs-panel > .vs-actions {
+  justify-content: flex-end;
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.image-studio .vs-panel > .kv-btn {
+  margin: 8px 8px 8px 0;
+}
+.image-studio .vs-panel > .vs-heading h3 {
+  margin-bottom: 0;
+}
+.image-studio .vs-settings-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.image-studio .vs-settings-layout > .vs-panel {
+  max-width: none;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+.image-studio .vs-settings-layout .vs-settings > .vs-actions {
+  margin-top: auto;
+}
+.image-studio .vs-specs {
+  grid-template-columns: 90px minmax(0, 1fr);
+}
+.image-studio .vs-specs dd {
+  overflow-wrap: anywhere;
+}
+.image-studio :is(.is-template-grid, .vs-template-grid) {
+  grid-template-columns: repeat(auto-fill, minmax(min(240px, 100%), 1fr));
+  gap: 20px;
+}
+.image-studio .vs-template-preview {
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.image-studio .vs-template-preview > div > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.image-studio .vs-template-body {
+  padding: 20px;
+  min-width: 0;
+}
+.image-studio .vs-template-body > details {
+  width: 100%;
+}
+.image-studio :is(.is-dialog-actions, .is-sample-gate) {
+  gap: 16px;
+}
+.image-studio .is-dialog-actions {
+  position: sticky;
+  bottom: -24px;
+  background: var(--bg-input);
+  padding: 16px 0;
+  z-index: 2;
+}
+@container studio (max-width: 720px) {
+  .image-studio :is(.is-brief-layout, .vs-layout, .vs-settings-layout) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .image-studio .vs-options {
+    grid-row: auto;
+  }
+  .image-studio .is-stage-tabs {
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .image-studio :is(.is-section-heading, .vs-heading) > .is-actions {
+    margin-left: auto;
+    justify-content: flex-end;
+  }
+}
+@container studio (max-width: 420px) {
+  .image-studio .is-two-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .image-studio :is(.is-section, .vs-panel, .is-plan-card) {
+    padding: 16px;
+  }
+  .image-studio .is-plan-card {
+    flex-direction: column;
+  }
+  .image-studio :is(.is-creation-footer, .studio-primary-actions) {
+    flex-wrap: wrap;
+  }
+  .image-studio .is-creation-footer > div {
+    flex-basis: 100%;
+  }
+}

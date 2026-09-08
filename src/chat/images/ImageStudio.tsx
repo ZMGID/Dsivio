@@ -26,7 +26,14 @@ import {
 } from 'lucide-react'
 import { api, isTauriRuntime } from '../../api/tauri'
 import { Button, IconButton } from '../../components/Button'
-import { AssetImage, ConfigPanel, Field, StudioSelect, TemplatePanel } from './StudioPanels'
+import {
+  AssetImage,
+  ConfigPanel,
+  Field,
+  ImageLanguageSelect,
+  StudioSelect,
+  TemplatePanel,
+} from './StudioPanels'
 import {
   emptyBrief,
   FEATURES,
@@ -47,6 +54,7 @@ import {
 } from './types'
 import { builtinTemplates as initialTemplates } from './builtinTemplates'
 import './imageStudio.css'
+import './studioLayout.css'
 import { DRAFT_KEY, readStudioDraft, storeStudioDraft } from './draft'
 
 const ICONS = [WandSparkles, ScanLine, Layers3, Palette, Grid2X2]
@@ -63,7 +71,9 @@ type Stage = 'brief' | 'plan' | 'results'
 export default function ImageStudio() {
   const [view, setView] = useState<View>('gen')
   const [stage, setStage] = useState<Stage>('brief')
-  const [brief, setBrief] = useState<ImageBrief>(() => readStudioDraft()?.brief || emptyBrief('gen'))
+  const [brief, setBrief] = useState<ImageBrief>(
+    () => readStudioDraft()?.brief || emptyBrief('gen'),
+  )
   const [task, setTask] = useState<ImageTask | null>(null)
   const [tasks, setTasks] = useState<ImageTask[]>([])
   const [templates, setTemplates] = useState<ImageTemplate[]>(initialTemplates)
@@ -79,14 +89,21 @@ export default function ImageStudio() {
   const [editNote, setEditNote] = useState('')
   const [editedPlans, setEditedPlans] = useState<ImagePlan[] | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
-  const [delivery, setDelivery] = useState({ width: 800, height: 800, maxKb: 2048 })
+  const [delivery, setDelivery] = useState({
+    width: 800,
+    height: 800,
+    maxKb: 2048,
+  })
   const [showHistory, setShowHistory] = useState(false)
   const [freezeName, setFreezeName] = useState('')
   const running = task?.status === 'running'
   const busy = pending || running
   const dirty = task ? JSON.stringify(brief) !== JSON.stringify(task.brief) : true
   const native = isTauriRuntime()
-  const report = useCallback((e: unknown) => setError(e instanceof Error ? e.message : String(e)), [])
+  const report = useCallback(
+    (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+    [],
+  )
   const taskId = task?.id
 
   const adopt = useCallback((t: ImageTask) => {
@@ -94,7 +111,9 @@ export default function ImageStudio() {
     setBrief(t.brief)
     setEditedPlans(null)
     setTasks((all) =>
-      [t, ...all.filter((x) => x.id !== t.id)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+      [t, ...all.filter((x) => x.id !== t.id)].sort((a, b) =>
+        b.updatedAt.localeCompare(a.updatedAt),
+      ),
     )
   }, [])
   useEffect(() => {
@@ -130,7 +149,13 @@ export default function ImageStudio() {
     }
   }, [native, report])
   useEffect(() => {
-    if (!loading) storeStudioDraft({ brief, taskId: task?.id, revision: task?.revision, plans: editedPlans })
+    if (!loading)
+      storeStudioDraft({
+        brief,
+        taskId: task?.id,
+        revision: task?.revision,
+        plans: editedPlans,
+      })
   }, [brief, task?.id, task?.revision, loading, editedPlans])
   useEffect(() => {
     if (!native || loading) return
@@ -260,21 +285,32 @@ export default function ImageStudio() {
     perform(async () => {
       const saved = action.kind === 'cancel' ? task : await save()
       if (!saved) return
-      const current = await api.imageStudioAction(saved.id, saved.revision, { group, ...action })
+      const current = await api.imageStudioAction(saved.id, saved.revision, {
+        group,
+        ...action,
+      })
       adopt(current)
       if (action.kind === 'plan') setStage('plan')
       if (['sample', 'bulk', 'generate', 'retry', 'revise', 'resume'].includes(action.kind))
         setStage('results')
-      if (action.kind === 'approve') setNotice('样品已确认。现在可以为这个分类的剩余商品规划并出图。')
+      if (action.kind === 'approve')
+        setNotice('样品已确认。现在可以为这个分类的剩余商品规划并出图。')
     })
   const patch = (p: Partial<ImageBrief>) => setBrief((b) => ({ ...b, ...p }))
   const patchProduct = (id: string, p: Partial<ImageProduct>) =>
-    setBrief((b) => ({ ...b, products: b.products.map((x) => (x.id === id ? { ...x, ...p } : x)) }))
+    setBrief((b) => ({
+      ...b,
+      products: b.products.map((x) => (x.id === id ? { ...x, ...p } : x)),
+    }))
   const importImages = (folder: boolean) =>
     perform(async () => {
       const paths = await open(
         folder
-          ? { directory: true, multiple: true, title: '选择商品文件夹（每个子文件夹作为一个 SKU）' }
+          ? {
+              directory: true,
+              multiple: true,
+              title: '选择商品文件夹（每个子文件夹作为一个 SKU）',
+            }
           : {
               multiple: true,
               title: '导入商品参考图',
@@ -292,13 +328,20 @@ export default function ImageStudio() {
             added = products.flatMap((p) => p.assets)
           return {
             ...b,
-            products: [{ ...p, assets: [...p.assets, ...added], front: p.front || added[0]?.id || null }],
+            products: [
+              {
+                ...p,
+                assets: [...p.assets, ...added],
+                front: p.front || added[0]?.id || null,
+              },
+            ],
           }
         }
         return { ...b, products: [...b.products, ...products] }
       })
     })
-  const updateTemplate = (t: ImageTemplate) => setTemplates((all) => [...all.filter((x) => x.id !== t.id), t])
+  const updateTemplate = (t: ImageTemplate) =>
+    setTemplates((all) => [...all.filter((x) => x.id !== t.id), t])
   const currentFeature = FEATURES.find((f) => f.id === brief.feature)!
   const groups = useMemo(() => [...new Set(brief.products.map(productGroup))], [brief.products])
   const activeGroup = groups.includes(group) ? group : groups[0] || '未分类'
@@ -306,14 +349,17 @@ export default function ImageStudio() {
     if (activeGroup !== group) setGroup(activeGroup)
   }, [activeGroup, group])
   const visibleProducts =
-    brief.feature !== 'gen' ? brief.products.filter((p) => productGroup(p) === group) : brief.products
+    brief.feature !== 'gen'
+      ? brief.products.filter((p) => productGroup(p) === group)
+      : brief.products
   const template = templates.find((t) => t.id === brief.templateId)
   const plans = editedPlans || task?.plans || []
   const groupPlans = plans.filter(
     (p) =>
       brief.feature === 'gen' ||
-      productGroup(brief.products.find((x) => x.id === p.productId) || ({ category: '' } as ImageProduct)) ===
-        group,
+      productGroup(
+        brief.products.find((x) => x.id === p.productId) || ({ category: '' } as ImageProduct),
+      ) === group,
   )
   const results = task ? (showHistory ? task.results : latestResults(task)) : []
   const complete = task ? sampleComplete(task, group) : false
@@ -324,7 +370,9 @@ export default function ImageStudio() {
   return (
     <section className="kv image-studio" aria-label="图片工作台">
       {!native && (
-        <div className="is-preview-note">界面预览模式 · 素材导入和生成需要在 Dsivio 桌面窗口中使用</div>
+        <div className="is-preview-note">
+          界面预览模式 · 素材导入和生成需要在 Dsivio 桌面窗口中使用
+        </div>
       )}
       {error && (
         <div role="alert" className="is-alert is-error">
@@ -389,8 +437,12 @@ export default function ImageStudio() {
                     const latest = await api.imageStudioGet(t.id)
                     adopt(latest)
                     setView(latest.brief.feature)
-                    setStage(latest.results.length ? 'results' : latest.plans.length ? 'plan' : 'brief')
-                    setGroup(productGroup(latest.brief.products[0] || ({ category: '' } as ImageProduct)))
+                    setStage(
+                      latest.results.length ? 'results' : latest.plans.length ? 'plan' : 'brief',
+                    )
+                    setGroup(
+                      productGroup(latest.brief.products[0] || ({ category: '' } as ImageProduct)),
+                    )
                   })
                 }
               >
@@ -428,10 +480,6 @@ export default function ImageStudio() {
                   <h2>{currentFeature.label}</h2>
                   <p>{currentFeature.step}</p>
                 </div>
-                <Button size="sm" disabled={pending} onClick={() => void switchView(brief.feature)}>
-                  <Plus size={14} />
-                  新任务
-                </Button>
               </div>
               <div className="is-work-toolbar">
                 <div className="is-stage-tabs" role="tablist" aria-label="制作阶段">
@@ -449,20 +497,29 @@ export default function ImageStudio() {
                     </button>
                   ))}
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() =>
-                    void perform(async () => {
-                      await save()
-                      setNotice('任务已保存')
-                    })
-                  }
-                >
-                  <Save size={14} />
-                  {task && !dirty ? '已保存' : '保存任务'}
-                </Button>
+                <div className="is-actions is-task-actions">
+                  <Button
+                    size="sm"
+                    disabled={pending}
+                    onClick={() => void switchView(brief.feature)}
+                  >
+                    <Plus size={14} />
+                    新任务
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={busy}
+                    onClick={() =>
+                      void perform(async () => {
+                        await save()
+                        setNotice('任务已保存')
+                      })
+                    }
+                  >
+                    <Save size={14} />
+                    {task && !dirty ? '已保存' : '保存任务'}
+                  </Button>
+                </div>
               </div>
               {task && (
                 <div className={`is-progress ${running ? 'running' : ''}`} role="status">
@@ -475,7 +532,11 @@ export default function ImageStudio() {
                   )}
                   <span>{task.error || task.progress}</span>
                   {running && (
-                    <Button size="sm" disabled={pending} onClick={() => void act({ kind: 'cancel' })}>
+                    <Button
+                      size="sm"
+                      disabled={pending}
+                      onClick={() => void act({ kind: 'cancel' })}
+                    >
                       <Square size={12} />
                       停止
                     </Button>
@@ -513,7 +574,11 @@ export default function ImageStudio() {
                             <FolderOpen size={14} />
                             商品文件夹
                           </Button>
-                          <Button size="sm" disabled={busy} onClick={() => void importImages(false)}>
+                          <Button
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => void importImages(false)}
+                          >
                             <Plus size={14} />
                             添加图片
                           </Button>
@@ -542,7 +607,9 @@ export default function ImageStudio() {
                       ) : (
                         <div className="is-products">
                           {visibleProducts.map((p, index) => {
-                            const pt = templates.find((t) => t.id === (p.templateId || brief.templateId))
+                            const pt = templates.find(
+                              (t) => t.id === (p.templateId || brief.templateId),
+                            )
                             return (
                               <article className="is-product" key={p.id}>
                                 <div className="is-product-heading">
@@ -552,7 +619,11 @@ export default function ImageStudio() {
                                     aria-label="商品名称 / SKU"
                                     disabled={busy}
                                     value={p.name}
-                                    onChange={(e) => patchProduct(p.id, { name: e.target.value })}
+                                    onChange={(e) =>
+                                      patchProduct(p.id, {
+                                        name: e.target.value,
+                                      })
+                                    }
                                   />
                                   {index < 2 && brief.feature !== 'gen' && (
                                     <span className="is-sample-badge">样品</span>
@@ -561,7 +632,9 @@ export default function ImageStudio() {
                                     label={`移除 ${p.name}`}
                                     disabled={busy}
                                     onClick={() =>
-                                      patch({ products: brief.products.filter((x) => x.id !== p.id) })
+                                      patch({
+                                        products: brief.products.filter((x) => x.id !== p.id),
+                                      })
                                     }
                                   >
                                     <X size={14} />
@@ -572,7 +645,11 @@ export default function ImageStudio() {
                                     <div className="is-asset" key={a.id}>
                                       <AssetImage path={a.path} name={a.name} />
                                       <span>
-                                        {p.front === a.id ? '正面' : p.back === a.id ? '背面' : '参考'}
+                                        {p.front === a.id
+                                          ? '正面'
+                                          : p.back === a.id
+                                            ? '背面'
+                                            : '参考'}
                                       </span>
                                       <small title={a.name}>{a.name}</small>
                                       <IconButton
@@ -596,7 +673,11 @@ export default function ImageStudio() {
                                     <StudioSelect
                                       disabled={busy}
                                       value={p.front || ''}
-                                      onChange={(e) => patchProduct(p.id, { front: e.target.value || null })}
+                                      onChange={(e) =>
+                                        patchProduct(p.id, {
+                                          front: e.target.value || null,
+                                        })
+                                      }
                                     >
                                       <option value="">选择正面图</option>
                                       {p.assets.map((a) => (
@@ -610,7 +691,11 @@ export default function ImageStudio() {
                                     <StudioSelect
                                       disabled={busy}
                                       value={p.back || ''}
-                                      onChange={(e) => patchProduct(p.id, { back: e.target.value || null })}
+                                      onChange={(e) =>
+                                        patchProduct(p.id, {
+                                          back: e.target.value || null,
+                                        })
+                                      }
                                     >
                                       <option value="">未提供背面图</option>
                                       {p.assets.map((a) => (
@@ -628,7 +713,11 @@ export default function ImageStudio() {
                                         className="kv-input"
                                         disabled={busy}
                                         value={p.category}
-                                        onChange={(e) => patchProduct(p.id, { category: e.target.value })}
+                                        onChange={(e) =>
+                                          patchProduct(p.id, {
+                                            category: e.target.value,
+                                          })
+                                        }
                                       />
                                     </Field>
                                     <Field label="这一款的模板">
@@ -636,7 +725,9 @@ export default function ImageStudio() {
                                         disabled={busy}
                                         value={p.templateId || ''}
                                         onChange={(e) =>
-                                          patchProduct(p.id, { templateId: e.target.value || null })
+                                          patchProduct(p.id, {
+                                            templateId: e.target.value || null,
+                                          })
                                         }
                                       >
                                         <option value="">使用通用模板</option>
@@ -654,7 +745,11 @@ export default function ImageStudio() {
                                     <StudioSelect
                                       disabled={busy}
                                       value={p.kind}
-                                      onChange={(e) => patchProduct(p.id, { kind: e.target.value })}
+                                      onChange={(e) =>
+                                        patchProduct(p.id, {
+                                          kind: e.target.value,
+                                        })
+                                      }
                                     >
                                       <option value="">选择商品款型</option>
                                       {Object.keys(pt.data.product_kinds).map((k) => (
@@ -665,13 +760,20 @@ export default function ImageStudio() {
                                     </StudioSelect>
                                   </Field>
                                 )}
-                                <Field label="已知商品信息" hint="尺寸、材质、卖点等以真实商品为准。">
+                                <Field
+                                  label="已知商品信息"
+                                  hint="尺寸、材质、卖点等以真实商品为准。"
+                                >
                                   <textarea
                                     className="kv-textarea custom-scrollbar"
                                     rows={2}
                                     disabled={busy}
                                     value={p.facts}
-                                    onChange={(e) => patchProduct(p.id, { facts: e.target.value })}
+                                    onChange={(e) =>
+                                      patchProduct(p.id, {
+                                        facts: e.target.value,
+                                      })
+                                    }
                                     placeholder="例如：容量 20L，尼龙面料，有独立电脑隔层"
                                   />
                                 </Field>
@@ -681,12 +783,17 @@ export default function ImageStudio() {
                         </div>
                       )}
                       {brief.products.length > 0 && (
-                        <Button size="sm" disabled={busy} onClick={() => void act({ kind: 'classify' })}>
-                          <ScanLine size={15} />让 Agent 识别商品{brief.feature === 'client' ? '并分类' : ''}
+                        <Button
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => void act({ kind: 'classify' })}
+                        >
+                          <ScanLine size={15} />让 Agent 识别商品
+                          {brief.feature === 'client' ? '并分类' : ''}
                         </Button>
                       )}
                     </section>
-                    <section className="is-section">
+                    <section className="is-section is-requirements-section">
                       <div className="is-section-heading">
                         <div>
                           <span className="is-step-number">02</span>
@@ -700,7 +807,11 @@ export default function ImageStudio() {
                               size="sm"
                               disabled={busy}
                               key={s}
-                              onClick={() => patch({ requirement: `${s}。${brief.requirement}` })}
+                              onClick={() =>
+                                patch({
+                                  requirement: `${s}。${brief.requirement}`,
+                                })
+                              }
                             >
                               {s}
                             </Button>
@@ -713,7 +824,11 @@ export default function ImageStudio() {
                                   size="sm"
                                   disabled={busy}
                                   key={s}
-                                  onClick={() => patch({ requirement: `${s}。${brief.requirement}` })}
+                                  onClick={() =>
+                                    patch({
+                                      requirement: `${s}。${brief.requirement}`,
+                                    })
+                                  }
                                 >
                                   {s}
                                 </Button>
@@ -782,7 +897,8 @@ export default function ImageStudio() {
                               .filter(
                                 (t) =>
                                   brief.feature === 'client' ||
-                                  t.data.mode === (brief.feature === 'replace' ? 'replace' : 'smart'),
+                                  t.data.mode ===
+                                    (brief.feature === 'replace' ? 'replace' : 'smart'),
                               )
                               .map((t) => (
                                 <option key={t.id} value={t.id}>
@@ -823,38 +939,31 @@ export default function ImageStudio() {
                         </StudioSelect>
                       </Field>
                       <Field label="图内语言">
-                        <input
-                          className="kv-input"
+                        <ImageLanguageSelect
                           disabled={busy}
-                          list="is-languages"
                           value={brief.language}
-                          onChange={(e) => patch({ language: e.target.value })}
+                          onChange={(language) => patch({ language })}
                         />
-                        <datalist id="is-languages">
-                          {['pt-BR', 'English', 'Español', 'Deutsch', 'Français', '中文', '无文字'].map(
-                            (l) => (
-                              <option key={l} value={l} />
-                            ),
-                          )}
-                        </datalist>
                       </Field>
                       <div className="is-field">
                         <span>画幅</span>
                         <div className="is-ratios" role="group" aria-label="画幅">
-                          {['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9'].map((r) => (
-                            <button
-                              type="button"
-                              key={r}
-                              disabled={busy}
-                              aria-pressed={brief.ratio === r}
-                              aria-label={r}
-                              className={brief.ratio === r ? 'active' : ''}
-                              onClick={() => patch({ ratio: r })}
-                            >
-                              <span style={{ aspectRatio: r.replace(':', '/') }} />
-                              {r}
-                            </button>
-                          ))}
+                          {['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9'].map(
+                            (r) => (
+                              <button
+                                type="button"
+                                key={r}
+                                disabled={busy}
+                                aria-pressed={brief.ratio === r}
+                                aria-label={r}
+                                className={brief.ratio === r ? 'active' : ''}
+                                onClick={() => patch({ ratio: r })}
+                              >
+                                <span style={{ aspectRatio: r.replace(':', '/') }} />
+                                {r}
+                              </button>
+                            ),
+                          )}
                         </div>
                       </div>
                       <div className="is-two-cols">
@@ -878,7 +987,9 @@ export default function ImageStudio() {
                             disabled={busy || !!template}
                             value={template?.data.slots.length || brief.count}
                             onChange={(e) =>
-                              patch({ count: Math.max(1, Math.min(30, Number(e.target.value))) })
+                              patch({
+                                count: Math.max(1, Math.min(30, Number(e.target.value))),
+                              })
                             }
                           />
                         </Field>
@@ -886,35 +997,39 @@ export default function ImageStudio() {
                       <p className="is-muted is-small">
                         实际支持的画幅和清晰度由图片接口决定。原图保留，交付尺寸在导出时设置。
                       </p>
-                      <div className="is-spec-footer">
-                        <div>
-                          <Sparkles size={17} />
-                          <span>
-                            Agent 负责看图和规划
-                            <br />
-                            <small>方案可编辑，确认后再生图</small>
-                          </span>
-                        </div>
-                        <Button
-                          variant="primary"
-                          disabled={busy || loading}
-                          onClick={() => void act({ kind: 'plan' })}
-                        >
-                          {busy ? <Loader2 size={16} className="is-spinning" /> : <Sparkles size={16} />}
-                          生成画面方案
-                          <ArrowRight size={15} />
-                        </Button>
-                      </div>
                     </section>
-                    <div className="is-tip">
-                      <CheckCircle2 size={16} />
-                      <p>
-                        {brief.feature === 'gen'
-                          ? '原图和每一次修改都会保留，随时可以对比不同版本。'
-                          : '先做两款样品。商品不足两款时全部作为样品，每个分类单独确认。'}
-                      </p>
-                    </div>
                   </aside>
+                  <div className="is-tip">
+                    <CheckCircle2 size={16} />
+                    <p>
+                      {brief.feature === 'gen'
+                        ? '原图和每一次修改都会保留，随时可以对比不同版本。'
+                        : '先做两款样品。商品不足两款时全部作为样品，每个分类单独确认。'}
+                    </p>
+                  </div>
+                  <div className="is-creation-footer">
+                    <div>
+                      <Sparkles size={17} />
+                      <span>
+                        Agent 负责看图和规划
+                        <br />
+                        <small>方案可编辑，确认后再生图</small>
+                      </span>
+                    </div>
+                    <Button
+                      variant="primary"
+                      disabled={busy || loading}
+                      onClick={() => void act({ kind: 'plan' })}
+                    >
+                      {busy ? (
+                        <Loader2 size={16} className="is-spinning" />
+                      ) : (
+                        <Sparkles size={16} />
+                      )}
+                      生成画面方案
+                      <ArrowRight size={15} />
+                    </Button>
+                  </div>
                 </div>
               )}
               {stage === 'plan' && (
@@ -929,7 +1044,12 @@ export default function ImageStudio() {
                         <Button
                           size="sm"
                           disabled={busy || dirty || !!editedPlans}
-                          onClick={() => void act({ kind: 'template', productId: groupPlans[0]?.productId })}
+                          onClick={() =>
+                            void act({
+                              kind: 'template',
+                              productId: groupPlans[0]?.productId,
+                            })
+                          }
                         >
                           <Layers3 size={14} />
                           存为规则模板
@@ -939,7 +1059,13 @@ export default function ImageStudio() {
                           onClick={() =>
                             void perform(async () => {
                               if (task && editedPlans)
-                                adopt(await api.imageStudioSavePlans(task.id, task.revision, editedPlans))
+                                adopt(
+                                  await api.imageStudioSavePlans(
+                                    task.id,
+                                    task.revision,
+                                    editedPlans,
+                                  ),
+                                )
                             })
                           }
                         >
@@ -949,7 +1075,11 @@ export default function ImageStudio() {
                         <Button
                           variant="primary"
                           disabled={busy || !!editedPlans || dirty}
-                          onClick={() => void act({ kind: brief.feature === 'gen' ? 'generate' : 'sample' })}
+                          onClick={() =>
+                            void act({
+                              kind: brief.feature === 'gen' ? 'generate' : 'sample',
+                            })
+                          }
                         >
                           <Sparkles size={15} />
                           {brief.feature === 'gen' ? '开始出图' : '生成两款样品'}
@@ -958,7 +1088,9 @@ export default function ImageStudio() {
                     )}
                   </div>
                   {editedPlans && (
-                    <p className="is-muted">保存方案会重新开始本次打样确认；已有图片仍保留在历史版本中。</p>
+                    <p className="is-muted">
+                      保存方案会重新开始本次打样确认；已有图片仍保留在历史版本中。
+                    </p>
                   )}
                   {!groupPlans.length ? (
                     <EmptyState
@@ -983,7 +1115,9 @@ export default function ImageStudio() {
                           <div className="is-plan-visual">
                             {p?.assets[0] ? (
                               <AssetImage
-                                path={p.assets.find((a) => a.id === p.front)?.path || p.assets[0].path}
+                                path={
+                                  p.assets.find((a) => a.id === p.front)?.path || p.assets[0].path
+                                }
                                 name={p.name}
                               />
                             ) : (
@@ -1045,7 +1179,11 @@ export default function ImageStudio() {
                         <History size={14} />
                         历史版本
                       </Button>
-                      <Button size="sm" disabled={!successCount} onClick={() => setExportOpen(true)}>
+                      <Button
+                        size="sm"
+                        disabled={!successCount}
+                        onClick={() => setExportOpen(true)}
+                      >
                         <Download size={14} />
                         导出交付图
                       </Button>
@@ -1056,8 +1194,12 @@ export default function ImageStudio() {
                       <div>
                         <CheckCircle2 size={20} />
                         <span>
-                          <strong>{approved ? `${group} · 样品已通过` : `${group} · 先检查样品`}</strong>
-                          <small>核对商品外观、文字拼写、版式与正反面，再确认这个分类继续批量。</small>
+                          <strong>
+                            {approved ? `${group} · 样品已通过` : `${group} · 先检查样品`}
+                          </strong>
+                          <small>
+                            核对商品外观、文字拼写、版式与正反面，再确认这个分类继续批量。
+                          </small>
                         </span>
                       </div>
                       <Button
@@ -1089,9 +1231,14 @@ export default function ImageStudio() {
                     <div className="is-result-grid">
                       {results.map((r) => {
                         const p = brief.products.find((p) => p.id === r.productId)
-                        const plan = plans.find((x) => x.productId === r.productId && x.slotId === r.slotId)
+                        const plan = plans.find(
+                          (x) => x.productId === r.productId && x.slotId === r.slotId,
+                        )
                         return (
-                          <article className={`is-result-card ${r.path ? '' : 'failed'}`} key={r.id}>
+                          <article
+                            className={`is-result-card ${r.path ? '' : 'failed'}`}
+                            key={r.id}
+                          >
                             <button
                               type="button"
                               className="is-result-preview"
@@ -1150,7 +1297,11 @@ export default function ImageStudio() {
                                       void act(
                                         r.remoteId && !r.error?.startsWith('远程图片任务失败')
                                           ? { kind: 'resume', resultId: r.id }
-                                          : { kind: 'retry', productId: r.productId, slotId: r.slotId },
+                                          : {
+                                              kind: 'retry',
+                                              productId: r.productId,
+                                              slotId: r.slotId,
+                                            },
                                       )
                                     }
                                   >
@@ -1242,7 +1393,9 @@ export default function ImageStudio() {
               {(task?.results.find((r) => r.id === selected.id)?.review || selected.review) && (
                 <div className="is-review">
                   <strong>质检意见</strong>
-                  <p>{task?.results.find((r) => r.id === selected.id)?.review || selected.review}</p>
+                  <p>
+                    {task?.results.find((r) => r.id === selected.id)?.review || selected.review}
+                  </p>
                 </div>
               )}
               <Field label="只修改这一张">
@@ -1285,11 +1438,15 @@ export default function ImageStudio() {
                 />
               </Field>
               <Button
-                disabled={busy || dirty || !freezeName.trim() || selected.revision !== task?.revision}
+                disabled={
+                  busy || dirty || !freezeName.trim() || selected.revision !== task?.revision
+                }
                 onClick={() =>
                   void perform(async () => {
                     if (task) {
-                      updateTemplate(await api.imageStudioFreeze(task.id, selected.productId, freezeName))
+                      updateTemplate(
+                        await api.imageStudioFreeze(task.id, selected.productId, freezeName),
+                      )
                       setSelected(null)
                       setNotice('已保存为样图模板，请在模板库检查文案和商品专属规则后复用。')
                     }
@@ -1357,14 +1514,19 @@ export default function ImageStudio() {
               调整尺寸会等比缩放并补白，导出 JPG。宽、高和大小全部设为 0，可原样复制生成文件。
             </p>
             <div className="is-dialog-actions">
-              <Button onClick={() => setDelivery({ width: 0, height: 0, maxKb: 0 })}>使用原图规格</Button>
+              <Button onClick={() => setDelivery({ width: 0, height: 0, maxKb: 0 })}>
+                使用原图规格
+              </Button>
               <Button
                 variant="primary"
                 disabled={pending}
                 onClick={() =>
                   void perform(async () => {
                     if (!task) return
-                    const dest = await open({ directory: true, title: '选择交付图保存位置' })
+                    const dest = await open({
+                      directory: true,
+                      title: '选择交付图保存位置',
+                    })
                     if (typeof dest === 'string') {
                       const path = await api.imageStudioExport(
                         task.id,
