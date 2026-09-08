@@ -19,6 +19,7 @@ import {
   isChatKnowledgeCenterPath,
   isChatMcpCenterPath,
   isChatNotesPath,
+  isChatImagesPath,
   isChatOnboardingRoute,
   isChatPluginCenterPath,
   isChatSessionCenterPath,
@@ -231,7 +232,8 @@ const AutomationCenter = lazy(() => import('./automation/AutomationCenter').then
   default: module.AutomationCenter,
 })))
 
-type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'onboarding'
+const ImageStudio = lazy(() => import('./images/ImageStudio'))
+type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'onboarding' | 'images'
 
 interface ChatProps {
   onSettingsChange: () => void
@@ -637,6 +639,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (isChatMcpCenterPath(path)) return 'mcp'
     if (isChatKnowledgeCenterPath(path)) return 'knowledge'
     if (isChatNotesPath(path)) return 'notes'
+    if (isChatImagesPath(path)) return 'images'
     if (isChatAutomationsPath(path)) return 'automations'
     // 旧 `#chat/sessions`：对话库已迁设置
     if (isChatSessionCenterPath(path)) return 'settings'
@@ -5389,6 +5392,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           onForceDropConversation={handleSidebarForceDropConversation}
           onConversationsLoaded={handleSidebarConversationsLoaded}
           onOpenExtensionsItem={handleSidebarOpenExtensionsItem}
+          onOpenImages={() => setHash('#chat/images')}
+          imagesActive={chatView === 'images'}
           onOpenSettings={handleSidebarOpenSettings}
           onSelectLang={handleSidebarSelectLang}
           onOpenUsage={handleSidebarOpenUsage}
@@ -5475,6 +5480,11 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             <Suspense fallback={null}>
               <KnowledgeCenter />
             </Suspense>
+          </div>
+        ) : chatView === 'images' ? (
+          <div key="center" className={centerPageClass}>
+            {centerPageTopStrip}
+            <Suspense fallback={null}><ImageStudio /></Suspense>
           </div>
         ) : chatView === 'notes' ? (
           <div key="center" className={centerPageClass}>

@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   MoreHorizontal,
   NotebookPen,
+  Image as ImageIcon,
   Plus,
   Search,
   Settings,
@@ -207,6 +208,8 @@ export interface SidebarProps {
   onConversationsLoaded?: () => void
   onOpenSettings: () => void
   onOpenExtensionsItem: (item: ExtensionsNavItem) => void
+  onOpenImages?: () => void
+  imagesActive?: boolean
   onSelectLang: (lang: Lang) => void
   onOpenUsage: () => void
   settingsActive?: boolean
@@ -617,6 +620,8 @@ export const Sidebar = memo(function Sidebar({
   onConversationsLoaded,
   onOpenSettings,
   onOpenExtensionsItem,
+  onOpenImages,
+  imagesActive = false,
   onSelectLang,
   onOpenUsage,
   settingsActive = false,
@@ -1404,6 +1409,12 @@ export const Sidebar = memo(function Sidebar({
           active={searchOpen}
           iconMotion="group-hover:scale-110"
         />
+        {onOpenImages && <NavRow
+          icon={<ImageIcon size={17} strokeWidth={1.75} />}
+          label={lang === 'en' ? 'Images' : '图片'}
+          onClick={onOpenImages}
+          active={imagesActive}
+        />}
         <ExtensionsNav
           activeItem={extensionsActive}
           onSelectItem={onOpenExtensionsItem}

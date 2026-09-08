@@ -20,6 +20,7 @@ import type {
 } from '../generated/chatProtocol'
 import type { Automation, AutomationChangedEvent, AutomationMeta, AutomationRun, AutomationRunEvent, AutomationRunStarted, AutomationRunSummary } from '../chat/automation/types'
 import type { GoalState } from '../chat/types'
+import type { ImageAction, ImageBootstrap, ImageBrief, ImageConfig, ImagePlan, ImageProduct, ImageTask, ImageTemplate } from '../chat/images/types'
 
 // ========== 类型定义 ==========
 
@@ -1926,6 +1927,20 @@ async function onChatProtocol(
 // ========== API 导出 ==========
 
 export const api = {
+  imageStudioBootstrap: () => invoke<ImageBootstrap>('image_studio_bootstrap'),
+  imageStudioGet: (id: string) => invoke<ImageTask>('image_studio_get', { id }),
+  imageStudioSave: (brief: ImageBrief, id?: string, revision?: number) => invoke<ImageTask>('image_studio_save', { id: id ?? null, revision: revision ?? null, brief }),
+  imageStudioSavePlans: (id: string, revision: number, plans: ImagePlan[]) => invoke<ImageTask>('image_studio_save_plans', { id, revision, plans }),
+  imageStudioImport: (paths: string[], asProducts: boolean) => invoke<ImageProduct[]>('image_studio_import', { paths, asProducts }),
+  imageStudioConfig: (config: ImageConfig) => invoke<void>('image_studio_config', { config }),
+  imageStudioPreview: (path: string, original = false) => invoke<string>('image_studio_preview', { path, original }),
+  imageStudioAction: (id: string, revision: number, action: ImageAction) => invoke<ImageTask>('image_studio_action', { id, revision, action }),
+  imageStudioTemplateImport: (path: string) => invoke<ImageTemplate>('image_studio_template_import', { path }),
+  imageStudioTemplateSave: (template: ImageTemplate) => invoke<ImageTemplate>('image_studio_template_save', { template }),
+  imageStudioTemplateExport: (id: string, destination: string) => invoke<string>('image_studio_template_export', { id, destination }),
+  imageStudioFreeze: (id: string, productId: string, name: string) => invoke<ImageTemplate>('image_studio_freeze', { id, productId, name }),
+  imageStudioExport: (id: string, destination: string, width: number, height: number, maxKb: number) => invoke<string>('image_studio_export', { id, destination, width, height, maxKb }),
+  imageStudioOpen: (path?: string) => invoke<void>('image_studio_open', { path: path ?? null }),
   providerOAuthStart: (provider: ProviderOAuthConfig['provider'], useSystemProxy = true) =>
     invoke<ProviderOAuthLogin>('provider_oauth_start', { provider, useSystemProxy }),
   providerOAuthPoll: (loginId: string) => invoke<ProviderOAuthPoll>('provider_oauth_poll', { loginId }),

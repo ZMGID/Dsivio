@@ -8,6 +8,7 @@ import {
   isChatKnowledgeCenterPath,
   isChatMcpCenterPath,
   isChatNotesPath,
+  isChatImagesPath,
   isChatOnboardingRoute,
   isChatPluginCenterPath,
   isChatSessionCenterPath,
@@ -18,7 +19,7 @@ import {
 
 type ChatView =
   | 'conversation' | 'settings' | 'assistants' | 'skill'
-  | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'onboarding'
+  | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'onboarding' | 'images'
 
 interface UseChatRoutingParams {
   onViewChange: (view: ChatView) => void
@@ -92,6 +93,10 @@ export function useChatRouting({
       }
       if (isChatNotesPath(path)) {
         onViewChange('notes')
+        return
+      }
+      if (isChatImagesPath(path)) {
+        onViewChange('images')
         return
       }
       if (isChatAutomationsPath(path)) {

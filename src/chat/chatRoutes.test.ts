@@ -15,6 +15,7 @@ import {
   isChatKnowledgeCenterPath,
   isChatMcpCenterPath,
   isChatNotesPath,
+  isChatImagesPath,
   isChatOnboardingRoute,
   isChatPluginCenterPath,
   isChatPopoutRoute,
@@ -40,6 +41,7 @@ describe('chatRoutes 判定', () => {
       ['chat/mcp', isChatMcpCenterPath],
       ['chat/knowledge', isChatKnowledgeCenterPath],
       ['chat/notes', isChatNotesPath],
+      ['chat/images', isChatImagesPath],
       ['chat/onboarding', isChatOnboardingRoute],
       ['chat/popout', isChatPopoutRoute],
     ]
@@ -62,6 +64,7 @@ describe('chatRoutes 判定', () => {
     // 'chat/settingsx' 不是 settings 的子路径
     expect(isChatSettingsPath('chat/settingsx')).toBe(false)
     expect(isChatNotesPath('chat/notesarchive')).toBe(false)
+    expect(isChatImagesPath('chat/images-old')).toBe(false)
   })
 
   it('会话路径不被任何中心页判定命中', () => {
@@ -77,6 +80,11 @@ describe('chatRoutes 判定', () => {
 })
 
 describe('hashPath', () => {
+  it('图片中心的深链接不会被当作聊天会话', () => {
+    withHash('#chat/images/task-123')
+    expect(isChatImagesPath(hashPath())).toBe(true)
+    expect(getRouteConversationId()).toBeNull()
+  })
   it('去掉 # 并截断 query', () => {
     withHash('#chat/abc?mode=x')
     expect(hashPath()).toBe('chat/abc')

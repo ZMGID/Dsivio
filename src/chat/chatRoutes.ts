@@ -64,6 +64,10 @@ export function isChatNotesPath(path: string): boolean {
   return path === 'chat/notes' || path.startsWith('chat/notes/')
 }
 
+export function isChatImagesPath(path: string): boolean {
+  return path === 'chat/images' || path.startsWith('chat/images/')
+}
+
 /**
  * 从当前 hash 解析会话 id；非会话路由返回 null。
  * 中心页（settings / assistants / skill / mcp / notes / sessions / plugins / automations / …）一律排除。
@@ -80,6 +84,7 @@ export function getRouteConversationId(): string | null {
   if (rest === 'plugins' || rest.startsWith('plugins/')) return null
   if (rest === 'mcp' || rest.startsWith('mcp/')) return null
   if (rest === 'notes' || rest.startsWith('notes/')) return null
+  if (rest === 'images' || rest.startsWith('images/')) return null
   if (rest === 'onboarding' || rest.startsWith('onboarding/')) return null
   if (rest === 'popout' || rest.startsWith('popout/')) return null
   if (rest === 'automations' || rest.startsWith('automations/')) return null
