@@ -358,7 +358,7 @@ function TemplatePagePreview({
 
   useEffect(() => {
     const trigger = document.activeElement
-    dialogRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
+    dialogRef.current?.focus()
     return () => {
       if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus()
     }
@@ -373,10 +373,11 @@ function TemplatePagePreview({
     >
       <section
         ref={dialogRef}
-        className="kv-modal is-dialog is-template-preview-dialog custom-scrollbar"
+        className="kv-modal is-dialog is-template-preview-dialog"
         role="dialog"
         aria-modal="true"
         aria-label={`${template.data.name} · 页面预览`}
+        tabIndex={-1}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
             e.stopPropagation()
@@ -406,7 +407,7 @@ function TemplatePagePreview({
             <X size={18} />
           </IconButton>
         </div>
-        <div className="is-template-preview-body" key={index}>
+        <div className="is-template-preview-body custom-scrollbar" key={index}>
           <p className="is-muted">
             第 {index + 1} / {template.data.slots.length} 张 · {slot.id}
           </p>

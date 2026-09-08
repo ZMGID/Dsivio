@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   ArrowRight,
@@ -40,7 +41,6 @@ import {
   latestResults,
   productGroup,
   sampleComplete,
-  SHOTS,
   type ImageAction,
   type ImageBrief,
   type ImageConfig,
@@ -56,6 +56,8 @@ import { builtinTemplates as initialTemplates } from './builtinTemplates'
 import './imageStudio.css'
 import './studioLayout.css'
 import { DRAFT_KEY, readStudioDraft, storeStudioDraft } from './draft'
+import { RequirementOptimize } from './RequirementOptimize'
+import { dropAsProducts } from './studioDrop'
 
 const ICONS = [WandSparkles, ScanLine, Layers3, Palette, Grid2X2]
 const DEFAULT_CONFIG: ImageConfig = {
@@ -96,6 +98,7 @@ export default function ImageStudio() {
   })
   const [showHistory, setShowHistory] = useState(false)
   const [freezeName, setFreezeName] = useState('')
+  const [dropActive, setDropActive] = useState(false)
   const running = task?.status === 'running'
   const busy = pending || running
   const dirty = task ? JSON.stringify(brief) !== JSON.stringify(task.brief) : true
@@ -302,6 +305,87 @@ export default function ImageStudio() {
       ...b,
       products: b.products.map((x) => (x.id === id ? { ...x, ...p } : x)),
     }))
+  const briefFeatureRef = useRef(brief.feature)
+  briefFeatureRef.current = brief.feature
+  const dropReadyRef = useRef({ accept: false, busy: false })
+  dropReadyRef.current = {
+    accept: view !== 'templates' && stage === 'brief',
+    busy,
+  }
+  const mergeImportedProducts = useCallback((asFolder: boolean, products: ImageProduct[]) => {
+    setBrief((b) => {
+      if (!asFolder && b.feature !== 'client' && b.products.length === 1) {
+        const current = b.products[0]
+        const added = products.flatMap((item) => item.assets)
+        return {
+          ...b,
+          products: [
+            {
+              ...current,
+              assets: [...current.assets, ...added],
+              front: current.front || added[0]?.id || null,
+            },
+          ],
+        }
+      }
+      return { ...b, products: [...b.products, ...products] }
+    })
+  }, [])
+  const importFromPaths = (paths: string[], asFolder: boolean) =>
+    perform(async () => {
+      if (!paths.length) return
+      const products = await api.imageStudioImport(
+        paths,
+        asFolder || briefFeatureRef.current === 'client',
+      )
+      mergeImportedProducts(asFolder, products)
+    })
+  const importDropped = (paths: string[]) => {
+    if (dropReadyRef.current.busy || !paths.length) return
+    void importFromPaths(paths, dropAsProducts(paths, briefFeatureRef.current))
+  }
+  const importDroppedRef = useRef(importDropped)
+  importDroppedRef.current = importDropped
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (cancelled) return
+        const payload = event.payload
+        if (!dropReadyRef.current.accept) {
+          if (payload.type === 'leave' || payload.type === 'drop') setDropActive(false)
+          return
+        }
+        if (payload.type === 'enter' || payload.type === 'over') {
+          if (!dropReadyRef.current.busy) setDropActive(true)
+          return
+        }
+        if (payload.type === 'leave') {
+          setDropActive(false)
+          return
+        }
+        if (payload.type === 'drop') {
+          setDropActive(false)
+          importDroppedRef.current(payload.paths)
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
+      })
+      .catch((err) => console.error('Image studio drag-drop listen failed:', err))
+    return () => {
+      cancelled = true
+      setDropActive(false)
+      unlisten?.()
+    }
+  }, [])
+  const keepOsDrop = (event: DragEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+  }
   const importImages = (folder: boolean) =>
     perform(async () => {
       const paths = await open(
@@ -318,27 +402,12 @@ export default function ImageStudio() {
             },
       )
       if (!paths) return
+      const list = Array.isArray(paths) ? paths : [paths]
       const products = await api.imageStudioImport(
-        Array.isArray(paths) ? paths : [paths],
-        folder || brief.feature === 'client',
+        list,
+        folder || briefFeatureRef.current === 'client',
       )
-      setBrief((b) => {
-        if (!folder && b.feature !== 'client' && b.products.length === 1) {
-          const p = b.products[0],
-            added = products.flatMap((p) => p.assets)
-          return {
-            ...b,
-            products: [
-              {
-                ...p,
-                assets: [...p.assets, ...added],
-                front: p.front || added[0]?.id || null,
-              },
-            ],
-          }
-        }
-        return { ...b, products: [...b.products, ...products] }
-      })
+      mergeImportedProducts(folder, products)
     })
   const updateTemplate = (t: ImageTemplate) =>
     setTemplates((all) => [...all.filter((x) => x.id !== t.id), t])
@@ -562,12 +631,16 @@ export default function ImageStudio() {
               {stage === 'brief' && (
                 <div className="is-brief-layout">
                   <div className="is-editor-column">
-                    <section className="is-section">
+                    <section
+                      className={`is-section${dropActive ? ' is-materials-drop-active' : ''}`}
+                      onDragEnter={keepOsDrop}
+                      onDragOver={keepOsDrop}
+                      onDrop={keepOsDrop}
+                    >
                       <div className="is-section-heading">
                         <div>
                           <span className="is-step-number">01</span>
                           <h3>商品素材</h3>
-                          <span className="is-count">{brief.products.length} 款</span>
                         </div>
                         <div className="is-actions">
                           <Button size="sm" disabled={busy} onClick={() => void importImages(true)}>
@@ -585,15 +658,18 @@ export default function ImageStudio() {
                         </div>
                       </div>
                       {!brief.products.length ? (
-                        <div className="is-upload-area">
+                        <div
+                          className={`is-upload-area${dropActive ? ' is-drop-active' : ''}`}
+                          aria-label="商品素材投放区"
+                        >
                           <div className="is-upload-illustration">
                             <FileImage size={35} strokeWidth={1.1} />
                             <span>
                               <Plus size={14} />
                             </span>
                           </div>
-                          <h3>放进你的商品，开始创作</h3>
-                          <p>支持 PNG、JPG、WebP · 一款商品可以有多张参考图</p>
+                          <h3>{dropActive ? '松开即可导入' : '放进你的商品，开始创作'}</h3>
+                          <p>支持 PNG、JPG、WebP · 图片或商品文件夹都可以直接拖进来</p>
                           <Button disabled={busy} onClick={() => void importImages(false)}>
                             选择商品图片
                             <ArrowRight size={14} />
@@ -605,192 +681,68 @@ export default function ImageStudio() {
                           </small>
                         </div>
                       ) : (
-                        <div className="is-products">
+                        <div
+                          className={`is-upload-area is-upload-area--filled${dropActive ? ' is-drop-active' : ''}`}
+                          aria-label="商品素材投放区"
+                        >
                           {visibleProducts.map((p, index) => {
-                            const pt = templates.find(
-                              (t) => t.id === (p.templateId || brief.templateId),
-                            )
+                            const showName =
+                              brief.products.length > 1 ||
+                              (p.name.trim() !== '' && p.name !== '商品素材')
                             return (
-                              <article className="is-product" key={p.id}>
-                                <div className="is-product-heading">
-                                  <span className="is-step-number">{index + 1}</span>
-                                  <input
-                                    className="kv-input"
-                                    aria-label="商品名称 / SKU"
-                                    disabled={busy}
-                                    value={p.name}
-                                    onChange={(e) =>
-                                      patchProduct(p.id, {
-                                        name: e.target.value,
-                                      })
-                                    }
-                                  />
-                                  {index < 2 && brief.feature !== 'gen' && (
-                                    <span className="is-sample-badge">样品</span>
-                                  )}
-                                  <IconButton
-                                    label={`移除 ${p.name}`}
-                                    disabled={busy}
-                                    onClick={() =>
-                                      patch({
-                                        products: brief.products.filter((x) => x.id !== p.id),
-                                      })
-                                    }
-                                  >
-                                    <X size={14} />
-                                  </IconButton>
-                                </div>
+                              <div className="is-asset-group" key={p.id}>
+                                {showName && (
+                                  <div className="is-product-heading">
+                                    <strong className="is-product-name">{p.name}</strong>
+                                    {index < 2 && brief.feature !== 'gen' && (
+                                      <span className="is-sample-badge">样品</span>
+                                    )}
+                                    <IconButton
+                                      label={`移除 ${p.name}`}
+                                      disabled={busy}
+                                      onClick={() =>
+                                        patch({
+                                          products: brief.products.filter((x) => x.id !== p.id),
+                                        })
+                                      }
+                                    >
+                                      <X size={14} />
+                                    </IconButton>
+                                  </div>
+                                )}
                                 <div className="is-asset-strip custom-scrollbar">
                                   {p.assets.map((a) => (
                                     <div className="is-asset" key={a.id}>
                                       <AssetImage path={a.path} name={a.name} />
-                                      <span>
-                                        {p.front === a.id
-                                          ? '正面'
-                                          : p.back === a.id
-                                            ? '背面'
-                                            : '参考'}
-                                      </span>
                                       <small title={a.name}>{a.name}</small>
                                       <IconButton
                                         label={`移除素材 ${a.name}`}
                                         disabled={busy}
-                                        onClick={() =>
+                                        onClick={() => {
+                                          const assets = p.assets.filter((x) => x.id !== a.id)
+                                          if (!assets.length) {
+                                            patch({
+                                              products: brief.products.filter((x) => x.id !== p.id),
+                                            })
+                                            return
+                                          }
                                           patchProduct(p.id, {
-                                            assets: p.assets.filter((x) => x.id !== a.id),
+                                            assets,
                                             front: p.front === a.id ? null : p.front,
                                             back: p.back === a.id ? null : p.back,
                                           })
-                                        }
+                                        }}
                                       >
                                         <X size={11} />
                                       </IconButton>
                                     </div>
                                   ))}
                                 </div>
-                                <div className="is-two-cols">
-                                  <Field label="商品正面">
-                                    <StudioSelect
-                                      disabled={busy}
-                                      value={p.front || ''}
-                                      onChange={(e) =>
-                                        patchProduct(p.id, {
-                                          front: e.target.value || null,
-                                        })
-                                      }
-                                    >
-                                      <option value="">选择正面图</option>
-                                      {p.assets.map((a) => (
-                                        <option key={a.id} value={a.id}>
-                                          {a.name}
-                                        </option>
-                                      ))}
-                                    </StudioSelect>
-                                  </Field>
-                                  <Field label="真实背面（需要时填写）">
-                                    <StudioSelect
-                                      disabled={busy}
-                                      value={p.back || ''}
-                                      onChange={(e) =>
-                                        patchProduct(p.id, {
-                                          back: e.target.value || null,
-                                        })
-                                      }
-                                    >
-                                      <option value="">未提供背面图</option>
-                                      {p.assets.map((a) => (
-                                        <option key={a.id} value={a.id}>
-                                          {a.name}
-                                        </option>
-                                      ))}
-                                    </StudioSelect>
-                                  </Field>
-                                </div>
-                                {brief.feature === 'client' && (
-                                  <div className="is-two-cols">
-                                    <Field label="所属分类">
-                                      <input
-                                        className="kv-input"
-                                        disabled={busy}
-                                        value={p.category}
-                                        onChange={(e) =>
-                                          patchProduct(p.id, {
-                                            category: e.target.value,
-                                          })
-                                        }
-                                      />
-                                    </Field>
-                                    <Field label="这一款的模板">
-                                      <StudioSelect
-                                        disabled={busy}
-                                        value={p.templateId || ''}
-                                        onChange={(e) =>
-                                          patchProduct(p.id, {
-                                            templateId: e.target.value || null,
-                                          })
-                                        }
-                                      >
-                                        <option value="">使用通用模板</option>
-                                        {templates.map((t) => (
-                                          <option value={t.id} key={t.id}>
-                                            {t.data.name}
-                                          </option>
-                                        ))}
-                                      </StudioSelect>
-                                    </Field>
-                                  </div>
-                                )}
-                                {!!pt?.data.product_kinds && (
-                                  <Field label="款型分支">
-                                    <StudioSelect
-                                      disabled={busy}
-                                      value={p.kind}
-                                      onChange={(e) =>
-                                        patchProduct(p.id, {
-                                          kind: e.target.value,
-                                        })
-                                      }
-                                    >
-                                      <option value="">选择商品款型</option>
-                                      {Object.keys(pt.data.product_kinds).map((k) => (
-                                        <option key={k} value={k}>
-                                          {k}
-                                        </option>
-                                      ))}
-                                    </StudioSelect>
-                                  </Field>
-                                )}
-                                <Field
-                                  label="已知商品信息"
-                                  hint="尺寸、材质、卖点等以真实商品为准。"
-                                >
-                                  <textarea
-                                    className="kv-textarea custom-scrollbar"
-                                    rows={2}
-                                    disabled={busy}
-                                    value={p.facts}
-                                    onChange={(e) =>
-                                      patchProduct(p.id, {
-                                        facts: e.target.value,
-                                      })
-                                    }
-                                    placeholder="例如：容量 20L，尼龙面料，有独立电脑隔层"
-                                  />
-                                </Field>
-                              </article>
+                              </div>
                             )
                           })}
+                          <p>{dropActive ? '松开即可继续导入' : '还可以直接拖入更多图片或文件夹'}</p>
                         </div>
-                      )}
-                      {brief.products.length > 0 && (
-                        <Button
-                          size="sm"
-                          disabled={busy}
-                          onClick={() => void act({ kind: 'classify' })}
-                        >
-                          <ScanLine size={15} />让 Agent 识别商品
-                          {brief.feature === 'client' ? '并分类' : ''}
-                        </Button>
                       )}
                     </section>
                     <section className="is-section is-requirements-section">
@@ -800,53 +752,26 @@ export default function ImageStudio() {
                           <h3>这次要做什么</h3>
                         </div>
                       </div>
-                      {brief.feature === 'gen' && (
-                        <div className="is-preset-chips">
-                          {SHOTS.slice(0, 5).map((s) => (
-                            <Button
-                              size="sm"
-                              disabled={busy}
-                              key={s}
-                              onClick={() =>
-                                patch({
-                                  requirement: `${s}。${brief.requirement}`,
-                                })
-                              }
-                            >
-                              {s}
-                            </Button>
-                          ))}
-                          <details>
-                            <summary>更多场景</summary>
-                            <div>
-                              {SHOTS.slice(5).map((s) => (
-                                <Button
-                                  size="sm"
-                                  disabled={busy}
-                                  key={s}
-                                  onClick={() =>
-                                    patch({
-                                      requirement: `${s}。${brief.requirement}`,
-                                    })
-                                  }
-                                >
-                                  {s}
-                                </Button>
-                              ))}
-                            </div>
-                          </details>
+                      <div className="is-field">
+                        <div className="is-field-toolbar">
+                          <span>图片要求</span>
+                          <RequirementOptimize
+                            value={brief.requirement}
+                            disabled={busy}
+                            onChange={(requirement) => patch({ requirement })}
+                            onError={report}
+                          />
                         </div>
-                      )}
-                      <Field label="图片要求">
                         <textarea
                           className="kv-textarea custom-scrollbar"
                           rows={5}
+                          aria-label="图片要求"
                           disabled={busy}
                           value={brief.requirement}
                           onChange={(e) => patch({ requirement: e.target.value })}
                           placeholder="例如：为这款背包做一套巴西市场商品图，突出大容量和通勤场景。画面简洁，保留商品原本的颜色和 Logo。"
                         />
-                      </Field>
+                      </div>
                       <Field label="统一风格（可选）">
                         <textarea
                           className="kv-textarea custom-scrollbar"
@@ -857,6 +782,87 @@ export default function ImageStudio() {
                           placeholder="色调、背景、光线、文字风格；填写后优先于模板默认风格"
                         />
                       </Field>
+                      {visibleProducts.map((p) => {
+                        const pt = templates.find(
+                          (t) => t.id === (p.templateId || brief.templateId),
+                        )
+                        const factsLabel =
+                          visibleProducts.length > 1 && p.name !== '商品素材'
+                            ? `${p.name} 的商品信息（可选）`
+                            : '商品信息（可选）'
+                        return (
+                          <div key={`${p.id}-facts`}>
+                            {brief.feature === 'client' && (
+                              <div className="is-two-cols">
+                                <Field label="所属分类">
+                                  <input
+                                    className="kv-input"
+                                    disabled={busy}
+                                    value={p.category}
+                                    onChange={(e) =>
+                                      patchProduct(p.id, {
+                                        category: e.target.value,
+                                      })
+                                    }
+                                  />
+                                </Field>
+                                <Field label="这一款的模板">
+                                  <StudioSelect
+                                    disabled={busy}
+                                    value={p.templateId || ''}
+                                    onChange={(e) =>
+                                      patchProduct(p.id, {
+                                        templateId: e.target.value || null,
+                                      })
+                                    }
+                                  >
+                                    <option value="">使用通用模板</option>
+                                    {templates.map((t) => (
+                                      <option value={t.id} key={t.id}>
+                                        {t.data.name}
+                                      </option>
+                                    ))}
+                                  </StudioSelect>
+                                </Field>
+                              </div>
+                            )}
+                            {!!pt?.data.product_kinds && (
+                              <Field label="款型分支">
+                                <StudioSelect
+                                  disabled={busy}
+                                  value={p.kind}
+                                  onChange={(e) =>
+                                    patchProduct(p.id, {
+                                      kind: e.target.value,
+                                    })
+                                  }
+                                >
+                                  <option value="">选择商品款型</option>
+                                  {Object.keys(pt.data.product_kinds).map((k) => (
+                                    <option key={k} value={k}>
+                                      {k}
+                                    </option>
+                                  ))}
+                                </StudioSelect>
+                              </Field>
+                            )}
+                            <Field label={factsLabel}>
+                              <textarea
+                                className="kv-textarea custom-scrollbar"
+                                rows={2}
+                                disabled={busy}
+                                value={p.facts}
+                                onChange={(e) =>
+                                  patchProduct(p.id, {
+                                    facts: e.target.value,
+                                  })
+                                }
+                                placeholder="例如：容量 20L，尼龙面料，有独立电脑隔层"
+                              />
+                            </Field>
+                          </div>
+                        )
+                      })}
                     </section>
                   </div>
                   <aside className="is-spec-column">

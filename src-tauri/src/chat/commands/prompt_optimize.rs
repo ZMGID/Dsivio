@@ -52,19 +52,31 @@ pub(super) fn build_optimize_user_prompt(
     draft: &str,
     recent_context: &str,
     language: &str,
+    purpose: &str,
 ) -> String {
     let text = truncate_chars(draft.trim(), MAX_DRAFT_CHARS);
+    let image_brief = purpose == "image_brief";
     if language.starts_with("zh") {
         if recent_context.is_empty() {
-            format!("请优化下面的提问：\n\n{text}")
+            format!(
+                "请优化下面的{}：\n\n{text}",
+                if image_brief { "出图要求" } else { "提问" }
+            )
         } else {
-            format!("最近对话（供指代消解，不要回答）：\n{recent_context}\n\n请优化下面的提问：\n\n{text}")
+            format!(
+                "最近对话（供指代消解，不要回答）：\n{recent_context}\n\n请优化下面的{}：\n\n{text}",
+                if image_brief { "出图要求" } else { "提问" }
+            )
         }
     } else if recent_context.is_empty() {
-        format!("Rewrite this question:\n\n{text}")
+        format!(
+            "Rewrite this {}:\n\n{text}",
+            if image_brief { "image brief" } else { "question" }
+        )
     } else {
         format!(
-            "Recent conversation (for resolving references; do not answer):\n{recent_context}\n\nRewrite this question:\n\n{text}"
+            "Recent conversation (for resolving references; do not answer):\n{recent_context}\n\nRewrite this {}:\n\n{text}",
+            if image_brief { "image brief" } else { "question" }
         )
     }
 }
@@ -139,13 +151,50 @@ fn localize(language: &str, zh: &str, en: &str) -> String {
     }
 }
 
-fn resolve_system_prompt(settings: &Settings, language: &str) -> String {
-    let custom = settings.chat.prompt_optimize_prompt.trim();
-    if custom.is_empty() {
-        default_system_prompt(language).to_string()
+pub(super) fn image_brief_system_prompt(language: &str) -> &'static str {
+    if language.starts_with("zh") {
+        "你是出图要求优化助手。把用户写的图片要求改写成更清楚、可执行的画面说明。\n\
+规则：\n\
+- 只输出优化后的图片要求，不要解释、不要前缀、不要用引号或代码块包起来\n\
+- 保留用户的意图、商品、市场和语言；不要作答，也不要编造用户没给的卖点或规格\n\
+- 补全含糊处（构图、光线、背景、必须保留的商品特征、文字语言），但不要发明事实\n\
+- 已经写得足够清楚时只做轻微润色"
     } else {
-        custom.to_string()
+        "You rewrite image-generation briefs so a model can follow them accurately.\n\
+Rules:\n\
+- Output only the rewritten brief: no explanation, prefix, quotes, or code fences\n\
+- Keep the user's intent, product, market, and language; do not answer or invent specs\n\
+- Fill in vagueness (composition, lighting, background, required product traits) without inventing facts\n\
+- If the draft is already clear, only lightly polish it"
     }
+}
+
+fn resolve_system_prompt(
+    settings: &Settings,
+    language: &str,
+    purpose: &str,
+    expert: Option<(&str, &str)>,
+) -> String {
+    let mut base = if purpose == "image_brief" {
+        image_brief_system_prompt(language).to_string()
+    } else {
+        let custom = settings.chat.prompt_optimize_prompt.trim();
+        if custom.is_empty() {
+            default_system_prompt(language).to_string()
+        } else {
+            custom.to_string()
+        }
+    };
+    if let Some((name, prompt)) = expert {
+        let name = name.trim();
+        if !name.is_empty() {
+            let guidance = truncate_chars(prompt.trim(), 1200);
+            base.push_str(&format!(
+                "\n\n专家视角：{name}\n{guidance}\n按这位专家的专长改写，但仍只输出优化后的正文。"
+            ));
+        }
+    }
+    base
 }
 
 async fn optimize_prompt_with_model(
@@ -155,6 +204,8 @@ async fn optimize_prompt_with_model(
     session: Option<SessionModel<'_>>,
     draft: &str,
     recent_context: &str,
+    purpose: &str,
+    expert: Option<(&str, &str)>,
 ) -> Result<String, String> {
     let language = crate::settings::resolve_chat_language(settings);
     if draft.trim().is_empty() {
@@ -203,11 +254,11 @@ async fn optimize_prompt_with_model(
     let messages = vec![
         serde_json::json!({
             "role": "system",
-            "content": resolve_system_prompt(settings, &language),
+            "content": resolve_system_prompt(settings, &language, purpose, expert),
         }),
         serde_json::json!({
             "role": "user",
-            "content": build_optimize_user_prompt(draft, recent_context, &language),
+            "content": build_optimize_user_prompt(draft, recent_context, &language, purpose),
         }),
     ];
     let spec = prompt_optimize_call_spec();
@@ -249,8 +300,24 @@ pub(crate) async fn chat_optimize_prompt(
     state: State<'_, AppState>,
     text: String,
     conversation_id: Option<String>,
+    assistant_id: Option<String>,
+    purpose: Option<String>,
 ) -> Result<String, String> {
     let settings = state.settings_read().clone();
+    let purpose = match purpose.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some("image_brief") => "image_brief",
+        _ => "question",
+    };
+    let expert = assistant_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| crate::chat::storage::get_assistant(&app, id))
+        .transpose()?
+        .map(|assistant| (assistant.name, assistant.system_prompt));
+    let expert = expert
+        .as_ref()
+        .map(|(name, prompt)| (name.as_str(), prompt.as_str()));
     let mut recent_context = String::new();
     let mut session_owned: Option<(String, String)> = None;
     if let Some(id) = conversation_id
@@ -280,6 +347,8 @@ pub(crate) async fn chat_optimize_prompt(
             session,
             &text,
             &recent_context,
+            purpose,
+            expert,
         ),
     )
     .await
@@ -383,13 +452,31 @@ mod tests {
 
     #[test]
     fn user_prompt_includes_draft_and_optional_context() {
-        let plain = build_optimize_user_prompt("帮我看看这个", "", "zh");
+        let plain = build_optimize_user_prompt("帮我看看这个", "", "zh", "question");
         assert!(plain.contains("帮我看看这个"));
         assert!(!plain.contains("最近对话"));
 
-        let with_ctx = build_optimize_user_prompt("那这个呢", "用户：第一问", "zh");
+        let with_ctx = build_optimize_user_prompt("那这个呢", "用户：第一问", "zh", "question");
         assert!(with_ctx.contains("最近对话"));
         assert!(with_ctx.contains("那这个呢"));
+
+        let brief = build_optimize_user_prompt("白底主图", "", "zh", "image_brief");
+        assert!(brief.contains("出图要求"));
+        assert!(brief.contains("白底主图"));
+    }
+
+    #[test]
+    fn image_brief_system_prompt_uses_selected_expert() {
+        let settings = Settings::default();
+        let text = resolve_system_prompt(
+            &settings,
+            "zh",
+            "image_brief",
+            Some(("电商视觉", "强调留白和商品比例")),
+        );
+        assert!(text.contains("出图要求优化助手"));
+        assert!(text.contains("电商视觉"));
+        assert!(text.contains("强调留白和商品比例"));
     }
 
     fn test_app_state() -> AppState {
@@ -502,7 +589,16 @@ mod tests {
         settings.retry_enabled = false;
 
         let rewritten =
-            optimize_prompt_with_model(&settings, &state, "conv_opt", None, "帮我看看这个", "")
+            optimize_prompt_with_model(
+                &settings,
+                &state,
+                "conv_opt",
+                None,
+                "帮我看看这个",
+                "",
+                "question",
+                None,
+            )
                 .await
                 .expect("rewrite from streamed model");
 

@@ -5089,6 +5089,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     presetLocked: Boolean(currentConversation) && !currentConversationIsBlank,
     presetLockedReason: i18n[uiLang].chatAgentPresetLocked,
     usageSlot: composerUsageSlot,
+    acceptOsDrops: chatView === 'conversation',
   }), [
     activeAgentRuntime.externalAgentId,
     activeBuiltinWebSearchSupported,
@@ -5100,6 +5101,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     composerCurrentAssistant,
     composerForceKnowledgeSearch,
     composerKnowledgeBaseIds,
+    chatView,
     composerAdditionalDirectories,
     composerUsageSlot,
     conversationProject,

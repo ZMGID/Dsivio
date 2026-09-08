@@ -7,9 +7,14 @@ import {
   latestResults,
   sampleComplete,
   type ImageBootstrap,
+  type ImageProduct,
   type ImageResult,
   type ImageTask,
 } from './types'
+
+let dropHandler:
+  | ((event: { payload: { type: string; paths?: string[] } }) => void)
+  | undefined
 
 vi.mock('../../api/tauri', () => ({
   isTauriRuntime: () => true,
@@ -20,9 +25,26 @@ vi.mock('../../api/tauri', () => ({
     imageStudioAction: vi.fn(),
     imageStudioPreview: vi.fn(),
     imageStudioSavePlans: vi.fn(),
+    imageStudioImport: vi.fn(),
   },
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
+vi.mock('../api', () => ({
+  chatApi: {
+    getAssistants: vi.fn().mockResolvedValue([]),
+    optimizePrompt: vi.fn(),
+  },
+}))
+vi.mock('@tauri-apps/api/webview', () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: (fn: (event: { payload: { type: string; paths?: string[] } }) => void) => {
+      dropHandler = fn
+      return Promise.resolve(() => {
+        if (dropHandler === fn) dropHandler = undefined
+      })
+    },
+  }),
+}))
 
 const config = {
   providerId: 'p',
@@ -93,11 +115,27 @@ function bootstrap(tasks: ImageTask[] = []): ImageBootstrap {
     templates: [],
   }
 }
+function importedProduct(name = '商品素材'): ImageProduct {
+  return {
+    id: 'imported',
+    name,
+    category: '未分类',
+    kind: '',
+    facts: '',
+    front: 'asset-1',
+    back: null,
+    assets: [{ id: 'asset-1', name: 'front.png', path: 'imports/front.png' }],
+    templateId: null,
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
+  dropHandler = undefined
   localStorage.clear()
   vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap())
   vi.mocked(api.imageStudioPreview).mockResolvedValue('data:image/png;base64,iVBORw0KGgo=')
+  vi.mocked(api.imageStudioImport).mockResolvedValue([importedProduct()])
 })
 
 describe('Image workspace state gates', () => {
@@ -151,6 +189,8 @@ describe('Built-in image workflows', () => {
     expect(screen.getByRole('region', { name: '图片工作台' })).toHaveClass('kv')
     expect(screen.getByRole('main')).toHaveClass('custom-scrollbar')
     expect(screen.getByLabelText('图片要求')).toHaveClass('kv-textarea', 'custom-scrollbar')
+    expect(screen.getByRole('button', { name: '先写下图片要求' })).toBeDisabled()
+    expect(screen.queryByText('更多场景')).not.toBeInTheDocument()
     const platform = screen.getByRole('button', { name: '使用平台' })
     expect(platform).toHaveClass('kv-select')
     fireEvent.click(platform)
@@ -230,5 +270,41 @@ describe('Built-in image workflows', () => {
         group: '背包',
       }),
     )
+  })
+})
+
+describe('Product material drag-drop', () => {
+  it('imports dropped images as reference photos', async () => {
+    render(<ImageStudio />)
+    const zone = await screen.findByLabelText('商品素材投放区')
+    await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+    dropHandler?.({ payload: { type: 'enter' } })
+    await waitFor(() => expect(zone).toHaveClass('is-drop-active'))
+    dropHandler?.({ payload: { type: 'drop', paths: ['C:\\goods\\front.png'] } })
+    await waitFor(() =>
+      expect(api.imageStudioImport).toHaveBeenCalledWith(['C:\\goods\\front.png'], false),
+    )
+    expect(await screen.findByLabelText('商品信息（可选）')).toBeInTheDocument()
+    expect(screen.queryByText('再加图')).not.toBeInTheDocument()
+    expect(screen.queryByText('1 款')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('商品素材投放区')).toHaveClass('is-upload-area--filled')
+    expect(screen.queryByLabelText('商品正面')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('商品名称 / SKU')).not.toBeInTheDocument()
+  })
+  it('imports dropped folders as SKUs', async () => {
+    vi.mocked(api.imageStudioImport).mockResolvedValue([importedProduct('sku-a')])
+    render(<ImageStudio />)
+    await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+    dropHandler?.({
+      payload: { type: 'drop', paths: ['C:\\goods\\sku-a', 'C:\\goods\\back.jpg'] },
+    })
+    await waitFor(() =>
+      expect(api.imageStudioImport).toHaveBeenCalledWith(
+        ['C:\\goods\\sku-a', 'C:\\goods\\back.jpg'],
+        true,
+      ),
+    )
+    expect(await screen.findByText('sku-a')).toBeInTheDocument()
+    expect(screen.getByLabelText('商品信息（可选）')).toBeInTheDocument()
   })
 })
