@@ -40,7 +40,7 @@ pub(crate) fn show(app: &tauri::AppHandle, title: &str, body: &str) {
             .config()
             .product_name
             .clone()
-            .unwrap_or_else(|| "Kivio Desktop".into());
+            .unwrap_or_else(|| "Dskivio".into());
         tauri::async_runtime::spawn_blocking(move || {
             windows_notify(&app_id, &display_name, &title, &body);
         });
@@ -214,7 +214,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_script_activates_the_winrt_xml_type_explicitly() {
-        let script = windows_script("com.zmair.kivio", "Kivio Desktop", "<toast />");
+        let script = windows_script("com.zmair.kivio", "Dskivio", "<toast />");
         assert!(script.contains(
             "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]::new()"
         ));
@@ -282,7 +282,7 @@ mod tests {
             super::xml_escape(&body)
         );
         let toast = super::windows_toast_script(&xml);
-        let full_script = windows_script("com.zmair.kivio", "Kivio Desktop", &xml);
+        let full_script = windows_script("com.zmair.kivio", "Dskivio", &xml);
         let script = format!(
             "$ErrorActionPreference = 'Stop'; \
              [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \

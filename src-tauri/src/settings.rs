@@ -3037,9 +3037,9 @@ pub fn default_lens_system_prompt(language: &str, has_image: bool) -> String {
 /// Chat 客户端默认系统提示：允许正常 Markdown（含表格），不强制「不要空行」。
 pub fn default_chat_system_prompt(has_image: bool) -> String {
     if has_image {
-        "You are the AI assistant inside Kivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. You can use images the user provides. Answer clearly and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
+        "You are the AI assistant inside Dskivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. You can use images the user provides. Answer clearly and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
     } else {
-        "You are the AI assistant inside Kivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. Answer clearly, directly, and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
+        "You are the AI assistant inside Dskivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. Answer clearly, directly, and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
     }
 }
 

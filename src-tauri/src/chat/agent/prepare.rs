@@ -1015,7 +1015,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
         );
     } else if has("automation_list") {
         bullets.push(
-            "You can inspect automations with automation_list / automation_get / automation_runs. Creating or editing graphs requires Kivio Agent (automation_upsert).".to_string(),
+            "You can inspect automations with automation_list / automation_get / automation_runs. Creating or editing graphs requires Dskivio Agent (automation_upsert).".to_string(),
         );
     }
     if has_write || has_edit || has_bash {

@@ -586,7 +586,7 @@ pub fn native_memory_read_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_read".to_string(),
         name: "memory_read".to_string(),
-        description: "Read Kivio Chat memory. L1 is online memory already injected when memory is enabled; use this mainly to inspect exact L1 text or read L2 long-term memory by exact query/heading.".to_string(),
+        description: "Read Dskivio Chat memory. L1 is online memory already injected when memory is enabled; use this mainly to inspect exact L1 text or read L2 long-term memory by exact query/heading.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -619,7 +619,7 @@ pub fn native_memory_modify_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_modify".to_string(),
         name: "memory_modify".to_string(),
-        description: "Modify Kivio Chat memory. Use for adding, replacing, removing, or archiving durable user-approved memory. L1 is short online memory limited to 5000 bytes; L2 is long-term memory that is never auto-loaded.".to_string(),
+        description: "Modify Dskivio Chat memory. Use for adding, replacing, removing, or archiving durable user-approved memory. L1 is short online memory limited to 5000 bytes; L2 is long-term memory that is never auto-loaded.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -666,7 +666,7 @@ pub fn native_memory_search_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_search".to_string(),
         name: "memory_search".to_string(),
-        description: "Search Kivio Chat long-term memory (L2) by keywords and get the most relevant entries back as heading + snippet. Prefer this over memory_read when you are not sure of the exact L2 heading: memory_read needs an exact heading/text match, while memory_search ranks sections by query-token overlap.".to_string(),
+        description: "Search Dskivio Chat long-term memory (L2) by keywords and get the most relevant entries back as heading + snippet. Prefer this over memory_read when you are not sure of the exact L2 heading: memory_read needs an exact heading/text match, while memory_search ranks sections by query-token overlap.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),

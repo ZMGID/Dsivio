@@ -41,7 +41,7 @@ pub fn start(conversation: &mut Conversation, objective: &str) -> Result<GoalSta
         conversation.agent_runtime.kind,
         crate::chat::types::AgentRuntimeKind::Builtin
     ) {
-        return Err("Goal mode is available only for Kivio Agent".into());
+        return Err("Goal mode is available only for Dskivio Agent".into());
     }
     if crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state) {
         return Err("Goal mode does not support Orchestrate in this version".into());
