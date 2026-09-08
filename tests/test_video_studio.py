@@ -117,6 +117,42 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn('test-secret', json.dumps(studio.bootstrap()))
         self.assertNotIn('test-secret', ''.join(p.read_text() for p in (self.root / 'tasks').glob('*.json')))
 
+    def test_grok_seven_references_are_all_sent(self):
+        b = {**self.brief, 'images': [f'https://example.test/{i}.png' for i in range(7)], 'inputMode': 'reference', 'voiceIds': ['eve', 'leo']}
+        payload = studio.request({'brief': b, 'prompt': 'confirmed script'})
+        self.assertEqual(len(payload['reference_images']), 7)
+        self.assertNotIn('image', payload)
+        self.assertEqual(payload['reference_audios'], [{'voice_id': 'eve'}, {'voice_id': 'leo'}])
+        self.assertEqual(studio.grok.cost_quote(duration=10, image_count=7)['estimated_cost']['720p'], '1.47')
+        for changes in ({'resolution': '1080p'}, {'images': b['images'] + ['https://example.test/8.png']}, {'inputMode': 'image'}):
+            with self.assertRaises(ValueError):
+                studio.request({'brief': {**b, **changes}, 'prompt': 'confirmed'})
+
+    def test_grok_single_frame_and_silent_requests(self):
+        payload = studio.request({'brief': {**self.brief, 'images': ['https://example.test/1.png'], 'inputMode': 'image', 'resolution': '1080p', 'speechMode': 'silent'}, 'prompt': 'confirmed'})
+        self.assertIn('image', payload)
+        self.assertFalse(payload['generate_audio'])
+
+    def test_minimax_frame_roles_and_reference_media(self):
+        b = {**self.brief, 'route': 'minimax', 'resolution': '768P', 'inputMode': 'frames',
+             'images': ['https://example.test/front.png', 'https://example.test/end.png'],
+             'firstFrame': 'https://example.test/front.png', 'lastFrame': 'https://example.test/end.png'}
+        payload = studio.request({'brief': b, 'prompt': 'confirmed'})
+        self.assertEqual([v.get('role') for v in payload['content'][1:]], ['first_frame', 'last_frame'])
+        with self.assertRaises(ValueError):
+            studio.request({'brief': {**b, 'referenceVideos': ['https://example.test/ref.mp4']}, 'prompt': 'confirmed'})
+        b = {**self.brief, 'route': 'minimax', 'resolution': '768P', 'inputMode': 'reference', 'ratio': 'adaptive',
+             'referenceVideos': ['https://example.test/ref.mp4'], 'referenceAudios': ['https://example.test/ref.wav']}
+        payload = studio.request({'brief': b, 'prompt': 'confirmed'})
+        self.assertEqual([v.get('role') for v in payload['content'][1:]], ['reference_video', 'reference_audio'])
+
+    def test_route_specific_ratios(self):
+        for route, ratios in [('grok', studio.grok.RATIOS), ('minimax', studio.mini.RATIOS)]:
+            for ratio in ratios:
+                studio.validate({'brief': {**self.brief, 'route': route, 'ratio': ratio, 'resolution': '720p' if route == 'grok' else '768P'}})
+        with self.assertRaises(ValueError):
+            studio.validate({'brief': {**self.brief, 'ratio': '21:9'}})
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -57,7 +57,7 @@ description: >
 6. 本地路线用 `run_workflow` 提交脚本输出的临时工作流并记录 `prompt_id`。生成成功后用 `fetch_outputs` 下载到员工当前工作区并提供本地成片链接，不能只报告服务器成功。
 7. 只要已经调用 `run_workflow`，在成片下载完成或任务已明确失败后，都运行 `python scripts/free_comfy_memory.py`。脚本会先查询全局 `/queue`：如果还有正在运行或等待的连续任务就跳过；只有 `queue_running=0` 且 `queue_pending=0` 时，才向同一台 ComfyUI 的 `/free` 提交 `{"unload_models": true, "free_memory": true}`。绝不为了释放内存中断其他任务。清理成功后说明模型和缓存已卸载，下一次生成需要重新加载；清理失败或因连续任务跳过时单独说明，不把已经成功下载的成片改报为失败。若 `run_workflow` 超时且任务是否结束仍不明确，也只运行脚本检查队列，不得强制停止 ComfyUI。普通 `/free` 后仍明显占用大量内存时，才建议用户正常重启 ComfyUI，不自动结束服务器进程。
 8. 素材上传、工作流准备或生成失败时只报告一条真实错误；不搜索替代工作流、不推测模型问题、不自动改走付费 API。只有准备脚本报告内置节点不匹配时，维护者才读取 [references/comfy-workflow-map.md](references/comfy-workflow-map.md) 并刷新资产。
-9. 用户选择 MiniMax API 后才读取同级技能 `minimax-h3-api`；选择 Grok API 后才读取同级技能 `grok-video-api`。客户端优先读取当前用户 `dsvideo/providers.json` 中的 `minimax` 或 `grok` 配置，旧环境变量只作兼容覆盖。若用户切换路线，重新运行本次请求对应的报价和可用余额检查，重新展示费用，不复用之前任务的信息。Grok 当前只接文生视频和单张首图生视频；多张参考图不静默丢弃，改为说明限制并让用户决定保留哪张。剧本确认与付费规格确认是两个独立门槛，两者都完成后才能提交。不得因任一路线失败自动切换到另一条路线。
+9. 用户选择 MiniMax API 后才读取同级技能 `minimax-h3-api`；选择 Grok API 后才读取同级技能 `grok-video-api`。客户端优先读取当前用户 `dsvideo/providers.json` 中的 `minimax` 或 `grok` 配置，旧环境变量只作兼容覆盖。若用户切换路线，重新运行本次请求对应的报价和可用余额检查，重新展示费用，不复用之前任务的信息。Grok 支持文生、单张首帧和参考生成。单张首帧用 --image；参考生成用重复 --reference-image（最多 7 张）与可选 --voice-id（最多 3 个预设音色），最高 720p、15 秒，不得与 --image 混用；按实际输入张数报价，不得静默丢图。剧本确认与付费规格确认是两个独立门槛，两者都完成后才能提交。不得因任一路线失败自动切换到另一条路线。
 
 ## 模板
 

@@ -11,6 +11,15 @@ export interface VideoBrief {
   language: string
   source: string
   template?: VideoTemplate
+  inputMode?: 'auto' | 'text' | 'image' | 'reference' | 'frames'
+  speechMode?: 'dialogue' | 'ambient' | 'silent'
+  dialogue?: string
+  music?: string
+  firstFrame?: string
+  lastFrame?: string
+  referenceVideos?: string[]
+  referenceAudios?: string[]
+  voiceIds?: string[]
 }
 export interface VideoTask {
   id: string
@@ -71,7 +80,20 @@ export const newVideoBrief = (
   resolution: '',
   language: 'pt-BR',
   source: '',
+  inputMode: 'auto',
+  speechMode: 'dialogue',
+  dialogue: '',
+  music: '',
+  referenceVideos: [],
+  referenceAudios: [],
+  voiceIds: [],
 })
+
+export const videoRatios = {
+  comfy: ['9:16', '16:9', '1:1', '2:3', '3:2', '3:4', '4:3', '21:9'],
+  minimax: ['9:16', '16:9', '1:1', '3:4', '4:3', '21:9', 'adaptive'],
+  grok: ['9:16', '16:9', '1:1', '3:4', '4:3', '3:2', '2:3'],
+}
 export const videoStatus: Record<string, string> = {
   draft: '草稿',
   approved: '剧本已确认',
@@ -81,3 +103,21 @@ export const videoStatus: Record<string, string> = {
   failed: '生成失败',
   uncertain: '提交结果待核查',
 }
+
+export const languages = [
+  ['pt-BR', '葡萄牙语（巴西）'],
+  ['en-US', '英语（美国）'],
+  ['en-GB', '英语（英国）'],
+  ['es', '西班牙语'],
+  ['zh-CN', '中文（普通话）'],
+  ['ja', '日语'],
+  ['ko', '韩语'],
+  ['fr', '法语'],
+  ['de', '德语'],
+  ['it', '意大利语'],
+  ['ar', '阿拉伯语'],
+  ['id', '印尼语'],
+  ['th', '泰语'],
+  ['vi', '越南语'],
+  ['custom', '其他语言…'],
+]

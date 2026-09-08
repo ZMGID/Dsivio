@@ -182,7 +182,7 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     }
     let mut analysis = Value::Null;
     let (instruction, data, field, result_action) = if action == "plan" {
-        (format!("{}\nReturn {{\"script\":\"完整中文剧本\"}}. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested.",
+        (format!("{}\nReturn {{\"script\":\"完整中文剧本\"}}. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested. Respect speechMode: dialogue preserves supplied dialogue verbatim in its language; ambient has no speech; silent has no audio. Follow music requirements. Reference video/audio paths are conditioning inputs, not observed evidence: never invent their contents.",
             std::fs::read_to_string(root.join("skills/video-director/SKILL.md")).map_err(|e|e.to_string())?), b.clone(), "script", "plan_result")
     } else if action == "analyze" {
         analysis = mcp(
@@ -217,9 +217,12 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
             return Err("请先确认当前剧本".into());
         }
         let guide = if b["route"] == "grok" {
-            "Convert the approved script into one English Grok video prompt; no H3-only section tags. Preserve verbatim dialogue and on-screen text in their original language.".into()
+            "Convert the approved script into one English Grok video prompt; no H3-only section tags. Preserve verbatim dialogue and on-screen text in their original language. Respect speechMode and music. In reference mode use <IMAGE_0>, <IMAGE_1> in upload order and <AUDIO_0>, <AUDIO_1> for the selected voiceIds in order.".into()
         } else {
-            let name = if images.is_empty() {
+            let name = if b["inputMode"] == "frames"
+                || (images.is_empty()
+                    && b["referenceVideos"].as_array().is_none_or(|v| v.is_empty()))
+            {
                 "base-en.txt"
             } else {
                 "ref-en.txt"
