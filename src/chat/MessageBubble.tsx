@@ -1,0 +1,1390 @@
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  AlertCircle,
+  Check,
+  ChevronRight,
+  Copy,
+  CornerDownRight,
+  GitBranch,
+  ListChecks,
+  Play,
+  RotateCcw,
+} from 'lucide-react'
+import { Button, IconButton } from '../components/Button'
+import { copyToClipboard } from '../utils/clipboard'
+import { AssistantMessageMeta } from './AssistantMessageMeta'
+import { ChatAttachments } from './ChatAttachments'
+import { ChatDotGridBackground } from './ChatDotGridBackground'
+import { ChatMarkdown, type ChatMarkdownOutlineSource, type MarkdownOutlineSourceUpdate } from './ChatMarkdown'
+import { DegradedAnswerCard } from './DegradedAnswerCard'
+import { GeneratedFileArtifacts } from './GeneratedFileArtifacts'
+import { MarkdownStreamingContext } from './markdownStreaming'
+import { artifactId, artifactPresentationFromToolCall, isArtifactPresentationToolCall } from './artifactPresentation'
+import { isExecutableAgentPlanText } from './agentPlan'
+import { artifactDataUrl, isImageArtifact } from './artifacts'
+import { loadArtifactDataUrl } from './attachmentPreview'
+import { openChatImageViewer } from './imageViewer'
+import { ChatInlineImage, CHAT_IMAGE_TILE_MAX_PX } from './ChatInlineImage'
+import { ReasoningBlock } from './ReasoningBlock'
+import { ChatDisclosureBody } from './ChatDisclosureBody'
+import { ModelIcon } from './ModelIcon'
+import { ToolCallBlock, ImageReadCluster } from './ToolCallBlock'
+import { ToolCallErrorBoundary } from './ToolCallErrorBoundary'
+import type { AgentPlanState, ChatMessage, ChatMessageSegment, ChatToolArtifact, ModelRef, ToolCallRecord } from './types'
+import { buildCitationMap, type CitationView } from './citations'
+import {
+  compareTimelineSegments,
+  clusterToolCallsForDisplay,
+  formatWorkDuration,
+  groupTimelineSegments,
+  groupWorkDurationMs,
+  isImageReadToolCall,
+  isProcessCommentaryText,
+  isStandaloneToolCard,
+  isUserFollowUpToolCall,
+  isUserSteerToolCall,
+  segmentToolCallId,
+  summarizeToolGroup,
+  toolRecordId,
+  userFollowUpText,
+  userSteerText,
+} from './segments'
+import type { TimelineGroupItem } from './segments'
+
+const DIRECT_IMAGE_GENERATION_PENDING = '[[KIVIO_DIRECT_IMAGE_GENERATION_PENDING]]'
+
+// 模块级稳定引用：内联箭头每次渲染新建会打穿 ChatMarkdown 的 memo（导致公式重渲）。
+const handleChatImageClick = (src: string, alt: string, name?: string) =>
+  openChatImageViewer({ src, alt, name })
+
+interface MessageBubbleProps {
+  message: ChatMessage
+  conversationId?: string | null
+  tokensPerSec?: number
+  reasoningDurationMs?: number | null
+  reasoningDurationMsBySegmentId?: Record<string, number>
+  /** 思维链正在流式写入 */
+  reasoningStreaming?: boolean
+  /** 这条消息整体是否在流式生成中（仅 streaming-assistant bubble 为 true） */
+  messageStreaming?: boolean
+  /**
+   * MarkdownStreamingContext 的值（默认跟 messageStreaming）。它不再决定 Streamdown 的
+   * 模式 / key（整条消息终身 streaming 模式，见 ChatMarkdown），只管「出字中」的内容策略：
+   * mermaid 显示源码还是出图、重内容岛是否 eager、高亮缓存只读。live 行在 settle 冻结帧会把
+   * messageStreaming 置 false（停 shimmer / 入场动画）但把这个值留为 true，让上述变化只在
+   * 落库 twin 首挂时发生一次。
+   */
+  markdownStreaming?: boolean
+  /** R8（多模型一问多答）：本条 user 消息这一问发给了哪些模型；多模型时渲染在气泡顶部。 */
+  sentModels?: { providerId: string | null; model: string | null }[]
+  onUpdateMessage?: (messageId: string, content: string) => Promise<void>
+  onRegenerateMessage?: (messageId: string, newContent?: string) => Promise<void>
+  onReplyWithModel?: (messageId: string, providerId: string, model: string) => Promise<void>
+  replyOccupiedModels?: ModelRef[]
+  onForkMessage?: (messageId: string) => Promise<void>
+  /** 一键 rewind：截掉这条提问及其之后的消息，原文回输入框（仅 user 气泡）。 */
+  onRewindMessage?: (messageId: string) => Promise<void>
+  onDeleteMessage?: (messageId: string) => Promise<void>
+  onSaveMessageToNote?: (messageId: string) => Promise<boolean>
+  agentPlanOverride?: AgentPlanState | null
+  onExecuteAgentPlan?: (messageId: string) => Promise<void> | void
+  /** 仅已落库助手消息注册标题来源；live 行必须保持目录静默到 twin 提交。 */
+  outlineEligible?: boolean
+  onOutlineSourceChange?: (update: MarkdownOutlineSourceUpdate) => void
+}
+
+function markdownImageSources(content: string): Set<string> {
+  const sources = new Set<string>()
+  for (const match of content.matchAll(/!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+    sources.add(match[1].trim().toLowerCase())
+  }
+  return sources
+}
+
+function artifactDisplayKey(name: string): string {
+  try {
+    return decodeURIComponent(name).trim().replace(/^\.?\//, '').replace(/\\/g, '/').toLowerCase()
+  } catch {
+    return name.trim().replace(/^\.?\//, '').replace(/\\/g, '/').toLowerCase()
+  }
+}
+
+function artifactIsReferenced(content: string, artifact: ChatToolArtifact): boolean {
+  const sources = markdownImageSources(content)
+  if (sources.size === 0) return false
+  const dataUrl = artifactDataUrl(artifact)
+  if (dataUrl && content.includes(dataUrl)) return true
+  const name = artifactDisplayKey(artifact.name)
+  const basename = name.split('/').filter(Boolean).pop() ?? name
+  for (const source of sources) {
+    const normalizedSource = artifactDisplayKey(source)
+    if (normalizedSource === name || normalizedSource === basename) {
+      return true
+    }
+  }
+  return false
+}
+
+/** MCP 默认名 mcp-image-*.png 是技术附件 id，不适合当用户可读标题。 */
+function isTechnicalMcpImageName(name: string | undefined | null): boolean {
+  if (!name) return false
+  return /^mcp-image-[\w.-]+\.(png|jpe?g|gif|webp)$/i.test(name.trim())
+}
+
+function artifactCaption(artifact: ChatToolArtifact, index: number, total: number): string | null {
+  const name = (artifact.name ?? '').trim()
+  if (!name) return null
+  if (isTechnicalMcpImageName(name)) {
+    // 多张时显示「截图 1/3」，单张只写「截图」
+    return total > 1 ? `截图 ${index + 1}/${total}` : '截图'
+  }
+  return name
+}
+
+function ArtifactImage({
+  artifact,
+  conversationId,
+  caption,
+}: {
+  artifact: ChatToolArtifact
+  conversationId?: string | null
+  caption?: string | null
+}) {
+  const inline = artifactDataUrl(artifact)
+  const path = (artifact.path ?? '').trim()
+  // 有 path 时 data_url 通常是 256px 缩略图（落盘外置后）；聊天区应显示整图，缩略图仅作秒显占位。
+  const [src, setSrc] = useState<string>(inline)
+
+  useEffect(() => {
+    let cancelled = false
+    if (path && conversationId) {
+      if (inline) setSrc(inline)
+      void loadArtifactDataUrl(artifact, conversationId).then((loaded) => {
+        if (!cancelled && loaded) setSrc(loaded)
+      })
+      return () => {
+        cancelled = true
+      }
+    }
+    if (inline) {
+      setSrc(inline)
+      return
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [inline, path, artifact, conversationId])
+
+  if (!src) return null
+  const name = artifact.name || 'Generated image'
+  const label = caption === undefined ? name : caption
+  const openViewer = () =>
+    openChatImageViewer({
+      src,
+      alt: label || name,
+      name: artifact.name,
+      path: artifact.path,
+      conversationId,
+    })
+  return (
+    <figure className="m-0 min-w-0 max-w-full shrink-0">
+      <ChatInlineImage
+        src={src}
+        alt={label || name}
+        name={artifact.name}
+        onOpenViewer={openViewer}
+      />
+      {label ? (
+        <figcaption
+          className="mt-1 truncate text-[11px] text-neutral-400 dark:text-neutral-500"
+          style={{ maxWidth: CHAT_IMAGE_TILE_MAX_PX }}
+        >
+          {label}
+        </figcaption>
+      ) : null}
+    </figure>
+  )
+}
+
+/**
+ * 答案下方图片画廊：
+ * - 消息级 artifacts 优先（明确交付物）
+ * - 工具产生的截图只保留「最后一轮」有图的 tool calls，避免 3 轮×3 页堆出 9 张同名小图
+ */
+function selectGalleryImageArtifacts(
+  messageArtifacts: ChatToolArtifact[],
+  toolCalls: ToolCallRecord[],
+  contentForRefs: string,
+): ChatToolArtifact[] {
+  const notReferenced = (a: ChatToolArtifact) =>
+    isImageArtifact(a) && !artifactIsReferenced(contentForRefs, a)
+
+  const fromMessage = messageArtifacts.filter(notReferenced)
+  if (fromMessage.length > 0) return fromMessage
+
+  // 找最后一个产生图片的 round，只展示该轮（通常是最终 screenshot 验收）
+  let lastImageRound: number | null = null
+  for (const tc of toolCalls) {
+    if (isImageReadToolCall(tc)) continue
+    const hasImg = (tc.artifacts ?? []).some(isImageArtifact)
+    if (!hasImg) continue
+    const r = tc.round ?? 0
+    if (lastImageRound == null || r >= lastImageRound) lastImageRound = r
+  }
+  if (lastImageRound == null) return []
+
+  const fromLastRound: ChatToolArtifact[] = []
+  for (const tc of toolCalls) {
+    if (isImageReadToolCall(tc)) continue
+    const r = tc.round ?? 0
+    if (r !== lastImageRound) continue
+    for (const a of tc.artifacts ?? []) {
+      if (notReferenced(a)) fromLastRound.push(a)
+    }
+  }
+  return fromLastRound
+}
+
+function GeneratedImageArtifacts({
+  artifacts,
+  conversationId,
+}: {
+  artifacts: ChatToolArtifact[]
+  conversationId?: string | null
+}) {
+  const imageArtifacts = artifacts.filter(isImageArtifact)
+  if (imageArtifacts.length === 0) return null
+  const total = imageArtifacts.length
+
+  return (
+    <div className="mt-3 flex min-w-0 max-w-full flex-wrap content-start gap-2">
+      {imageArtifacts.map((artifact, index) => (
+        <ArtifactImage
+          key={`${artifact.path || artifact.name || 'img'}-${index}`}
+          artifact={artifact}
+          conversationId={conversationId}
+          caption={artifactCaption(artifact, index, total)}
+        />
+      ))}
+    </div>
+  )
+}
+
+function ArtifactPresentationBlock({
+  toolCall,
+  artifacts,
+  conversationId,
+}: {
+  toolCall: ToolCallRecord
+  artifacts: ChatToolArtifact[]
+  conversationId?: string | null
+}) {
+  const presentation = artifactPresentationFromToolCall(toolCall)
+  if (!presentation) {
+    return (
+      <ToolCallErrorBoundary>
+        <ToolCallBlock toolCall={toolCall} />
+      </ToolCallErrorBoundary>
+    )
+  }
+  const artifactById = new Map(
+    artifacts
+      .map((artifact) => [artifactId(artifact), artifact] as const)
+      .filter(([id]) => Boolean(id)),
+  )
+  const selected = presentation.artifactIds
+    .map((id) => artifactById.get(id))
+    .filter((artifact): artifact is ChatToolArtifact => Boolean(artifact))
+  const missingCount = presentation.artifactIds.length - selected.length
+  if (presentation.artifactIds.length === 0) {
+    return (
+      <ToolCallErrorBoundary>
+        <ToolCallBlock toolCall={toolCall} />
+      </ToolCallErrorBoundary>
+    )
+  }
+
+  return (
+    <section aria-label="展示文件" className="not-prose my-2">
+      {presentation.caption ? (
+        <div className="mb-2 text-[13px] leading-5 text-neutral-600 dark:text-neutral-300">
+          {presentation.caption}
+        </div>
+      ) : null}
+      <GeneratedImageArtifacts artifacts={selected} conversationId={conversationId} />
+      <GeneratedFileArtifacts artifacts={selected} />
+      {missingCount > 0 ? (
+        <div className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-neutral-400 dark:text-neutral-500">
+          <AlertCircle size={12} strokeWidth={1.9} />
+          <span>{missingCount} 个文件不可用</span>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function ImageGenerationPending() {
+  return (
+    <section aria-label="图片生成中" className="image-generation-pending">
+      <div className="mb-3">
+        <div className="flex items-center gap-2 text-[14px] font-medium leading-5 text-neutral-700 dark:text-neutral-300">
+          <span className="image-generation-pending-indicator" aria-hidden="true" />
+          <span>正在生成图片</span>
+        </div>
+        <div className="mt-1 pl-4 text-[12px] leading-5 text-neutral-400 dark:text-neutral-500">
+          正在细化画面细节，请稍候。
+        </div>
+      </div>
+      <div className="image-generation-pending-frame" aria-hidden="true">
+        <ChatDotGridBackground />
+      </div>
+    </section>
+  )
+}
+
+function AgentPlanAction({
+  messageId,
+  planState,
+  disabled,
+  onExecute,
+}: {
+  messageId: string
+  planState?: AgentPlanState | null
+  disabled?: boolean
+  onExecute?: (messageId: string) => Promise<void> | void
+}) {
+  const plan = planState?.plan?.trim() ?? ''
+  if (!isExecutableAgentPlanText(plan)) return null
+
+  const approved = (planState?.status ?? 'draft') === 'approved'
+  return (
+    <div className="not-prose mt-3 flex max-w-full items-center gap-2 border-l-2 border-emerald-400/70 pl-3 text-[12px] leading-5 text-neutral-500 dark:border-emerald-500/60 dark:text-neutral-400">
+      <ListChecks size={14} strokeWidth={2} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+      <span className="min-w-0 flex-1 truncate">{approved ? '已按这条计划执行' : '计划草案'}</span>
+      {!approved && onExecute && (
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => void onExecute(messageId)}
+          disabled={disabled}
+          title="执行这条计划"
+          aria-label="执行这条计划"
+        >
+          <Play size={12} strokeWidth={2.2} fill="currentColor" />
+          执行这条计划
+        </Button>
+      )}
+    </div>
+  )
+}
+
+function orderedSegments(segments?: ChatMessageSegment[]): ChatMessageSegment[] {
+  return [...(segments ?? [])].sort(compareTimelineSegments)
+}
+
+function segmentText(segment: ChatMessageSegment): string {
+  return segment.text ?? ''
+}
+
+function MissingToolSegment({ toolCallId }: { toolCallId: string }) {
+  return (
+    <div className="not-prose mb-2 inline-flex max-w-full items-center gap-1.5 rounded-md py-0.5 text-[11.5px] leading-5 text-neutral-400 dark:text-neutral-500">
+      <AlertCircle size={12} strokeWidth={1.9} className="shrink-0" />
+      <span className="truncate">工具记录缺失{toolCallId ? ` · ${toolCallId}` : ''}</span>
+    </div>
+  )
+}
+
+/**
+ * 用户在生成中插进来的那句话（「立刻引导」）。它不是一次工具调用，所以不套工具卡的外壳 ——
+ * 渲染成一条右对齐的小气泡，读起来就是「我在这里插了一句」，与时间线上下文的因果关系对得上。
+ */
+function UserSteerSegment({ toolCall }: { toolCall: ToolCallRecord }) {
+  const text = isUserFollowUpToolCall(toolCall) ? userFollowUpText(toolCall) : userSteerText(toolCall)
+  if (!text.trim()) return null
+  return (
+    <div className="not-prose flex justify-end">
+      <div className="flex max-w-[85%] items-start gap-1.5 rounded-md bg-neutral-100 px-2.5 py-1.5 text-[12.5px] leading-5 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+        <CornerDownRight
+          size={13}
+          strokeWidth={1.9}
+          className="mt-0.5 shrink-0 text-neutral-400 dark:text-neutral-500"
+        />
+        <span className="min-w-0 whitespace-pre-wrap break-words">{text}</span>
+      </div>
+    </div>
+  )
+}
+
+function isUserInjectedToolCall(toolCall: ToolCallRecord): boolean {
+  return isUserSteerToolCall(toolCall) || isUserFollowUpToolCall(toolCall)
+}
+
+function ClusteredToolCalls({
+  toolCalls,
+  artifacts,
+  conversationId,
+  itemClassName,
+}: {
+  toolCalls: ToolCallRecord[]
+  artifacts: ChatToolArtifact[]
+  conversationId?: string | null
+  itemClassName?: string
+}) {
+  return (
+    <>
+      {clusterToolCallsForDisplay(toolCalls).map((item, index) => {
+        if (item.type === 'imageRead') {
+          const key = item.toolCalls.map((toolCall) => toolRecordId(toolCall)).filter(Boolean).join('-')
+            || `image-read-${index}`
+          return (
+            <div key={key} className={itemClassName}>
+              <ToolCallErrorBoundary>
+                <ImageReadCluster toolCalls={item.toolCalls} />
+              </ToolCallErrorBoundary>
+            </div>
+          )
+        }
+        const toolCall = item.toolCall
+        const key = toolRecordId(toolCall) || `tool-${index}`
+        return (
+          <div key={key} className={itemClassName}>
+            {isUserInjectedToolCall(toolCall) ? (
+              <UserSteerSegment toolCall={toolCall} />
+            ) : isArtifactPresentationToolCall(toolCall) ? (
+              <ArtifactPresentationBlock
+                toolCall={toolCall}
+                artifacts={artifacts}
+                conversationId={conversationId}
+              />
+            ) : (
+              <ToolCallErrorBoundary>
+                <ToolCallBlock toolCall={toolCall} />
+              </ToolCallErrorBoundary>
+            )}
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
+function TimelineToolSegment({
+  segment,
+  toolCallById,
+  artifacts,
+  conversationId,
+}: {
+  segment: ChatMessageSegment
+  toolCallById: ReadonlyMap<string, ToolCallRecord>
+  artifacts: ChatToolArtifact[]
+  conversationId?: string | null
+}) {
+  const toolCallId = segmentToolCallId(segment)
+  const toolCall = toolCallById.get(toolCallId)
+  if (!toolCall) {
+    return <MissingToolSegment toolCallId={toolCallId} />
+  }
+  if (isUserInjectedToolCall(toolCall)) {
+    return <UserSteerSegment toolCall={toolCall} />
+  }
+  if (isArtifactPresentationToolCall(toolCall)) {
+    return (
+      <ArtifactPresentationBlock
+        toolCall={toolCall}
+        artifacts={artifacts}
+        conversationId={conversationId}
+      />
+    )
+  }
+  return (
+    <ToolCallErrorBoundary>
+      <ToolCallBlock toolCall={toolCall} />
+    </ToolCallErrorBoundary>
+  )
+}
+
+function TimelineTextSegment({
+  segment,
+  artifacts,
+  citations,
+  conversationId,
+  process = false,
+  outlineSource,
+}: {
+  segment: ChatMessageSegment
+  artifacts: ChatToolArtifact[]
+  citations?: Map<number, CitationView>
+  conversationId?: string | null
+  process?: boolean
+  outlineSource?: ChatMarkdownOutlineSource
+}) {
+  const text = segmentText(segment).trim()
+  if (!text) return null
+  const isProcessText = process || isProcessCommentaryText(segment)
+  return (
+    <div className={isProcessText ? 'text-neutral-600 dark:text-neutral-300' : undefined}>
+      <ChatMarkdown
+        content={text}
+        artifacts={artifacts}
+        conversationId={conversationId}
+        citations={citations}
+        onImageClick={handleChatImageClick}
+        outlineSource={outlineSource}
+      />
+    </div>
+  )
+}
+
+function TimelineSegmentNode({
+  segment,
+  index,
+  segmentCount,
+  toolCallById,
+  artifacts,
+  citations,
+  conversationId,
+  reasoningStreaming,
+  reasoningDurationMs,
+  reasoningDurationMsBySegmentId,
+  reasoningSegmentCount,
+}: {
+  segment: ChatMessageSegment
+  index: number
+  segmentCount: number
+  toolCallById: ReadonlyMap<string, ToolCallRecord>
+  artifacts: ChatToolArtifact[]
+  citations?: Map<number, CitationView>
+  conversationId?: string | null
+  reasoningStreaming: boolean
+  reasoningDurationMs?: number | null
+  reasoningDurationMsBySegmentId?: Record<string, number>
+  reasoningSegmentCount: number
+}) {
+  if (segment.kind === 'tool') {
+    return (
+      <TimelineToolSegment
+        segment={segment}
+        toolCallById={toolCallById}
+        artifacts={artifacts}
+        conversationId={conversationId}
+      />
+    )
+  }
+  if (segment.kind === 'reasoning') {
+    const reasoning = segmentText(segment)
+    if (!reasoning.trim()) return null
+    return (
+      <ReasoningBlock
+        reasoning={reasoning}
+        streaming={reasoningStreaming && index === segmentCount - 1}
+        durationMs={
+          reasoningDurationMsBySegmentId?.[segment.id]
+            ?? (reasoningSegmentCount === 1 ? reasoningDurationMs : null)
+        }
+      />
+    )
+  }
+  if (!segmentText(segment).trim()) return null
+  return (
+    <TimelineTextSegment
+      segment={segment}
+      artifacts={artifacts}
+      citations={citations}
+      conversationId={conversationId}
+      process
+    />
+  )
+}
+
+/** macOS 经典放射状短线 spinner：8 根短线绕中心放射、透明度阶梯递增，整体步进旋转。 */
+function TimelineSpinner({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      className={className}
+      aria-hidden="true"
+    >
+      <g className="kv-tick-spinner" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <line
+            key={i}
+            x1="12"
+            y1="3.5"
+            x2="12"
+            y2="7"
+            transform={`rotate(${i * 45} 12 12)`}
+            opacity={(i + 1) / 8}
+          />
+        ))}
+      </g>
+    </svg>
+  )
+}
+
+function workingGroupTitle(generating: boolean, durationMs: number | null): string {
+  if (generating) return 'Working'
+  if (durationMs != null && durationMs > 0) return `Worked for ${formatWorkDuration(durationMs)}`
+  return 'Worked'
+}
+
+function renderProcessSegments({
+  segments,
+  toolCallById,
+  artifacts,
+  citations,
+  conversationId,
+  reasoningStreaming,
+  reasoningDurationMs,
+  reasoningDurationMsBySegmentId,
+  reasoningSegmentCount,
+}: {
+  segments: ChatMessageSegment[]
+  toolCallById: ReadonlyMap<string, ToolCallRecord>
+  artifacts: ChatToolArtifact[]
+  citations?: Map<number, CitationView>
+  conversationId?: string | null
+  reasoningStreaming: boolean
+  reasoningDurationMs?: number | null
+  reasoningDurationMsBySegmentId?: Record<string, number>
+  reasoningSegmentCount: number
+}) {
+  const nodes: ReactNode[] = []
+  const segmentCount = segments.length
+  for (let index = 0; index < segments.length; ) {
+    const segment = segments[index]
+    if (segment.kind === 'tool') {
+      const toolCall = toolCallById.get(segmentToolCallId(segment))
+      if (toolCall && isImageReadToolCall(toolCall)) {
+        const imageReads = [toolCall]
+        let end = index + 1
+        while (end < segments.length) {
+          const next = segments[end]
+          if (next.kind !== 'tool') break
+          const nextCall = toolCallById.get(segmentToolCallId(next))
+          if (!nextCall || !isImageReadToolCall(nextCall)) break
+          imageReads.push(nextCall)
+          end += 1
+        }
+        nodes.push(
+          <div key={segment.id}>
+            <ToolCallErrorBoundary>
+              <ImageReadCluster toolCalls={imageReads} />
+            </ToolCallErrorBoundary>
+          </div>,
+        )
+        index = end
+        continue
+      }
+    }
+    nodes.push(
+      <div key={segment.id}>
+        <TimelineSegmentNode
+          segment={segment}
+          index={index}
+          segmentCount={segmentCount}
+          toolCallById={toolCallById}
+          artifacts={artifacts}
+          citations={citations}
+          conversationId={conversationId}
+          reasoningStreaming={reasoningStreaming}
+          reasoningDurationMs={reasoningDurationMs}
+          reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
+          reasoningSegmentCount={reasoningSegmentCount}
+        />
+      </div>,
+    )
+    index += 1
+  }
+  return nodes
+}
+
+/**
+ * 一轮过程 = 一个 Codex 式 Working 壳。
+ * - 「生成中」= 这条消息还在流式、且这是末组：始终展开，避免抖动。
+ * - 后面出现终稿/standalone（非末组）或流式结束 → 收成一行 Worked for Xs。
+ * - 用户手动点过开关后以用户操作为准。
+ * - 折叠态只留 header，不挂组内 ReasoningBlock / ToolCallBlock / 过程旁白。
+ */
+function TimelineGroupBlock({
+  segments,
+  toolCalls,
+  toolCallById,
+  artifacts,
+  citations,
+  conversationId,
+  isLastGroup,
+  messageStreaming,
+  reasoningStreaming,
+  reasoningDurationMs,
+  reasoningDurationMsBySegmentId,
+  reasoningSegmentCount,
+}: {
+  segments: ChatMessageSegment[]
+  toolCalls: ToolCallRecord[]
+  toolCallById: ReadonlyMap<string, ToolCallRecord>
+  artifacts: ChatToolArtifact[]
+  citations?: Map<number, CitationView>
+  conversationId?: string | null
+  isLastGroup: boolean
+  messageStreaming: boolean
+  reasoningStreaming: boolean
+  reasoningDurationMs?: number | null
+  reasoningDurationMsBySegmentId?: Record<string, number>
+  reasoningSegmentCount: number
+}) {
+  const generating = messageStreaming && isLastGroup
+  const summary = useMemo(
+    () => summarizeToolGroup(segments, toolCalls, toolCallById),
+    [segments, toolCalls, toolCallById],
+  )
+  const durationMs = useMemo(
+    () => groupWorkDurationMs(segments, toolCalls, toolCallById, reasoningDurationMs),
+    [segments, toolCalls, toolCallById, reasoningDurationMs],
+  )
+  const title = workingGroupTitle(generating, durationMs)
+  const [userOpen, setUserOpen] = useState<boolean | null>(null)
+  const renderDetails = userOpen ?? generating
+
+  return (
+    <section aria-label="过程分组" className="not-prose">
+      <button
+        type="button"
+        onClick={() => setUserOpen(current => !(current ?? generating))}
+        aria-expanded={renderDetails}
+        data-chat-disclosure
+        data-tauri-drag-region="false"
+        className="mb-1 flex w-full items-center gap-1.5 text-left text-[12px] leading-relaxed font-medium text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+      >
+        {generating ? (
+          <TimelineSpinner size={16} className="shrink-0 text-neutral-400 dark:text-neutral-500" />
+        ) : (
+          <ChevronRight
+            size={14}
+            strokeWidth={2}
+            className={`shrink-0 transition-transform duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-out)] ${
+              renderDetails ? 'rotate-90' : ''
+            }`}
+          />
+        )}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={`min-w-0 truncate ${
+              generating ? 'chat-motion-tool-shimmer' : ''
+            }`}
+          >
+            {title}
+          </span>
+          {summary.diffStats && (
+            <span className="shrink-0 font-mono text-[11px] tabular-nums">
+              <span className="text-emerald-600 dark:text-emerald-400">+{summary.diffStats.additions}</span>
+              <span className="ml-1 text-red-500/80 dark:text-red-400/80">-{summary.diffStats.removals}</span>
+            </span>
+          )}
+        </div>
+      </button>
+      <ChatDisclosureBody open={renderDetails} animate={userOpen !== null}>
+        {() => (
+          <div className="space-y-1.5">
+            {/* A new tool can move existing commentary into this group. Keep
+                those segments visible instead of replaying opacity from zero. */}
+            {renderProcessSegments({
+              segments,
+              toolCallById,
+              artifacts,
+              citations,
+              conversationId,
+              reasoningStreaming: reasoningStreaming && isLastGroup,
+              reasoningDurationMs,
+              reasoningDurationMsBySegmentId,
+              reasoningSegmentCount,
+            })}
+          </div>
+        )}
+      </ChatDisclosureBody>
+    </section>
+  )
+}
+
+function TimelineSegments({
+  segments,
+  toolCalls,
+  artifacts,
+  conversationId,
+  messageStreaming,
+  reasoningStreaming,
+  reasoningDurationMs,
+  reasoningDurationMsBySegmentId,
+  outlineEligible = false,
+  ownerMessageId,
+  onOutlineSourceChange,
+}: {
+  segments: ChatMessageSegment[]
+  toolCalls: ToolCallRecord[]
+  artifacts: ChatToolArtifact[]
+  conversationId?: string | null
+  messageStreaming: boolean
+  reasoningStreaming: boolean
+  reasoningDurationMs?: number | null
+  reasoningDurationMsBySegmentId?: Record<string, number>
+  outlineEligible?: boolean
+  ownerMessageId: string
+  onOutlineSourceChange?: (update: MarkdownOutlineSourceUpdate) => void
+}) {
+  const prepared = useMemo(() => {
+    const ordered = orderedSegments(segments)
+    const toolCallById = new Map<string, ToolCallRecord>()
+    for (const toolCall of toolCalls) {
+      const id = toolRecordId(toolCall)
+      if (id) toolCallById.set(id, toolCall)
+    }
+
+    const citations = buildCitationMap(toolCalls)
+    const reasoningSegmentCount = ordered.filter((segment) => segment.kind === 'reasoning').length
+    const referencedToolIds = new Set(
+      ordered
+        .filter((segment) => segment.kind === 'tool')
+        .map((segment) => segmentToolCallId(segment))
+        .filter(Boolean),
+    )
+    const orphanTools = toolCalls
+      .filter((toolCall) => {
+        const id = toolRecordId(toolCall)
+        return id && !referencedToolIds.has(id)
+      })
+      .sort((left, right) => {
+        const leftStarted = left.startedAt ?? left.started_at ?? 0
+        const rightStarted = right.startedAt ?? right.started_at ?? 0
+        return leftStarted - rightStarted
+      })
+
+    const groupItems = groupTimelineSegments(ordered, (segment) => {
+      const id = segmentToolCallId(segment)
+      if (!id) return false
+      const toolCall = toolCallById.get(id)
+      return toolCall ? isStandaloneToolCard(toolCall) : false
+    })
+
+    return { toolCallById, citations, reasoningSegmentCount, orphanTools, groupItems }
+  }, [segments, toolCalls])
+
+  const { toolCallById, citations, reasoningSegmentCount, orphanTools, groupItems } = prepared
+  const lastGroupIndex = groupItems.reduce(
+    (last, item, index) => (item.type === 'group' ? index : last),
+    -1,
+  )
+
+  return (
+    <section aria-label="回答时间线" className="space-y-1.5">
+      {groupItems.map((item: TimelineGroupItem, index) => {
+        if (item.type === 'text') {
+          if (!segmentText(item.segment).trim()) return null
+          // Segments can be regrouped as tools arrive; entrance fades would
+          // briefly hide text the user has already read.
+          return (
+            <div key={item.segment.id}>
+              <TimelineTextSegment
+                segment={item.segment}
+                artifacts={artifacts}
+                citations={citations}
+                conversationId={conversationId}
+                outlineSource={
+                  outlineEligible && onOutlineSourceChange
+                    ? {
+                      ownerMessageId,
+                      sourceId: item.segment.id,
+                      onChange: onOutlineSourceChange,
+                    }
+                    : undefined
+                }
+              />
+            </div>
+          )
+        }
+        if (item.type === 'standaloneTool') {
+          // advisor / subagent：专属卡片常驻渲染，不折叠进「调用 N 次工具」组。
+          const id = segmentToolCallId(item.segment)
+          const toolCall = toolCallById.get(id)
+          if (!toolCall) return null
+          return (
+            <div key={item.segment.id}>
+              {isUserInjectedToolCall(toolCall) ? (
+                <UserSteerSegment toolCall={toolCall} />
+              ) : isArtifactPresentationToolCall(toolCall) ? (
+                <ArtifactPresentationBlock
+                  toolCall={toolCall}
+                  artifacts={artifacts}
+                  conversationId={conversationId}
+                />
+              ) : (
+                <ToolCallErrorBoundary>
+                  <ToolCallBlock toolCall={toolCall} />
+                </ToolCallErrorBoundary>
+              )}
+            </div>
+          )
+        }
+        const groupKey = item.segments[0]?.id ?? `group-${index}`
+        return (
+          <div key={groupKey}>
+            <TimelineGroupBlock
+              segments={item.segments}
+              toolCalls={toolCalls}
+              toolCallById={toolCallById}
+              artifacts={artifacts}
+              citations={citations}
+              conversationId={conversationId}
+              isLastGroup={index === lastGroupIndex}
+              messageStreaming={messageStreaming}
+              reasoningStreaming={reasoningStreaming}
+              reasoningDurationMs={reasoningDurationMs}
+              reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
+              reasoningSegmentCount={reasoningSegmentCount}
+            />
+          </div>
+        )
+      })}
+      <ClusteredToolCalls
+        toolCalls={orphanTools}
+        artifacts={artifacts}
+        conversationId={conversationId}
+      />
+    </section>
+  )
+}
+
+function MessageBubbleComponent({
+  message,
+  conversationId,
+  tokensPerSec,
+  reasoningDurationMs,
+  reasoningDurationMsBySegmentId,
+  reasoningStreaming = false,
+  messageStreaming = false,
+  markdownStreaming = messageStreaming,
+  sentModels,
+  onUpdateMessage,
+  onRegenerateMessage,
+  onReplyWithModel,
+  replyOccupiedModels,
+  onForkMessage,
+  onRewindMessage,
+  onDeleteMessage,
+  onSaveMessageToNote,
+  agentPlanOverride = null,
+  onExecuteAgentPlan,
+  outlineEligible = false,
+  onOutlineSourceChange,
+}: MessageBubbleProps) {
+  const isUser = message.role === 'user'
+  // 历史消息会被虚拟列表反复卸载/挂载；只让真正的流式预览播放进入动画，
+  // 否则滚动时每个重新进入 DOM 的旧气泡都会淡入并上移，看起来像刷新且阻滞滚动。
+  const playEntranceAnimation = messageStreaming
+  // 「这条是否已落盘并允许历史操作」：门控重新生成。`onUpdateMessage` / `onDeleteMessage`
+  // 在这里作为完整可变能力信号；MessageGroup 的在飞列不传它们，从而一次关掉这些入口。
+  // 编辑与删除入口已按需求移除，但底层能力仍保留。
+  const canMutate = Boolean(onUpdateMessage && onDeleteMessage && onRegenerateMessage)
+  const prepared = useMemo(() => {
+    const attachments = message.attachments ?? []
+    const toolCalls = message.tool_calls ?? message.toolCalls ?? []
+    // 后端 recovery.rs 产出的降级描述；旧会话无此字段 → null → 不渲染卡片。
+    const degraded = message.degraded ?? null
+    // 降级文案同时走三条路：content、时间线 text 分段、以及这张卡片。卡片已完整表达，
+    // 另外两条都要按文本相等剔掉，否则同一段话在气泡里出现两遍（正是用户看到的样子）。
+    const degradedText = degraded?.text.trim() ?? ''
+    const timelineSegments = orderedSegments(message.segments).filter(
+      (segment) =>
+        !degradedText || segment.kind !== 'text' || segmentText(segment).trim() !== degradedText,
+    )
+    const hasTimelineSegments = timelineSegments.length > 0
+    const messageArtifacts = message.artifacts ?? []
+    const toolArtifacts = toolCalls.flatMap((toolCall) => toolCall.artifacts ?? [])
+    // Markdown 和显式展示引用仍使用全量 artifacts；回答末尾自动区域只兼容旧的无 ID artifact。
+    const renderArtifacts = [...messageArtifacts, ...toolArtifacts]
+    const legacyMessageArtifacts = messageArtifacts.filter((artifact) => !artifactId(artifact))
+    const legacyToolCalls = toolCalls.map((toolCall) => ({
+      ...toolCall,
+      artifacts: (toolCall.artifacts ?? []).filter((artifact) => !artifactId(artifact)),
+    }))
+    const isDirectImageGenerationPending =
+      !isUser && message.content.trim() === DIRECT_IMAGE_GENERATION_PENDING
+    const artifactReferenceContent = [
+      message.content,
+      ...timelineSegments.map((segment) => segmentText(segment)),
+    ].join('\n\n')
+    // 答案下方画廊：只挂「未引用 + 最后一轮截图」，避免 3 轮验收堆 9 张同名图
+    const galleryImageArtifacts = selectGalleryImageArtifacts(
+      legacyMessageArtifacts,
+      legacyToolCalls,
+      artifactReferenceContent,
+    )
+    const generatedFileArtifacts = [
+      ...legacyMessageArtifacts,
+      ...legacyToolCalls.flatMap((toolCall) => toolCall.artifacts ?? []),
+    ].filter((artifact) => !isImageArtifact(artifact))
+    const hasAnswerContent =
+      !isDirectImageGenerationPending &&
+      message.content.trim().length > 0 &&
+      message.content.trim() !== degradedText
+    const hasGeneratedImages = galleryImageArtifacts.length > 0
+    const hasGeneratedFiles = generatedFileArtifacts.length > 0
+
+    return {
+      attachments,
+      toolCalls,
+      degraded,
+      degradedText,
+      timelineSegments,
+      hasTimelineSegments,
+      renderArtifacts,
+      galleryImageArtifacts,
+      generatedFileArtifacts,
+      isDirectImageGenerationPending,
+      hasAnswerContent,
+      hasGeneratedImages,
+      hasGeneratedFiles,
+    }
+  }, [isUser, message])
+  const {
+    attachments,
+    toolCalls,
+    degraded,
+    timelineSegments,
+    hasTimelineSegments,
+    renderArtifacts,
+    galleryImageArtifacts,
+    generatedFileArtifacts,
+    isDirectImageGenerationPending,
+    hasAnswerContent,
+    hasGeneratedImages,
+    hasGeneratedFiles,
+  } = prepared
+  const outlineSource = useMemo<ChatMarkdownOutlineSource | undefined>(() => {
+    if (!outlineEligible || messageStreaming || !onOutlineSourceChange) return undefined
+    return {
+      ownerMessageId: message.id,
+      sourceId: message.id,
+      onChange: onOutlineSourceChange,
+    }
+  }, [message.id, messageStreaming, onOutlineSourceChange, outlineEligible])
+  // 后端 recovery.rs 产出的降级描述；旧会话无此字段 → undefined → 不渲染卡片。
+  // content 仍保留同一段文本（旧前端 / 外部 CLI 只读 content），但卡片已经完整表达了
+  // 同样的信息 —— 这里不再把它当正文渲染，避免一模一样的内容出现两遍。
+  const [copied, setCopied] = useState(false)
+  const [toolsExpanded, setToolsExpanded] = useState(false)
+  // 消息级悬停：鼠标在这条消息上 → 底部操作/元信息条显示，移走 → 隐藏。
+  // 显示走 onPointerEnter（送达可靠）；**隐藏不依赖 pointerleave**——悬停期间挂一个
+  // document 级 pointermove，指针落在消息外即收起。移动事件是持续流，漏一帧还有
+  // 下一帧，不存在「边界事件漏发一次就永久卡住」。监听只在悬停的那一条上活跃
+  // （全局同时至多一个），handler 是一次 contains 判断。
+  //
+  // **不走 React state，走 DOM 属性 + CSS**（`[data-msg-hovered] .msg-hover-reveal`）：
+  // 滚动时内容从静止的光标下滑过，WebKit 会随滚动连环补发 enter/leave，每滑过一条
+  // 消息就是两次 setState = 两次整棵 MessageBubble 重渲（体内的 map/filter 每次产新
+  // 数组，memo 的 ToolCallBlock 等照样全部重渲）——这是滚动不顺滑的主因之一。
+  // 属性切换不进 React，重渲为零；React 重渲也不会碰这个非受控属性。
+  //
+  // ⚠️ 显隐的最终修复不在这里而在渲染层：操作行必须带 `[will-change:opacity]`
+  // （见 AssistantMessageMeta / 下方用户操作行）。WKWebView 对非合成层的 opacity
+  // 变化存在重绘失效——探针实测状态/类名/computed opacity 全部正确置 0，屏幕上
+  // 旧画面滞留不消；提升为合成层后 opacity 由合成器每帧应用，不走重绘路径。
+  const hoverRootRef = useRef<HTMLDivElement>(null)
+  const hoverMoveCleanupRef = useRef<(() => void) | null>(null)
+  const setBubbleHovered = (on: boolean) => {
+    // 先清后挂（幂等）：重复 enter、或悬停期间根元素被 React 重挂，都不会漏掉旧监听。
+    hoverMoveCleanupRef.current?.()
+    hoverMoveCleanupRef.current = null
+    const root = hoverRootRef.current
+    if (!root) return
+    root.toggleAttribute('data-msg-hovered', on)
+    if (!on) return
+    const onMove = (event: PointerEvent) => {
+      const current = hoverRootRef.current
+      if (!current || !(event.target instanceof Node) || !current.contains(event.target)) {
+        setBubbleHovered(false)
+      }
+    }
+    document.addEventListener('pointermove', onMove, { passive: true })
+    hoverMoveCleanupRef.current = () => document.removeEventListener('pointermove', onMove)
+  }
+  // 悬停中整行被 virtualizer 卸载时，document 监听不能漏。
+  useEffect(() => () => {
+    hoverMoveCleanupRef.current?.()
+    hoverMoveCleanupRef.current = null
+  }, [])
+  const hoverProps = {
+    ref: hoverRootRef,
+    onPointerEnter: () => setBubbleHovered(true),
+    // 快路径：leave 真来了立刻收；没来由上面的 pointermove 兜底。
+    onPointerLeave: () => setBubbleHovered(false),
+  }
+  // 工具调用超过 4 个时默认折叠（与思考过程一致）
+  const toolsCollapsible = toolCalls.length > 4
+  const agentPlan = message.agent_plan ?? message.agentPlan ?? agentPlanOverride
+  const isAgentPlanMessage = isExecutableAgentPlanText(agentPlan?.plan)
+
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(message.content)
+    if (!ok) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 2000)
+  }
+
+  if (isUser) {
+    const hasText = message.content.trim().length > 0
+    // R8（多模型一问多答）：本问发给 ≥2 个模型时，在 user 气泡顶部渲染模型标签行（如 @deepseek @qwen）。
+    // 单模型不显示这行（sentModels 缺省或 <2）。
+    const replyModelTags = (sentModels ?? []).filter((m) => (m.model ?? '').trim().length > 0)
+    const showModelTags = replyModelTags.length >= 2
+    return (
+      <div
+        {...hoverProps}
+        className={`flex justify-end py-2 ${playEntranceAnimation ? 'chat-motion-bubble-in' : ''}`}
+      >
+        <div className="flex min-w-0 max-w-[85%] flex-col items-end gap-1">
+          {showModelTags && (
+            <div className="flex flex-wrap items-center justify-end gap-1.5 pr-0.5">
+              {replyModelTags.map((tag, index) => (
+                <span
+                  key={`${tag.model}-${index}`}
+                  className="chat-user-bubble inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium text-neutral-500 dark:text-neutral-400"
+                  title={tag.providerId ? `${tag.model} | ${tag.providerId}` : (tag.model ?? '')}
+                >
+                  {tag.model && <ModelIcon model={tag.model} size={12} />}
+                  <span className="max-w-[140px] truncate">@{tag.model}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          {attachments.length > 0 && (
+            <ChatAttachments
+              attachments={attachments}
+              conversationId={conversationId}
+              variant="user"
+            />
+          )}
+          {hasText && (
+            <div className="chat-user-bubble rounded-[20px] px-4 py-2.5 text-neutral-900 dark:text-neutral-100">
+              <div className="whitespace-pre-wrap [overflow-wrap:anywhere] text-[15px] leading-relaxed">
+                {message.content}
+              </div>
+            </div>
+          )}
+          {hasText && (
+            <div
+              className="msg-hover-reveal flex items-center gap-0.5 pr-0.5 opacity-0 transition-opacity duration-[var(--kv-dur-fast)] ease-[var(--kv-ease-out)] [will-change:opacity] focus-within:opacity-100"
+            >
+              <IconButton
+                size="xs"
+                onClick={() => void handleCopy()}
+                label={copied ? '已复制' : '复制'}
+              >
+                {copied ? <Check size={13} strokeWidth={2} className="chat-motion-pop" /> : <Copy size={13} strokeWidth={2} />}
+              </IconButton>
+              {onRewindMessage && (
+                <IconButton
+                  size="xs"
+                  onClick={() => void onRewindMessage(message.id)}
+                  label="回到这里"
+                  title="回到这里：删掉这条提问及其之后的消息，原文放回输入框"
+                >
+                  <RotateCcw size={13} strokeWidth={2} />
+                </IconButton>
+              )}
+              {onForkMessage && (
+                <IconButton
+                  size="xs"
+                  onClick={() => void onForkMessage(message.id)}
+                  label="建分支"
+                  title="从这里建分支（复制到新对话）"
+                >
+                  <GitBranch size={13} strokeWidth={2} />
+                </IconButton>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <MarkdownStreamingContext.Provider value={markdownStreaming}>
+    <div
+      {...hoverProps}
+      className={`flex justify-start py-3 ${playEntranceAnimation ? 'chat-motion-bubble-in' : ''}`}
+      data-chat-outline-owner={outlineEligible ? message.id : undefined}
+    >
+      <div className="w-full min-w-0">
+        {toolCalls.length > 0 && !hasTimelineSegments && (
+          <section
+            aria-label="工具调用"
+            className={message.content.trim().length > 0 || message.reasoning ? 'mb-3' : ''}
+          >
+            {toolsCollapsible ? (
+              <button
+                type="button"
+                onClick={() => setToolsExpanded((value) => !value)}
+                className="mb-1 flex w-full items-center gap-1 text-left text-[11px] font-medium text-neutral-400 transition-colors hover:text-neutral-600 dark:text-neutral-500 dark:hover:text-neutral-300"
+                aria-expanded={toolsExpanded}
+                data-chat-disclosure
+                data-tauri-drag-region="false"
+              >
+                <span>
+                  工具调用 · {toolCalls.length} 个
+                </span>
+              </button>
+            ) : (
+              <div className="mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
+                工具调用
+              </div>
+            )}
+            {toolsCollapsible && (
+              <ChatDisclosureBody open={toolsExpanded}>
+                <ClusteredToolCalls
+                  toolCalls={toolCalls}
+                  artifacts={renderArtifacts}
+                  conversationId={conversationId}
+                />
+              </ChatDisclosureBody>
+            )}
+            {!toolsCollapsible && (
+              <ClusteredToolCalls
+                toolCalls={toolCalls}
+                artifacts={renderArtifacts}
+                conversationId={conversationId}
+              />
+            )}
+          </section>
+        )}
+
+        {Boolean((message.reasoning ?? '').trim()) && !hasTimelineSegments && (
+          <ReasoningBlock
+            reasoning={message.reasoning ?? ''}
+            streaming={reasoningStreaming}
+            durationMs={reasoningDurationMs}
+          />
+        )}
+
+        {isDirectImageGenerationPending ? (
+          <ImageGenerationPending />
+        ) : hasTimelineSegments ? (
+          <>
+            <TimelineSegments
+              segments={timelineSegments}
+              toolCalls={toolCalls}
+              artifacts={renderArtifacts}
+              conversationId={conversationId}
+              messageStreaming={messageStreaming}
+              reasoningStreaming={reasoningStreaming}
+              reasoningDurationMs={reasoningDurationMs}
+              reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
+              outlineEligible={outlineEligible}
+              ownerMessageId={message.id}
+              onOutlineSourceChange={onOutlineSourceChange}
+            />
+            {hasGeneratedImages && (
+              <GeneratedImageArtifacts
+                artifacts={galleryImageArtifacts}
+                conversationId={conversationId}
+              />
+            )}
+            {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} />}
+          </>
+        ) : (
+          (hasAnswerContent || hasGeneratedImages || hasGeneratedFiles) && (
+            <section aria-label="回答">
+              {(toolCalls.length > 0 || message.reasoning) && (
+                <div className="mb-1 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
+                  回答
+                </div>
+              )}
+              {hasAnswerContent && (
+                <ChatMarkdown
+                  content={message.content}
+                  artifacts={renderArtifacts}
+                  conversationId={conversationId}
+                  onImageClick={handleChatImageClick}
+                  outlineSource={outlineSource}
+                />
+              )}
+              {hasGeneratedImages && (
+                <GeneratedImageArtifacts
+                  artifacts={galleryImageArtifacts}
+                  conversationId={conversationId}
+                />
+              )}
+              {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} />}
+            </section>
+          )
+        )}
+
+        {/* 降级兜底渲染成独立卡片：故障不混进正文，也不会被复制/回灌给模型。 */}
+        {degraded && <DegradedAnswerCard degraded={degraded} />}
+
+        {isAgentPlanMessage && !isDirectImageGenerationPending && (
+          <AgentPlanAction
+            messageId={message.id}
+            planState={agentPlan}
+            disabled={messageStreaming}
+            onExecute={onExecuteAgentPlan}
+          />
+        )}
+
+        {message.content.trim().length > 0 && !isDirectImageGenerationPending && (
+          <AssistantMessageMeta
+            content={message.content}
+            reasoning={message.reasoning}
+            timestamp={message.timestamp}
+            tokensPerSec={tokensPerSec}
+            runEntry={message.run_entry ?? message.runEntry}
+            streamOutcome={message.stream_outcome ?? message.streamOutcome}
+            usage={message.usage}
+            onRegenerate={
+              canMutate
+                ? () => {
+                    void onRegenerateMessage!(message.id)
+                  }
+                : undefined
+            }
+            onReplyWithModel={
+              onReplyWithModel
+                ? (providerId, model) => {
+                    void onReplyWithModel(message.id, providerId, model)
+                  }
+                : undefined
+            }
+            replyOccupiedModels={replyOccupiedModels}
+            onFork={
+              onForkMessage
+                ? () => {
+                    void onForkMessage(message.id)
+                  }
+                : undefined
+            }
+            onSaveToNote={
+              onSaveMessageToNote
+                ? async () => onSaveMessageToNote(message.id)
+                : undefined
+            }
+          />
+        )}
+
+        {attachments.length > 0 && (
+          <ChatAttachments
+            attachments={attachments}
+            conversationId={conversationId}
+            variant="assistant"
+          />
+        )}
+      </div>
+    </div>
+    </MarkdownStreamingContext.Provider>
+  )
+}
+
+// memo：流式生成时历史消息 props 不变 → 跳过重渲染，避免每个 token 重新解析 Markdown
+export const MessageBubble = memo(MessageBubbleComponent)

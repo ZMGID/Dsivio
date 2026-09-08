@@ -1,0 +1,529 @@
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Archive, Pin } from 'lucide-react'
+import type { ChatProject, ChatSet, ConversationListItem } from './types'
+import { i18n, type I18n, type Lang } from '../settings/i18n'
+import { chatApi, normalizeAgentRuntime } from './api'
+import {
+  displayConversationTitle,
+  FORK_TITLE_SUFFIX,
+  isPlaceholderTitle,
+  isProvisionalTitle,
+} from './conversationTitle'
+import { SwapTitle } from './SwapTitle'
+import {
+  ConversationContextMenu,
+  type ConversationMenuAnchor,
+} from './ConversationContextMenu'
+import { formatCompactAge, formatRelativeTime } from './sessionLibrary/format'
+
+/** 对话所属分组标签：优先「集 · 名」，否则项目名（按 project_id，退回 folder===项目名）。
+ *  与 Sidebar 搜索弹层的显示逻辑一致。无归属时返回空串。 */
+function conversationFolderLabel(
+  conv: ConversationListItem,
+  projects: ChatProject[],
+  sets: ChatSet[],
+  t: I18n,
+): string {
+  const setId = conv.set_id ?? conv.setId ?? null
+  if (setId) {
+    const setName = sets.find((s) => s.id === setId)?.name
+    if (setName) return `${t.chatSetPrefix} · ${setName}`
+  }
+  const projectId = conv.project_id ?? conv.projectId ?? null
+  const project = projectId
+    ? projects.find((p) => p.id === projectId)
+    : projects.find((p) => conv.folder === p.name)
+  return project?.name ?? conv.folder ?? ''
+}
+
+/** 归档退场：比 `--kv-dur-fast`（150ms）略长，给 transitionend 漏触发时兜底卸行。 */
+const ARCHIVE_EXIT_MS = 240
+
+function conversationUsesExternalAgent(conv: ConversationListItem): boolean {
+  const runtime = normalizeAgentRuntime(conv)
+  return runtime.kind === 'external' && Boolean(runtime.externalAgentId)
+}
+
+type ExitingRow = {
+  item: ConversationListItem
+  index: number
+  /** 父列表已经摘掉过这一行；若之后又出现，视为归档失败，取消退场。 */
+  detached: boolean
+}
+
+interface ConversationListProps {
+  conversations: ConversationListItem[]
+  currentConversationId?: string
+  generatingConversationIds?: ReadonlySet<string>
+  titleGeneratingConversationIds?: ReadonlySet<string>
+  projects: ChatProject[]
+  sets: ChatSet[]
+  lang: Lang
+  compact?: boolean
+  indent?: boolean
+  showAssistantName?: boolean
+  // 「最近」平铺列表用：在每条对话右侧显示其所属「集 / 项目」标签（与搜索弹层一致）。
+  // 项目/集 tab 的嵌套列表不传（已在该分组下，标签冗余）。
+  showFolderLabel?: boolean
+  /**
+   * 集/项目下的手动排序。**不传 = 不可拖**（「最近」就不传：那里的语义是时间线）。
+   * `scopeId` 写进容器的 `data-reorder-scope`，让 useInsertionReorder 只在本分组内取样。
+   */
+  reorder?: {
+    scopeId: string
+    draggingId: string | null
+    startDrag: (e: React.PointerEvent<HTMLElement>, id: string) => void
+  }
+  onSelectConversation: (id: string, conversation?: ConversationListItem) => void
+  onRenameConversation: (id: string, title: string) => Promise<void>
+  onRegenerateConversationTitle: (id: string) => Promise<void>
+  onTogglePinConversation: (id: string, pinned: boolean) => Promise<void>
+  /** 一键归档（侧栏默认不再显示归档对话） */
+  onArchiveConversation: (id: string) => Promise<void>
+  onExportConversation: (id: string, title: string) => Promise<void>
+  onDeleteConversation: (id: string) => Promise<void>
+  onMoveConversationToProject: (id: string, projectId: string | undefined) => Promise<void>
+  onMoveConversationToSet: (id: string, setId: string | undefined) => Promise<void>
+  onOpenInPopout?: (id: string) => void | Promise<void>
+}
+
+export const ConversationList = memo(function ConversationList({
+  conversations,
+  currentConversationId,
+  generatingConversationIds = new Set(),
+  titleGeneratingConversationIds = new Set(),
+  projects,
+  sets,
+  lang,
+  compact = false,
+  indent = false,
+  showAssistantName = true,
+  showFolderLabel = false,
+  reorder,
+  onSelectConversation,
+  onRenameConversation,
+  onRegenerateConversationTitle,
+  onTogglePinConversation,
+  onArchiveConversation,
+  onExportConversation,
+  onDeleteConversation,
+  onMoveConversationToProject,
+  onMoveConversationToSet,
+  onOpenInPopout,
+}: ConversationListProps) {
+  const [menuState, setMenuState] = useState<{
+    conversationId: string
+    anchor: ConversationMenuAnchor
+  } | null>(null)
+  const [menuNativeSessionId, setMenuNativeSessionId] = useState<string | null>(null)
+  const [menuNativeSessionLoading, setMenuNativeSessionLoading] = useState(false)
+  const t = i18n[lang]
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const renameInputRef = useRef<HTMLInputElement>(null)
+  const exitingRef = useRef<Map<string, ExitingRow>>(new Map())
+  const exitTimersRef = useRef<Map<string, number>>(new Map())
+  const [exitingIds, setExitingIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [nowSec, setNowSec] = useState(() => Math.floor(Date.now() / 1000))
+  useEffect(() => {
+    const id = window.setInterval(() => setNowSec(Math.floor(Date.now() / 1000)), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const finishExit = useCallback((id: string) => {
+    const timer = exitTimersRef.current.get(id)
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      exitTimersRef.current.delete(id)
+    }
+    exitingRef.current.delete(id)
+    setExitingIds((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }, [])
+
+  const displayedConversations = useMemo(() => {
+    if (exitingIds.size === 0) return conversations
+    const present = new Set(conversations.map((item) => item.id))
+    const extras = [...exitingRef.current.values()]
+      .filter((row) => !present.has(row.item.id))
+      .sort((a, b) => a.index - b.index)
+    if (extras.length === 0) return conversations
+    const list = [...conversations]
+    for (const row of extras) {
+      list.splice(Math.min(row.index, list.length), 0, row.item)
+    }
+    return list
+  }, [conversations, exitingIds])
+
+  const menuConversation = menuState
+    ? displayedConversations.find((c) => c.id === menuState.conversationId)
+    : undefined
+  const menuUsesExternalAgent = Boolean(
+    menuConversation && conversationUsesExternalAgent(menuConversation),
+  )
+
+  useEffect(() => {
+    if (!menuConversation || !menuUsesExternalAgent) {
+      setMenuNativeSessionId(null)
+      setMenuNativeSessionLoading(false)
+      return
+    }
+    const conversationId = menuConversation.id
+    let cancelled = false
+    setMenuNativeSessionLoading(true)
+    setMenuNativeSessionId(null)
+    void chatApi
+      .getExternalNativeSessionId(conversationId)
+      .then((id) => {
+        if (!cancelled) setMenuNativeSessionId(id)
+      })
+      .catch(() => {
+        if (!cancelled) setMenuNativeSessionId(null)
+      })
+      .finally(() => {
+        if (!cancelled) setMenuNativeSessionLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [menuConversation, menuUsesExternalAgent])
+
+  useEffect(() => {
+    if (exitingIds.size === 0) return
+    const present = new Set(conversations.map((item) => item.id))
+    for (const id of exitingIds) {
+      const row = exitingRef.current.get(id)
+      if (!row) continue
+      if (!present.has(id)) {
+        row.detached = true
+        continue
+      }
+      if (row.detached) finishExit(id)
+    }
+  }, [conversations, exitingIds, finishExit])
+
+  useEffect(() => {
+    const timers = exitTimersRef.current
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (renamingId) {
+      renameInputRef.current?.focus()
+      renameInputRef.current?.select()
+    }
+  }, [renamingId])
+
+  /** 右键在光标处弹出菜单（不再用行尾 ⋯ / 图钉按钮）。 */
+  const openMenuAtPointer = (conversationId: string, clientX: number, clientY: number) => {
+    setMenuState({
+      conversationId,
+      anchor: { left: clientX, top: clientY },
+    })
+  }
+
+  const startRename = (conv: ConversationListItem) => {
+    setRenamingId(conv.id)
+    setRenameDraft(displayConversationTitle(conv.title, conv.preview))
+    setMenuState(null)
+  }
+
+  const commitRename = async (conversationId: string) => {
+    const nextTitle = renameDraft.trim()
+    setRenamingId(null)
+    if (!nextTitle || isPlaceholderTitle(nextTitle)) return
+    const conv = conversations.find((c) => c.id === conversationId)
+    if (!conv || conv.title === nextTitle) return
+    const listed = displayConversationTitle(conv.title, conv.preview)
+    if (isPlaceholderTitle(conv.title) && nextTitle === listed) return
+    await onRenameConversation(conversationId, nextTitle)
+  }
+
+  const beginArchive = (conv: ConversationListItem, index: number) => {
+    if (!exitingRef.current.has(conv.id)) {
+      exitingRef.current.set(conv.id, { item: conv, index, detached: false })
+      setExitingIds((prev) => {
+        const next = new Set(prev)
+        next.add(conv.id)
+        return next
+      })
+      exitTimersRef.current.set(
+        conv.id,
+        window.setTimeout(() => finishExit(conv.id), ARCHIVE_EXIT_MS),
+      )
+    }
+    void onArchiveConversation(conv.id)
+  }
+
+  if (displayedConversations.length === 0) {
+    return null
+  }
+
+  return (
+    <>
+      <div
+        className={compact ? 'space-y-0.5 py-0.5' : 'space-y-0.5 py-1'}
+        data-reorder-scope={reorder?.scopeId}
+      >
+        {displayedConversations.map((conv, index) => {
+          const active = currentConversationId === conv.id
+          const isGenerating = generatingConversationIds.has(conv.id)
+          const isTitleGenerating = titleGeneratingConversationIds.has(conv.id)
+          const isRenaming = renamingId === conv.id
+          const isExiting = exitingIds.has(conv.id)
+          const folderLabel = showFolderLabel ? conversationFolderLabel(conv, projects, sets, t) : ''
+          // 分支对话：把「（分支）」后缀从可截断的标题里拆出，做成不缩的固定标签，
+          // 避免侧栏窄宽时被省略号吃掉（forked_from 字段判定，不依赖标题文字）。
+          const isFork = Boolean(conv.forked_from ?? conv.forkedFrom)
+          const listedTitle = displayConversationTitle(conv.title, conv.preview)
+          const displayTitle =
+            isFork && listedTitle.endsWith(FORK_TITLE_SUFFIX)
+              ? listedTitle.slice(0, -FORK_TITLE_SUFFIX.length)
+              : listedTitle
+          const visibleTitle = displayTitle || t.chatLibUntitled
+          const isDragging = reorder?.draggingId === conv.id
+          const updatedAt = conv.updated_at ?? 0
+          const compactAge = formatCompactAge(updatedAt, nowSec)
+          const ageLabel = formatRelativeTime(updatedAt, t, nowSec)
+
+          if (isRenaming) {
+            return (
+              <div
+                key={conv.id}
+                className={`kv-conv-exit${isExiting ? ' is-exiting' : ''}`}
+                aria-hidden={isExiting || undefined}
+              >
+                <div
+                  data-reorder-id={conv.id}
+                  className={`kv-conv-row group relative flex min-w-0 items-center rounded-lg ${
+                    isDragging ? 'is-dragging ' : ''
+                  }${
+                    active
+                      ? 'bg-black/[0.07] dark:bg-white/[0.11]'
+                      : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
+                  }`}
+                >
+                  <input
+                    ref={renameInputRef}
+                    type="text"
+                    value={renameDraft}
+                    onChange={(e) => setRenameDraft(e.target.value)}
+                    onBlur={() => void commitRename(conv.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        void commitRename(conv.id)
+                      }
+                      if (e.key === 'Escape') {
+                        setRenamingId(null)
+                      }
+                    }}
+                    className={`min-w-0 flex-1 border-0 bg-transparent text-left outline-none focus:ring-0 ${
+                      compact
+                        ? `${indent ? 'pl-8' : 'pl-2.5'} pr-2 py-1 text-[13px] leading-5`
+                        : 'px-3 py-2 text-[13px]'
+                    } font-medium ${
+                      active
+                        ? 'text-neutral-900 dark:text-neutral-100'
+                        : 'text-neutral-700 dark:text-neutral-300'
+                    }`}
+                    placeholder={t.chatLibUntitled}
+                  />
+                </div>
+              </div>
+            )
+          }
+
+          return (
+            <div
+              key={conv.id}
+              className={`kv-conv-exit${isExiting ? ' is-exiting' : ''}`}
+              aria-hidden={isExiting || undefined}
+              onTransitionEnd={(event) => {
+                if (event.target !== event.currentTarget) return
+                if (
+                  event.propertyName !== 'grid-template-rows'
+                  && event.propertyName !== 'opacity'
+                ) return
+                finishExit(conv.id)
+              }}
+            >
+              <div
+                data-reorder-id={conv.id}
+                onPointerDown={reorder ? (e) => reorder.startDrag(e, conv.id) : undefined}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  openMenuAtPointer(conv.id, e.clientX, e.clientY)
+                }}
+                className={`kv-conv-row group relative flex min-w-0 items-center rounded-lg ${
+                  isDragging ? 'is-dragging ' : ''
+                }${
+                  active
+                    ? 'bg-black/[0.07] dark:bg-white/[0.11]'
+                    : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
+                }`}
+              >
+              <button
+                type="button"
+                onClick={() => onSelectConversation(conv.id, conv)}
+                onDoubleClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  startRename(conv)
+                }}
+                className={`min-w-0 flex-1 text-left font-medium transition-colors ${
+                  compact
+                    ? `${indent ? 'pl-8' : 'pl-2.5'} pr-2 py-1 text-[13px] leading-5`
+                    : 'px-3 py-2 text-[13px]'
+                } ${
+                  active
+                    ? 'text-neutral-900 dark:text-neutral-100'
+                    : 'text-neutral-700 dark:text-neutral-300'
+                }`}
+                title={
+                  isGenerating || isTitleGenerating
+                    ? t.chatTitleGenerating.replace('{title}', visibleTitle)
+                    : visibleTitle
+                }
+              >
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {/* 模型标题替换乐观截断标题时打字机逐字打出；生成中的临时标题置灰 */}
+                  <SwapTitle
+                    text={visibleTitle}
+                    className={`block min-w-0 flex-1 truncate${
+                      isTitleGenerating
+                      || (isGenerating && isProvisionalTitle(displayTitle, conv.preview))
+                        ? ' kv-title-provisional'
+                        : ''
+                    }`}
+                  />
+                  {isFork && (
+                    <span
+                      className="shrink-0 text-[11px] font-normal text-neutral-400 dark:text-neutral-500"
+                      title={t.chatForkedFromOther}
+                    >
+                      {t.chatForkSuffix}
+                    </span>
+                  )}
+                  {folderLabel && (
+                    <span
+                      className="max-w-[96px] shrink-0 truncate text-[11px] font-normal text-neutral-400 dark:text-neutral-500"
+                      title={folderLabel}
+                    >
+                      {folderLabel}
+                    </span>
+                  )}
+                </span>
+                {showAssistantName && (conv.assistant_name ?? conv.assistantName) && (
+                  <span className="mt-0.5 block truncate text-[11px] font-normal text-neutral-400 dark:text-neutral-500">
+                    {(conv.assistant_name ?? conv.assistantName)}
+                  </span>
+                )}
+              </button>
+              {/* 行尾：平时短龄；悬停让给 PIN + 归档；生成中优先慢波。
+                  短龄叠在槽右侧（置顶时针占左、龄占右）。慢波保持原始 chat-gen-wave。 */}
+
+              <div
+                className="kv-conv-trailing relative mr-1 flex h-[22px] w-[44px] shrink-0 items-center justify-end"
+                data-busy={isGenerating && !conv.pinned ? '' : undefined}
+              >
+                {compactAge && (
+                  <span
+                    className="kv-conv-age pointer-events-none absolute right-0.5 flex h-full items-center text-[11px] tabular-nums leading-none text-neutral-400 dark:text-neutral-500"
+                    aria-label={ageLabel || undefined}
+                  >
+                    {compactAge}
+                  </span>
+                )}
+                {isGenerating && !conv.pinned && (
+                  <span
+                    className="kv-conv-wave chat-gen-wave pointer-events-none absolute right-1"
+                    aria-label={t.chatGenerating}
+                    role="status"
+                  >
+                    <span /><span /><span /><span />
+                  </span>
+                )}
+                <div className="kv-conv-actions flex items-center">
+                  <button
+                    type="button"
+                    data-no-drag
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void onTogglePinConversation(conv.id, !conv.pinned)
+                    }}
+                    className={`shrink-0 rounded-md p-0.5 transition-opacity hover:bg-black/[0.06] dark:hover:bg-white/[0.1] ${
+                      conv.pinned
+                        ? 'text-neutral-700 opacity-100 dark:text-neutral-200'
+                        : isGenerating
+                          ? 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200'
+                          : 'text-neutral-400 opacity-0 group-hover:opacity-100 hover:text-neutral-600 dark:hover:text-neutral-200'
+                    }`}
+                    aria-label={conv.pinned ? t.chatUnpin : t.chatPin}
+                    title={conv.pinned ? t.chatUnpin : t.chatPin}
+                  >
+                    <Pin size={14} strokeWidth={conv.pinned ? 2.5 : 1.75} />
+                  </button>
+                  <button
+                    type="button"
+                    data-no-drag
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      beginArchive(conv, index)
+                    }}
+                    className={`shrink-0 rounded-md p-0.5 text-neutral-400 transition-opacity hover:bg-black/[0.06] hover:text-neutral-600 dark:hover:bg-white/[0.1] dark:hover:text-neutral-200 ${
+                      isGenerating && !conv.pinned
+                        ? ''
+                        : 'opacity-0 group-hover:opacity-100'
+                    }`}
+                    aria-label={t.chatLibArchive}
+                    title={t.chatLibArchive}
+                  >
+                    <Archive size={14} strokeWidth={1.75} />
+                  </button>
+                </div>
+              </div>
+
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {menuState && menuConversation && (
+        <ConversationContextMenu
+          anchor={menuState.anchor}
+          conversationFolder={menuConversation.folder}
+          conversationProjectId={menuConversation.project_id ?? menuConversation.projectId ?? null}
+          conversationSetId={menuConversation.set_id ?? menuConversation.setId ?? null}
+          projects={projects}
+          sets={sets}
+          lang={lang}
+          canRegenerateTitle={(menuConversation.message_count ?? 0) > 0}
+          regeneratingTitle={titleGeneratingConversationIds.has(menuConversation.id)}
+          showNativeSession={menuUsesExternalAgent}
+          nativeSessionId={menuNativeSessionId}
+          nativeSessionLoading={menuNativeSessionLoading}
+          onRegenerateTitle={() => void onRegenerateConversationTitle(menuConversation.id)}
+          onExport={() => void onExportConversation(
+            menuConversation.id,
+            displayConversationTitle(menuConversation.title, menuConversation.preview)
+              || t.chatLibUntitled,
+          )}
+          onMoveToProject={(projectId) => void onMoveConversationToProject(menuConversation.id, projectId)}
+          onMoveToSet={(setId) => void onMoveConversationToSet(menuConversation.id, setId)}
+          onOpenInPopout={onOpenInPopout ? () => void onOpenInPopout(menuConversation.id) : undefined}
+          onDelete={() => void onDeleteConversation(menuConversation.id)}
+          onClose={() => setMenuState(null)}
+        />
+      )}
+    </>
+  )
+})

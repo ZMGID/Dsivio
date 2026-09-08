@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kivio Desktop",
+  "version": "2.9.8",
+  "identifier": "com.zmair.kivio",
+  "build": {
+    "beforeDevCommand": "npm run dev:ui",
+    "beforeBuildCommand": "npm run build:ui",
+    "devUrl": "http://localhost:5713",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Kivio Desktop",
+        "width": 392,
+        "height": 152,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "visibleOnAllWorkspaces": true,
+        "create": false,
+        "skipTaskbar": true,
+        "visible": false
+      }
+    ],
+    "macOSPrivateApi": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "dmg",
+      "msi",
+      "nsis"
+    ],
+    "externalBin": [
+      "binaries/kivio-ocr-helper"
+    ],
+    "resources": {
+      "resources/skills": "skills",
+      "../docs/licenses": "licenses"
+    },
+    "windows": {
+      "wix": {
+        "version": "2.8.2"
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "infoPlist": "Info.plist"
+    },
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

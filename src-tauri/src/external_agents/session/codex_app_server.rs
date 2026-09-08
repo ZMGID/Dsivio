@@ -1,0 +1,3983 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::timeout;
+
+use crate::external_agents::session::live::{ApprovalAsk, ApprovalBridge, SessionCommand};
+use crate::external_agents::spawn::{fold_stderr, join_stderr_tail};
+use crate::external_agents::stream::{usage_from_parts, CliUsageParts};
+use crate::external_agents::types::{ExternalCliSlashCommand, UnifiedAgentEvent};
+use crate::proc::NoConsoleWindow;
+use crate::utils::strip_windows_verbatim_prefix;
+
+/// Codex `app-server` speaks newline-delimited JSON-RPC over stdio (one JSON object per line,
+/// no `Content-Length` framing). Responses omit the `jsonrpc` field, so we never require it.
+async fn write_rpc(
+    stdin: &mut tokio::process::ChildStdin,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Result<(), String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": method,
+        "params": params,
+    });
+    let mut line = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    line.push('\n');
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn write_rpc_result(
+    stdin: &mut tokio::process::ChildStdin,
+    id: &Value,
+    result: Value,
+) -> Result<(), String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    });
+    let mut line = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    line.push('\n');
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn write_rpc_error(
+    stdin: &mut tokio::process::ChildStdin,
+    id: &Value,
+    code: i64,
+    message: &str,
+) -> Result<(), String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message },
+    });
+    let mut line = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    line.push('\n');
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn codex_initialize_params() -> Value {
+    json!({
+        "clientInfo": { "name": "kivio", "title": "kivio", "version": "0" },
+        // `runtimeWorkspaceRoots` / command `additionalPermissions` are experimental.
+        // Without this flag app-server strips them, so agreeing to a permission card
+        // never materializes `:workspace_roots` and the model reports the workspace
+        // as still locked.
+        "capabilities": { "experimentalApi": true },
+    })
+}
+
+fn absolute_workspace_path(path: &str) -> String {
+    strip_windows_verbatim_prefix(PathBuf::from(path))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn runtime_workspace_roots(cwd: &str, extra: &[String]) -> Vec<String> {
+    let mut roots = Vec::new();
+    let cwd = absolute_workspace_path(cwd);
+    if !cwd.is_empty() {
+        roots.push(cwd);
+    }
+    for path in extra {
+        let path = absolute_workspace_path(path);
+        if !path.is_empty() && !roots.iter().any(|existing| existing == &path) {
+            roots.push(path);
+        }
+    }
+    roots
+}
+
+/// `thread/start` needs cwd / sandbox / approval / workspace roots.
+/// `runtimeWorkspaceRoots` is what materializes `:workspace_roots` / `project_roots`
+/// when the model asks for workspace permission — echoing the grant is not enough
+/// if this list is empty.
+///
+/// `thread/resume` sends **only** `threadId`. Extra cwd / sandbox / experimental roots
+/// made Codex reject a perfectly good rollout (Windows vs WSL path, or a capsule that
+/// did not exist when the thread was created). Model / sandbox for this turn go on
+/// `turn/start`.
+fn build_codex_thread_params(
+    cwd: &str,
+    sandbox_mode: &str,
+    approval_policy: &str,
+    model: Option<&str>,
+    resume_thread: Option<&str>,
+) -> (&'static str, Value) {
+    if let Some(tid) = resume_thread.filter(|tid| !tid.is_empty()) {
+        return ("thread/resume", json!({ "threadId": tid }));
+    }
+    let cwd_abs = absolute_workspace_path(cwd);
+    let mut params = json!({});
+    if !cwd_abs.is_empty() {
+        params["cwd"] = json!(cwd_abs);
+        params["runtimeWorkspaceRoots"] = json!([cwd_abs]);
+    }
+    params["sandbox"] = json!(sandbox_mode);
+    params["approvalPolicy"] = json!(approval_policy);
+    if let Some(model) = model {
+        params["model"] = json!(model);
+    }
+    ("thread/start", params)
+}
+
+/// JSON-RPC notification (no `id`). Required after `initialize` — newer app-server rejects
+/// subsequent requests until it sees `initialized`.
+async fn write_rpc_notification(
+    stdin: &mut tokio::process::ChildStdin,
+    method: &str,
+    params: Value,
+) -> Result<(), String> {
+    let payload = json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+    });
+    let mut line = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    line.push('\n');
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn rpc_id_key(id: &Value) -> String {
+    match id {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Same three ids the picker sends (`detection.rs`). Blank / unknown → 工作区写.
+pub(crate) fn normalize_codex_sandbox(sandbox: Option<&str>) -> &'static str {
+    match sandbox.map(str::trim) {
+        Some("danger-full-access") => "danger-full-access",
+        Some("read-only") => "read-only",
+        _ => "workspace-write",
+    }
+}
+
+/// Native Codex TUI default is `on-request`: the sandbox still applies, but escapes
+/// (network, writes outside the workspace, untrusted commands) ask the host.
+/// `danger-full-access` keeps `never` so the 「完全」档 stays silent.
+fn codex_approval_policy(sandbox: Option<&str>) -> &'static str {
+    match normalize_codex_sandbox(sandbox) {
+        "danger-full-access" => "never",
+        _ => "on-request",
+    }
+}
+
+fn is_codex_tool_approval(method: &str) -> bool {
+    matches!(
+        method,
+        "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval"
+            | "execCommandApproval"
+            | "applyPatchApproval"
+    )
+}
+
+/// Echo the requested grant. Codex only turns network on when both the request
+/// and the grant have `network.enabled = true`; a boolean `true` does not count.
+/// Empty object grants nothing.
+fn granted_codex_permissions(params: &Value) -> Value {
+    let mut permissions = params.get("permissions").cloned().unwrap_or(json!({}));
+    let network_enabled = matches!(permissions.get("network"), Some(Value::Bool(true)))
+        || permissions.pointer("/network/enabled") == Some(&Value::Bool(true))
+        || matches!(
+            params.pointer("/additionalPermissions/network"),
+            Some(Value::Bool(true))
+        )
+        || params.pointer("/additionalPermissions/network/enabled") == Some(&Value::Bool(true));
+    if network_enabled {
+        permissions["network"] = json!({ "enabled": true });
+    }
+    permissions
+}
+
+fn is_codex_elicitation(method: &str) -> bool {
+    method == "mcpServer/elicitation/request" || method.starts_with("openai/elicitation")
+}
+
+/// Approve payload when the user allows (or the 「完全」档 auto-allows). Each method
+/// maps to a different response shape (see the `*RequestApprovalResponse` schemas).
+fn approval_response(method: &str, params: &Value) -> Option<Value> {
+    if is_codex_elicitation(method) {
+        return Some(json!({ "action": "decline", "content": null }));
+    }
+    match method {
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            Some(json!({ "decision": "acceptForSession" }))
+        }
+        // Legacy exec/apply-patch approval requests use ReviewDecision.
+        "execCommandApproval" | "applyPatchApproval" => {
+            Some(json!({ "decision": "approved_for_session" }))
+        }
+        "item/permissions/requestApproval" => Some(json!({
+            "permissions": granted_codex_permissions(params),
+            "scope": "session"
+        })),
+        _ => None,
+    }
+}
+
+/// Deny payload. `interrupt` maps to Codex's cancel/abort (stop the turn); otherwise the
+/// agent continues and tries something else.
+fn approval_deny_response(method: &str, interrupt: bool) -> Option<Value> {
+    if is_codex_elicitation(method) {
+        return Some(json!({ "action": "decline", "content": null }));
+    }
+    match method {
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            Some(json!({
+                "decision": if interrupt { "cancel" } else { "decline" }
+            }))
+        }
+        "execCommandApproval" | "applyPatchApproval" => Some(if interrupt {
+            json!({ "decision": "abort" })
+        } else {
+            json!({ "decision": { "denied": { "rejection": "user declined" } } })
+        }),
+        "item/permissions/requestApproval" => Some(json!({
+            "permissions": {},
+            "scope": "turn"
+        })),
+        _ => None,
+    }
+}
+
+fn approval_ask_from_params(method: &str, id: &Value, params: &Value) -> ApprovalAsk {
+    let request_id = rpc_id_key(id);
+    // `approvalId` is the callback id when several prompts share one `itemId`.
+    let tool_call_id = json_str(params, "approvalId")
+        .filter(|value| !value.is_empty())
+        .or_else(|| json_str(params, "itemId"))
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("codex-approve-{request_id}"));
+    let (tool_name, input) = match method {
+        "item/commandExecution/requestApproval" | "execCommandApproval" => {
+            let command = json_str(params, "command").unwrap_or("");
+            let reason = json_str(params, "reason").unwrap_or("");
+            let display = if command.is_empty() { reason } else { command };
+            (
+                "Bash",
+                json!({
+                    "command": display,
+                    "cwd": params.get("cwd").cloned().unwrap_or(Value::Null),
+                    "reason": reason,
+                }),
+            )
+        }
+        "item/fileChange/requestApproval" | "applyPatchApproval" => (
+            "Edit",
+            json!({
+                "path": json_str(params, "grantRoot").unwrap_or(""),
+                "reason": json_str(params, "reason").unwrap_or(""),
+            }),
+        ),
+        "item/permissions/requestApproval" => (
+            // Not Bash: a prior 「总是允许」Bash must not swallow workspace grants,
+            // and the card copy has to say this is a workspace / environment grant.
+            "request_permissions",
+            json!({
+                "reason": json_str(params, "reason").unwrap_or("请求工作区 / 执行环境权限"),
+                "cwd": params.get("cwd").cloned().unwrap_or(Value::Null),
+                "environmentId": params.get("environmentId").cloned().unwrap_or(Value::Null),
+                "permissions": params.get("permissions").cloned().unwrap_or(json!({})),
+            }),
+        ),
+        _ => ("Bash", params.clone()),
+    };
+    ApprovalAsk {
+        request_id,
+        tool_call_id,
+        tool_name: tool_name.to_string(),
+        input,
+        requires_user_interaction: false,
+    }
+}
+
+/// Outcome of mapping one app-server notification. Failed turns must bubble as `Err` so
+/// `run_persistent_turn` can RetryFresh; emitting `Error` and returning `Ok` would skip retry
+/// and still poison `stream_error` if a later reconnect succeeds.
+///
+/// Mid-turn `error` / `thread/realtime/error` is **not** a turn end: Codex retries the
+/// upstream stream in-process (`stream_max_retries`, default 5) and keeps emitting
+/// `Reconnecting... N/M` until `turn/completed`. Treating those as `TurnFailed` kills the
+/// still-running CLI and shows "通信出错" while Codex is still thinking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodexMapResult {
+    Continue,
+    TurnEnded,
+    TurnFailed(String),
+}
+
+/// Map a single codex app-server notification to zero or more `UnifiedAgentEvent`s.
+fn map_codex_notification(
+    method: &str,
+    params: &Value,
+    emitted_tools: &mut HashSet<String>,
+    sink: &mut dyn FnMut(UnifiedAgentEvent),
+) -> CodexMapResult {
+    match method {
+        "item/agentMessage/delta" => {
+            if let Some(delta) = params.get("delta").and_then(|v| v.as_str()) {
+                if !delta.is_empty() {
+                    sink(UnifiedAgentEvent::TextDelta {
+                        delta: delta.to_string(),
+                    });
+                }
+            }
+        }
+        "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta" => {
+            if let Some(delta) = params.get("delta").and_then(|v| v.as_str()) {
+                if !delta.is_empty() {
+                    sink(UnifiedAgentEvent::ThinkingDelta {
+                        delta: delta.to_string(),
+                    });
+                }
+            }
+        }
+        "item/commandExecution/outputDelta" => {
+            // Output streamed before the item completes; the completed item carries the
+            // aggregated output we surface as the tool result, so deltas are not re-emitted.
+        }
+        "item/started" => {
+            if let Some(item) = params.get("item").and_then(|v| v.as_object()) {
+                emit_thread_item(item, emitted_tools, sink, false);
+            }
+        }
+        "item/completed" => {
+            if let Some(item) = params.get("item").and_then(|v| v.as_object()) {
+                emit_thread_item(item, emitted_tools, sink, true);
+            }
+        }
+        "turn/plan/updated" => emit_plan_update(params, sink),
+        "model/safetyBuffering/updated" => {
+            if params.get("showBufferingUi").and_then(Value::as_bool) == Some(true) {
+                sink(UnifiedAgentEvent::StatusNote {
+                    text: "模型正在安全审核，请稍候…".to_string(),
+                });
+            }
+        }
+        "model/rerouted" => {
+            if let Some(to) = params.get("toModel").and_then(Value::as_str) {
+                sink(UnifiedAgentEvent::StatusNote {
+                    text: format!("已改道到 {to}"),
+                });
+            }
+        }
+        "thread/tokenUsage/updated" => {
+            // `tokenUsage` 有 `last` 与 `total` 两份：
+            //   last  = 最近一次请求的快照 → **上下文占用**口径，是用量条要的分子
+            //   total = 整个 thread 的累计消耗 → 计费口径，随轮次单调增长
+            // 用 total 当「已用上下文」会持续虚高，最终把进度条推满而实际远未满。
+            // `last` 缺失时才退回 `total`（兼容旧版 codex）。
+            //
+            // 同层还有 `modelContextWindow`（与 last/total 平级）：codex 自报的**本轮真实窗口**。
+            // 本机实测 258400，而静态表（`codex debug models` 的 context_window）是 272000，
+            // 偏高 5.3%。CLI 实报优先于任何静态表（模型可能中途切换），走
+            // `ModelUsage::context_window_tokens` 这条 L9 最高优先级通道。
+            let model_context_window = params
+                .get("tokenUsage")
+                .and_then(|v| v.get("modelContextWindow"))
+                .and_then(|v| v.as_u64())
+                .filter(|tokens| *tokens > 0);
+            if let Some(usage) = params
+                .get("tokenUsage")
+                .and_then(|v| v.get("last").or_else(|| v.get("total")))
+                .and_then(|v| v.as_object())
+            {
+                let field = |key: &str| usage.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+                let parts = CliUsageParts {
+                    input: field("inputTokens"),
+                    output: field("outputTokens"),
+                    cache_read: field("cachedInputTokens"),
+                    cache_creation: field("cacheWriteInputTokens"),
+                    // **codex 的 cache 已含在 inputTokens 里**（OpenAI 口径），不能再加一遍。
+                    // 本机实测原文（codex-cli 0.145.0, 2026-07-26）：
+                    //   {"cacheWriteInputTokens":0,"cachedInputTokens":3456,"inputTokens":16865,
+                    //    "outputTokens":7,"reasoningOutputTokens":0,"totalTokens":16872}
+                    // 对账 16865 + 7 = 16872 = totalTokens ⇒ 3456 是 inputTokens 的子集。
+                    // 当成不相交去加会得到 20328，虚高 20%。
+                    cache_included_in_input: true,
+                    // 刻意**不读** `reasoningOutputTokens`：同一样本里它是 0 而
+                    // input+output 已恰好等于 totalTokens，说明推理 token 已含在 outputTokens 内。
+                    context_window: model_context_window,
+                    ..Default::default()
+                };
+                if parts.input > 0
+                    || parts.output > 0
+                    || parts.cache_read > 0
+                    || parts.cache_creation > 0
+                    // 窗口本身也是有效信息：一轮还没产生 token 时先把分母立起来，
+                    // 好过让用量条继续吃静态表的近似值。
+                    || parts.context_window.is_some()
+                {
+                    sink(UnifiedAgentEvent::Usage {
+                        usage: usage_from_parts(parts),
+                    });
+                }
+            }
+        }
+        "turn/completed" => {
+            if let Some(turn) = params.get("turn").and_then(|v| v.as_object()) {
+                if turn.get("status").and_then(|v| v.as_str()) == Some("failed") {
+                    return CodexMapResult::TurnFailed(codex_error_message(
+                        turn.get("error").unwrap_or(&Value::Null),
+                    ));
+                }
+            }
+            return CodexMapResult::TurnEnded;
+        }
+        // Mid-turn `error` / `thread/realtime/error` **precedes** `turn/completed` (app-server
+        // README). Codex uses this for stream reconnect (`Reconnecting... 7/50`); the TUI
+        // keeps thinking. Do **not** end the Kivio turn here — returning `TurnFailed` kills
+        // the live process (RetryFresh) while Codex is still retrying. Quota / window /
+        // exhausted-retry stay fail-closed; everything else is an English status-line note
+        // (`reconnect 7/50`) until `turn/completed`.
+        "error" | "thread/realtime/error" => {
+            let message = codex_error_message(params);
+            if crate::external_agents::errors::is_non_retryable_codex_error(&message, "codex") {
+                return CodexMapResult::TurnFailed(message);
+            }
+            sink(UnifiedAgentEvent::StatusNote {
+                text: mid_turn_error_status_note(&message),
+            });
+            return CodexMapResult::Continue;
+        }
+        "thread/compacted" => {
+            // Deprecated in current app-server; still emitted by older CLIs.
+            sink(UnifiedAgentEvent::CliCompacted {
+                trigger: "auto".to_string(),
+                pre_tokens: None,
+                post_tokens: None,
+                dropped_tokens: None,
+                duration_ms: None,
+            });
+        }
+        _ => {}
+    }
+    CodexMapResult::Continue
+}
+
+fn map_str<'a>(item: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a str> {
+    item.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn json_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn item_id(item: &serde_json::Map<String, Value>) -> Option<String> {
+    item.get("id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn value_as_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Null) | None => String::new(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// Codex `webSearch` items are `{id, query, action?}` — there is no `results` field.
+/// Serializing JSON `null` produced the literal `"null"` in the tool card.
+fn web_search_result(item: &serde_json::Map<String, Value>) -> String {
+    if let Some(results) = item.get("results") {
+        match results {
+            Value::Null => {}
+            Value::String(s) if s.is_empty() || s == "null" => {}
+            Value::Array(entries) if entries.is_empty() => {}
+            other => {
+                let text = value_as_text(Some(other));
+                if !text.is_empty() {
+                    return text;
+                }
+            }
+        }
+    }
+    if let Some(action) = item.get("action") {
+        let kind = json_str(action, "type").unwrap_or("");
+        let from_action = match kind {
+            "openPage" | "open_page" => json_str(action, "url").unwrap_or("").to_string(),
+            "findInPage" | "find_in_page" => {
+                let url = json_str(action, "url").unwrap_or("");
+                let pattern = json_str(action, "pattern").unwrap_or("");
+                [url, pattern]
+                    .into_iter()
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · ")
+            }
+            _ => json_str(action, "query")
+                .or_else(|| {
+                    action
+                        .get("queries")
+                        .and_then(Value::as_array)
+                        .and_then(|queries| {
+                            queries
+                                .iter()
+                                .find_map(|q| q.as_str().map(str::trim).filter(|s| !s.is_empty()))
+                        })
+                })
+                .unwrap_or("")
+                .to_string(),
+        };
+        if !from_action.is_empty() {
+            return from_action;
+        }
+    }
+    let query = map_str(item, "query").unwrap_or("");
+    if !query.is_empty() {
+        return query.to_string();
+    }
+    item.get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed")
+        .to_string()
+}
+
+fn item_failed(item: &serde_json::Map<String, Value>) -> bool {
+    matches!(
+        item.get("status").and_then(|v| v.as_str()),
+        Some("failed") | Some("declined")
+    )
+}
+
+/// Codex TUI / app-server progress: `Reconnecting... 7/50` or the same with a parenthetical
+/// cause. Also accepts the Chinese TUI string `正在重新连接 12/50`.
+fn parse_reconnect_progress(raw: &str) -> Option<(u64, u64)> {
+    let lower = raw.to_ascii_lowercase();
+    let start = lower
+        .find("reconnecting")
+        .or_else(|| raw.find("正在重新连接"))?;
+    let rest = raw.get(start..)?;
+    let digit_at = rest.find(|c: char| c.is_ascii_digit())?;
+    let digits = rest.get(digit_at..)?;
+    let attempt_len = digits
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(digits.len());
+    if attempt_len == 0 {
+        return None;
+    }
+    let attempt: u64 = digits.get(..attempt_len)?.parse().ok()?;
+    let after_attempt = digits.get(attempt_len..)?.trim_start();
+    let after_slash = after_attempt.strip_prefix('/')?.trim_start();
+    let max_len = after_slash
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(after_slash.len());
+    if max_len == 0 {
+        return None;
+    }
+    let max: u64 = after_slash.get(..max_len)?.parse().ok()?;
+    if attempt == 0 || max == 0 {
+        return None;
+    }
+    Some((attempt, max))
+}
+
+fn head_chars(s: &str, n: usize) -> String {
+    let mut out = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if i >= n {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Status-line copy for a mid-turn Codex error. StreamStatusLine is English and short
+/// (`elapsed · tokens · running`), so this matches: `reconnect 7/50`.
+fn mid_turn_error_status_note(raw: &str) -> String {
+    if let Some((attempt, max)) = parse_reconnect_progress(raw) {
+        return format!("reconnect {attempt}/{max}");
+    }
+    let hay = raw.to_ascii_lowercase();
+    if hay.contains("reconnecting")
+        || raw.contains("正在重新连接")
+        || hay.contains("responsestreamdisconnected")
+        || hay.contains("responsestreamconnectionfailed")
+        || hay.contains("httpconnectionfailed")
+    {
+        return "reconnect".to_string();
+    }
+    let cause = head_chars(raw.trim(), 80);
+    if cause.is_empty() {
+        "retry".to_string()
+    } else {
+        format!("retry · {cause}")
+    }
+}
+
+fn is_codex_reconnect_progress(raw: &str) -> bool {
+    parse_reconnect_progress(raw).is_some()
+        || raw.to_ascii_lowercase().contains("reconnecting")
+        || raw.contains("正在重新连接")
+}
+
+/// Fold `codexErrorInfo` (string variant or tagged object) into the message so retry
+/// classification can see `UsageLimitExceeded` even when `message` is generic.
+fn codex_error_message(error: &Value) -> String {
+    let err = error.get("error").unwrap_or(error);
+    let message = err
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+    let info = match err.get("codexErrorInfo") {
+        Some(Value::String(s)) => Some(s.trim().to_string()).filter(|s| !s.is_empty()),
+        Some(Value::Object(map)) => map
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| map.keys().next().cloned()),
+        _ => None,
+    };
+    match (info.as_deref(), message) {
+        (Some(info), "") => info.to_string(),
+        (Some(info), msg) => format!("{info}: {msg}"),
+        (None, "") => "Codex error".to_string(),
+        (None, msg) => msg.to_string(),
+    }
+}
+
+fn emit_thread_item(
+    item: &serde_json::Map<String, Value>,
+    emitted_tools: &mut HashSet<String>,
+    sink: &mut dyn FnMut(UnifiedAgentEvent),
+    include_result: bool,
+) {
+    match item.get("type").and_then(|v| v.as_str()) {
+        Some("agentMessage") if include_result => {
+            // 0.153 async questions are notifications, not reverse RPC. Emit a completed
+            // display card; its answer is an ordinary user message, never an approval reply.
+            let questions: Vec<Value> = item
+                .get("questions")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .filter_map(|(index, question)| {
+                    let title = json_str(question, "title")?;
+                    let options: Vec<Value> = question
+                        .get("options")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .enumerate()
+                        .filter_map(|(oi, option)| {
+                            let label = option.as_str()?.trim();
+                            (!label.is_empty())
+                                .then(|| json!({ "id": oi.to_string(), "label": label }))
+                        })
+                        .collect();
+                    Some(
+                        json!({ "id": index.to_string(), "prompt": title, "options": options,
+                        "allow_custom": true, "allow_multiple": false }),
+                    )
+                })
+                .collect();
+            if questions.is_empty() {
+                return;
+            }
+            let Some(id) = item_id(item).map(|id| format!("codex-async-{id}")) else {
+                return;
+            };
+            if !emitted_tools.insert(id.clone()) {
+                return;
+            }
+            sink(UnifiedAgentEvent::ToolUse {
+                id: id.clone(),
+                name: "request_user_input_async".to_string(),
+                input: json!({ "askUser": { "phase": "awaiting", "async": true,
+                    "questions": questions, "answers": {} } }),
+            });
+            sink(UnifiedAgentEvent::ToolResult {
+                tool_use_id: id,
+                content: String::new(),
+                is_error: false,
+            });
+        }
+        Some("commandExecution") => {
+            emit_command_execution(item, emitted_tools, sink, include_result)
+        }
+        Some("fileChange") => emit_named_tool(
+            item,
+            emitted_tools,
+            sink,
+            include_result,
+            "Edit",
+            json!({
+                "changes": item.get("changes").cloned().unwrap_or(Value::Null),
+            }),
+            file_change_result(item),
+        ),
+        Some("mcpToolCall") => {
+            let server = map_str(item, "server").unwrap_or("mcp");
+            let tool = map_str(item, "tool").unwrap_or("tool");
+            let name = format!("mcp__{server}__{tool}");
+            let input = item.get("arguments").cloned().unwrap_or(Value::Null);
+            let result = if item_failed(item) {
+                value_as_text(item.get("error"))
+            } else {
+                value_as_text(item.get("result"))
+            };
+            emit_named_tool(
+                item,
+                emitted_tools,
+                sink,
+                include_result,
+                &name,
+                input,
+                result,
+            );
+        }
+        Some("webSearch") => {
+            let query = map_str(item, "query")
+                .or_else(|| item.get("action").and_then(|a| json_str(a, "query")))
+                .unwrap_or("");
+            emit_named_tool(
+                item,
+                emitted_tools,
+                sink,
+                include_result,
+                "web_search",
+                json!({ "query": query }),
+                web_search_result(item),
+            );
+        }
+        // 0.148 schema：插件 / 动态工具；以前落进 `_` 整张卡消失。
+        Some("dynamicToolCall") => {
+            let tool = map_str(item, "tool").unwrap_or("tool");
+            let name = match map_str(item, "namespace") {
+                Some(ns) => format!("{ns}__{tool}"),
+                None => tool.to_string(),
+            };
+            let input = item.get("arguments").cloned().unwrap_or(Value::Null);
+            emit_named_tool(
+                item,
+                emitted_tools,
+                sink,
+                include_result,
+                &name,
+                input,
+                dynamic_tool_result(item),
+            );
+        }
+        Some("imageGeneration") => {
+            let prompt = map_str(item, "revisedPrompt").unwrap_or("");
+            emit_named_tool(
+                item,
+                emitted_tools,
+                sink,
+                include_result,
+                "image_generation",
+                json!({ "prompt": prompt }),
+                image_generation_result(item),
+            );
+        }
+        Some("sleep") => {
+            let duration_ms = item.get("durationMs").cloned().unwrap_or(Value::Null);
+            emit_named_tool(
+                item,
+                emitted_tools,
+                sink,
+                include_result,
+                "sleep",
+                json!({ "durationMs": duration_ms }),
+                match duration_ms.as_u64() {
+                    Some(ms) => format!("{ms}ms"),
+                    None => duration_ms.to_string(),
+                },
+            );
+        }
+        Some("clock") => {
+            let duration_ms = item.get("durationMs").cloned().unwrap_or(Value::Null);
+            let current_time = map_str(item, "currentTime")
+                .or_else(|| map_str(item, "time"))
+                .or_else(|| map_str(item, "now"))
+                .map(str::to_string);
+            let result = if let Some(time) = current_time.as_deref() {
+                time.to_string()
+            } else {
+                match duration_ms.as_u64() {
+                    Some(ms) => format!("{ms}ms"),
+                    None => item
+                        .get("status")
+                        .and_then(Value::as_str)
+                        .unwrap_or("completed")
+                        .to_string(),
+                }
+            };
+            emit_named_tool(
+                item,
+                emitted_tools,
+                sink,
+                include_result,
+                "clock",
+                json!({
+                    "durationMs": duration_ms,
+                    "currentTime": current_time,
+                }),
+                result,
+            );
+        }
+        Some("collabToolCall") | Some("collabAgentToolCall") => {
+            emit_collab_tool_call(item, emitted_tools, sink, include_result);
+        }
+        Some("subAgentActivity") => emit_subagent_activity(item, sink),
+        Some("contextCompaction") => {
+            if include_result {
+                sink(UnifiedAgentEvent::CliCompacted {
+                    trigger: "auto".to_string(),
+                    pre_tokens: None,
+                    post_tokens: None,
+                    dropped_tokens: None,
+                    duration_ms: None,
+                });
+            }
+        }
+        Some("imageView") => {
+            let path = map_str(item, "path").unwrap_or("");
+            emit_named_tool(
+                item,
+                emitted_tools,
+                sink,
+                include_result,
+                "image_view",
+                json!({ "path": path }),
+                path.to_string(),
+            );
+        }
+        _ => {}
+    }
+}
+
+fn dynamic_tool_result(item: &serde_json::Map<String, Value>) -> String {
+    if let Some(items) = item.get("contentItems").and_then(Value::as_array) {
+        let texts: Vec<String> = items
+            .iter()
+            .filter_map(|entry| json_str(entry, "text").map(str::to_string))
+            .collect();
+        if !texts.is_empty() {
+            return texts.join("\n");
+        }
+    }
+    if item_failed(item) {
+        return "failed".to_string();
+    }
+    item.get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed")
+        .to_string()
+}
+
+fn image_generation_result(item: &serde_json::Map<String, Value>) -> String {
+    if let Some(path) = map_str(item, "savedPath") {
+        return path.to_string();
+    }
+    let result = value_as_text(item.get("result"));
+    if !result.is_empty() {
+        return result;
+    }
+    item.get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed")
+        .to_string()
+}
+
+fn file_change_result(item: &serde_json::Map<String, Value>) -> String {
+    let paths: Vec<String> = item
+        .get("changes")
+        .and_then(Value::as_array)
+        .map(|changes| {
+            changes
+                .iter()
+                .filter_map(|change| json_str(change, "path").map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if paths.is_empty() {
+        item.get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("completed")
+            .to_string()
+    } else {
+        paths.join("\n")
+    }
+}
+
+fn emit_named_tool(
+    item: &serde_json::Map<String, Value>,
+    emitted_tools: &mut HashSet<String>,
+    sink: &mut dyn FnMut(UnifiedAgentEvent),
+    include_result: bool,
+    name: &str,
+    input: Value,
+    result: String,
+) {
+    let Some(id) = item_id(item) else {
+        return;
+    };
+    if emitted_tools.insert(id.clone()) {
+        sink(UnifiedAgentEvent::ToolUse {
+            id: id.clone(),
+            name: name.to_string(),
+            input,
+        });
+    }
+    if !include_result {
+        return;
+    }
+    sink(UnifiedAgentEvent::ToolResult {
+        tool_use_id: id,
+        content: result,
+        is_error: item_failed(item),
+    });
+}
+
+fn emit_plan_update(params: &Value, sink: &mut dyn FnMut(UnifiedAgentEvent)) {
+    let Some(plan) = params.get("plan").and_then(Value::as_array) else {
+        return;
+    };
+    let todos: Vec<Value> = plan
+        .iter()
+        .filter_map(|entry| {
+            let step = json_str(entry, "step")?;
+            let status = match entry.get("status").and_then(Value::as_str) {
+                Some("inProgress") | Some("in_progress") => "in_progress",
+                Some("completed") => "completed",
+                Some("pending") => "pending",
+                _ => "pending",
+            };
+            Some(json!({ "content": step, "status": status }))
+        })
+        .collect();
+    if todos.is_empty() && !plan.is_empty() {
+        return;
+    }
+    sink(UnifiedAgentEvent::TodoWrite {
+        todos: json!({ "todos": todos }),
+    });
+}
+
+fn collab_tool_kind(item: &serde_json::Map<String, Value>) -> String {
+    item.get("tool")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .replace('-', "_")
+        .to_ascii_lowercase()
+}
+
+fn collab_child_id(item: &serde_json::Map<String, Value>) -> Option<String> {
+    map_str(item, "newThreadId")
+        .or_else(|| map_str(item, "receiverThreadId"))
+        .map(str::to_string)
+        .or_else(|| {
+            item.get("receiverThreadIds")
+                .and_then(Value::as_array)
+                .and_then(|ids| {
+                    ids.iter()
+                        .find_map(|id| id.as_str().map(str::trim).filter(|s| !s.is_empty()))
+                        .map(str::to_string)
+                })
+        })
+}
+
+fn collab_is_spawn(kind: &str) -> bool {
+    matches!(kind, "spawn_agent" | "spawnagent")
+}
+
+fn emit_collab_tool_call(
+    item: &serde_json::Map<String, Value>,
+    emitted_tools: &mut HashSet<String>,
+    sink: &mut dyn FnMut(UnifiedAgentEvent),
+    include_result: bool,
+) {
+    let Some(id) = item_id(item) else {
+        return;
+    };
+    let kind = collab_tool_kind(item);
+    let child_id = collab_child_id(item);
+    let task_id = child_id.clone().unwrap_or_else(|| id.clone());
+    let prompt = map_str(item, "prompt").unwrap_or("");
+    if emitted_tools.insert(id.clone()) {
+        sink(UnifiedAgentEvent::ToolUse {
+            id: id.clone(),
+            name: "subagent".to_string(),
+            input: json!({
+                "tool": item.get("tool").cloned().unwrap_or(Value::Null),
+                "prompt": prompt,
+                "receiverThreadId": child_id,
+            }),
+        });
+        if collab_is_spawn(&kind) {
+            sink(UnifiedAgentEvent::BackgroundTask {
+                task_id: task_id.clone(),
+                status: "running".to_string(),
+                kind: Some("local_agent".to_string()),
+                description: (!prompt.is_empty()).then(|| prompt.to_string()),
+                summary: None,
+            });
+        }
+    }
+    if !include_result {
+        return;
+    }
+    let failed = item_failed(item);
+    let content = if collab_is_spawn(&kind) && !failed {
+        format!("started subagent {task_id}")
+    } else if let Some(status) = map_str(item, "agentStatus") {
+        status.to_string()
+    } else {
+        item.get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("completed")
+            .to_string()
+    };
+    sink(UnifiedAgentEvent::ToolResult {
+        tool_use_id: id,
+        content,
+        is_error: failed,
+    });
+    let final_status = if failed {
+        "failed"
+    } else if matches!(kind.as_str(), "wait" | "close_agent" | "closeagent") {
+        "completed"
+    } else {
+        "running"
+    };
+    sink(UnifiedAgentEvent::BackgroundTask {
+        task_id: task_id.clone(),
+        status: final_status.to_string(),
+        kind: Some("local_agent".to_string()),
+        description: None,
+        summary: map_str(item, "agentStatus").map(str::to_string),
+    });
+    if !failed {
+        sink(UnifiedAgentEvent::SubagentProgress {
+            task_id,
+            status: final_status.to_string(),
+            preview: prompt.to_string(),
+            steps: Vec::new(),
+        });
+    }
+}
+
+fn emit_subagent_activity(
+    item: &serde_json::Map<String, Value>,
+    sink: &mut dyn FnMut(UnifiedAgentEvent),
+) {
+    let task_id = collab_child_id(item)
+        .or_else(|| item_id(item))
+        .unwrap_or_else(|| "codex-subagent".to_string());
+    let preview = map_str(item, "text")
+        .or_else(|| map_str(item, "preview"))
+        .or_else(|| map_str(item, "message"))
+        .or_else(|| map_str(item, "activity"))
+        .unwrap_or("")
+        .to_string();
+    sink(UnifiedAgentEvent::SubagentProgress {
+        task_id,
+        status: "running".to_string(),
+        preview,
+        steps: Vec::new(),
+    });
+}
+
+/// A `commandExecution` ThreadItem (camelCase wire shape) maps to a Bash tool use / result.
+fn emit_command_execution(
+    item: &serde_json::Map<String, Value>,
+    emitted_tools: &mut HashSet<String>,
+    sink: &mut dyn FnMut(UnifiedAgentEvent),
+    include_result: bool,
+) {
+    if item.get("type").and_then(|v| v.as_str()) != Some("commandExecution") {
+        return;
+    }
+    let id = match item
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        Some(id) => id.to_string(),
+        None => return,
+    };
+    let command = item
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if emitted_tools.insert(id.clone()) {
+        sink(UnifiedAgentEvent::ToolUse {
+            id: id.clone(),
+            name: "Bash".to_string(),
+            input: json!({ "command": command }),
+        });
+    }
+    if !include_result {
+        return;
+    }
+    let content = item
+        .get("aggregatedOutput")
+        .map(|value| match value {
+            Value::String(s) => s.clone(),
+            _ => value.to_string(),
+        })
+        .unwrap_or_default();
+    let exit_code = item.get("exitCode").and_then(|v| v.as_i64());
+    let status_failed = matches!(
+        item.get("status").and_then(|v| v.as_str()),
+        Some("failed") | Some("declined")
+    );
+    let is_error = exit_code.map(|code| code != 0).unwrap_or(status_failed);
+    sink(UnifiedAgentEvent::ToolResult {
+        tool_use_id: id,
+        content,
+        is_error,
+    });
+}
+
+// ===========================================================================================
+// Persistent session (Phase 2): keep the app-server process alive across turns.
+// ===========================================================================================
+
+/// `/compact` must NOT be sent as prompt text — codex treats it as a plain user message (the
+/// model just role-plays a compaction while the real context keeps growing). The app-server
+/// protocol compacts via the dedicated `thread/compact/start` RPC instead.
+fn is_compact_slash(prompt: &str) -> bool {
+    prompt.trim() == "/compact"
+}
+
+/// Normalize conversation-stored effort before `turn/start`.
+///
+/// Curated catalog dropped `none`/`minimal` and added `max`/`ultra`. Legacy sessions may still
+/// hold the old ids — omit them rather than send a value the picker no longer offers.
+pub fn normalize_codex_effort(raw: Option<&str>) -> Option<String> {
+    let raw = raw.map(str::trim).filter(|s| !s.is_empty())?;
+    let lower = raw.to_ascii_lowercase();
+    match lower.as_str() {
+        "default" | "none" | "minimal" | "off" | "auto" | "unset" => None,
+        "low" | "medium" | "high" | "xhigh" | "max" | "ultra" => Some(lower),
+        _ => None,
+    }
+}
+
+/// Build the `turn/start` params, applying the per-turn `model` / reasoning `effort` (R4: codex
+/// applies both every turn, so a mid-session switch takes effect on the next turn). Pure so the
+/// per-turn application is unit-testable.
+///
+/// Extra writable roots become `runtimeWorkspaceRoots` (cwd + extras). Do **not** replace
+/// the thread sandbox with a `sandboxPolicy` object — that object defaults
+/// `networkAccess: false` and drops the environment-scoped workspace roots, which is
+/// exactly the "工作区权限没放开" failure mode. Empty extra list = omit the field so
+/// the thread's existing roots stay in force.
+///
+/// `approval_policy` is sent every turn so a live thread that started under `never` still
+/// picks up `on-request` after this adapter change (and the 「完全」档 can switch back).
+fn build_codex_turn_params(
+    thread_id: &str,
+    cwd: &str,
+    input: Vec<Value>,
+    model: Option<&str>,
+    effort: Option<&str>,
+    extra_writable_roots: &[String],
+    approval_policy: &str,
+) -> Value {
+    let mut turn_params = json!({
+        "threadId": thread_id,
+        "input": input,
+        "cwd": cwd,
+        "approvalPolicy": approval_policy,
+    });
+    if let Some(effort) = normalize_codex_effort(effort) {
+        turn_params["effort"] = json!(effort);
+    }
+    if let Some(model) = model {
+        turn_params["model"] = json!(model);
+    }
+    if extra_writable_roots
+        .iter()
+        .any(|path| !path.trim().is_empty())
+    {
+        turn_params["runtimeWorkspaceRoots"] =
+            json!(runtime_workspace_roots(cwd, extra_writable_roots));
+    }
+    turn_params
+}
+
+fn local_image_items(
+    cli_bin: &Path,
+    images: &[crate::external_agents::attachments::ImageBlock],
+) -> Vec<Value> {
+    crate::external_agents::attachments::materialize_images_to_tempdir(images)
+        .into_iter()
+        .map(|path| {
+            let path = crate::external_agents::wsl::path_for_cli(cli_bin, &path);
+            json!({ "type": "localImage", "path": path.to_string_lossy() })
+        })
+        .collect()
+}
+
+/// A live Codex app-server connection: one `thread/start` (or `thread/resume`), then many
+/// `turn/start` calls over the same process. Owned exclusively by its actor task.
+pub struct CodexAppServerSession {
+    child: Child,
+    stdin: ChildStdin,
+    reader: Lines<BufReader<ChildStdout>>,
+    thread_id: String,
+    cwd: String,
+    cli_bin: PathBuf,
+    next_id: u64,
+    emitted_tools: HashSet<String>,
+    /// 服务端当前活跃轮次的 turn id（取自任意一条带 `turnId` 的通知）。
+    /// `turn/steer` 的 `expectedTurnId` 前置条件要用它；轮末清空。
+    active_turn_id: Option<String>,
+    /// Ring-buffered stderr tail (N1), joined on close / error for diagnostics.
+    stderr_tail: tokio::task::JoinHandle<String>,
+    /// `on-request` (workspace-write / read-only) asks the host; `never` (完全) auto-allows.
+    approval_policy: &'static str,
+}
+
+/// Handshake timeouts (缺陷 4 / R3): 30s each, up from 15/20s.
+const CODEX_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(30);
+const CODEX_THREAD_START_TIMEOUT: Duration = Duration::from_secs(30);
+/// Resume replays the on-disk rollout. A long project thread can exceed the start
+/// timeout; treating that as "thread missing" opens a blank session.
+const CODEX_THREAD_RESUME_TIMEOUT: Duration = Duration::from_secs(120);
+
+impl CodexAppServerSession {
+    /// Spawn `codex app-server`, `initialize`, then create or resume a thread. The process and
+    /// thread persist for subsequent `run_turn` calls.
+    pub async fn connect(
+        resolved_bin: &Path,
+        args: &[String],
+        cwd: &Path,
+        model: Option<&str>,
+        sandbox: Option<&str>,
+        resume_thread: Option<&str>,
+    ) -> Result<Self, String> {
+        let mut child = crate::external_agents::spawn::cli_command(resolved_bin)
+            .args(args)
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .no_console_window()
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("spawn: {e}"))?;
+        // N1: drain stderr for the process lifetime.
+        let stderr_tail = crate::external_agents::spawn::spawn_stderr_tail(child.stderr.take());
+        let mut stdin = match child.stdin.take() {
+            Some(s) => s,
+            None => {
+                let tail = join_stderr_tail(&mut child, stderr_tail).await;
+                return Err(fold_stderr("spawn: stdin unavailable".to_string(), &tail));
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                let tail = join_stderr_tail(&mut child, stderr_tail).await;
+                return Err(fold_stderr("spawn: stdout unavailable".to_string(), &tail));
+            }
+        };
+        let mut reader = BufReader::new(stdout).lines();
+
+        let cwd_str = crate::external_agents::wsl::path_for_cli(resolved_bin, cwd)
+            .to_string_lossy()
+            .into_owned();
+        let chosen_model = model.filter(|m| !m.is_empty() && *m != "default");
+        let sandbox_mode = normalize_codex_sandbox(sandbox);
+        let approval_policy = codex_approval_policy(Some(sandbox_mode));
+
+        let handshake = async {
+            let mut next_id = 1u64;
+            write_rpc(&mut stdin, next_id, "initialize", codex_initialize_params())
+                .await
+                .map_err(|e| format!("initialize: {e}"))?;
+            read_until_response(&mut reader, &mut stdin, next_id, CODEX_INITIALIZE_TIMEOUT)
+                .await
+                .map_err(|e| format!("initialize: {e}"))?;
+            next_id += 1;
+            write_rpc_notification(&mut stdin, "initialized", json!({}))
+                .await
+                .map_err(|e| format!("initialized: {e}"))?;
+
+            if !crate::external_agents::wsl::is_wsl_target(resolved_bin) {
+                ensure_windows_sandbox(&mut reader, &mut stdin, &cwd_str, &mut next_id).await;
+            }
+
+            let (method, params) = build_codex_thread_params(
+                &cwd_str,
+                sandbox_mode,
+                approval_policy,
+                chosen_model,
+                resume_thread.filter(|t| !t.is_empty()),
+            );
+            let thread_rpc_id = next_id;
+            next_id += 1;
+            write_rpc(&mut stdin, thread_rpc_id, method, params)
+                .await
+                .map_err(|e| format!("thread-start: {e}"))?;
+            let thread_timeout = if method == "thread/resume" {
+                CODEX_THREAD_RESUME_TIMEOUT
+            } else {
+                CODEX_THREAD_START_TIMEOUT
+            };
+            let result =
+                read_until_response(&mut reader, &mut stdin, thread_rpc_id, thread_timeout)
+                    .await
+                    .map_err(|e| format!("thread-start: {e}"))?;
+            let thread_id = result
+                .get("thread")
+                .and_then(|t| t.get("id"))
+                .and_then(|v| v.as_str())
+                .or_else(|| result.get("threadId").and_then(|v| v.as_str()))
+                .map(str::to_string)
+                .ok_or_else(|| format!("thread-start: invalid {method} response"))?;
+            Ok::<_, String>((thread_id, next_id))
+        }
+        .await;
+
+        match handshake {
+            Ok((thread_id, next_id)) => Ok(Self {
+                child,
+                stdin,
+                reader,
+                thread_id,
+                cwd: cwd_str,
+                cli_bin: resolved_bin.to_path_buf(),
+                next_id,
+                emitted_tools: HashSet::new(),
+                active_turn_id: None,
+                stderr_tail,
+                approval_policy,
+            }),
+            Err(msg) => {
+                let tail = join_stderr_tail(&mut child, stderr_tail).await;
+                Err(fold_stderr(msg, &tail))
+            }
+        }
+    }
+
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    /// 常驻子进程的 pid。只作为注册表元数据（诊断 / 「两轮是不是同一个进程」），
+    /// 关停一律走 actor 的 `Close`，绝不按 pid 杀。
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
+    /// Run one turn over the live thread. Emits events into `events`; polls `control` so an
+    /// incoming `Cancel` sends `turn/interrupt` (without killing the process). Does NOT close stdin.
+    pub async fn run_turn(
+        &mut self,
+        prompt: &str,
+        model: Option<&str>,
+        reasoning: Option<&str>,
+        images: &[crate::external_agents::attachments::ImageBlock],
+        extra_writable_roots: &[String],
+        events: &mpsc::Sender<UnifiedAgentEvent>,
+        control: &mut mpsc::Receiver<SessionCommand>,
+        mut approvals: Option<&mut ApprovalBridge>,
+    ) -> Result<(), String> {
+        let chosen_model = model.filter(|m| !m.is_empty() && *m != "default");
+        let chosen_effort = normalize_codex_effort(reasoning);
+        let turn_id = self.next_id;
+        self.next_id += 1;
+
+        if is_compact_slash(prompt) {
+            // Real compaction RPC; the server runs it as a turn (contextCompaction item +
+            // turn/completed), so the read loop below works unchanged.
+            write_rpc(
+                &mut self.stdin,
+                turn_id,
+                "thread/compact/start",
+                json!({ "threadId": self.thread_id }),
+            )
+            .await?;
+        } else {
+            // Codex reads images as `localImage` items pointing at on-disk files; copy each into a
+            // private temp dir (its sandbox can't reach the conversation attachments dir).
+            let mut input = vec![json!({ "type": "text", "text": prompt })];
+            input.extend(local_image_items(&self.cli_bin, images));
+            let turn_params = build_codex_turn_params(
+                &self.thread_id,
+                &self.cwd,
+                input,
+                chosen_model,
+                chosen_effort.as_deref(),
+                extra_writable_roots,
+                self.approval_policy,
+            );
+            write_rpc(&mut self.stdin, turn_id, "turn/start", turn_params).await?;
+        }
+
+        // 已发出、还在等响应的 `turn/steer`（rpc_id → (steer_id, 文本, 回执通道)）。
+        // 受理与否只有响应说得准，所以 oneshot 在这里排队、由读循环兑付。
+        let mut pending_steers: std::collections::HashMap<
+            u64,
+            (String, String, oneshot::Sender<bool>),
+        > = std::collections::HashMap::new();
+        loop {
+            match control.try_recv() {
+                Ok(SessionCommand::Cancel) => {
+                    let iid = self.next_id;
+                    self.next_id += 1;
+                    let _ = write_rpc(
+                        &mut self.stdin,
+                        iid,
+                        "turn/interrupt",
+                        json!({ "threadId": self.thread_id }),
+                    )
+                    .await;
+                    return Err("cancelled".to_string());
+                }
+                Ok(SessionCommand::Close) => return Err("closed".to_string()),
+                Ok(SessionCommand::Steer {
+                    id,
+                    text,
+                    images: steer_images,
+                    kind: crate::external_agents::session::live::MessageInjectionKind::Steer,
+                    accepted,
+                }) => {
+                    // `turn/steer` 往**在飞的**这一轮追加用户输入（不新起一轮、不发
+                    // turn/started）。`expectedTurnId` 是前置条件，必须等于服务端当前活跃的
+                    // turn id —— 那是服务端给的字符串，不是我们的 JSON-RPC 请求 id，所以只能
+                    // 从通知里抓（每条通知的 params 都带 turnId）。还没抓到就说明这一轮还没
+                    // 真正开始，此时无从注入，回 false 让调用方按普通消息在轮末发。
+                    match self.active_turn_id.clone() {
+                        Some(expected_turn_id) => {
+                            let rpc_id = self.next_id;
+                            self.next_id += 1;
+                            let mut input = vec![json!({ "type": "text", "text": text })];
+                            input.extend(local_image_items(&self.cli_bin, &steer_images));
+                            let params = json!({
+                                "threadId": self.thread_id,
+                                "input": input,
+                                "expectedTurnId": expected_turn_id,
+                            });
+                            match write_rpc(&mut self.stdin, rpc_id, "turn/steer", params).await {
+                                // 受理与否要等它的**响应**（review / compact 轮次会被拒），
+                                // 所以在这里只登记，由下面的读循环兑付这个 oneshot。
+                                Ok(()) => {
+                                    pending_steers.insert(rpc_id, (id, text, accepted));
+                                }
+                                Err(_) => {
+                                    let _ = accepted.send(false);
+                                }
+                            }
+                        }
+                        None => {
+                            let _ = accepted.send(false);
+                        }
+                    }
+                }
+                Ok(SessionCommand::Steer { accepted, .. }) => {
+                    let _ = accepted.send(false);
+                }
+                Ok(SessionCommand::RunTurn { done, .. }) => {
+                    let _ = done.send(Err("session busy".to_string()));
+                }
+                // codex 无后台任务协议（stop_task 是 claude 专属），忽略。
+                Ok(SessionCommand::StopTask { .. }) => {}
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    return Err("control channel closed".to_string())
+                }
+            }
+
+            let line = match timeout(Duration::from_millis(200), self.reader.next_line()).await {
+                Ok(Ok(Some(l))) => l,
+                Ok(Ok(None)) => return Err("codex app-server exited mid-turn".to_string()),
+                Ok(Err(e)) => return Err(e.to_string()),
+                Err(_) => continue,
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = match serde_json::from_str(line.trim()) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if let (Some(method), Some(id)) = (
+                value.get("method").and_then(|v| v.as_str()),
+                value.get("id"),
+            ) {
+                let params = value.get("params").cloned().unwrap_or(Value::Null);
+                answer_codex_server_request(
+                    &mut self.stdin,
+                    method,
+                    id,
+                    &params,
+                    approvals.as_deref_mut(),
+                    control,
+                    &self.thread_id,
+                    &mut self.next_id,
+                    self.approval_policy != "never",
+                )
+                .await?;
+                continue;
+            }
+            if let Some(method) = value.get("method").and_then(|v| v.as_str()) {
+                let params = value.get("params").cloned().unwrap_or(Value::Null);
+                // 服务端给的活跃 turn id：每条 turn 相关通知的 params 都带 turnId。
+                // `turn/steer` 的 `expectedTurnId` 只能取自这里。
+                if let Some(turn) = params.get("turnId").and_then(|v| v.as_str()) {
+                    self.active_turn_id = Some(turn.to_string());
+                }
+                let mut buf: Vec<UnifiedAgentEvent> = Vec::new();
+                let mapped =
+                    map_codex_notification(method, &params, &mut self.emitted_tools, &mut |e| {
+                        buf.push(e)
+                    });
+                for e in buf {
+                    let _ = events.send(e).await;
+                }
+                match mapped {
+                    CodexMapResult::Continue => {}
+                    CodexMapResult::TurnEnded => {
+                        self.active_turn_id = None;
+                        return Ok(());
+                    }
+                    CodexMapResult::TurnFailed(message) => {
+                        self.active_turn_id = None;
+                        return Err(message);
+                    }
+                }
+                continue;
+            }
+            // `turn/steer` 的响应。**必须排在下面那条通用 error 分支之前**：被拒的 steer
+            // （review / compact 轮次不可 steer、expectedTurnId 已过期）回的是带 id 的
+            // error，落到通用分支会把整轮判死 —— 用户只是插话没插上，不该赔掉这一轮。
+            if let Some(rpc_id) = value.get("id").and_then(Value::as_u64) {
+                if let Some((steer_id, steer_text, accepted)) = pending_steers.remove(&rpc_id) {
+                    let ok = value.get("result").is_some();
+                    let _ = accepted.send(ok);
+                    if ok {
+                        // 受理了才在时间线上留卡（卡的语义是「这句话确实进了模型输入」）。
+                        let _ = events
+                            .send(UnifiedAgentEvent::UserSteer {
+                                id: steer_id,
+                                text: steer_text,
+                            })
+                            .await;
+                    }
+                    continue;
+                }
+            }
+            if let Some(err) = value.get("error") {
+                let message = err
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| err.to_string());
+                // Same as the `error` notification: Codex may surface reconnect progress as a
+                // JSON-RPC error object while the turn is still running. Killing the reader
+                // here is the "掐线" the TUI never does.
+                if is_codex_reconnect_progress(&message) {
+                    let _ = events
+                        .send(UnifiedAgentEvent::StatusNote {
+                            text: mid_turn_error_status_note(&message),
+                        })
+                        .await;
+                    continue;
+                }
+                return Err(message);
+            }
+            // Response to turn/start (or a stale id): the turn is now running — keep reading.
+        }
+    }
+
+    /// Close stdin and give Codex a moment to flush the rollout before killing.
+    pub async fn close(mut self) {
+        let _ = self.stdin.shutdown().await;
+        match timeout(Duration::from_secs(3), self.child.wait()).await {
+            Ok(_) => {}
+            Err(_) => {
+                crate::external_agents::spawn::kill_agent_process_tree(&mut self.child);
+                let _ = self.child.wait().await;
+            }
+        }
+        let _ = timeout(Duration::from_secs(2), self.stderr_tail).await;
+    }
+}
+
+/// Answer a server→client JSON-RPC request.
+///
+/// `requestUserInput` always goes through the ask-user host. Command / file / permissions
+/// approvals ask the host when the session is `on-request`; the 「完全」档 (`never`) still
+/// auto-allows so picking that capsule stays silent. Handshake auto-accepts because there
+/// is no UI yet. Unknown requests are fail-closed so the turn cannot hang.
+async fn answer_codex_server_request(
+    stdin: &mut ChildStdin,
+    method: &str,
+    id: &Value,
+    params: &Value,
+    approvals: Option<&mut ApprovalBridge>,
+    control: &mut mpsc::Receiver<SessionCommand>,
+    thread_id: &str,
+    next_id: &mut u64,
+    asks_for_approval: bool,
+) -> Result<(), String> {
+    if method == "item/tool/requestUserInput" {
+        return answer_codex_user_input(stdin, id, params, approvals, control, thread_id, next_id)
+            .await;
+    }
+    if is_codex_tool_approval(method) {
+        return answer_codex_tool_approval(
+            stdin,
+            method,
+            id,
+            params,
+            approvals,
+            control,
+            thread_id,
+            next_id,
+            asks_for_approval,
+        )
+        .await;
+    }
+    if let Some(result) = approval_response(method, params) {
+        return write_rpc_result(stdin, id, result).await;
+    }
+    write_rpc_result(stdin, id, unknown_server_request_result()).await
+}
+
+/// 未知的带 `id` 请求：回 decline 结果而不是 `-32601`，避免这一轮挂死。
+fn unknown_server_request_result() -> Value {
+    json!({ "decision": "decline" })
+}
+
+async fn answer_codex_tool_approval(
+    stdin: &mut ChildStdin,
+    method: &str,
+    id: &Value,
+    params: &Value,
+    approvals: Option<&mut ApprovalBridge>,
+    control: &mut mpsc::Receiver<SessionCommand>,
+    thread_id: &str,
+    next_id: &mut u64,
+    asks_for_approval: bool,
+) -> Result<(), String> {
+    if !asks_for_approval {
+        let result = approval_response(method, params)
+            .ok_or_else(|| format!("no approve payload for {method}"))?;
+        return write_rpc_result(stdin, id, result).await;
+    }
+    let Some(bridge) = approvals else {
+        let denied = approval_deny_response(method, false)
+            .ok_or_else(|| format!("no deny payload for {method}"))?;
+        return write_rpc_result(stdin, id, denied).await;
+    };
+    let ask = approval_ask_from_params(method, id, params);
+    let request_id = ask.request_id.clone();
+    if bridge.requests.send(ask).await.is_err() {
+        let denied = approval_deny_response(method, false)
+            .ok_or_else(|| format!("no deny payload for {method}"))?;
+        return write_rpc_result(stdin, id, denied).await;
+    }
+    loop {
+        match control.try_recv() {
+            Ok(SessionCommand::Cancel) => {
+                if let Some(denied) = approval_deny_response(method, true) {
+                    let _ = write_rpc_result(stdin, id, denied).await;
+                }
+                let iid = *next_id;
+                *next_id += 1;
+                let _ = write_rpc(
+                    stdin,
+                    iid,
+                    "turn/interrupt",
+                    json!({ "threadId": thread_id }),
+                )
+                .await;
+                return Err("cancelled".to_string());
+            }
+            Ok(SessionCommand::Close) => {
+                if let Some(denied) = approval_deny_response(method, true) {
+                    let _ = write_rpc_result(stdin, id, denied).await;
+                }
+                return Err("closed".to_string());
+            }
+            Ok(SessionCommand::RunTurn { done, .. }) => {
+                let _ = done.send(Err("session busy".to_string()));
+            }
+            Ok(SessionCommand::Steer { accepted, .. }) => {
+                let _ = accepted.send(false);
+            }
+            Ok(SessionCommand::StopTask { .. }) => {}
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                if let Some(denied) = approval_deny_response(method, true) {
+                    let _ = write_rpc_result(stdin, id, denied).await;
+                }
+                return Err("control channel closed".to_string());
+            }
+        }
+        match timeout(Duration::from_millis(200), bridge.decisions.recv()).await {
+            Ok(Some(decision)) if decision.request_id == request_id => {
+                if decision.approved {
+                    let result = approval_response(method, params)
+                        .ok_or_else(|| format!("no approve payload for {method}"))?;
+                    return write_rpc_result(stdin, id, result).await;
+                }
+                let denied = approval_deny_response(method, false)
+                    .ok_or_else(|| format!("no deny payload for {method}"))?;
+                return write_rpc_result(stdin, id, denied).await;
+            }
+            Ok(Some(_)) | Err(_) => continue,
+            Ok(None) => {
+                let denied = approval_deny_response(method, false)
+                    .ok_or_else(|| format!("no deny payload for {method}"))?;
+                return write_rpc_result(stdin, id, denied).await;
+            }
+        }
+    }
+}
+
+async fn answer_codex_user_input(
+    stdin: &mut ChildStdin,
+    id: &Value,
+    params: &Value,
+    approvals: Option<&mut ApprovalBridge>,
+    control: &mut mpsc::Receiver<SessionCommand>,
+    thread_id: &str,
+    next_id: &mut u64,
+) -> Result<(), String> {
+    let Some(bridge) = approvals else {
+        return write_rpc_error(stdin, id, -32603, "ask-user host unavailable").await;
+    };
+    let request_id = rpc_id_key(id);
+    let tool_call_id = json_str(params, "itemId")
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("codex-ask-{request_id}"));
+    let ask = ApprovalAsk {
+        request_id: request_id.clone(),
+        tool_call_id,
+        tool_name: "requestUserInput".to_string(),
+        input: params.clone(),
+        requires_user_interaction: true,
+    };
+    if bridge.requests.send(ask).await.is_err() {
+        return write_rpc_error(stdin, id, -32603, "ask-user host closed").await;
+    }
+    loop {
+        match control.try_recv() {
+            Ok(SessionCommand::Cancel) => {
+                let _ = write_rpc_error(stdin, id, -32603, "cancelled").await;
+                let iid = *next_id;
+                *next_id += 1;
+                let _ = write_rpc(
+                    stdin,
+                    iid,
+                    "turn/interrupt",
+                    json!({ "threadId": thread_id }),
+                )
+                .await;
+                return Err("cancelled".to_string());
+            }
+            Ok(SessionCommand::Close) => {
+                let _ = write_rpc_error(stdin, id, -32603, "closed").await;
+                return Err("closed".to_string());
+            }
+            Ok(SessionCommand::RunTurn { done, .. }) => {
+                let _ = done.send(Err("session busy".to_string()));
+            }
+            Ok(SessionCommand::Steer { accepted, .. }) => {
+                let _ = accepted.send(false);
+            }
+            Ok(SessionCommand::StopTask { .. }) => {}
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                let _ = write_rpc_error(stdin, id, -32603, "control channel closed").await;
+                return Err("control channel closed".to_string());
+            }
+        }
+        match timeout(Duration::from_millis(200), bridge.decisions.recv()).await {
+            Ok(Some(decision)) if decision.request_id == request_id => {
+                if decision.approved {
+                    let payload = decision
+                        .updated_input
+                        .unwrap_or_else(|| json!({ "answers": {} }));
+                    return write_rpc_result(stdin, id, payload).await;
+                }
+                return write_rpc_error(stdin, id, -32603, "user declined").await;
+            }
+            Ok(Some(_)) | Err(_) => continue,
+            Ok(None) => {
+                return write_rpc_error(stdin, id, -32603, "ask-user host closed").await;
+            }
+        }
+    }
+}
+
+/// Read JSON-RPC lines until the response with `target_id` arrives, auto-answering any
+/// server→client approval requests and skipping notifications. Unknown requests are
+/// fail-closed so handshake cannot hang.
+async fn read_until_response(
+    reader: &mut Lines<BufReader<ChildStdout>>,
+    stdin: &mut ChildStdin,
+    target_id: u64,
+    overall: Duration,
+) -> Result<Value, String> {
+    let start = std::time::Instant::now();
+    loop {
+        if start.elapsed() > overall {
+            return Err("codex app-server handshake timeout".to_string());
+        }
+        let line = match timeout(Duration::from_millis(200), reader.next_line()).await {
+            Ok(Ok(Some(l))) => l,
+            Ok(Ok(None)) => return Err("codex app-server exited during handshake".to_string()),
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => continue,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let (Some(method), Some(id)) = (
+            value.get("method").and_then(|v| v.as_str()),
+            value.get("id"),
+        ) {
+            let params = value.get("params").cloned().unwrap_or(Value::Null);
+            answer_handshake_request(stdin, method, id, &params).await?;
+            continue;
+        }
+        if value.get("method").is_some() {
+            continue; // notification
+        }
+        if let Some(err) = value.get("error") {
+            return Err(err
+                .get("message")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| err.to_string()));
+        }
+        if value.get("id").and_then(|v| v.as_u64()) == Some(target_id) {
+            return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+        }
+    }
+}
+
+async fn answer_handshake_request(
+    stdin: &mut ChildStdin,
+    method: &str,
+    id: &Value,
+    params: &Value,
+) -> Result<(), String> {
+    if let Some(result) = approval_response(method, params) {
+        write_rpc_result(stdin, id, result).await
+    } else {
+        write_rpc_result(stdin, id, unknown_server_request_result()).await
+    }
+}
+
+/// Native Codex TUI sets up the Windows sandbox (UAC + ACLs) before the first
+/// workspace-write turn. App-server does not do that by itself; without this
+/// call the model reports that the execution environment is still locked.
+async fn ensure_windows_sandbox(
+    reader: &mut Lines<BufReader<ChildStdout>>,
+    stdin: &mut ChildStdin,
+    cwd: &str,
+    next_id: &mut u64,
+) {
+    #[cfg(not(windows))]
+    {
+        let _ = (reader, stdin, cwd, next_id);
+    }
+    #[cfg(windows)]
+    {
+        let _ = ensure_windows_sandbox_inner(reader, stdin, cwd, next_id).await;
+    }
+}
+
+#[cfg(windows)]
+async fn ensure_windows_sandbox_inner(
+    reader: &mut Lines<BufReader<ChildStdout>>,
+    stdin: &mut ChildStdin,
+    cwd: &str,
+    next_id: &mut u64,
+) -> Result<(), String> {
+    let ready_id = *next_id;
+    *next_id += 1;
+    write_rpc(stdin, ready_id, "windowsSandbox/readiness", json!({})).await?;
+    let status = match read_until_response(reader, stdin, ready_id, Duration::from_secs(8)).await {
+        Ok(result) => result
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        Err(_) => return Ok(()),
+    };
+    if status == "ready" {
+        return Ok(());
+    }
+
+    let setup_id = *next_id;
+    *next_id += 1;
+    let mut params = json!({ "mode": "elevated" });
+    let cwd_abs = absolute_workspace_path(cwd);
+    if !cwd_abs.is_empty() {
+        params["cwd"] = json!(cwd_abs);
+    }
+    write_rpc(stdin, setup_id, "windowsSandbox/setupStart", params).await?;
+    match read_until_response(reader, stdin, setup_id, Duration::from_secs(15)).await {
+        Ok(result) if result.get("started").and_then(Value::as_bool) == Some(true) => {}
+        _ => return Ok(()),
+    }
+
+    let start = std::time::Instant::now();
+    let overall = Duration::from_secs(90);
+    loop {
+        if start.elapsed() > overall {
+            return Ok(());
+        }
+        let line = match timeout(Duration::from_millis(200), reader.next_line()).await {
+            Ok(Ok(Some(l))) => l,
+            Ok(Ok(None)) => return Ok(()),
+            Ok(Err(_)) => return Ok(()),
+            Err(_) => continue,
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let (Some(method), Some(id)) = (
+            value.get("method").and_then(|v| v.as_str()),
+            value.get("id"),
+        ) {
+            let params = value.get("params").cloned().unwrap_or(Value::Null);
+            let _ = answer_handshake_request(stdin, method, id, &params).await;
+            continue;
+        }
+        if value.get("method").and_then(|v| v.as_str()) == Some("windowsSandbox/setupCompleted") {
+            return Ok(());
+        }
+    }
+}
+
+/// Curated codex built-in slash commands (not exposed via any list RPC). Merged with the
+/// dynamic `skills/list` results for the slash popover.
+const CODEX_BUILTIN_COMMANDS: &[(&str, &str)] = &[
+    ("compact", "压缩对话历史"),
+    ("diff", "查看改动 diff"),
+    ("init", "生成 AGENTS.md"),
+    ("model", "切换模型"),
+    ("approvals", "审批策略"),
+    ("review", "审查改动"),
+    ("status", "会话状态"),
+    ("mcp", "MCP server 状态"),
+    ("new", "新会话"),
+    ("undo", "撤销上一步"),
+];
+
+/// Result of a one-shot Codex model catalog probe (app-server `model/list`).
+///
+/// Aligns with desktop-cc-gui: runtime list is authoritative; each model carries its own
+/// `supportedReasoningEfforts`. `reasoning_options` is a convenience union / default-model
+/// slice for callers that only want a flat list.
+#[derive(Debug, Clone)]
+pub struct CodexModelsProbe {
+    pub models: Vec<crate::external_agents::types::RuntimeModelOption>,
+    pub reasoning_by_model:
+        std::collections::HashMap<String, Vec<crate::external_agents::types::RuntimeModelOption>>,
+    pub reasoning_options: Vec<crate::external_agents::types::RuntimeModelOption>,
+}
+
+/// **Selectable** Codex catalog — word-for-word the 4 entries in desktop-cc-gui
+/// `generatedModelCatalog.json` → `engines.codex`.
+///
+/// This is what users actually see in cc-gui when `model/list` is empty/degraded
+/// (workspace not connected): sol / terra / luna / gpt-5.5. Live `model/list` on
+/// current CLI returns a *different* short set (5.5/5.4/5.4-mini/5.3-codex/5.2) and
+/// **omits** gpt-5.6-* — so we do **not** dump that list into the picker. Runtime is
+/// only used to enrich efforts/labels for ids that already sit in this curated table.
+const CODEX_CURATED_CATALOG: &[(&str, &str, &[&str])] = &[
+    (
+        "gpt-5.6-sol",
+        "gpt-5.6-sol",
+        &["low", "medium", "high", "xhigh", "max", "ultra"],
+    ),
+    (
+        "gpt-5.6-terra",
+        "gpt-5.6-terra",
+        &["low", "medium", "high", "xhigh", "max", "ultra"],
+    ),
+    (
+        "gpt-5.6-luna",
+        "gpt-5.6-luna",
+        &["low", "medium", "high", "xhigh", "max"],
+    ),
+    ("gpt-5.5", "gpt-5.5", &["low", "medium", "high", "xhigh"]),
+];
+
+fn effort_options(ids: &[&str]) -> Vec<crate::external_agents::types::RuntimeModelOption> {
+    use crate::external_agents::types::RuntimeModelOption;
+    ids.iter()
+        .map(|id| RuntimeModelOption {
+            id: (*id).to_string(),
+            label: title_case_effort(id),
+            context_window_tokens: None,
+        })
+        .collect()
+}
+
+/// Build the picker list the way desktop-cc-gui does in practice for most users:
+///
+/// 1. **Curated 4** (generated catalog) as the selectable set / order  
+/// 2. If runtime `model/list` has the **same id**, overwrite label / efforts / window  
+/// 3. If `config.toml` model is still missing, inject it after Auto  
+///
+/// Deliberately does **not** append every runtime-only id (gpt-5.4 / 5.2 / …) — that
+/// is what made Kivio show a junk list while cc-gui showed the clean 4.
+pub fn merge_codex_model_catalog(
+    runtime: CodexModelsProbe,
+    config_model: Option<&str>,
+) -> CodexModelsProbe {
+    use crate::external_agents::types::{default_model_option, RuntimeModelOption};
+
+    let runtime_by_id: std::collections::HashMap<&str, &RuntimeModelOption> = runtime
+        .models
+        .iter()
+        .filter(|m| m.id != "default")
+        .map(|m| (m.id.as_str(), m))
+        .collect();
+
+    let mut models = vec![default_model_option()];
+    let mut reasoning_by_model = std::collections::HashMap::new();
+    let mut seen = HashSet::new();
+    seen.insert("default".to_string());
+
+    for (id, label, efforts) in CODEX_CURATED_CATALOG {
+        seen.insert((*id).to_string());
+        // Runtime enrichment when the same catalog id appears in model/list.
+        if let Some(rt) = runtime_by_id.get(*id) {
+            models.push(RuntimeModelOption {
+                id: (*id).to_string(),
+                label: if rt.label.trim().is_empty() {
+                    (*label).to_string()
+                } else {
+                    rt.label.clone()
+                },
+                context_window_tokens: rt.context_window_tokens,
+            });
+            if let Some(opts) = runtime.reasoning_by_model.get(*id) {
+                if !opts.is_empty() {
+                    reasoning_by_model.insert((*id).to_string(), opts.clone());
+                    continue;
+                }
+            }
+        } else {
+            models.push(RuntimeModelOption {
+                id: (*id).to_string(),
+                label: (*label).to_string(),
+                context_window_tokens: None,
+            });
+        }
+        reasoning_by_model.insert((*id).to_string(), effort_options(efforts));
+    }
+
+    // config.toml model missing from curated set → inject (cc-gui same behavior).
+    if let Some(cfg) = config_model
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && *s != "default")
+    {
+        if !seen.contains(cfg) {
+            models.insert(
+                1,
+                RuntimeModelOption {
+                    id: cfg.to_string(),
+                    label: format!("{cfg} (config)"),
+                    context_window_tokens: None,
+                },
+            );
+            reasoning_by_model.insert(
+                cfg.to_string(),
+                effort_options(&["low", "medium", "high", "xhigh", "max", "ultra"]),
+            );
+        }
+    }
+
+    let reasoning_options = config_model
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(|cfg| reasoning_by_model.get(cfg).cloned())
+        .filter(|o| !o.is_empty())
+        .or_else(|| reasoning_by_model.get("gpt-5.6-sol").cloned())
+        .or_else(|| {
+            models
+                .iter()
+                .filter(|m| m.id != "default")
+                .find_map(|m| reasoning_by_model.get(&m.id).cloned())
+        })
+        .unwrap_or_default();
+
+    CodexModelsProbe {
+        models,
+        reasoning_by_model,
+        reasoning_options,
+    }
+}
+
+/// When model/list / debug models both fail — still serve the curated 4.
+pub fn codex_static_fallback_probe() -> CodexModelsProbe {
+    merge_codex_model_catalog(
+        CodexModelsProbe {
+            models: vec![crate::external_agents::types::default_model_option()],
+            reasoning_by_model: std::collections::HashMap::new(),
+            reasoning_options: Vec::new(),
+        },
+        None,
+    )
+}
+
+/// Discover Codex models via app-server JSON-RPC `model/list` (same path as desktop-cc-gui).
+///
+/// Spawns a short-lived `codex app-server`, `initialize`s, then `model/list` — does **not**
+/// create a thread (cheaper than a full chat session). Failure → `None` so the caller can
+/// fall back to `codex debug models` or the static catalog.
+pub async fn detect_codex_models(
+    resolved_bin: &Path,
+    cwd: &Path,
+    timeout_secs: u64,
+) -> Option<CodexModelsProbe> {
+    let mut child = crate::external_agents::spawn::cli_command(resolved_bin)
+        .arg("app-server")
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .no_console_window()
+        .kill_on_drop(true)
+        .spawn()
+        .ok()?;
+    let (mut stdin, stdout) = (child.stdin.take()?, child.stdout.take()?);
+    let mut reader = BufReader::new(stdout).lines();
+    let overall = Duration::from_secs(timeout_secs);
+
+    let ok = write_rpc(
+        &mut stdin,
+        1,
+        "initialize",
+        json!({ "clientInfo": { "name": "kivio", "title": "kivio", "version": "0" } }),
+    )
+    .await
+    .is_ok()
+        && read_until_response(&mut reader, &mut stdin, 1, overall)
+            .await
+            .is_ok()
+        && write_rpc_notification(&mut stdin, "initialized", json!({}))
+            .await
+            .is_ok()
+        && write_rpc(&mut stdin, 2, "model/list", json!({}))
+            .await
+            .is_ok();
+
+    let probe = if ok {
+        read_until_response(&mut reader, &mut stdin, 2, overall)
+            .await
+            .ok()
+            .and_then(|result| parse_codex_model_list_result(&result))
+    } else {
+        None
+    };
+
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+    probe
+}
+
+/// Parse a `model/list` **result** object (`{ "data": [ ... ] }`).
+///
+/// Field names match the live app-server (camelCase). We also accept snake_case for
+/// older / relay shapes. Hidden models are dropped. A synthetic `default` row is prepended
+/// (Kivio Auto = don't pin a model in Turn/start).
+pub fn parse_codex_model_list_result(result: &Value) -> Option<CodexModelsProbe> {
+    use crate::external_agents::types::{default_model_option, RuntimeModelOption};
+
+    let data = result
+        .get("data")
+        .or_else(|| result.get("models"))
+        .and_then(|v| v.as_array())?;
+
+    let mut models = Vec::new();
+    let mut reasoning_by_model = std::collections::HashMap::new();
+    let mut default_model_id: Option<String> = None;
+    let mut seen = HashSet::new();
+
+    for entry in data {
+        if entry.get("hidden").and_then(|v| v.as_bool()) == Some(true) {
+            continue;
+        }
+        let Some(id) = entry
+            .get("id")
+            .or_else(|| entry.get("model"))
+            .or_else(|| entry.get("slug"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let label = entry
+            .get("displayName")
+            .or_else(|| entry.get("display_name"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(id.as_str())
+            .to_string();
+        let context_window_tokens = entry
+            .get("contextWindow")
+            .or_else(|| entry.get("context_window"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        let is_default = entry
+            .get("isDefault")
+            .or_else(|| entry.get("is_default"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if is_default && default_model_id.is_none() {
+            default_model_id = Some(id.clone());
+        }
+
+        let efforts = parse_codex_reasoning_efforts(entry);
+        if !efforts.is_empty() {
+            reasoning_by_model.insert(id.clone(), efforts);
+        }
+
+        models.push(RuntimeModelOption {
+            id,
+            label,
+            context_window_tokens,
+        });
+    }
+
+    if models.is_empty() {
+        return None;
+    }
+
+    // Prefer server-declared default at the front of the real catalog (after Auto).
+    if let Some(default_id) = default_model_id.as_deref() {
+        if let Some(pos) = models.iter().position(|m| m.id == default_id) {
+            if pos > 0 {
+                let m = models.remove(pos);
+                models.insert(0, m);
+            }
+        }
+    }
+
+    let mut out = vec![default_model_option()];
+    // Auto inherits the first real model's window when known.
+    if let Some(first) = models.first() {
+        out[0].context_window_tokens = first.context_window_tokens;
+    }
+    out.extend(models);
+
+    // Flat effort list: default model's efforts, else first model that has any.
+    let reasoning_options = default_model_id
+        .as_ref()
+        .and_then(|id| reasoning_by_model.get(id).cloned())
+        .or_else(|| {
+            out.iter()
+                .filter(|m| m.id != "default")
+                .find_map(|m| reasoning_by_model.get(&m.id).cloned())
+        })
+        .unwrap_or_default();
+
+    Some(CodexModelsProbe {
+        models: out,
+        reasoning_by_model,
+        reasoning_options,
+    })
+}
+
+/// Extract per-model effort options from a model/list or debug-models entry.
+fn parse_codex_reasoning_efforts(
+    entry: &Value,
+) -> Vec<crate::external_agents::types::RuntimeModelOption> {
+    use crate::external_agents::types::RuntimeModelOption;
+
+    let levels = entry
+        .get("supportedReasoningEfforts")
+        .or_else(|| entry.get("supported_reasoning_efforts"))
+        .or_else(|| entry.get("supported_reasoning_levels"))
+        .and_then(|v| v.as_array());
+    let Some(levels) = levels else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for level in levels {
+        let id = level
+            .get("reasoningEffort")
+            .or_else(|| level.get("reasoning_effort"))
+            .or_else(|| level.get("effort"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let Some(id) = id else { continue };
+        if !seen.insert(id.to_string()) {
+            continue;
+        }
+        // Codex ships marketing copy in `description` ("Fast responses with lighter
+        // reasoning"). The picker only wants the effort id; those sentences blow out
+        // the 64px pill and the menu.
+        out.push(RuntimeModelOption {
+            id: id.to_string(),
+            label: title_case_effort(id),
+            context_window_tokens: None,
+        });
+    }
+    out
+}
+
+fn title_case_effort(id: &str) -> String {
+    let mut chars = id.chars();
+    match chars.next() {
+        Some(c) => c.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => id.to_string(),
+    }
+}
+
+/// Discover codex slash commands: curated built-ins + dynamic skills from `skills/list`.
+pub async fn detect_codex_commands(
+    resolved_bin: &Path,
+    cwd: &Path,
+    timeout_secs: u64,
+) -> Option<Vec<ExternalCliSlashCommand>> {
+    let mut out: Vec<ExternalCliSlashCommand> = CODEX_BUILTIN_COMMANDS
+        .iter()
+        .map(|(name, desc)| ExternalCliSlashCommand {
+            slash: format!("/{name}"),
+            name: (*name).to_string(),
+            description: Some((*desc).to_string()),
+            argument_hint: None,
+        })
+        .collect();
+
+    // Best-effort: pull skills via the app-server. Failure leaves just the built-ins.
+    if let Ok(mut child) = crate::external_agents::spawn::cli_command(resolved_bin)
+        .arg("app-server")
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .no_console_window()
+        .kill_on_drop(true)
+        .spawn()
+    {
+        if let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) {
+            let mut reader = BufReader::new(stdout).lines();
+            let overall = Duration::from_secs(timeout_secs);
+            let ok = write_rpc(
+                &mut stdin,
+                1,
+                "initialize",
+                json!({ "clientInfo": { "name": "kivio", "title": "kivio", "version": "0" } }),
+            )
+            .await
+            .is_ok()
+                && read_until_response(&mut reader, &mut stdin, 1, overall)
+                    .await
+                    .is_ok()
+                && write_rpc_notification(&mut stdin, "initialized", json!({}))
+                    .await
+                    .is_ok()
+                && write_rpc(&mut stdin, 2, "skills/list", json!({}))
+                    .await
+                    .is_ok();
+            if ok {
+                if let Ok(result) = read_until_response(&mut reader, &mut stdin, 2, overall).await {
+                    let mut seen: HashSet<String> = out.iter().map(|c| c.name.clone()).collect();
+                    if let Some(groups) = result.get("data").and_then(|v| v.as_array()) {
+                        for group in groups {
+                            let Some(skills) = group.get("skills").and_then(|v| v.as_array())
+                            else {
+                                continue;
+                            };
+                            for skill in skills {
+                                let Some(name) = skill
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                else {
+                                    continue;
+                                };
+                                if seen.insert(name.to_string()) {
+                                    out.push(ExternalCliSlashCommand {
+                                        slash: format!("/{name}"),
+                                        name: name.to_string(),
+                                        description: skill
+                                            .get("description")
+                                            .and_then(|v| v.as_str())
+                                            .map(|d| d.trim().to_string())
+                                            .filter(|d| !d.is_empty()),
+                                        argument_hint: None,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Some(out)
+}
+
+/// Spawn the actor task that owns a connected session and serves `SessionCommand`s.
+pub fn spawn_codex_session_actor(
+    mut session: CodexAppServerSession,
+) -> mpsc::Sender<SessionCommand> {
+    let (tx, mut rx) = mpsc::channel::<SessionCommand>(8);
+    tokio::spawn(async move {
+        while let Some(cmd) = rx.recv().await {
+            match cmd {
+                SessionCommand::RunTurn {
+                    prompt,
+                    model,
+                    reasoning,
+                    images,
+                    extra_writable_roots,
+                    events,
+                    done,
+                    mut approvals,
+                } => {
+                    // Invariant (A4): `run_turn` sends every `event` before returning, and mpsc
+                    // preserves order, so the caller's post-`done` drain sees them all. `done.send`
+                    // stays LAST.
+                    let result = session
+                        .run_turn(
+                            &prompt,
+                            model.as_deref(),
+                            reasoning.as_deref(),
+                            &images,
+                            &extra_writable_roots,
+                            &events,
+                            &mut rx,
+                            approvals.as_mut(),
+                        )
+                        .await;
+                    let _ = done.send(result);
+                }
+                // 轮次之间没有可注入的对象：回 false 让前端把这条留在队列里、
+                // 轮末按普通消息发出去（绝不静默吞掉）。
+                SessionCommand::Steer { accepted, .. } => {
+                    let _ = accepted.send(false);
+                }
+                SessionCommand::Cancel => {} // no active turn between turns
+                // codex 无后台任务协议，忽略。
+                SessionCommand::StopTask { .. } => {}
+                SessionCommand::Close => {
+                    session.close().await;
+                    return;
+                }
+            }
+        }
+        session.close().await;
+    });
+    tx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn async_questions_emit_one_nonblocking_card_only_on_completion() {
+        let params = json!({"item": {"type": "agentMessage", "id": "msg-1",
+        "text": "fallback", "questions": [
+            {"title": "Choose a color", "options": ["Red", "Blue"]},
+            {"title": "Anything else?", "options": null}
+        ]}});
+        let mut emitted = HashSet::new();
+        let mut events = Vec::new();
+        for method in ["item/started", "item/completed", "item/completed"] {
+            assert_eq!(
+                map_codex_notification(method, &params, &mut emitted, &mut |event| events
+                    .push(event)),
+                CodexMapResult::Continue
+            );
+            if method == "item/started" {
+                assert!(events.is_empty());
+            }
+        }
+        assert_eq!(events.len(), 2);
+        let UnifiedAgentEvent::ToolUse { input, .. } = &events[0] else {
+            panic!("card missing");
+        };
+        assert_eq!(input["askUser"]["async"], true);
+        assert_eq!(
+            input["askUser"]["questions"][0]["options"][1]["label"],
+            "Blue"
+        );
+        assert_eq!(input["askUser"]["questions"][1]["options"], json!([]));
+        assert!(matches!(
+            &events[1],
+            UnifiedAgentEvent::ToolResult {
+                is_error: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn legacy_agent_messages_and_empty_questions_do_not_create_cards() {
+        for questions in [Value::Null, json!([]), json!([{"title": " "}])] {
+            let (events, _) = collect(
+                "item/completed",
+                &json!({"item": {
+                    "type": "agentMessage", "id": "legacy", "questions": questions
+                }})
+                .to_string(),
+            );
+            assert!(events.is_empty());
+        }
+    }
+
+    fn collect(method: &str, raw: &str) -> (Vec<UnifiedAgentEvent>, CodexMapResult) {
+        let params: Value = serde_json::from_str(raw).unwrap();
+        let mut events = Vec::new();
+        let mut tools = HashSet::new();
+        let mapped = map_codex_notification(method, &params, &mut tools, &mut |e| events.push(e));
+        (events, mapped)
+    }
+
+    /// Shape mirrors live `codex app-server` → `model/list` (2026-08 probe).
+    #[test]
+    fn parse_model_list_result_matches_cc_gui_shape() {
+        let result = json!({
+            "data": [
+                {
+                    "id": "gpt-5.5",
+                    "model": "gpt-5.5",
+                    "displayName": "GPT-5.5",
+                    "description": "Frontier model",
+                    "hidden": false,
+                    "isDefault": true,
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low", "description": "Fast"},
+                        {"reasoningEffort": "medium", "description": "Balanced"},
+                        {"reasoningEffort": "high", "description": "Deep"},
+                        {"reasoningEffort": "xhigh", "description": "Extra"}
+                    ],
+                    "defaultReasoningEffort": "medium"
+                },
+                {
+                    "id": "gpt-5.4-mini",
+                    "model": "gpt-5.4-mini",
+                    "displayName": "GPT-5.4-Mini",
+                    "hidden": false,
+                    "isDefault": false,
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low", "description": "Fast"},
+                        {"reasoningEffort": "high", "description": "Deep"}
+                    ],
+                    "defaultReasoningEffort": "medium"
+                },
+                {
+                    "id": "hidden-model",
+                    "model": "hidden-model",
+                    "displayName": "Hidden",
+                    "hidden": true
+                }
+            ]
+        });
+        let probe = parse_codex_model_list_result(&result).unwrap();
+        // Auto + two visible models; hidden dropped.
+        assert_eq!(probe.models.len(), 3);
+        assert_eq!(probe.models[0].id, "default");
+        // isDefault model is first real entry.
+        assert_eq!(probe.models[1].id, "gpt-5.5");
+        assert_eq!(probe.models[1].label, "GPT-5.5");
+        assert!(probe.models.iter().any(|m| m.id == "gpt-5.4-mini"));
+        assert!(!probe.models.iter().any(|m| m.id == "hidden-model"));
+        // per-model efforts
+        let gpt55 = probe.reasoning_by_model.get("gpt-5.5").unwrap();
+        assert_eq!(gpt55.len(), 4);
+        assert!(gpt55.iter().any(|e| e.id == "xhigh"));
+        assert_eq!(
+            gpt55.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(),
+            vec!["Low", "Medium", "High", "Xhigh"]
+        );
+        assert!(gpt55.iter().all(|e| !e.label.contains('—')));
+        let mini = probe.reasoning_by_model.get("gpt-5.4-mini").unwrap();
+        assert_eq!(mini.len(), 2);
+        // flat options come from the default model
+        assert!(probe.reasoning_options.iter().any(|e| e.id == "medium"));
+        assert!(probe.reasoning_options.iter().any(|e| e.id == "xhigh"));
+    }
+
+    #[test]
+    fn parse_model_list_empty_or_all_hidden_is_none() {
+        assert!(parse_codex_model_list_result(&json!({"data": []})).is_none());
+        assert!(parse_codex_model_list_result(&json!({
+            "data": [{"id": "x", "hidden": true}]
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn merge_uses_curated_four_like_cc_gui_not_raw_model_list() {
+        // Live model/list on this machine — 5 ids, no gpt-5.6-*. Must NOT dump these.
+        let runtime = parse_codex_model_list_result(&json!({
+            "data": [
+                {
+                    "id": "gpt-5.5",
+                    "displayName": "GPT-5.5",
+                    "isDefault": true,
+                    "supportedReasoningEfforts": [
+                        {"reasoningEffort": "low", "description": "Fast"},
+                        {"reasoningEffort": "high", "description": "Deep"}
+                    ]
+                },
+                {"id": "gpt-5.4", "displayName": "gpt-5.4"},
+                {"id": "gpt-5.4-mini", "displayName": "GPT-5.4-Mini"},
+                {"id": "gpt-5.3-codex", "displayName": "gpt-5.3-codex"},
+                {"id": "gpt-5.2", "displayName": "gpt-5.2"}
+            ]
+        }))
+        .unwrap();
+
+        let merged = merge_codex_model_catalog(runtime, Some("gpt-5.6-sol"));
+        // curated four (+ Auto)
+        let ids: Vec<&str> = merged.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "default",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+            ]
+        );
+        // runtime-only junk must not appear
+        assert!(!merged.models.iter().any(|m| m.id == "gpt-5.4"));
+        assert!(!merged.models.iter().any(|m| m.id == "gpt-5.2"));
+        // runtime enriches gpt-5.5 label + efforts
+        assert_eq!(
+            merged
+                .models
+                .iter()
+                .find(|m| m.id == "gpt-5.5")
+                .unwrap()
+                .label,
+            "GPT-5.5"
+        );
+        assert_eq!(merged.reasoning_by_model.get("gpt-5.5").unwrap().len(), 2);
+        // sol keeps curated ultra ladder
+        assert!(merged
+            .reasoning_by_model
+            .get("gpt-5.6-sol")
+            .unwrap()
+            .iter()
+            .any(|e| e.id == "ultra"));
+    }
+
+    #[test]
+    fn normalize_codex_effort_drops_legacy_and_keeps_valid() {
+        assert_eq!(normalize_codex_effort(None), None);
+        assert_eq!(normalize_codex_effort(Some("")), None);
+        assert_eq!(normalize_codex_effort(Some("default")), None);
+        assert_eq!(normalize_codex_effort(Some("none")), None);
+        assert_eq!(normalize_codex_effort(Some("minimal")), None);
+        assert_eq!(normalize_codex_effort(Some("off")), None);
+        assert_eq!(normalize_codex_effort(Some("bogus")), None);
+        assert_eq!(
+            normalize_codex_effort(Some("high")).as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            normalize_codex_effort(Some("XHIGH")).as_deref(),
+            Some("xhigh")
+        );
+        assert_eq!(
+            normalize_codex_effort(Some("ultra")).as_deref(),
+            Some("ultra")
+        );
+    }
+
+    #[test]
+    fn merge_injects_unknown_config_model_after_auto() {
+        let runtime = parse_codex_model_list_result(&json!({
+            "data": [{"id": "gpt-5.5", "displayName": "GPT-5.5", "isDefault": true}]
+        }))
+        .unwrap();
+        let merged = merge_codex_model_catalog(runtime, Some("my-custom-proxy-model"));
+        assert_eq!(merged.models[0].id, "default");
+        assert_eq!(merged.models[1].id, "my-custom-proxy-model");
+        assert!(merged.models[1].label.contains("config"));
+        // still the curated four after the config inject
+        assert!(merged.models.iter().any(|m| m.id == "gpt-5.6-sol"));
+        assert!(merged.models.iter().any(|m| m.id == "gpt-5.5"));
+    }
+
+    /// Live cross-turn continuity: connect once, run two turns on the SAME process, and confirm
+    /// turn 2 recalls a fact stated only in turn 1 — proving the codex thread persists between
+    /// turns (Phase 2). Requires a logged-in `codex` CLI + network.
+    #[tokio::test]
+    #[ignore = "requires live codex login + network"]
+    async fn persistent_session_remembers_across_turns() {
+        use crate::external_agents::session::live::SessionCommand;
+        use tokio::sync::{mpsc, oneshot};
+
+        let bin = which_codex().expect("codex on PATH");
+        let cwd = std::env::temp_dir();
+        let session = CodexAppServerSession::connect(
+            &bin,
+            &["app-server".to_string()],
+            &cwd,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("connect codex app-server");
+        let thread_id = session.thread_id().to_string();
+        assert!(!thread_id.is_empty());
+        let control = spawn_codex_session_actor(session);
+
+        async fn one_turn(control: &mpsc::Sender<SessionCommand>, prompt: &str) -> String {
+            let (etx, mut erx) = mpsc::channel::<UnifiedAgentEvent>(64);
+            let (dtx, drx) = oneshot::channel();
+            control
+                .send(SessionCommand::RunTurn {
+                    prompt: prompt.to_string(),
+                    model: None,
+                    reasoning: None,
+                    images: vec![],
+                    extra_writable_roots: vec![],
+                    events: etx,
+                    done: dtx,
+                    approvals: None,
+                })
+                .await
+                .unwrap();
+            let mut text = String::new();
+            // Drain events until the turn's `done` fires.
+            let mut drx = drx;
+            loop {
+                tokio::select! {
+                    biased;
+                    r = &mut drx => { while let Ok(e) = erx.try_recv() { if let UnifiedAgentEvent::TextDelta { delta } = e { text.push_str(&delta); } } r.unwrap().unwrap(); break; }
+                    ev = erx.recv() => { if let Some(UnifiedAgentEvent::TextDelta { delta }) = ev { text.push_str(&delta); } }
+                }
+            }
+            text
+        }
+
+        let _t1 = one_turn(&control, "Remember this secret number: 42. Just reply OK.").await;
+        let t2 = one_turn(
+            &control,
+            "What was the secret number I just gave you? Reply with only the digits.",
+        )
+        .await;
+        eprintln!("turn2 reply: {t2:?}");
+        assert!(
+            t2.contains("42"),
+            "turn 2 should recall 42 from turn 1, got: {t2:?}"
+        );
+        let _ = control.send(SessionCommand::Close).await;
+    }
+
+    fn which_codex() -> Option<std::path::PathBuf> {
+        let out = std::process::Command::new("which")
+            .arg("codex")
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if p.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(p))
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live codex CLI on PATH"]
+    async fn live_detect_codex_commands() {
+        let bin = which_codex().expect("codex on PATH");
+        let cmds = detect_codex_commands(&bin, &std::env::temp_dir(), 12)
+            .await
+            .expect("codex commands");
+        eprintln!("codex commands: {}", cmds.len());
+        for c in cmds.iter().take(12) {
+            eprintln!("  {}", c.slash);
+        }
+        // At least the curated built-ins must be present.
+        assert!(cmds.iter().any(|c| c.name == "compact"));
+    }
+
+    #[test]
+    fn agent_message_delta_emits_text() {
+        let (events, ended) = collect(
+            "item/agentMessage/delta",
+            r#"{"delta":"hi","itemId":"i","threadId":"t","turnId":"u"}"#,
+        );
+        assert_eq!(ended, CodexMapResult::Continue);
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::TextDelta { delta }) if delta == "hi"
+        ));
+    }
+
+    #[test]
+    fn reasoning_deltas_emit_thinking() {
+        let (summary, _) = collect(
+            "item/reasoning/summaryTextDelta",
+            r#"{"delta":"plan","itemId":"i","summaryIndex":0,"threadId":"t","turnId":"u"}"#,
+        );
+        assert!(matches!(
+            summary.first(),
+            Some(UnifiedAgentEvent::ThinkingDelta { delta }) if delta == "plan"
+        ));
+        let (text, _) = collect(
+            "item/reasoning/textDelta",
+            r#"{"delta":"think","contentIndex":0,"itemId":"i","threadId":"t","turnId":"u"}"#,
+        );
+        assert!(matches!(
+            text.first(),
+            Some(UnifiedAgentEvent::ThinkingDelta { delta }) if delta == "think"
+        ));
+    }
+
+    #[test]
+    fn command_execution_emits_tool_use_and_result() {
+        let started = r#"{"item":{"type":"commandExecution","id":"cmd-1","command":"ls","status":"inProgress"},"startedAtMs":0,"threadId":"t","turnId":"u"}"#;
+        let completed = r#"{"item":{"type":"commandExecution","id":"cmd-1","command":"ls","aggregatedOutput":"ok\n","exitCode":0,"status":"completed"},"completedAtMs":1,"threadId":"t","turnId":"u"}"#;
+        let started_val: Value = serde_json::from_str(started).unwrap();
+        let completed_val: Value = serde_json::from_str(completed).unwrap();
+        let mut events = Vec::new();
+        let mut tools = HashSet::new();
+        map_codex_notification("item/started", &started_val, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        map_codex_notification("item/completed", &completed_val, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::ToolUse { id, name, .. }) if id == "cmd-1" && name == "Bash"
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, content, is_error }
+                if tool_use_id == "cmd-1" && content.contains("ok") && !*is_error
+        )));
+    }
+
+    #[test]
+    fn web_search_null_results_use_query_not_literal_null() {
+        let started = json!({
+            "item": {
+                "type": "webSearch",
+                "id": "ws-1",
+                "query": "openai status",
+                "results": null,
+                "status": "inProgress"
+            }
+        });
+        let completed = json!({
+            "item": {
+                "type": "webSearch",
+                "id": "ws-1",
+                "query": "openai status",
+                "action": { "type": "search", "query": "openai status" },
+                "results": null,
+                "status": "completed"
+            }
+        });
+        let mut events = Vec::new();
+        let mut tools = HashSet::new();
+        map_codex_notification("item/started", &started, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        map_codex_notification("item/completed", &completed, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::ToolUse { id, name, .. })
+                if id == "ws-1" && name == "web_search"
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, content, is_error }
+                if tool_use_id == "ws-1" && content == "openai status" && !*is_error
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { content, .. } if content == "null"
+        )));
+    }
+
+    #[test]
+    fn token_usage_emits_usage() {
+        let (events, _) = collect(
+            "thread/tokenUsage/updated",
+            r#"{"threadId":"t","turnId":"u","tokenUsage":{"last":{"cachedInputTokens":0,"inputTokens":5,"outputTokens":7,"reasoningOutputTokens":0,"totalTokens":12},"total":{"cachedInputTokens":0,"inputTokens":5,"outputTokens":7,"reasoningOutputTokens":0,"totalTokens":12}}}"#,
+        );
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, UnifiedAgentEvent::Usage { .. })));
+    }
+
+    fn only_usage(events: &[UnifiedAgentEvent]) -> crate::chat::model::ModelUsage {
+        events
+            .iter()
+            .find_map(|e| match e {
+                UnifiedAgentEvent::Usage { usage } => Some(usage.clone()),
+                _ => None,
+            })
+            .expect("应产出 Usage 事件")
+    }
+
+    #[test]
+    fn token_usage_prefers_last_snapshot_over_cumulative_total() {
+        // 第三轮时 total 已累计到远高于本轮实际上下文占用的量级。用量条要的是 last。
+        let (events, _) = collect(
+            "thread/tokenUsage/updated",
+            r#"{"threadId":"t","turnId":"u","tokenUsage":{
+                 "last":{"cacheWriteInputTokens":0,"cachedInputTokens":40000,"inputTokens":41200,"outputTokens":300,"reasoningOutputTokens":250,"totalTokens":41500},
+                 "total":{"cacheWriteInputTokens":0,"cachedInputTokens":180000,"inputTokens":189000,"outputTokens":2400,"reasoningOutputTokens":1800,"totalTokens":191400}}}"#,
+        );
+        let usage = only_usage(&events);
+        assert_eq!(
+            usage.input_tokens,
+            Some(41_200),
+            "取 last，不是 total(189000)"
+        );
+        assert_eq!(usage.output_tokens, Some(300));
+        assert_eq!(usage.cached_input_tokens, Some(40_000));
+        // codex 的 cachedInputTokens 是 inputTokens 的子集（实测对账见解析处注释）：
+        // 41200 + 300 = 41500，不得把 40000 再加一遍变成 81500，也不得加 reasoning 的 250。
+        assert_eq!(usage.total_tokens, Some(41_500));
+    }
+
+    /// 钉住 codex 的 cache 包含关系。这条直接复刻本机实测原文（codex-cli 0.145.0,
+    /// 2026-07-26），任何人把 `cache_included_in_input` 改回 false 都会让它变红。
+    #[test]
+    fn token_usage_matches_live_codex_total_exactly() {
+        let (events, _) = collect(
+            "thread/tokenUsage/updated",
+            r#"{"threadId":"t","turnId":"u","tokenUsage":{
+                 "last":{"cacheWriteInputTokens":0,"cachedInputTokens":3456,"inputTokens":16865,"outputTokens":7,"reasoningOutputTokens":0,"totalTokens":16872},
+                 "modelContextWindow":258400,
+                 "total":{"cacheWriteInputTokens":0,"cachedInputTokens":3456,"inputTokens":16865,"outputTokens":7,"reasoningOutputTokens":0,"totalTokens":16872}}}"#,
+        );
+        let usage = only_usage(&events);
+        // 必须与 codex 自报的 totalTokens 完全一致——这是「口径对了」的唯一硬判据。
+        assert_eq!(usage.total_tokens, Some(16_872));
+        assert_eq!(usage.cached_input_tokens, Some(3_456));
+        // 分母也来自同一条 payload：codex 自报 258400，而静态表（`codex debug models`
+        // 的 context_window）是 272000，偏高 5.3%。实报优先。
+        assert_eq!(usage.context_window_tokens, Some(258_400));
+    }
+
+    #[test]
+    fn token_usage_reports_window_even_before_any_token_is_spent() {
+        // 一轮开头 token 还是 0，但窗口已知——此时也要把分母立起来，
+        // 否则用量条会先吃一段静态表的近似值再跳变。
+        let (events, _) = collect(
+            "thread/tokenUsage/updated",
+            r#"{"threadId":"t","turnId":"u","tokenUsage":{
+                 "last":{"cachedInputTokens":0,"inputTokens":0,"outputTokens":0,"totalTokens":0},
+                 "modelContextWindow":258400,
+                 "total":{"cachedInputTokens":0,"inputTokens":0,"outputTokens":0,"totalTokens":0}}}"#,
+        );
+        let usage = only_usage(&events);
+        assert_eq!(usage.context_window_tokens, Some(258_400));
+    }
+
+    #[test]
+    fn token_usage_without_model_context_window_leaves_denominator_unset() {
+        // 旧版 codex 不报 modelContextWindow：不得凭空造一个，交给 L9 的静态表兜。
+        let (events, _) = collect(
+            "thread/tokenUsage/updated",
+            r#"{"threadId":"t","turnId":"u","tokenUsage":{
+                 "last":{"cachedInputTokens":0,"inputTokens":16,"outputTokens":7,"totalTokens":23}}}"#,
+        );
+        let usage = only_usage(&events);
+        assert_eq!(usage.context_window_tokens, None);
+    }
+
+    #[test]
+    fn token_usage_falls_back_to_total_when_last_absent() {
+        let (events, _) = collect(
+            "thread/tokenUsage/updated",
+            r#"{"threadId":"t","turnId":"u","tokenUsage":{
+                 "total":{"cachedInputTokens":11,"inputTokens":16,"outputTokens":7,"totalTokens":23}}}"#,
+        );
+        let usage = only_usage(&events);
+        assert_eq!(usage.input_tokens, Some(16));
+        assert_eq!(usage.cached_input_tokens, Some(11));
+        assert_eq!(usage.total_tokens, Some(23));
+    }
+
+    #[test]
+    fn token_usage_emits_when_only_cache_is_nonzero() {
+        // 极端形态防御：只有 cache 字段非零（inputTokens 为 0）时仍要上报，不能静默丢弃。
+        // 注意 codex 实测不会出现这种形态（cache ⊆ input），这里纯粹是解析层的健壮性。
+        let (events, _) = collect(
+            "thread/tokenUsage/updated",
+            r#"{"threadId":"t","turnId":"u","tokenUsage":{
+                 "last":{"cachedInputTokens":52000,"inputTokens":0,"outputTokens":0,"totalTokens":52000}}}"#,
+        );
+        assert!(only_usage(&events).cached_input_tokens == Some(52_000));
+    }
+
+    #[test]
+    fn turn_completed_ends_loop() {
+        let (_, ended) = collect(
+            "turn/completed",
+            r#"{"threadId":"t","turn":{"id":"u","items":[],"status":"completed"}}"#,
+        );
+        assert_eq!(ended, CodexMapResult::TurnEnded);
+    }
+
+    #[test]
+    fn turn_failed_returns_err_without_error_event() {
+        let (events, ended) = collect(
+            "turn/completed",
+            r#"{"threadId":"t","turn":{"id":"u","items":[],"status":"failed","error":{"message":"boom","codexErrorInfo":"UsageLimitExceeded"}}}"#,
+        );
+        assert_eq!(
+            ended,
+            CodexMapResult::TurnFailed("UsageLimitExceeded: boom".to_string())
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, UnifiedAgentEvent::Error { .. })));
+    }
+
+    #[test]
+    fn reconnecting_error_stays_on_the_status_line() {
+        let (events, ended) = collect(
+            "error",
+            r#"{"error":{"message":"Reconnecting... 7/50 (stream disconnected before completion)"}}"#,
+        );
+        assert_eq!(ended, CodexMapResult::Continue);
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::StatusNote { text }) if text == "reconnect 7/50"
+        ));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, UnifiedAgentEvent::Error { .. })));
+    }
+
+    #[test]
+    fn realtime_error_reconnecting_is_also_progress() {
+        let (events, ended) = collect(
+            "thread/realtime/error",
+            r#"{"threadId":"t","message":"Reconnecting... 12/50"}"#,
+        );
+        assert_eq!(ended, CodexMapResult::Continue);
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::StatusNote { text }) if text == "reconnect 12/50"
+        ));
+    }
+
+    #[test]
+    fn stream_disconnect_mid_turn_does_not_end_the_turn() {
+        let (events, ended) = collect(
+            "error",
+            r#"{"error":{"message":"stream disconnected","codexErrorInfo":"ResponseStreamDisconnected"}}"#,
+        );
+        assert_eq!(ended, CodexMapResult::Continue);
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::StatusNote { text }) if text == "reconnect"
+        ));
+    }
+
+    #[test]
+    fn generic_mid_turn_error_waits_for_turn_completed() {
+        let (events, ended) = collect("error", r#"{"error":{"message":"fatal"}}"#);
+        assert_eq!(ended, CodexMapResult::Continue);
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::StatusNote { text }) if text.contains("fatal")
+        ));
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, UnifiedAgentEvent::Error { .. })));
+    }
+
+    #[test]
+    fn usage_limit_error_notification_still_fails_closed() {
+        let (events, ended) = collect(
+            "error",
+            r#"{"error":{"message":"quota","codexErrorInfo":"UsageLimitExceeded"}}"#,
+        );
+        assert_eq!(
+            ended,
+            CodexMapResult::TurnFailed("UsageLimitExceeded: quota".to_string())
+        );
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, UnifiedAgentEvent::Error { .. })));
+    }
+
+    #[test]
+    fn parse_reconnect_progress_reads_attempt_and_max() {
+        assert_eq!(
+            parse_reconnect_progress("Reconnecting... 7/50"),
+            Some((7, 50))
+        );
+        assert_eq!(
+            parse_reconnect_progress("Reconnecting... 1/5 (stream disconnected before completion)"),
+            Some((1, 5))
+        );
+        assert_eq!(
+            parse_reconnect_progress("正在重新连接 12/50"),
+            Some((12, 50))
+        );
+        assert_eq!(parse_reconnect_progress("stream disconnected"), None);
+    }
+
+    fn event_variant(event: &UnifiedAgentEvent) -> &'static str {
+        match event {
+            UnifiedAgentEvent::TextDelta { .. } => "TextDelta",
+            UnifiedAgentEvent::ThinkingDelta { .. } => "ThinkingDelta",
+            UnifiedAgentEvent::ToolUse { .. } => "ToolUse",
+            UnifiedAgentEvent::ToolResult { .. } => "ToolResult",
+            UnifiedAgentEvent::Usage { .. } => "Usage",
+            UnifiedAgentEvent::Error { .. } => "Error",
+            UnifiedAgentEvent::Raw { .. } => "Raw",
+            UnifiedAgentEvent::SlashCommands { .. } => "SlashCommands",
+            UnifiedAgentEvent::CliCompacted { .. } => "CliCompacted",
+            UnifiedAgentEvent::UserSteer { .. } => "UserSteer",
+            UnifiedAgentEvent::UserFollowUp { .. } => "UserFollowUp",
+            UnifiedAgentEvent::QueuedTextsRestored { .. } => "QueuedTextsRestored",
+            UnifiedAgentEvent::StatusNote { .. } => "StatusNote",
+            UnifiedAgentEvent::BackgroundTask { .. } => "BackgroundTask",
+            UnifiedAgentEvent::TodoWrite { .. } => "TodoWrite",
+            UnifiedAgentEvent::SubagentProgress { .. } => "SubagentProgress",
+        }
+    }
+
+    /// 起一个真机 codex 常驻会话（生产路径：`connect` + `spawn_codex_session_actor`），
+    /// 跑一轮并收齐事件。`None` = 本机没有可用的 codex，调用方 skip。
+    ///
+    /// 此前这两条真机测试驱动的是 `run_codex_app_server_session` —— 一个只被它们自己吊着命的
+    /// 一次性驱动，即同一协议的第二份实现。改成驱动生产代码后那份实现被删掉了。
+    async fn live_codex_turn(prompt: &str, wall_clock: Duration) -> Option<Vec<UnifiedAgentEvent>> {
+        let bin = match crate::external_agents::spawn::resolve_binary(
+            &crate::external_agents::defs::codex::CODEX_AGENT_DEF,
+        )
+        .await
+        {
+            Some(bin) => bin,
+            None => {
+                eprintln!("SKIP: 本机没有可用的 codex CLI");
+                return None;
+            }
+        };
+        let cwd = std::env::temp_dir();
+        let session = match CodexAppServerSession::connect(
+            &bin,
+            &["app-server".to_string()],
+            &cwd,
+            None,
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(session) => session,
+            Err(err) => {
+                eprintln!("SKIP: 连接失败（未登录 / 网络？）：{err}");
+                return None;
+            }
+        };
+        let control = spawn_codex_session_actor(session);
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::channel::<UnifiedAgentEvent>(256);
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        control
+            .send(SessionCommand::RunTurn {
+                prompt: prompt.to_string(),
+                model: None,
+                reasoning: None,
+                images: Vec::new(),
+                extra_writable_roots: Vec::new(),
+                events: events_tx,
+                done: done_tx,
+                approvals: None,
+            })
+            .await
+            .expect("actor alive");
+        let collector = tokio::spawn(async move {
+            let mut out = Vec::new();
+            while let Some(event) = events_rx.recv().await {
+                out.push(event);
+            }
+            out
+        });
+        match tokio::time::timeout(wall_clock, done_rx).await {
+            Ok(Ok(Ok(()))) => eprintln!("turn: Ok"),
+            Ok(Ok(Err(err))) => eprintln!("turn: Err({err})"),
+            Ok(Err(_)) => eprintln!("turn: actor dropped the done channel"),
+            Err(_) => panic!("codex app-server session HUNG past the {wall_clock:?} guard"),
+        }
+        Some(collector.await.expect("collector task"))
+    }
+
+    /// 真机验证「运行中立刻引导」：codex 的 `turn/steer` 往**在飞的**这一轮追加用户输入。
+    ///
+    /// 这条测的是三件只有真 app-server 能证明的事：
+    ///   1. `expectedTurnId` 拿的是**服务端**给的 turn id（我们从通知的 `turnId` 抓），
+    ///      用我们自己的 JSON-RPC 请求 id 会被判前置条件不符；
+    ///   2. 受理回执要等 `turn/steer` 的**响应**，不是写完就算；
+    ///   3. 被拒的 steer 回的是带 id 的 error，**不能**把整轮判死（读循环里那条
+    ///      `pending_steers` 分支必须排在通用 error 分支之前）。
+    #[tokio::test]
+    #[ignore = "requires live codex login + network"]
+    async fn codex_turn_steer_injects_into_the_running_turn() {
+        let bin = match crate::external_agents::spawn::resolve_binary(
+            &crate::external_agents::defs::codex::CODEX_AGENT_DEF,
+        )
+        .await
+        {
+            Some(bin) => bin,
+            None => {
+                eprintln!("SKIP: 本机没有可用的 codex CLI");
+                return;
+            }
+        };
+        let cwd = std::env::temp_dir();
+        let session = match CodexAppServerSession::connect(
+            &bin,
+            &["app-server".to_string()],
+            &cwd,
+            None,
+            None,
+            None,
+        )
+        .await
+        {
+            Ok(session) => session,
+            Err(err) => {
+                eprintln!("SKIP: 连接失败（未登录 / 网络？）：{err}");
+                return;
+            }
+        };
+        let control = spawn_codex_session_actor(session);
+        let (events_tx, mut events_rx) = tokio::sync::mpsc::channel::<UnifiedAgentEvent>(256);
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+        control
+            .send(SessionCommand::RunTurn {
+                // 让这一轮够长，好在它跑着的时候插话（数到 5 会连着出好几段 reasoning/text）。
+                prompt: "Count slowly from 1 to 5, one number per line, then say COUNT_DONE."
+                    .to_string(),
+                model: None,
+                reasoning: None,
+                images: Vec::new(),
+                extra_writable_roots: Vec::new(),
+                events: events_tx,
+                done: done_tx,
+                approvals: None,
+            })
+            .await
+            .expect("actor alive");
+
+        // 等到服务端真的开了这一轮（我们抓到 turnId）再插话。太早插 = 没有活跃 turn，
+        // 按设计会回 false —— 那是正确行为，但测不到注入。
+        let steer_control = control.clone();
+        let steered = tokio::spawn(async move {
+            for _ in 0..40 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+                if steer_control
+                    .send(SessionCommand::Steer {
+                        id: "steer-live-1".to_string(),
+                        text: "Change of plan: stop counting and reply STEER_OK.".to_string(),
+                        images: Vec::new(),
+                        kind: crate::external_agents::session::live::MessageInjectionKind::Steer,
+                        accepted: accepted_tx,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return false;
+                }
+                if accepted_rx.await.unwrap_or(false) {
+                    return true;
+                }
+            }
+            false
+        });
+
+        let collector = tokio::spawn(async move {
+            let mut out = Vec::new();
+            while let Some(event) = events_rx.recv().await {
+                out.push(event);
+            }
+            out
+        });
+        match tokio::time::timeout(Duration::from_secs(180), done_rx).await {
+            Ok(Ok(Ok(()))) => eprintln!("turn: Ok"),
+            Ok(Ok(Err(err))) => eprintln!("turn: Err({err})"),
+            Ok(Err(_)) => eprintln!("turn: actor dropped the done channel"),
+            Err(_) => panic!("codex app-server session HUNG past the guard"),
+        }
+        let accepted = steered.await.expect("steer task");
+        let captured = collector.await.expect("collector task");
+        let seq: Vec<&str> = captured.iter().map(event_variant).collect();
+        eprintln!("codex steer sequence: {seq:?}");
+        for (i, ev) in captured.iter().enumerate() {
+            eprintln!("[{i}] {ev:?}");
+        }
+
+        assert!(accepted, "turn/steer 未被受理（seq: {seq:?}）");
+        let steer_event = captured.iter().any(|event| {
+            matches!(event, UnifiedAgentEvent::UserSteer { id, text }
+                if id == "steer-live-1" && text.contains("STEER_OK"))
+        });
+        assert!(
+            steer_event,
+            "受理了却没发 UserSteer 事件（时间线上就不会有插话卡）：{seq:?}"
+        );
+        // 被拒的 steer 不该赔掉整轮；受理的更不该。这一轮必须仍然正常产出内容。
+        assert!(
+            captured
+                .iter()
+                .any(|e| matches!(e, UnifiedAgentEvent::TextDelta { .. })),
+            "插话之后这一轮没有任何正文，疑似被 steer 的响应误判成致命错误：{seq:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live codex login + network"]
+    async fn codex_app_server_smoke() {
+        let Some(captured) = live_codex_turn(
+            "Reply with exactly the token SMOKE_OK and nothing else.",
+            Duration::from_secs(90),
+        )
+        .await
+        else {
+            return;
+        };
+        eprintln!("=== codex app-server smoke: {} events ===", captured.len());
+        for (i, ev) in captured.iter().enumerate() {
+            eprintln!("[{i}] {ev:?}");
+        }
+        let seq: Vec<&str> = captured.iter().map(event_variant).collect();
+        eprintln!("codex sequence: {seq:?}");
+
+        let got_text = captured
+            .iter()
+            .any(|e| matches!(e, UnifiedAgentEvent::TextDelta { .. }));
+        let got_error = captured
+            .iter()
+            .any(|e| matches!(e, UnifiedAgentEvent::Error { .. }));
+        assert!(
+            got_text || got_error,
+            "expected at least one TextDelta or a clean Error, got: {seq:?}"
+        );
+    }
+
+    /// Live proof that L4 reads the `last` snapshot, not the cumulative `total`.
+    ///
+    /// 单测只能证明「给定这样的 JSON 会取 last」；这条证明真实 codex 确实**发**了
+    /// `last` 且它与 `total` 在多轮下会分叉。跑两轮同一 thread：
+    /// `total` 单调累加，`last` 只反映最近一次请求 —— 若 Kivio 读回 total，
+    /// 第二轮的用量会包含第一轮，进度条持续虚高。
+    #[tokio::test]
+    #[ignore = "requires live codex login + network"]
+    async fn codex_usage_uses_last_snapshot_not_cumulative_total() {
+        let Some(captured) = live_codex_turn(
+            "Reply with exactly the token USAGE_OK and nothing else.",
+            Duration::from_secs(120),
+        )
+        .await
+        else {
+            return;
+        };
+        let usages: Vec<crate::chat::model::ModelUsage> = captured
+            .into_iter()
+            .filter_map(|e| match e {
+                UnifiedAgentEvent::Usage { usage } => Some(usage),
+                _ => None,
+            })
+            .collect();
+        for u in &usages {
+            eprintln!(
+                "codex usage: input={:?} output={:?} cache_read={:?} total={:?} window={:?}",
+                u.input_tokens,
+                u.output_tokens,
+                u.cached_input_tokens,
+                u.total_tokens,
+                u.context_window_tokens
+            );
+        }
+        assert!(
+            !usages.is_empty(),
+            "codex reported no usage — thread/tokenUsage/updated parsing regressed"
+        );
+
+        // **口径硬判据**：codex 的 `cachedInputTokens` 是 `inputTokens` 的子集
+        // （实测 16865 + 7 = 16872 = 其自报的 totalTokens），所以 Kivio 算出的
+        // total 必须恰好等于 input + output。把 cache 再加一遍会让这条变红——
+        // 那正是曾经真实发生过的 bug（20328 vs 16872，虚高 20%）。
+        for u in &usages {
+            let input = u.input_tokens.unwrap_or(0);
+            let output = u.output_tokens.unwrap_or(0);
+            let cache = u.cached_input_tokens.unwrap_or(0);
+            assert_eq!(
+                u.total_tokens,
+                Some(input + output),
+                "codex total must equal input+output (cache is a subset of input): {u:?}"
+            );
+            assert!(
+                cache <= input,
+                "cachedInputTokens should never exceed inputTokens: {u:?}"
+            );
+        }
+
+        // `last` 是快照不是累计：多条上报时最后一条不应等于各条之和（读回 total 时会）。
+        if usages.len() > 1 {
+            let sum: u64 = usages.iter().filter_map(|u| u.input_tokens).sum();
+            let last = usages.last().and_then(|u| u.input_tokens).unwrap_or(0);
+            eprintln!(
+                "codex usage reports={} sum_input={sum} last_input={last}",
+                usages.len()
+            );
+            assert!(
+                last < sum,
+                "last snapshot must be strictly below the sum of all reports (else it is cumulative)"
+            );
+        }
+    }
+
+    #[test]
+    fn build_codex_turn_params_applies_model_and_effort_per_turn() {
+        let params = build_codex_turn_params(
+            "thread-1",
+            "/work",
+            vec![json!({ "type": "text", "text": "hi" })],
+            Some("gpt-5.3-codex"),
+            Some("high"),
+            &[],
+            "on-request",
+        );
+        assert_eq!(params["threadId"], json!("thread-1"));
+        assert_eq!(params["model"], json!("gpt-5.3-codex"));
+        assert_eq!(params["effort"], json!("high"));
+        assert_eq!(params["approvalPolicy"], json!("on-request"));
+    }
+
+    #[test]
+    fn build_codex_turn_params_omits_defaults() {
+        let params = build_codex_turn_params(
+            "thread-1",
+            "/work",
+            vec![json!({ "type": "text", "text": "hi" })],
+            None,
+            None,
+            &[],
+            "on-request",
+        );
+        assert!(params.get("model").is_none());
+        assert!(params.get("effort").is_none());
+        assert!(params.get("sandboxPolicy").is_none());
+        assert!(params.get("sandbox").is_none());
+        assert!(params.get("runtimeWorkspaceRoots").is_none());
+    }
+
+    #[test]
+    fn build_codex_turn_params_adds_writable_roots_without_sandbox_string() {
+        let params = build_codex_turn_params(
+            "thread-1",
+            "/work",
+            vec![json!({ "type": "text", "text": "hi" })],
+            None,
+            None,
+            &["/tmp/attach".to_string()],
+            "on-request",
+        );
+        assert_eq!(
+            params["runtimeWorkspaceRoots"],
+            json!(["/work", "/tmp/attach"]),
+        );
+        assert!(params.get("sandboxPolicy").is_none());
+        assert!(params.get("sandbox").is_none());
+    }
+
+    #[test]
+    fn build_codex_thread_params_sends_workspace_roots() {
+        let (method, params) = build_codex_thread_params(
+            "/work",
+            "workspace-write",
+            "on-request",
+            Some("gpt-5.6-sol"),
+            None,
+        );
+        assert_eq!(method, "thread/start");
+        assert_eq!(params["cwd"], json!("/work"));
+        assert_eq!(params["sandbox"], json!("workspace-write"));
+        assert_eq!(params["approvalPolicy"], json!("on-request"));
+        assert_eq!(params["model"], json!("gpt-5.6-sol"));
+        assert_eq!(params["runtimeWorkspaceRoots"], json!(["/work"]));
+        assert!(params.get("threadId").is_none());
+    }
+
+    #[test]
+    fn build_codex_thread_params_resume_sends_only_thread_id() {
+        let (method, params) = build_codex_thread_params(
+            "/work",
+            "workspace-write",
+            "on-request",
+            Some("gpt-5.6-sol"),
+            Some("thr_1"),
+        );
+        assert_eq!(method, "thread/resume");
+        assert_eq!(params, json!({ "threadId": "thr_1" }));
+    }
+
+    #[test]
+    fn initialize_opts_into_experimental_api() {
+        let params = codex_initialize_params();
+        assert_eq!(params["capabilities"]["experimentalApi"], json!(true));
+        assert_eq!(params["clientInfo"]["name"], json!("kivio"));
+    }
+
+    #[test]
+    fn approval_response_shapes() {
+        let empty = json!({});
+        assert_eq!(
+            approval_response("item/commandExecution/requestApproval", &empty),
+            Some(json!({ "decision": "acceptForSession" }))
+        );
+        assert_eq!(
+            approval_response("item/fileChange/requestApproval", &empty),
+            Some(json!({ "decision": "acceptForSession" }))
+        );
+        assert_eq!(
+            approval_response(
+                "item/permissions/requestApproval",
+                &json!({ "permissions": { "network": { "enabled": true } } }),
+            ),
+            Some(json!({
+                "permissions": { "network": { "enabled": true } },
+                "scope": "session"
+            }))
+        );
+        assert_eq!(
+            approval_response(
+                "item/permissions/requestApproval",
+                &json!({ "permissions": { "network": true } }),
+            ),
+            Some(json!({
+                "permissions": { "network": { "enabled": true } },
+                "scope": "session"
+            }))
+        );
+        assert!(approval_response("item/started", &empty).is_none());
+        assert!(approval_response("item/tool/requestUserInput", &empty).is_none());
+        assert_eq!(
+            approval_deny_response("item/commandExecution/requestApproval", false),
+            Some(json!({ "decision": "decline" }))
+        );
+        assert_eq!(
+            approval_deny_response("item/commandExecution/requestApproval", true),
+            Some(json!({ "decision": "cancel" }))
+        );
+        assert_eq!(
+            approval_deny_response("item/permissions/requestApproval", false),
+            Some(json!({ "permissions": {}, "scope": "turn" }))
+        );
+        assert_eq!(
+            approval_response("mcpServer/elicitation/request", &empty),
+            Some(json!({ "action": "decline", "content": null }))
+        );
+        assert_eq!(
+            approval_response("openai/elicitation/create", &empty),
+            Some(json!({ "action": "decline", "content": null }))
+        );
+        assert_eq!(
+            approval_deny_response("openai/elicitation", false),
+            Some(json!({ "action": "decline", "content": null }))
+        );
+        assert_eq!(
+            unknown_server_request_result(),
+            json!({ "decision": "decline" })
+        );
+    }
+
+    #[test]
+    fn workspace_write_asks_and_full_access_does_not() {
+        assert_eq!(codex_approval_policy(None), "on-request");
+        assert_eq!(codex_approval_policy(Some("workspace-write")), "on-request");
+        assert_eq!(codex_approval_policy(Some("read-only")), "on-request");
+        assert_eq!(codex_approval_policy(Some("danger-full-access")), "never");
+    }
+
+    #[test]
+    fn normalize_codex_sandbox_collapses_blank_and_unknown_to_workspace_write() {
+        assert_eq!(normalize_codex_sandbox(None), "workspace-write");
+        assert_eq!(normalize_codex_sandbox(Some("")), "workspace-write");
+        assert_eq!(normalize_codex_sandbox(Some("default")), "workspace-write");
+        assert_eq!(
+            normalize_codex_sandbox(Some("workspace-write")),
+            "workspace-write"
+        );
+        assert_eq!(normalize_codex_sandbox(Some("read-only")), "read-only");
+        assert_eq!(
+            normalize_codex_sandbox(Some("danger-full-access")),
+            "danger-full-access"
+        );
+    }
+
+    #[test]
+    fn command_approval_ask_uses_bash_command_for_the_card() {
+        let ask = approval_ask_from_params(
+            "item/commandExecution/requestApproval",
+            &json!(7),
+            &json!({
+                "itemId": "item-1",
+                "command": "curl https://example.com",
+                "cwd": "/work",
+                "reason": "network"
+            }),
+        );
+        assert_eq!(ask.tool_name, "Bash");
+        assert_eq!(ask.tool_call_id, "item-1");
+        assert_eq!(ask.input["command"], json!("curl https://example.com"));
+        assert_eq!(ask.input["cwd"], json!("/work"));
+        assert!(!ask.requires_user_interaction);
+    }
+
+    #[test]
+    fn command_approval_ask_prefers_approval_id_when_present() {
+        let ask = approval_ask_from_params(
+            "item/commandExecution/requestApproval",
+            &json!(8),
+            &json!({
+                "itemId": "item-1",
+                "approvalId": "cb-9",
+                "command": "curl https://example.com",
+            }),
+        );
+        assert_eq!(ask.tool_call_id, "cb-9");
+    }
+
+    #[test]
+    fn permissions_approval_ask_is_not_a_bash_card() {
+        let ask = approval_ask_from_params(
+            "item/permissions/requestApproval",
+            &json!(61),
+            &json!({
+                "itemId": "call_123",
+                "environmentId": "local",
+                "cwd": "/work",
+                "reason": "Select a workspace root",
+                "permissions": {
+                    "fileSystem": {
+                        "write": ["/work"]
+                    }
+                }
+            }),
+        );
+        assert_eq!(ask.tool_name, "request_permissions");
+        assert_eq!(ask.tool_call_id, "call_123");
+        assert_eq!(ask.input["reason"], json!("Select a workspace root"));
+        assert_eq!(ask.input["cwd"], json!("/work"));
+        assert_eq!(
+            ask.input["permissions"]["fileSystem"]["write"],
+            json!(["/work"])
+        );
+        assert_ne!(ask.tool_name, "Bash");
+    }
+
+    #[test]
+    fn plan_update_emits_todo_write_with_normalized_status() {
+        let (events, mapped) = collect(
+            "turn/plan/updated",
+            r#"{"turnId":"u","plan":[{"step":"读文件","status":"inProgress"},{"step":"改代码","status":"pending"}]}"#,
+        );
+        assert_eq!(mapped, CodexMapResult::Continue);
+        let UnifiedAgentEvent::TodoWrite { todos } = &events[0] else {
+            panic!("expected TodoWrite");
+        };
+        assert_eq!(todos["todos"][0]["status"], json!("in_progress"));
+        assert_eq!(todos["todos"][0]["content"], json!("读文件"));
+        let state = crate::external_agents::session::dsh_jsonrpc::todo_state_from_write(todos)
+            .expect("must map");
+        assert_eq!(state.items.len(), 2);
+    }
+
+    #[test]
+    fn file_change_emits_edit_tool() {
+        let started = json!({
+            "item": {
+                "type": "fileChange",
+                "id": "fc-1",
+                "status": "inProgress",
+                "changes": [{ "path": "src/main.rs", "kind": "update", "diff": "@@" }]
+            }
+        });
+        let completed = json!({
+            "item": {
+                "type": "fileChange",
+                "id": "fc-1",
+                "status": "completed",
+                "changes": [{ "path": "src/main.rs", "kind": "update", "diff": "@@" }]
+            }
+        });
+        let mut events = Vec::new();
+        let mut tools = HashSet::new();
+        map_codex_notification("item/started", &started, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        map_codex_notification("item/completed", &completed, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::ToolUse { id, name, .. }) if id == "fc-1" && name == "Edit"
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, is_error, .. }
+                if tool_use_id == "fc-1" && !*is_error
+        )));
+    }
+
+    #[test]
+    fn dynamic_tool_call_emits_namespaced_tool() {
+        let started = json!({
+            "item": {
+                "type": "dynamicToolCall",
+                "id": "dyn-1",
+                "tool": "summarize",
+                "namespace": "office",
+                "status": "inProgress",
+                "arguments": { "file": "a.docx" }
+            }
+        });
+        let completed = json!({
+            "item": {
+                "type": "dynamicToolCall",
+                "id": "dyn-1",
+                "tool": "summarize",
+                "namespace": "office",
+                "status": "completed",
+                "arguments": { "file": "a.docx" },
+                "contentItems": [{ "type": "inputText", "text": "ok" }]
+            }
+        });
+        let mut events = Vec::new();
+        let mut tools = HashSet::new();
+        map_codex_notification("item/started", &started, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        map_codex_notification("item/completed", &completed, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::ToolUse { id, name, .. })
+                if id == "dyn-1" && name == "office__summarize"
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, content, is_error, .. }
+                if tool_use_id == "dyn-1" && content == "ok" && !*is_error
+        )));
+    }
+
+    #[test]
+    fn image_generation_and_sleep_emit_tool_cards() {
+        let image = json!({
+            "item": {
+                "type": "imageGeneration",
+                "id": "img-1",
+                "status": "completed",
+                "result": "done",
+                "revisedPrompt": "a cat",
+                "savedPath": "/tmp/cat.png"
+            }
+        });
+        let sleep = json!({
+            "item": {
+                "type": "sleep",
+                "id": "slp-1",
+                "status": "completed",
+                "durationMs": 1500
+            }
+        });
+        let mut events = Vec::new();
+        let mut tools = HashSet::new();
+        map_codex_notification("item/started", &image, &mut tools, &mut |e| events.push(e));
+        map_codex_notification("item/completed", &image, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        map_codex_notification("item/started", &sleep, &mut tools, &mut |e| events.push(e));
+        map_codex_notification("item/completed", &sleep, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolUse { name, .. } if name == "image_generation"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, content, .. }
+                if tool_use_id == "img-1" && content == "/tmp/cat.png"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolUse { name, .. } if name == "sleep"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, content, .. }
+                if tool_use_id == "slp-1" && content == "1500ms"
+        )));
+    }
+
+    #[test]
+    fn clock_item_emits_tool_card() {
+        let clock = json!({
+            "item": {
+                "type": "clock",
+                "id": "clk-1",
+                "status": "completed",
+                "currentTime": "2026-09-01T15:00:00Z"
+            }
+        });
+        let mut events = Vec::new();
+        let mut tools = HashSet::new();
+        map_codex_notification("item/started", &clock, &mut tools, &mut |e| events.push(e));
+        map_codex_notification("item/completed", &clock, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolUse { name, .. } if name == "clock"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::ToolResult { tool_use_id, content, .. }
+                if tool_use_id == "clk-1" && content == "2026-09-01T15:00:00Z"
+        )));
+    }
+
+    #[test]
+    fn collab_spawn_keeps_subagent_card_running() {
+        let started = json!({
+            "item": {
+                "type": "collabToolCall",
+                "id": "col-1",
+                "tool": "spawn_agent",
+                "status": "inProgress",
+                "prompt": "search docs"
+            }
+        });
+        let completed = json!({
+            "item": {
+                "type": "collabToolCall",
+                "id": "col-1",
+                "tool": "spawn_agent",
+                "status": "completed",
+                "newThreadId": "thr_child",
+                "prompt": "search docs"
+            }
+        });
+        let mut events = Vec::new();
+        let mut tools = HashSet::new();
+        map_codex_notification("item/started", &started, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        map_codex_notification("item/completed", &completed, &mut tools, &mut |e| {
+            events.push(e)
+        });
+        assert!(matches!(
+            events.first(),
+            Some(UnifiedAgentEvent::ToolUse { name, .. }) if name == "subagent"
+        ));
+        let result = events.iter().find_map(|event| match event {
+            UnifiedAgentEvent::ToolResult {
+                content, is_error, ..
+            } => Some((content.as_str(), *is_error)),
+            _ => None,
+        });
+        assert_eq!(result, Some(("started subagent thr_child", false)));
+        assert_eq!(
+            crate::external_agents::session::dsh_jsonrpc::subagent_launch_task_id(
+                "subagent",
+                "started subagent thr_child"
+            )
+            .as_deref(),
+            Some("thr_child")
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            UnifiedAgentEvent::BackgroundTask { task_id, status, .. }
+                if task_id == "thr_child" && status == "running"
+        )));
+    }
+}
