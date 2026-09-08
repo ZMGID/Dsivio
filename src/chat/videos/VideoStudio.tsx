@@ -28,6 +28,7 @@ import {
 import builtin from '../../../src-tauri/resources/plugins/dsvideo-plugin/skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json'
 import '../images/ImageStudio.css'
 import './VideoStudio.css'
+import '../images/studioLayout.css'
 import { VideoMediaOptions } from './VideoMediaOptions'
 
 const preview: VideoBootstrap = {
@@ -352,140 +353,146 @@ export default function VideoStudio() {
                 <h2>视频设置</h2>
                 <span className="vs-muted">聊天与视频页面共用</span>
               </div>
-              <section className="vs-panel vs-settings">
-                <Field label="配置路线">
-                  <StudioSelect
-                    value={provider}
-                    onChange={(e) => {
-                      const p = e.target.value
-                      setProvider(p)
-                      setKey('')
-                      setBase(
-                        data.config[p]?.base_url ||
-                          (
-                            {
-                              comfy: 'http://127.0.0.1:8188',
-                              minimax: 'https://api.minimaxi.com',
-                              grok: 'https://api.x.ai',
-                            } as Record<string, string>
-                          )[p],
-                      )
-                      setModel(
-                        data.config[p]?.model || 'grok-imagine-video-1.5',
-                      )
-                    }}
-                  >
-                    {Object.entries(routeNames).map(([v, n]) => (
-                      <option key={v} value={v}>
-                        {n}
-                      </option>
-                    ))}
-                  </StudioSelect>
-                </Field>
-                <Field label="服务地址">
-                  <input
-                    className="kv-input"
-                    value={base}
-                    onChange={(e) => setBase(e.target.value)}
-                  />
-                </Field>
-                {provider !== 'comfy' && (
-                  <Field
-                    label="API Key"
-                    hint={
-                      data.config[provider]?.ready
-                        ? '已配置。留空保留现有密钥。'
-                        : '密钥仅保存在本机供应商配置中。'
-                    }
-                  >
+              <div className="vs-settings-layout">
+                <section className="vs-panel vs-settings">
+                  <Field label="配置路线">
+                    <StudioSelect
+                      value={provider}
+                      onChange={(e) => {
+                        const p = e.target.value
+                        setProvider(p)
+                        setKey('')
+                        setBase(
+                          data.config[p]?.base_url ||
+                            (
+                              {
+                                comfy: 'http://127.0.0.1:8188',
+                                minimax: 'https://api.minimaxi.com',
+                                grok: 'https://api.x.ai',
+                              } as Record<string, string>
+                            )[p],
+                        )
+                        setModel(
+                          data.config[p]?.model || 'grok-imagine-video-1.5',
+                        )
+                      }}
+                    >
+                      {Object.entries(routeNames).map(([v, n]) => (
+                        <option key={v} value={v}>
+                          {n}
+                        </option>
+                      ))}
+                    </StudioSelect>
+                  </Field>
+                  <Field label="服务地址">
                     <input
                       className="kv-input"
-                      type="password"
-                      autoComplete="new-password"
-                      value={key}
-                      onChange={(e) => setKey(e.target.value)}
+                      value={base}
+                      onChange={(e) => setBase(e.target.value)}
                     />
                   </Field>
-                )}
-                {provider === 'grok' && (
-                  <Field label="模型">
-                    <input
-                      className="kv-input"
-                      value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                    />
-                  </Field>
-                )}
-                <Button
-                  variant="primary"
-                  disabled={!native || !!busy}
-                  onClick={() =>
-                    void guarded('保存配置…', async () => {
-                      const config = await api.videoStudioConfig({
-                        name: provider,
-                        base_url: base,
-                        api_key: key,
-                        model,
-                      })
-                      setData((d) => ({ ...d, config }))
-                      setKey('')
-                    })
-                  }
-                >
-                  保存配置
-                </Button>
-              </section>
-              <section className="vs-panel">
-                <h3>运行环境</h3>
-                <p className="vs-muted">
-                  导演使用应用当前聊天模型，处理图片需模型支持视觉。
-                </p>
-                <dl className="vs-specs">
-                  <dt>Python</dt>
-                  <dd>{data.dependencies.python || '未检测'}</dd>
-                  <dt>Comfy MCP</dt>
-                  <dd>{data.dependencies.comfy ? '已找到' : '未找到'}</dd>
-                  <dt>Node.js</dt>
-                  <dd>
-                    {data.dependencies.node
-                      ? '已找到（分析需 ≥ 22.12）'
-                      : '未找到'}
-                  </dd>
-                  <dt>FFmpeg</dt>
-                  <dd>{data.dependencies.ffmpeg ? '已找到' : '未找到'}</dd>
-                </dl>
-                <p className="vs-muted">
-                  ComfyUI 路线需要 comfy-mcp 0.10.0、comfy-cli ≥ 1.14 和服务端
-                  H3 工作流节点。参考视频分析首次运行由 npx 加载固定版本
-                  MCP；部分平台还需 yt-dlp。
-                </p>
-                <Button
-                  size="sm"
-                  disabled={!native || !!busy}
-                  onClick={() => void guarded('检查环境…', refresh)}
-                >
-                  重新检查
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={!native || !!busy}
-                  onClick={() =>
-                    void guarded(
-                      '正在安装 ComfyUI 客户端依赖，可能需要几分钟…',
-                      async () => {
-                        await api.videoStudioInstallComfy()
-                        await refresh()
-                      },
-                    )
-                  }
-                >
-                  安装 / 修复 Comfy 依赖
-                </Button>
-                <p className="vs-muted">
-                  依赖安装到应用自己的运行目录，不修改系统 Python 包。
-                </p>
-                <p className="vs-path">{data.configPath}</p>
-              </section>
+                  {provider !== 'comfy' && (
+                    <Field
+                      label="API Key"
+                      hint={
+                        data.config[provider]?.ready
+                          ? '已配置。留空保留现有密钥。'
+                          : '密钥仅保存在本机供应商配置中。'
+                      }
+                    >
+                      <input
+                        className="kv-input"
+                        type="password"
+                        autoComplete="new-password"
+                        value={key}
+                        onChange={(e) => setKey(e.target.value)}
+                      />
+                    </Field>
+                  )}
+                  {provider === 'grok' && (
+                    <Field label="模型">
+                      <input
+                        className="kv-input"
+                        value={model}
+                        onChange={(e) => setModel(e.target.value)}
+                      />
+                    </Field>
+                  )}
+                  <div className="vs-actions">
+                    <Button
+                      variant="primary"
+                      disabled={!native || !!busy}
+                      onClick={() =>
+                        void guarded('保存配置…', async () => {
+                          const config = await api.videoStudioConfig({
+                            name: provider,
+                            base_url: base,
+                            api_key: key,
+                            model,
+                          })
+                          setData((d) => ({ ...d, config }))
+                          setKey('')
+                        })
+                      }
+                    >
+                      保存配置
+                    </Button>
+                  </div>
+                </section>
+                <section className="vs-panel">
+                  <h3>运行环境</h3>
+                  <p className="vs-muted">
+                    导演使用应用当前聊天模型，处理图片需模型支持视觉。
+                  </p>
+                  <dl className="vs-specs">
+                    <dt>Python</dt>
+                    <dd>{data.dependencies.python || '未检测'}</dd>
+                    <dt>Comfy MCP</dt>
+                    <dd>{data.dependencies.comfy ? '已找到' : '未找到'}</dd>
+                    <dt>Node.js</dt>
+                    <dd>
+                      {data.dependencies.node
+                        ? '已找到（分析需 ≥ 22.12）'
+                        : '未找到'}
+                    </dd>
+                    <dt>FFmpeg</dt>
+                    <dd>{data.dependencies.ffmpeg ? '已找到' : '未找到'}</dd>
+                  </dl>
+                  <p className="vs-muted">
+                    ComfyUI 路线需要 comfy-mcp 0.10.0、comfy-cli ≥ 1.14 和服务端
+                    H3 工作流节点。参考视频分析首次运行由 npx 加载固定版本
+                    MCP；部分平台还需 yt-dlp。
+                  </p>
+                  <div className="vs-actions">
+                    <Button
+                      size="sm"
+                      disabled={!native || !!busy}
+                      onClick={() => void guarded('检查环境…', refresh)}
+                    >
+                      重新检查
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={!native || !!busy}
+                      onClick={() =>
+                        void guarded(
+                          '正在安装 ComfyUI 客户端依赖，可能需要几分钟…',
+                          async () => {
+                            await api.videoStudioInstallComfy()
+                            await refresh()
+                          },
+                        )
+                      }
+                    >
+                      安装 / 修复 Comfy 依赖
+                    </Button>
+                  </div>
+                  <p className="vs-muted">
+                    依赖安装到应用自己的运行目录，不修改系统 Python 包。
+                  </p>
+                  <p className="vs-path">{data.configPath}</p>
+                </section>
+              </div>
             </>
           ) : view === 'templates' ? (
             <>
@@ -554,7 +561,7 @@ export default function VideoStudio() {
                       <h3>{t.name}</h3>
                       <details>
                         <summary>查看剧本</summary>
-                        <pre>
+                        <pre className="custom-scrollbar">
                           {t.script ||
                             t.shots
                               ?.map(
@@ -580,29 +587,6 @@ export default function VideoStudio() {
             <>
               <div className="vs-heading">
                 <h2>{view === 'analysis' ? '参考视频分析' : '视频创作'}</h2>
-                <div className="vs-actions">
-                  <span className="vs-muted">
-                    {task ? videoStatus[task.status] || task.status : '新任务'}
-                    {dirty ? ' · 未保存' : ''}
-                  </span>
-                  <Button
-                    size="sm"
-                    disabled={!!busy}
-                    onClick={() => fresh(view)}
-                  >
-                    <Plus size={14} />
-                    新建
-                  </Button>
-                  {task && (
-                    <IconButton
-                      label="重新读取任务"
-                      disabled={!!busy}
-                      onClick={() => void run('get')}
-                    >
-                      <RefreshCw size={14} />
-                    </IconButton>
-                  )}
-                </div>
               </div>
               <div className="is-work-toolbar">
                 <div
@@ -625,10 +609,40 @@ export default function VideoStudio() {
                     </button>
                   ))}
                 </div>
+                <div className="vs-actions is-task-actions">
+                  <span className="vs-muted">
+                    {task ? videoStatus[task.status] || task.status : '新任务'}
+                    {dirty ? ' · 未保存' : ''}
+                  </span>
+                  <Button
+                    size="sm"
+                    disabled={!!busy}
+                    onClick={() => fresh(view)}
+                  >
+                    <Plus size={14} />
+                    新建
+                  </Button>
+                  <Button
+                    size="sm"
+                    disabled={!native || controlsDisabled}
+                    onClick={() => void run('save')}
+                  >
+                    保存修改
+                  </Button>
+                  {task && (
+                    <IconButton
+                      label="重新读取任务"
+                      disabled={!!busy}
+                      onClick={() => void run('get')}
+                    >
+                      <RefreshCw size={14} />
+                    </IconButton>
+                  )}
+                </div>
               </div>
               {step === 0 ? (
                 <div className="vs-layout">
-                  <div>
+                  <div className="vs-editor-column">
                     <section className="vs-panel">
                       <h3>{view === 'analysis' ? '参考视频' : '商品素材'}</h3>
                       {view === 'analysis' ? (
@@ -723,7 +737,7 @@ export default function VideoStudio() {
                         }
                       >
                         <textarea
-                          className="kv-textarea"
+                          className="kv-textarea custom-scrollbar"
                           disabled={controlsDisabled}
                           rows={6}
                           placeholder="商品展示、使用动作、场景、镜头节奏、口播与结尾要求…"
@@ -743,31 +757,19 @@ export default function VideoStudio() {
                           </IconButton>
                         </div>
                       )}
-                      <div className="vs-actions">
-                        <Button
-                          variant="primary"
-                          disabled={
-                            !native ||
-                            controlsDisabled ||
-                            (view === 'analysis'
-                              ? !brief.source.trim()
-                              : !brief.request.trim() && !brief.template)
-                          }
-                          onClick={() =>
-                            void run(view === 'analysis' ? 'analyze' : 'plan')
-                          }
-                        >
-                          <WandSparkles size={15} />
-                          {view === 'analysis' ? '开始拆解' : '生成导演剧本'}
-                        </Button>
-                        <Button
-                          disabled={!native || controlsDisabled}
-                          onClick={() => void run('save')}
-                        >
-                          保存草稿
-                        </Button>
-                      </div>
                     </section>
+                    {view === 'creation' && (
+                      <section className="vs-panel">
+                        <h3>参考方式与声音</h3>
+                        <VideoMediaOptions
+                          brief={brief}
+                          change={change}
+                          disabled={controlsDisabled}
+                          native={native}
+                          onError={setError}
+                        />
+                      </section>
+                    )}
                   </div>
                   <section className="vs-panel vs-options">
                     <Field label="任务名称">
@@ -865,13 +867,6 @@ export default function VideoStudio() {
                             ))}
                           </StudioSelect>
                         </Field>
-                        <VideoMediaOptions
-                          brief={brief}
-                          change={change}
-                          disabled={controlsDisabled}
-                          native={native}
-                          onError={setError}
-                        />
                         <Field
                           label={
                             route === 'comfy' ? '工作流百万像素' : '生成清晰度'
@@ -895,6 +890,30 @@ export default function VideoStudio() {
                       </>
                     )}
                   </section>
+                  <div className="vs-actions studio-primary-actions">
+                    <Button
+                      variant="primary"
+                      disabled={
+                        !native ||
+                        controlsDisabled ||
+                        (view === 'analysis'
+                          ? !brief.source.trim()
+                          : !brief.request.trim() && !brief.template)
+                      }
+                      onClick={() =>
+                        void run(view === 'analysis' ? 'analyze' : 'plan')
+                      }
+                    >
+                      <WandSparkles size={15} />
+                      {view === 'analysis' ? '开始拆解' : '生成导演剧本'}
+                    </Button>
+                    <Button
+                      disabled={!native || controlsDisabled}
+                      onClick={() => void run('save')}
+                    >
+                      保存草稿
+                    </Button>
+                  </div>
                 </div>
               ) : step === 1 ? (
                 <>
@@ -918,12 +937,6 @@ export default function VideoStudio() {
                       placeholder="生成剧本后在这里查看镜头、动作、声音和时间线。也可以直接填写已有剧本。"
                     />
                     <div className="vs-actions">
-                      <Button
-                        disabled={!native || controlsDisabled}
-                        onClick={() => void run('save')}
-                      >
-                        保存修改
-                      </Button>
                       {view === 'creation' && (
                         <Button
                           variant="primary"
@@ -992,7 +1005,7 @@ export default function VideoStudio() {
                     </p>
                     <details>
                       <summary>查看转换后的提示词</summary>
-                      <pre>
+                      <pre className="custom-scrollbar">
                         {dirty
                           ? '内容已修改，请重新确认剧本。'
                           : task?.prompt || '请先确认剧本并转换提示词。'}

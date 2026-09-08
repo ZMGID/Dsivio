@@ -1,4 +1,12 @@
-import { Children, cloneElement, isValidElement, useEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { Check, FolderOpen, Image as ImageIcon, Plus, Save, Settings2, X } from 'lucide-react'
 import { api, isTauriRuntime } from '../../api/tauri'
@@ -24,7 +32,9 @@ export function StudioSelect({
   const text = (node: ReactNode): string =>
     Children.toArray(node)
       .map((child) =>
-        isValidElement<{ children?: ReactNode }>(child) ? text(child.props.children) : String(child),
+        isValidElement<{ children?: ReactNode }>(child)
+          ? text(child.props.children)
+          : String(child),
       )
       .join('')
   const options = Children.toArray(children).flatMap((child) => {
@@ -43,7 +53,73 @@ export function StudioSelect({
   )
 }
 
-export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+const imageLanguages = [
+  ['pt-BR', '葡萄牙语（巴西）'],
+  ['en-US', '英语（美国）'],
+  ['en-GB', '英语（英国）'],
+  ['es', '西班牙语'],
+  ['zh-CN', '简体中文'],
+  ['zh-TW', '繁体中文'],
+  ['ja', '日语'],
+  ['ko', '韩语'],
+  ['fr', '法语'],
+  ['de', '德语'],
+  ['it', '意大利语'],
+  ['ar', '阿拉伯语'],
+  ['id', '印尼语'],
+  ['th', '泰语'],
+  ['vi', '越南语'],
+  ['无文字', '无文字'],
+]
+
+export function ImageLanguageSelect({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+}) {
+  const known = imageLanguages.some(([code]) => code === value)
+  return (
+    <div className="is-field">
+      <StudioSelect
+        ariaLabel="图内语言"
+        disabled={disabled}
+        value={known ? value : 'custom'}
+        onChange={(e) => onChange(e.target.value === 'custom' ? '' : e.target.value)}
+      >
+        {imageLanguages.map(([code, label]) => (
+          <option key={code} value={code}>
+            {label}
+          </option>
+        ))}
+        <option value="custom">其他语言 / 自定义说明…</option>
+      </StudioSelect>
+      {!known && (
+        <input
+          className="kv-input"
+          aria-label="自定义图内语言"
+          placeholder="例如：西班牙语（墨西哥），保留品牌英文"
+          disabled={disabled}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </div>
+  )
+}
+
+export function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+}) {
   return (
     <label className="is-field">
       <span>{label}</span>
@@ -114,7 +190,8 @@ export function ConfigPanel({
   const [draft, setDraft] = useState(config)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
-  const update = (key: keyof ImageConfig, value: string) => setDraft((d) => ({ ...d, [key]: value }))
+  const update = (key: keyof ImageConfig, value: string) =>
+    setDraft((d) => ({ ...d, [key]: value }))
   return (
     <div className="kv-modal-backdrop kv-modal-backdrop--portal is-overlay" onClick={onClose}>
       <section
@@ -133,9 +210,14 @@ export function ConfigPanel({
             <X size={18} />
           </IconButton>
         </div>
-        <p className="is-muted">配置一次，所有图片功能共用。密钥沿用应用「设置 → 供应商」中的配置。</p>
+        <p className="is-muted">
+          配置一次，所有图片功能共用。密钥沿用应用「设置 → 供应商」中的配置。
+        </p>
         <Field label="图片供应商">
-          <StudioSelect value={draft.providerId} onChange={(e) => update('providerId', e.target.value)}>
+          <StudioSelect
+            value={draft.providerId}
+            onChange={(e) => update('providerId', e.target.value)}
+          >
             <option value="">选择供应商</option>
             {providers.map((p) => (
               <option key={p.id} value={p.id}>
@@ -161,7 +243,10 @@ export function ConfigPanel({
               ))}
           </datalist>
         </Field>
-        <Field label="图片接口协议" hint="选择你已经跑通的图片网关协议。供应商地址和请求头在应用设置中维护。">
+        <Field
+          label="图片接口协议"
+          hint="选择你已经跑通的图片网关协议。供应商地址和请求头在应用设置中维护。"
+        >
           <StudioSelect value={draft.protocol} onChange={(e) => update('protocol', e.target.value)}>
             <option value="openai">OpenAI 标准（生成 / 编辑）</option>
             <option value="grok">Grok 图片</option>
@@ -244,7 +329,13 @@ const blankTemplate = (): ImageTemplate => ({
     language: 'pt-BR',
     style: '',
     output: { ratio: '1:1', resolution: '1k' },
-    slots: [{ id: 'h1', purpose: '主视觉', brief: '用一张图展示商品整体外观和最重要的卖点。' }],
+    slots: [
+      {
+        id: 'h1',
+        purpose: '主视觉',
+        brief: '用一张图展示商品整体外观和最重要的卖点。',
+      },
+    ],
   },
 })
 
@@ -292,7 +383,8 @@ function TemplatePagePreview({
             onClose()
           }
           if (e.key === 'Tab') {
-            const buttons = dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')
+            const buttons =
+              dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')
             if (!buttons?.length) return
             const first = buttons[0]
             const last = buttons[buttons.length - 1]
@@ -338,7 +430,10 @@ function TemplatePagePreview({
           <Button disabled={index === 0} onClick={() => setIndex((i) => i - 1)}>
             上一张
           </Button>
-          <Button disabled={index === template.data.slots.length - 1} onClick={() => setIndex((i) => i + 1)}>
+          <Button
+            disabled={index === template.data.slots.length - 1}
+            onClick={() => setIndex((i) => i + 1)}
+          >
             下一张
           </Button>
         </div>
@@ -359,7 +454,10 @@ export function TemplatePanel({
   report: (e: unknown) => void
 }) {
   const [editing, setEditing] = useState<ImageTemplate | null>(null)
-  const [preview, setPreview] = useState<{ template: ImageTemplate; index: number } | null>(null)
+  const [preview, setPreview] = useState<{
+    template: ImageTemplate
+    index: number
+  } | null>(null)
   const [pending, setPending] = useState(false)
   const perform = async (fn: () => Promise<void>) => {
     if (!isTauriRuntime()) {
@@ -389,7 +487,10 @@ export function TemplatePanel({
             disabled={pending}
             onClick={() =>
               void perform(async () => {
-                const path = await open({ directory: true, title: '选择包含 template.json 和示例图的文件夹' })
+                const path = await open({
+                  directory: true,
+                  title: '选择包含 template.json 和示例图的文件夹',
+                })
                 if (typeof path === 'string') onChange(await api.imageStudioTemplateImport(path))
               })
             }
@@ -471,7 +572,10 @@ export function TemplatePanel({
                   disabled={pending}
                   onClick={() =>
                     void perform(async () => {
-                      const dest = await open({ directory: true, title: '选择模板导出位置' })
+                      const dest = await open({
+                        directory: true,
+                        title: '选择模板导出位置',
+                      })
                       if (typeof dest === 'string') await api.imageStudioTemplateExport(t.id, dest)
                     })
                   }
@@ -523,10 +627,9 @@ export function TemplatePanel({
               </Field>
             </div>
             <Field label="图内语言">
-              <input
-                className="kv-input"
+              <ImageLanguageSelect
                 value={editing.data.language || ''}
-                onChange={(e) => editData({ language: e.target.value })}
+                onChange={(language) => editData({ language })}
               />
             </Field>
             <Field label="统一风格">
@@ -585,7 +688,8 @@ export function TemplatePanel({
                             i === index
                               ? {
                                   ...s,
-                                  [editing.data.mode === 'replace' ? 'prompt' : 'brief']: e.target.value,
+                                  [editing.data.mode === 'replace' ? 'prompt' : 'brief']:
+                                    e.target.value,
                                 }
                               : s,
                           ),
@@ -597,7 +701,11 @@ export function TemplatePanel({
                     size="sm"
                     variant="ghost"
                     disabled={editing.data.slots.length <= 1}
-                    onClick={() => editData({ slots: editing.data.slots.filter((_, i) => i !== index) })}
+                    onClick={() =>
+                      editData({
+                        slots: editing.data.slots.filter((_, i) => i !== index),
+                      })
+                    }
                   >
                     移除此页
                   </Button>
@@ -611,7 +719,11 @@ export function TemplatePanel({
                   editData({
                     slots: [
                       ...editing.data.slots,
-                      { id: `page-${crypto.randomUUID().slice(0, 6)}`, purpose: '', brief: '' },
+                      {
+                        id: `page-${crypto.randomUUID().slice(0, 6)}`,
+                        purpose: '',
+                        brief: '',
+                      },
                     ],
                   })
                 }
