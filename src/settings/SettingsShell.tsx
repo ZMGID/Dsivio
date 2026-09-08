@@ -2436,7 +2436,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             <div className="kv-sidebar-brand-mark">
               <img src="/icon.png" alt="" aria-hidden="true" />
             </div>
-            <div className="kv-sidebar-brand-name">Kivio Desktop</div>
+            <div className="kv-sidebar-brand-name">Dskivio</div>
             <div className="kv-sidebar-brand-ver">v{appVersion}</div>
           </div>
           {categoryNav}

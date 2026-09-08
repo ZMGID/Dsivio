@@ -2080,7 +2080,7 @@ fn apply_context_clear_rejects_external_runtime() {
     conversation.agent_runtime.kind = crate::chat::AgentRuntimeKind::External;
     conversation.agent_runtime.external_agent_id = Some("claude".to_string());
     let err = apply_context_clear(&mut conversation).expect_err("external");
-    assert!(err.contains("Kivio Agent"));
+    assert!(err.contains("Dskivio Agent"));
 }
 
 #[test]
@@ -2295,7 +2295,7 @@ fn prepare_reply_with_model_tags_last_turn_and_rejects_duplicates() {
         None,
     )
     .expect_err("external");
-    assert!(err.contains("Kivio Agent"));
+    assert!(err.contains("Dskivio Agent"));
 }
 
 #[test]

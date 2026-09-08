@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Kivio Desktop",
+  "productName": "Dskivio",
   "version": "2.9.8",
   "identifier": "com.zmair.kivio",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Kivio Desktop",
+        "title": "Dskivio",
         "width": 392,
         "height": 152,
         "resizable": true,
