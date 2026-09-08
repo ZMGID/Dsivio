@@ -28,6 +28,17 @@ API Key 不返回前端或写入任务和模板。结果大于 80 MB 时使用�
 
 ## 验证
 
+### 参数补齐（2026-09-08）
+
+画幅按路线展开：ComfyUI 8 种，MiniMax 7 种（含自适应），Grok 7 种。
+口播语言改为常用语言选择和自定义；可选口播、仅环境音与音乐、静音，并填写固定对白和配乐要求。
+Grok 区分单图首帧与最多 7 张参考图；参考模式上限 720p，支持最多 3 个预设音色。静音直接映射 `generate_audio=false`。
+MiniMax 增加首尾帧、参考视频、参考音频；各类数量及总数在提交前校验，参考音视频导入时通过 ffprobe 检查时长，并将参考视频时长计入报价。
+聊天内置脚本同步支持 `--reference-image` 与 `--voice-id`，保持共享工作区协议。
+ComfyUI/MiniMax 声音要求由提示词表达，不能将提示词静音要求当作硬性音轨开关。
+
+核对来源：[xAI 参考生成](https://docs.x.ai/developers/model-capabilities/video/reference-to-video)、[生成规格](https://docs.x.ai/developers/model-capabilities/video/generation)、[定价](https://docs.x.ai/developers/pricing)，及内置 MiniMax 客户端与 ComfyUI 工作流支持表。
+
 - `python -B -X utf8 -m unittest discover -s tests -p test_video_studio.py`
 - `./scripts/win-cargo-test.ps1 --lib video_studio::tests`
 - `npx vitest run src/chat/chatRoutes.test.ts`

@@ -15,7 +15,7 @@
 - Duration: integer 1–15 seconds.
 - Ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`.
 - Resolution: `480p`, `720p`, or `1080p` for text-to-video and image-to-video.
-- Input mode in this integration: prompt only, or prompt plus one starting image.
+- Input modes: text-only; one starting image; or reference-to-video with up to 7 images and/or 3 preset voices (max 720p). Modes cannot be mixed. Verified 2026-09-08: https://docs.x.ai/developers/model-capabilities/video/reference-to-video
 - Generated video includes audio by default; `generate_audio: false` requests silent output.
 - Output URLs are temporary and must be downloaded promptly.
 - The saved `grok` provider supplies the URL, key, and selected model. `XAI_API_BASE`, `XAI_API_KEY`, and `XAI_VIDEO_MODEL` remain legacy overrides.

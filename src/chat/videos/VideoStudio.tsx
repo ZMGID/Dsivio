@@ -18,6 +18,8 @@ import { Field, StudioSelect } from '../images/StudioPanels'
 import {
   newVideoBrief,
   videoStatus,
+  videoRatios,
+  languages,
   type VideoBootstrap,
   type VideoBrief,
   type VideoTask,
@@ -26,6 +28,7 @@ import {
 import builtin from '../../../src-tauri/resources/plugins/dsvideo-plugin/skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json'
 import '../images/ImageStudio.css'
 import './VideoStudio.css'
+import { VideoMediaOptions } from './VideoMediaOptions'
 
 const preview: VideoBootstrap = {
   tasks: [],
@@ -75,7 +78,7 @@ export default function VideoStudio() {
   const [provider, setProvider] = useState('comfy')
   const [base, setBase] = useState('http://127.0.0.1:8188')
   const [key, setKey] = useState('')
-  const [model, setModel] = useState('grok-imagine-video')
+  const [model, setModel] = useState('grok-imagine-video-1.5')
   const [video, setVideo] = useState('')
   const [recoveryId, setRecoveryId] = useState('')
   const locked =
@@ -236,7 +239,11 @@ export default function VideoStudio() {
   const route = brief.route
   const resolutions =
     route === 'grok'
-      ? ['480p', '720p', '1080p']
+      ? brief.inputMode === 'reference' ||
+        (brief.inputMode !== 'image' &&
+          (brief.images.length > 1 || !!brief.voiceIds?.length))
+        ? ['480p', '720p']
+        : ['480p', '720p', '1080p']
       : route === 'minimax'
         ? ['768P', '2K']
         : route === 'comfy'
@@ -363,7 +370,9 @@ export default function VideoStudio() {
                             } as Record<string, string>
                           )[p],
                       )
-                      setModel(data.config[p]?.model || 'grok-imagine-video')
+                      setModel(
+                        data.config[p]?.model || 'grok-imagine-video-1.5',
+                      )
                     }}
                   >
                     {Object.entries(routeNames).map(([v, n]) => (
@@ -701,8 +710,8 @@ export default function VideoStudio() {
                             添加参考图
                           </Button>
                           <p className="vs-muted">
-                            Grok 最多 1 张 · ComfyUI 最多 3 张 · MiniMax 最多 9
-                            张
+                            Grok 单图 1 张 / 参考图最多 7 张 · ComfyUI 最多 3 张
+                            · MiniMax 最多 9 张
                           </p>
                         </>
                       )}
@@ -771,13 +780,36 @@ export default function VideoStudio() {
                       />
                     </Field>
                     <Field label="口播 / 文案语言">
-                      <input
-                        className="kv-input"
+                      <StudioSelect
                         disabled={controlsDisabled}
-                        value={brief.language}
+                        value={
+                          languages.some(([v]) => v === brief.language)
+                            ? brief.language
+                            : 'custom'
+                        }
                         onChange={(e) => change({ language: e.target.value })}
-                      />
+                      >
+                        {languages.map(([v, name]) => (
+                          <option key={v} value={v}>
+                            {name}
+                          </option>
+                        ))}
+                      </StudioSelect>
                     </Field>
+                    {(!languages.some(([v]) => v === brief.language) ||
+                      brief.language === 'custom') && (
+                      <Field label="其他语言">
+                        <input
+                          className="kv-input"
+                          disabled={controlsDisabled}
+                          value={
+                            brief.language === 'custom' ? '' : brief.language
+                          }
+                          onChange={(e) => change({ language: e.target.value })}
+                          placeholder="输入语言名称或地区代码"
+                        />
+                      </Field>
+                    )}
                     {view === 'creation' && (
                       <>
                         <Field label="视频时长（秒）">
@@ -799,8 +831,13 @@ export default function VideoStudio() {
                             value={brief.ratio}
                             onChange={(e) => change({ ratio: e.target.value })}
                           >
-                            {['9:16', '16:9', '1:1'].map((v) => (
-                              <option key={v}>{v}</option>
+                            {(route
+                              ? videoRatios[route]
+                              : videoRatios.comfy
+                            ).map((v) => (
+                              <option key={v} value={v}>
+                                {v === 'adaptive' ? '自适应' : v}
+                              </option>
                             ))}
                           </StudioSelect>
                         </Field>
@@ -815,6 +852,8 @@ export default function VideoStudio() {
                               change({
                                 route: e.target.value as VideoBrief['route'],
                                 resolution: '',
+                                inputMode: 'auto',
+                                ratio: '9:16',
                               })
                             }
                           >
@@ -826,6 +865,13 @@ export default function VideoStudio() {
                             ))}
                           </StudioSelect>
                         </Field>
+                        <VideoMediaOptions
+                          brief={brief}
+                          change={change}
+                          disabled={controlsDisabled}
+                          native={native}
+                          onError={setError}
+                        />
                         <Field
                           label={
                             route === 'comfy' ? '工作流百万像素' : '生成清晰度'
@@ -840,7 +886,9 @@ export default function VideoStudio() {
                           >
                             <option value="">请选择</option>
                             {resolutions.map((v) => (
-                              <option key={v}>{v}</option>
+                              <option key={v} value={v}>
+                                {v === 'adaptive' ? '自适应' : v}
+                              </option>
                             ))}
                           </StudioSelect>
                         </Field>

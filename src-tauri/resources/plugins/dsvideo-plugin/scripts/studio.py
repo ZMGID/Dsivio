@@ -12,6 +12,7 @@ import os
 import re
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -79,6 +80,40 @@ def import_brief(brief):
             dest.write_bytes(raw)
         images.append(str(dest))
     b['images'] = images
+    for field in ('firstFrame', 'lastFrame'):
+        value = b.get(field)
+        if value:
+            if value not in brief.get('images', []):
+                raise ValueError('首尾帧必须从已添加的图片中选择')
+            b[field] = images[brief['images'].index(value)]
+    for field, extensions, limit in [('referenceVideos', ('.mp4', '.mov'), 50), ('referenceAudios', ('.mp3', '.wav'), 15)]:
+        copied = []
+        seconds = 0.0
+        paths = b.get(field, [])
+        if len(paths) > 3:
+            raise ValueError('参考视频和音频分别最多 3 个')
+        for path in paths:
+            p = Path(path)
+            if p.suffix.lower() not in extensions or p.stat().st_size > limit * 1024 * 1024:
+                raise ValueError(f'参考媒体格式不支持或超过 {limit} MB')
+            try:
+                result = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', str(p)], capture_output=True, text=True, timeout=20)
+                duration = float(json.loads(result.stdout)['format']['duration'])
+            except Exception:
+                raise ValueError('无法读取参考媒体时长，请检查 FFmpeg / ffprobe 安装')
+            if not 2 <= duration <= 15:
+                raise ValueError('每段参考视频和音频必须为 2–15 秒')
+            seconds += duration
+            raw = p.read_bytes()
+            dest = ROOT / 'assets' / (hashlib.sha256(raw).hexdigest() + p.suffix.lower())
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if not dest.exists():
+                dest.write_bytes(raw)
+            copied.append(str(dest))
+        if seconds > 15.01:
+            raise ValueError('参考视频和参考音频各自总时长不得超过 15 秒')
+        b[field] = copied
+        b[field + 'Seconds'] = seconds
     return b
 
 
@@ -111,8 +146,44 @@ def validate(t):
     if route not in ('grok', 'minimax', 'comfy'):
         raise ValueError('请明确选择生成路线')
     count = len(b.get('images', []))
-    if count > {'grok': 1, 'minimax': 9, 'comfy': 3}[route]:
+    mode = b.get('inputMode', 'auto')
+    if mode == 'auto':
+        mode = 'reference' if route == 'grok' and (count > 1 or b.get('voiceIds')) else 'image' if route == 'grok' and count else 'reference' if count or b.get('referenceVideos') else 'text'
+    if mode not in ('text', 'image', 'reference', 'frames'):
+        raise ValueError('未知生成模式')
+    if mode == 'text' and (count or b.get('referenceVideos') or b.get('referenceAudios') or b.get('voiceIds')):
+        raise ValueError('文生视频模式不使用参考素材，请移除素材或切换模式')
+    if mode == 'frames' and route != 'minimax':
+        raise ValueError('当前首尾帧模式仅支持 MiniMax')
+    if route != 'minimax' and (b.get('referenceVideos') or b.get('referenceAudios') or b.get('firstFrame') or b.get('lastFrame')):
+        raise ValueError('当前路线不支持 MiniMax 首尾帧或参考音视频，请移除这些素材')
+    if route != 'grok' and b.get('voiceIds'):
+        raise ValueError('预设音色仅适用于 Grok 参考生成')
+    if len(b.get('voiceIds', [])) > 3 or (b.get('voiceIds') and b.get('speechMode') == 'silent'):
+        raise ValueError('Grok 最多选择 3 个音色；静音时请清空音色选择')
+    if b.get('voiceIds') and mode != 'reference':
+        raise ValueError('预设音色需要参考生成模式')
+    if count > {'grok': 7 if mode == 'reference' else 1, 'minimax': 9, 'comfy': 3}[route]:
         raise ValueError('当前路线不支持这么多参考图，请调整素材或路线')
+    if mode == 'image' and count != 1:
+        raise ValueError('单图模式需要恰好一张图片')
+    if route == 'grok' and mode == 'reference' and not count and not b.get('voiceIds'):
+        raise ValueError('参考生成至少需要一张图片或一个预设音色')
+    if route == 'grok' and mode == 'reference' and b['resolution'] == '1080p':
+        raise ValueError('Grok 参考生成最高支持 720p')
+    if mode == 'frames':
+        frames = [v for v in (b.get('firstFrame'), b.get('lastFrame')) if v]
+        if not frames or set(b.get('images', [])) != set(frames) or b.get('referenceVideos') or b.get('referenceAudios'):
+            raise ValueError('首尾帧模式仅保留选中的首尾帧图片，不能混用其他参考素材')
+    if b.get('ratio') not in {'grok': grok.RATIOS, 'minimax': mini.RATIOS, 'comfy': ('1:1','2:3','3:2','3:4','4:3','9:16','16:9','21:9')}[route]:
+        raise ValueError('所选画幅不适用于当前路线')
+    if mode != 'frames' and (b.get('firstFrame') or b.get('lastFrame')):
+        raise ValueError('请切换到首尾帧模式或清空首尾帧选择')
+    if len(b.get('images', [])) + len(b.get('referenceVideos', [])) + len(b.get('referenceAudios', [])) > 12:
+        raise ValueError('参考媒体总数不得超过 12 个')
+    if b.get('referenceAudios') and not (count or b.get('referenceVideos')):
+        raise ValueError('参考音频需要同时提供图片或视频')
+    b = {**b, 'effectiveMode': mode}
     low = {'grok': 1, 'minimax': 4, 'comfy': 2}[route]
     if not low <= int(b['duration']) <= 15:
         raise ValueError(f'当前路线支持 {low}–15 秒')
@@ -137,9 +208,16 @@ def request(t):
     b, route = validate(t)
     args = dict(prompt=t['prompt'], duration=int(b['duration']), resolution=b['resolution'], ratio=b['ratio'])
     if route == 'grok':
-        return grok.build_video_request(**args, image=next(iter(b.get('images', [])), None),
+        refs = b['effectiveMode'] == 'reference'
+        return grok.build_video_request(**args, image=next(iter(b.get('images', [])), None) if not refs else None,
+                                       reference_images=b.get('images', []) if refs else [], voice_ids=b.get('voiceIds', []) if refs else [],
+                                       generate_audio=b.get('speechMode') != 'silent',
                                        model=get_provider(route).get('model') or grok.MODEL)
-    return mini.build_video_request(**args, reference_images=b.get('images', []))
+    frames = b['effectiveMode'] == 'frames'
+    return mini.build_video_request(**args, first_frame=b.get('firstFrame') if frames else None,
+                                   last_frame=b.get('lastFrame') if frames else None,
+                                   reference_images=[] if frames else b.get('images', []),
+                                   reference_videos=b.get('referenceVideos', []), reference_audios=b.get('referenceAudios', []))
 
 
 def handle(action, data):
@@ -203,7 +281,9 @@ def handle(action, data):
             t['quote'] = {'note': '本地工作流；算力与工作流节点费用取决于你的 ComfyUI 配置。', 'base_url': get_provider('comfy').get('base_url') or 'http://127.0.0.1:8188'}
         else:
             c = client(route)
-            q = grok.cost_quote(duration=int(b['duration']), image_count=len(b['images'])) if route == 'grok' else mini.cost_quote(duration=int(b['duration']), reference_image_count=len(b['images']))
+            q = grok.cost_quote(duration=int(b['duration']), image_count=len(b['images'])) if route == 'grok' else mini.cost_quote(duration=int(b['duration']), reference_image_count=len(b['images']), reference_video_seconds=b.get('referenceVideosSeconds', 0))
+            if route == 'grok' and b['effectiveMode'] == 'reference':
+                q['estimated_cost'].pop('1080p', None)
             if route == 'minimax' and normalize_base_url(c.base_url) != 'https://api.minimaxi.com':
                 raise ValueError('当前报价仅适用 MiniMax 国内官方地址；国际站或代理请在聊天中核实价格后使用')
             if route == 'grok' and (normalize_base_url(c.base_url) != 'https://api.x.ai' or (get_provider(route).get('model') or grok.MODEL) != grok.MODEL):
@@ -230,6 +310,8 @@ def handle(action, data):
             return persist(t)
         c = client(route, t['remote'])
         payload = request(t)
+        if len(json.dumps(payload).encode('utf-8')) > 64 * 1024 * 1024:
+            raise ValueError('请求超过 64 MB，请压缩或减少参考素材')
         t['requested'] = {k: payload[k] for k in ('duration', 'resolution', 'model') if k in payload}
         t['status'] = 'submitting'
         persist(t)
