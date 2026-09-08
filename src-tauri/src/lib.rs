@@ -13,6 +13,7 @@ pub mod external_agents;
 pub mod fonts;
 pub mod lens;
 pub mod lens_commands;
+pub mod image_studio;
 #[cfg(target_os = "macos")]
 pub mod macos_ocr;
 pub mod mcp;
@@ -745,6 +746,20 @@ pub fn run() {
             plugins::plugins_set_enabled,
             plugins::plugins_uninstall,
             notes::notes_list,
+            image_studio::image_studio_bootstrap,
+            image_studio::image_studio_get,
+            image_studio::image_studio_save,
+            image_studio::image_studio_save_plans,
+            image_studio::image_studio_import,
+            image_studio::image_studio_config,
+            image_studio::image_studio_preview,
+            image_studio::image_studio_action,
+            image_studio::image_studio_template_import,
+            image_studio::image_studio_template_save,
+            image_studio::image_studio_template_export,
+            image_studio::image_studio_freeze,
+            image_studio::image_studio_export,
+            image_studio::image_studio_open,
             notes::notes_read,
             notes::notes_create,
             notes::notes_update,
