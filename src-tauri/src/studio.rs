@@ -2,6 +2,7 @@
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use tauri::AppHandle;
+pub mod library;
 static DRAFT_LOCK: Mutex<()> = Mutex::new(());
 fn field<T: serde::de::DeserializeOwned>(v: &Value, key: &str) -> Result<T, String> {
     serde_json::from_value(v.get(key).cloned().unwrap_or(Value::Null))

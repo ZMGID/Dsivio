@@ -6,6 +6,7 @@ import {
   FileImage,
   Film,
   FolderOpen,
+  History,
   Layers,
   Plus,
   RefreshCw,
@@ -36,6 +37,9 @@ import { readVideoDrafts, writeVideoDraft, type VideoEntry } from './videoDrafts
 import { ChatMarkdown } from '../ChatMarkdown'
 import { useSharedDraft } from '../studio/useSharedDraft'
 import { applyVideoStudioDrop } from './videoDrop'
+import { useTaskLibrary } from '../studio/useTaskLibrary'
+import { VideoTaskPanel } from './VideoTaskPanel'
+import { useVideoTaskProgress } from './useVideoTaskProgress'
 
 const preview: VideoBootstrap = {
   tasks: [],
@@ -70,13 +74,18 @@ function AssetImage({ path, name }: { path: string; name: string }) {
 
 export default function VideoStudio() {
   const native = isTauriRuntime()
+  const library = useTaskLibrary('video', native)
   const [initial] = useState(() => readVideoDrafts().creation)
   const [entry, setEntry] = useState<VideoEntry>('creation')
   const [draftSaved, setDraftSaved] = useState(true)
   const [editingScript, setEditingScript] = useState(false)
   const [data, setData] = useState<VideoBootstrap>(preview)
+  const [runtimeCheck, setRuntimeCheck] = useState<
+    'pending' | 'checking' | 'ready' | 'failed'
+  >('pending')
+  const [runtimeError, setRuntimeError] = useState('')
   const [view, setView] = useState<
-    VideoEntry | 'templates' | 'settings'
+    VideoEntry | 'templates' | 'settings' | 'tasks'
   >('creation')
   const [brief, setBrief] = useState<VideoBrief>(() => initial?.brief || newVideoBrief())
   const [task, setTask] = useState<VideoTask | undefined>(initial?.task)
@@ -118,10 +127,15 @@ export default function VideoStudio() {
     }, !!busy)
   const syncCurrent = useRef({ task, dirty, busy })
   syncCurrent.current = { task, dirty, busy }
+  const progressError = useVideoTaskProgress(data.tasks, native && view === 'tasks' && !busy, updated => {
+    setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === updated.id && t.revision <= updated.revision ? updated : t) }))
+  })
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (silent = false) => {
     if (!native) return
-
+    if (!silent) setRuntimeCheck('checking')
+    setRuntimeError('')
+    try {
       const next = await api.videoStudioBootstrap()
       setData(next)
       const current = syncCurrent.current
@@ -132,7 +146,12 @@ export default function VideoStudio() {
           setStep(updated.prompt ? 2 : updated.script || updated.concepts?.length ? 1 : 0)
         } else setError('此任务已在聊天中更新。本地编辑已保留，请重新打开最新任务后继续。')
       }
-
+      setRuntimeCheck('ready')
+    } catch (e) {
+      setRuntimeCheck('failed')
+      setRuntimeError(String(e))
+      throw e
+    }
   }, [native])
   useEffect(() => {
     void refresh().catch(() => {})
@@ -159,7 +178,7 @@ export default function VideoStudio() {
   // Refresh shared chat-created templates when returning to this window.
   useEffect(() => {
     const focus = () => {
-      void refresh().catch(() => {})
+      void refresh(true).catch(() => {})
     }
     const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') focus() }, 3000)
     window.addEventListener('focus', focus)
@@ -177,6 +196,16 @@ export default function VideoStudio() {
     setModel(data.config[provider]?.model || 'grok-imagine-video-1.5')
     setConfigConflict(false)
   }, [provider, data.config, configDirty])
+
+  const uncheckedRuntime = runtimeCheck === 'checking'
+    ? '检测中…'
+    : runtimeCheck === 'failed' ? '检测失败' : '未检测'
+  const dependencyStatus = (available?: boolean) => runtimeCheck === 'ready'
+    ? available === undefined ? '未检测' : available ? '已就绪' : '内置文件缺失'
+    : uncheckedRuntime
+  const runtimeMissing = runtimeCheck === 'ready' &&
+    [data.dependencies.comfy, data.dependencies.analyzer, data.dependencies.node,
+      data.dependencies.ffmpeg, data.dependencies.bundled].some(value => value === false)
 
   useEffect(() => {
     if (view !== 'creation' && view !== 'analysis' && view !== 'remake') return
@@ -218,6 +247,15 @@ export default function VideoStudio() {
     setBrief((b) => ({ ...b, ...values }))
     setDirty(true)
   }
+  const openTask = (t: VideoTask) => void guarded('打开任务…', async () => {
+    if (dirty && (brief.request.trim() || brief.images.length || script.trim())) await saved()
+    const latest = await api.videoStudioTask('get', { id: t.id })
+    accept(latest)
+    setEntry(latest.brief.mode)
+    setView(latest.brief.mode)
+    setEditingScript(false)
+    setStep(latest.prompt || latest.output ? 2 : latest.script || latest.concepts?.length ? 1 : 0)
+  })
   function fresh(mode: VideoEntry, template?: VideoTemplate) {
     setTask(undefined)
     setBrief({
@@ -309,10 +347,10 @@ export default function VideoStudio() {
   const pollRef = useRef(() => { void run('poll') })
   pollRef.current = () => { void run('poll') }
   useEffect(() => {
-    if (!native || busy || task?.status !== 'running' || !task.remote?.id) return
+    if (!native || busy || view === 'tasks' || task?.status !== 'running' || !task.remote?.id) return
     const timer = window.setTimeout(() => pollRef.current(), 8000)
     return () => window.clearTimeout(timer)
-  }, [native, busy, task?.id, task?.revision, task?.status, task?.remote?.id])
+  }, [native, busy, view, task?.id, task?.revision, task?.status, task?.remote?.id])
 
   async function pickImages() {
     await guarded('选择素材…', async () => {
@@ -454,28 +492,21 @@ export default function VideoStudio() {
               <span>模板库</span>
               <small>{data.templates.length}</small>
             </button>
+            <button className={view === 'tasks' ? 'active' : ''} aria-current={view === 'tasks' ? 'page' : undefined} disabled={!!busy} onClick={() => setView('tasks')}>
+              <History size={17} /><span>任务</span><small>{data.tasks.filter(t => ['running', 'submitting', 'uncertain'].includes(t.status) || !library.organization[t.id]?.archived).length}</small>
+            </button>
           </nav>
           <div className="is-rail-history custom-scrollbar">
             <div className="is-rail-label">最近任务</div>
             {!data.tasks.length && (
               <p className="vs-muted">剧本、成片和远程任务会保存在这里。</p>
             )}
-            {data.tasks.map((t) => (
+            {data.tasks.filter(t => ['running', 'submitting', 'uncertain'].includes(t.status) || !library.organization[t.id]?.archived).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6).map((t) => (
               <button
                 key={t.id}
                 disabled={!!busy}
                 className={t.id === task?.id ? 'active' : ''}
-                onClick={() =>
-                  void guarded('打开任务…', async () => {
-                    const latest = await api.videoStudioTask('get', {
-                      id: t.id,
-                    })
-                    accept(latest)
-                    setEntry(latest.brief.mode)
-                    setView(latest.brief.mode)
-                    setStep(latest.prompt ? 2 : latest.script || latest.concepts?.length ? 1 : 0)
-                  })
-                }
+                onClick={() => openTask(t)}
               >
                 <span className={`is-history-dot ${t.status}`} />
                 <span>{t.brief.name || '未命名视频'}</span>
@@ -510,7 +541,17 @@ export default function VideoStudio() {
               {busy}
             </div>
           )}
-          {view === 'settings' ? (
+          {view === 'tasks' ? (
+            <>
+            {progressError && <p role="status" className="tl-message">{progressError}</p>}
+            {runtimeCheck === 'failed' && <p role="alert" className="tl-message tl-error">任务读取失败：{runtimeError}。请刷新任务重试。</p>}
+            <VideoTaskPanel tasks={data.tasks} library={library} loading={runtimeCheck === 'checking' || runtimeCheck === 'pending'} disabled={!!busy}
+              currentId={task?.id} onOpen={openTask} onRefresh={() => refresh(true)} onNew={() => void guarded('新建视频…', async () => {
+                if (dirty && (brief.request.trim() || brief.images.length || script.trim())) await saved()
+                fresh('creation')
+              })} />
+            </>
+          ) : view === 'settings' ? (
             <>
               <div className="vs-heading">
                 <h2>视频设置</h2>
@@ -612,19 +653,17 @@ export default function VideoStudio() {
                   </p>
                   <dl className="vs-specs">
                     <dt>Python</dt>
-                    <dd>{data.dependencies.python || '未检测'}</dd>
+                    <dd>{runtimeCheck === 'ready' ? data.dependencies.python || '未检测' : uncheckedRuntime}</dd>
                     <dt>Comfy MCP</dt>
-                    <dd>{data.dependencies.comfy ? '已就绪' : '内置文件缺失'}</dd>
+                    <dd>{dependencyStatus(data.dependencies.comfy)}</dd>
                     <dt>视频分析 MCP</dt>
-                    <dd>{data.dependencies.analyzer ? '已就绪' : '内置文件缺失'}</dd>
+                    <dd>{dependencyStatus(data.dependencies.analyzer)}</dd>
                     <dt>Node.js</dt>
                     <dd>
-                      {data.dependencies.node
-                        ? '已就绪'
-                        : '内置文件缺失'}
+                      {dependencyStatus(data.dependencies.node)}
                     </dd>
                     <dt>FFmpeg</dt>
-                    <dd>{data.dependencies.ffmpeg ? '已就绪' : '内置文件缺失'}</dd>
+                    <dd>{dependencyStatus(data.dependencies.ffmpeg)}</dd>
                   </dl>
                   <p className="vs-muted">
                     MCP 服务、Python、Node.js 和视频处理依赖随应用提供。
@@ -633,15 +672,20 @@ export default function VideoStudio() {
                   <div className="vs-actions">
                     <Button
                       size="sm"
-                      disabled={!native || !!busy}
+                      disabled={!native || !!busy || runtimeCheck === 'checking'}
                       onClick={() => void guarded('检查环境…', refresh)}
                     >
                       重新检查
                     </Button>
                   </div>
-                  <p className="vs-muted">
-                    若内置文件缺失，请重新安装 Dsivio。
-                  </p>
+                  {runtimeCheck === 'failed' && (
+                    <p className="vs-muted">
+                      无法读取内置运行环境状态，请重新检查。错误：{runtimeError}
+                    </p>
+                  )}
+                  {runtimeMissing && (
+                    <p className="vs-muted">内置运行环境不完整，请重新安装 Dsivio。</p>
+                  )}
                   <p className="vs-path">{data.configPath}</p>
                 </section>
               </div>

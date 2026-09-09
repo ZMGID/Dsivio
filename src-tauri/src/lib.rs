@@ -851,6 +851,7 @@ pub fn run() {
             plugins::plugins_uninstall,
             notes::notes_list,
             studio::studio_draft,
+            studio::library::studio_task_library,
             video_studio::video_studio,
             image_studio::image_studio_bootstrap,
             image_studio::image_studio_get,

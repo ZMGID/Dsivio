@@ -32,6 +32,7 @@ export interface VideoTask {
   prompt: string
   approved: boolean
   status: string
+  submission?: { state: 'rejected' | 'uncertain'; httpStatus?: number; reason: string; retryable: boolean }
   error?: string
   output?: string
   remote?: { route: VideoRoute; id?: string; base_url: string }

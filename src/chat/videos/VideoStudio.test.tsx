@@ -7,6 +7,7 @@ import { newVideoBrief, type VideoTask } from './types'
 vi.mock('../../api/tauri', () => ({
   isTauriRuntime: () => true,
   api: {
+    studioTaskLibrary: vi.fn(async () => ({})),
     videoStudioBootstrap: vi.fn(async () => ({
       tasks: [], config: {}, root: '', configPath: '',
       dependencies: { python: '3.14', comfy: false, node: true, ffmpeg: true },
@@ -39,6 +40,29 @@ vi.mock('../api', () => ({
 }))
 
 describe('shared video workspace navigation', () => {
+  it('opens older chat-created tasks from a dedicated searchable library while keeping the rail bounded', async () => {
+    const tasks: VideoTask[] = Array.from({ length: 9 }, (_, i) => ({
+      id: `library-${i}`, revision: 1, updatedAt: 1700000000000 + i,
+      brief: { ...newVideoBrief(), name: `历史视频 ${i}`, request: `商品 ${i}` },
+      script: '已确认的剧本', prompt: 'stored prompt', approved: true, status: 'approved',
+    }))
+    vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce({
+      tasks, config: {}, templates: [], root: '', configPath: '',
+      dependencies: { python: '3.12', comfy: true, node: true, ffmpeg: true },
+    })
+    vi.mocked(api.videoStudioTask).mockResolvedValueOnce(tasks[0])
+    render(<VideoStudio />)
+    await screen.findByRole('button', { name: '任务 9' })
+    expect(screen.queryByRole('button', { name: '历史视频 0' })).toBeNull()
+    expect(screen.getByRole('button', { name: '历史视频 8' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '任务 9' }))
+    expect(screen.getByRole('heading', { name: '视频任务 9' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('搜索任务'), { target: { value: '历史视频 0' } })
+    fireEvent.click(screen.getByRole('button', { name: '打开任务 历史视频 0' }))
+    await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('get', { id: 'library-0' }))
+    expect(await screen.findByText('stored prompt')).toBeTruthy()
+  })
+
   beforeEach(() => localStorage.clear())
   afterEach(() => {
     vi.useRealTimers()
@@ -64,6 +88,43 @@ describe('shared video workspace navigation', () => {
     render(<VideoStudio />)
     await screen.findByRole('button', { name: '模板库 1' })
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('does not report missing bundled files while the runtime check is pending', async () => {
+    vi.mocked(api.videoStudioBootstrap).mockImplementationOnce(() => new Promise(() => {}))
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
+    expect(await screen.findAllByText('检测中…')).toHaveLength(5)
+    expect(screen.queryByText('内置文件缺失')).toBeNull()
+    expect(screen.getByRole('button', { name: '重新检查' })).toBeDisabled()
+  })
+
+  it('distinguishes a failed check from missing files and recovers on retry', async () => {
+    vi.mocked(api.videoStudioBootstrap).mockRejectedValueOnce('unknown path')
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
+    expect(await screen.findAllByText('检测失败')).toHaveLength(5)
+    expect(screen.getByText(/无法读取内置运行环境状态/)).toHaveTextContent('unknown path')
+    expect(screen.queryByText('内置文件缺失')).toBeNull()
+    expect(screen.queryByText(/重新安装 Dsivio/)).toBeNull()
+
+    vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce({
+      tasks: [], templates: [], config: {}, root: '', configPath: '',
+      dependencies: { python: '3.12.12', comfy: true, node: true, ffmpeg: true, analyzer: true, bundled: true },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '重新检查' }))
+    expect(await screen.findByText('3.12.12')).toBeTruthy()
+    expect(screen.getAllByText('已就绪')).toHaveLength(4)
+    expect(screen.queryByText(/无法读取内置运行环境状态/)).toBeNull()
+    expect(screen.queryByText(/重新安装 Dsivio/)).toBeNull()
+  })
+
+  it('reports missing files only after a successful runtime check', async () => {
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
+    expect(await screen.findByText('3.14')).toBeTruthy()
+    expect(screen.getAllByText('内置文件缺失')).toHaveLength(1)
+    expect(screen.getByText('内置运行环境不完整，请重新安装 Dsivio。')).toBeTruthy()
   })
 
   it('shows a floating error toast for a user action, then auto-dismisses', async () => {

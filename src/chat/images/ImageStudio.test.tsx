@@ -20,6 +20,7 @@ let dropHandler:
 vi.mock('../../api/tauri', () => ({
   isTauriRuntime: () => true,
   api: {
+    studioTaskLibrary: vi.fn(async () => ({})),
     imageStudioBootstrap: vi.fn(),
     imageStudioGet: vi.fn(),
     imageStudioSave: vi.fn(),
@@ -123,7 +124,7 @@ function bootstrap(tasks: ImageTask[] = []): ImageBootstrap {
 
 async function openSavedTask(name: string) {
   fireEvent.click(await screen.findByRole('button', { name: /^任务 / }))
-  fireEvent.click(await screen.findByRole('button', { name }))
+  fireEvent.click(await screen.findByRole('button', { name: `打开任务 ${name}` }))
 }
 function importedProduct(name = '商品素材'): ImageProduct {
   return {
@@ -270,9 +271,9 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioGet).mockResolvedValue(t)
     render(<ImageStudio />)
     fireEvent.click(await screen.findByRole('button', { name: '任务 1' }))
-    expect(screen.getByRole('heading', { name: '任务' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /^图片任务/ })).toBeInTheDocument()
     expect(screen.queryByText('最近任务')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '背包秋季套图' }))
+    fireEvent.click(screen.getByRole('button', { name: '打开任务 背包秋季套图' }))
     await waitFor(() => expect(api.imageStudioGet).toHaveBeenCalledWith('job'))
     expect(screen.getByRole('heading', { name: '模板套图' })).toBeInTheDocument()
   })
