@@ -55,28 +55,26 @@ pub(super) fn build_optimize_user_prompt(
     purpose: &str,
 ) -> String {
     let text = truncate_chars(draft.trim(), MAX_DRAFT_CHARS);
-    let image_brief = purpose == "image_brief";
+    let subject = match purpose {
+        "image_brief" => ("出图要求", "image brief"),
+        "video_brief" => ("视频要求", "video brief"),
+        _ => ("提问", "question"),
+    };
     if language.starts_with("zh") {
         if recent_context.is_empty() {
-            format!(
-                "请优化下面的{}：\n\n{text}",
-                if image_brief { "出图要求" } else { "提问" }
-            )
+            format!("请优化下面的{}：\n\n{text}", subject.0)
         } else {
             format!(
                 "最近对话（供指代消解，不要回答）：\n{recent_context}\n\n请优化下面的{}：\n\n{text}",
-                if image_brief { "出图要求" } else { "提问" }
+                subject.0
             )
         }
     } else if recent_context.is_empty() {
-        format!(
-            "Rewrite this {}:\n\n{text}",
-            if image_brief { "image brief" } else { "question" }
-        )
+        format!("Rewrite this {}:\n\n{text}", subject.1)
     } else {
         format!(
             "Recent conversation (for resolving references; do not answer):\n{recent_context}\n\nRewrite this {}:\n\n{text}",
-            if image_brief { "image brief" } else { "question" }
+            subject.1
         )
     }
 }
@@ -122,6 +120,9 @@ pub(super) fn sanitize_optimized_prompt(raw: &str) -> Option<String> {
     for prefix in [
         "优化后的问题：",
         "优化后的提问：",
+        "优化后的出图要求：",
+        "优化后的图片要求：",
+        "优化后的视频要求：",
         "优化后：",
         "Rewritten question:",
         "Rewritten:",
@@ -169,20 +170,40 @@ Rules:\n\
     }
 }
 
+pub(super) fn video_brief_system_prompt(language: &str) -> &'static str {
+    if language.starts_with("zh") {
+        "你是视频要求优化助手。把用户写的拍摄想法改写成更清楚、可执行的视频说明。\n\
+规则：\n\
+- 只输出优化后的视频要求，不要解释、不要前缀、不要用引号或代码块包起来\n\
+- 保留用户的意图、商品、场景和语言；不要作答，也不要编造没给的动作或配件\n\
+- 补全含糊处（开场到结尾、镜头、主体动作、声音/口播、结尾定格），时长和画幅没写就标待定\n\
+- 已经写得足够清楚时只做轻微润色"
+    } else {
+        "You rewrite video-generation briefs so a model can follow them accurately.\n\
+Rules:\n\
+- Output only the rewritten brief: no explanation, prefix, quotes, or code fences\n\
+- Keep the user's intent, product, scene, and language; do not answer or invent actions\n\
+- Fill in vagueness (opening to ending, camera, subject action, sound, final hold); mark duration and aspect as pending if missing\n\
+- If the draft is already clear, only lightly polish it"
+    }
+}
+
 fn resolve_system_prompt(
     settings: &Settings,
     language: &str,
     purpose: &str,
     expert: Option<(&str, &str)>,
 ) -> String {
-    let mut base = if purpose == "image_brief" {
-        image_brief_system_prompt(language).to_string()
-    } else {
-        let custom = settings.chat.prompt_optimize_prompt.trim();
-        if custom.is_empty() {
-            default_system_prompt(language).to_string()
-        } else {
-            custom.to_string()
+    let mut base = match purpose {
+        "image_brief" => image_brief_system_prompt(language).to_string(),
+        "video_brief" => video_brief_system_prompt(language).to_string(),
+        _ => {
+            let custom = settings.chat.prompt_optimize_prompt.trim();
+            if custom.is_empty() {
+                default_system_prompt(language).to_string()
+            } else {
+                custom.to_string()
+            }
         }
     };
     if let Some((name, prompt)) = expert {
@@ -306,6 +327,7 @@ pub(crate) async fn chat_optimize_prompt(
     let settings = state.settings_read().clone();
     let purpose = match purpose.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         Some("image_brief") => "image_brief",
+        Some("video_brief") => "video_brief",
         _ => "question",
     };
     let expert = assistant_id
@@ -463,6 +485,10 @@ mod tests {
         let brief = build_optimize_user_prompt("白底主图", "", "zh", "image_brief");
         assert!(brief.contains("出图要求"));
         assert!(brief.contains("白底主图"));
+
+        let video = build_optimize_user_prompt("背包展示 15 秒", "", "zh", "video_brief");
+        assert!(video.contains("视频要求"));
+        assert!(video.contains("背包展示"));
     }
 
     #[test]
@@ -472,11 +498,25 @@ mod tests {
             &settings,
             "zh",
             "image_brief",
-            Some(("电商视觉", "强调留白和商品比例")),
+            Some(("电商生图", "强调留白和商品比例")),
         );
         assert!(text.contains("出图要求优化助手"));
-        assert!(text.contains("电商视觉"));
+        assert!(text.contains("电商生图"));
         assert!(text.contains("强调留白和商品比例"));
+    }
+
+    #[test]
+    fn video_brief_system_prompt_uses_selected_expert() {
+        let settings = Settings::default();
+        let text = resolve_system_prompt(
+            &settings,
+            "zh",
+            "video_brief",
+            Some(("视频提示词", "每段只写一个镜头动作")),
+        );
+        assert!(text.contains("视频要求优化助手"));
+        assert!(text.contains("视频提示词"));
+        assert!(text.contains("每段只写一个镜头动作"));
     }
 
     fn test_app_state() -> AppState {

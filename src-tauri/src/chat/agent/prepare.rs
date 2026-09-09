@@ -50,7 +50,7 @@ pub fn skill_allowed_for_conversation(
         return false;
     }
     match assistant_snapshot {
-        Some(assistant) => assistant.skill_ids.iter().any(|id| id == skill_id),
+        Some(assistant) => skills::skill_id_in_allowlist(skill_id, &assistant.skill_ids),
         None => true,
     }
 }
@@ -1550,6 +1550,26 @@ mod tests {
             None,
             "pdf",
             false
+        ));
+    }
+
+    #[test]
+    fn skill_allowed_matches_packaged_plugin_skill_ids() {
+        let chat_tools = crate::settings::ChatToolsConfig::default();
+        let assistant = test_assistant_snapshot(vec![], vec!["h3-prompt-writing"]);
+        let packaged = "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-h3-prompt-writing";
+
+        assert!(skill_allowed_for_conversation(
+            &chat_tools,
+            Some(&assistant),
+            packaged,
+            false,
+        ));
+        assert!(!skill_allowed_for_conversation(
+            &chat_tools,
+            Some(&assistant),
+            "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-ecom-h3-video",
+            false,
         ));
     }
 

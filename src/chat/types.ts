@@ -295,6 +295,8 @@ export interface ChatAssistant {
   icon?: string
   color?: string
   source?: 'builtin' | 'user' | 'imported' | string
+  /** 套件广场分类：writing / coding / research / workplace / ecommerce */
+  category?: string
   system_prompt?: string
   systemPrompt?: string
   provider_id?: string

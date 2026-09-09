@@ -839,6 +839,9 @@ pub struct ChatAssistant {
     pub color: String,
     #[serde(default)]
     pub source: String,
+    /// 套件广场分类：`writing` / `coding` / `research` / `workplace` / `ecommerce`。空 = 未分类。
+    #[serde(default)]
+    pub category: String,
     #[serde(default)]
     pub system_prompt: String,
     #[serde(default)]

@@ -1672,6 +1672,22 @@ pub struct Settings {
     /// 已 seed v2 的老用户靠它拿到新专家；置 true 后不再跑。
     #[serde(default)]
     pub builtin_assistants_seeded_v3: bool,
+    /// 一次性迁移标记（v4，非破坏性）：给内置专家写入广场分类，并补齐电商套件。
+    /// 已 seed v3 的老用户靠它拿到分类和新专家；置 true 后不再跑。
+    #[serde(default)]
+    pub builtin_assistants_seeded_v4: bool,
+    /// 一次性迁移标记（v5，非破坏性）：按开源 listing skill 重写电商套件 prompt。
+    /// 已 seed v4 的老用户靠它拿到新文案；置 true 后不再跑。
+    #[serde(default)]
+    pub builtin_assistants_seeded_v5: bool,
+    /// 一次性迁移标记（v6，非破坏性）：按 dsimage / 视频导演+H3 重写电商生图并补齐视频提示词专家。
+    /// 已 seed v5 的老用户靠它拿到新文案和新专家；置 true 后不再跑。
+    #[serde(default)]
+    pub builtin_assistants_seeded_v6: bool,
+    /// 一次性迁移标记（v7，非破坏性）：把电商生图 / 视频提示词改成优化提示词用的改写专家。
+    /// 已 seed v6 的老用户靠它拿到新文案；置 true 后不再跑。
+    #[serde(default)]
+    pub builtin_assistants_seeded_v7: bool,
     /// 一次性迁移标记：把 pre-green-light 安装（原生工具默认全关 + 旧 approval_policy）
     /// 带到新默认——原生文件/命令工具置 true，且仅当 approval_policy 仍是旧默认时改 "auto"。
     /// 幂等：置 true 后不再翻转，尊重用户此后手动关闭某工具或改 policy 的选择。
@@ -1850,6 +1866,10 @@ impl Default for Settings {
             builtin_assistants_seeded_v1: false,
             builtin_assistants_seeded_v2: false,
             builtin_assistants_seeded_v3: false,
+            builtin_assistants_seeded_v4: false,
+            builtin_assistants_seeded_v5: false,
+            builtin_assistants_seeded_v6: false,
+            builtin_assistants_seeded_v7: false,
             chat_tools_greenlit_v1: false,
             onboarding_status: default_onboarding_status(),
             auto_check_update: true,

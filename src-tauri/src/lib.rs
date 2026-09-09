@@ -349,6 +349,71 @@ pub fn run() {
                     Err(err) => eprintln!("Failed to merge built-in assistants v3: {err}"),
                 }
             }
+            // 非破坏性内置专家迁移（v4）：给已有内置写入广场分类，并补齐电商套件。
+            // 已 seed v3 的老用户靠它拿到分类和新专家；新装用户 v1 已装全套，此处为幂等 no-op。
+            if !settings.builtin_assistants_seeded_v4 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v4(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v4 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!(
+                                "Failed to persist settings after merging built-in assistants v4: {err}"
+                            );
+                            settings.builtin_assistants_seeded_v4 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to merge built-in assistants v4: {err}"),
+                }
+            }
+            // 非破坏性内置专家迁移（v5）：按开源 listing skill 重写电商套件 prompt。
+            if !settings.builtin_assistants_seeded_v5 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v5(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v5 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!(
+                                "Failed to persist settings after merging built-in assistants v5: {err}"
+                            );
+                            settings.builtin_assistants_seeded_v5 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to merge built-in assistants v5: {err}"),
+                }
+            }
+            // 非破坏性内置专家迁移（v6）：电商生图按 dsimage 重写，并补齐视频提示词专家。
+            if !settings.builtin_assistants_seeded_v6 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v6(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v6 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!(
+                                "Failed to persist settings after merging built-in assistants v6: {err}"
+                            );
+                            settings.builtin_assistants_seeded_v6 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to merge built-in assistants v6: {err}"),
+                }
+            }
+            // 非破坏性内置专家迁移（v7）：电商生图 / 视频提示词改为优化提示词用的改写专家。
+            if !settings.builtin_assistants_seeded_v7 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v7(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v7 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!(
+                                "Failed to persist settings after merging built-in assistants v7: {err}"
+                            );
+                            settings.builtin_assistants_seeded_v7 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to merge built-in assistants v7: {err}"),
+                }
+            }
             if let Err(err) = apply_launch_at_startup(&app.handle(), settings.launch_at_startup) {
                 eprintln!("Failed to apply launch-at-startup setting: {err}");
             }

@@ -30,6 +30,7 @@ import '../images/ImageStudio.css'
 import './VideoStudio.css'
 import '../images/studioLayout.css'
 import { VideoMediaOptions } from './VideoMediaOptions'
+import { RequirementOptimize } from '../images/RequirementOptimize'
 
 const preview: VideoBootstrap = {
   tasks: [],
@@ -94,8 +95,13 @@ export default function VideoStudio() {
       void api
         .videoStudioBootstrap()
         .then(setData)
-        .catch((e) => setError(String(e)))
+        .catch(() => {})
   }, [native])
+  useEffect(() => {
+    if (!error) return
+    const timer = window.setTimeout(() => setError(''), 5000)
+    return () => window.clearTimeout(timer)
+  }, [error])
   useEffect(() => {
     setVideo('')
     let alive = true
@@ -253,6 +259,14 @@ export default function VideoStudio() {
 
   return (
     <div className="kv image-studio video-studio">
+      {error && (
+        <div role="alert" className="vs-toast">
+          <span>{error}</span>
+          <IconButton label="关闭提示" onClick={() => setError('')}>
+            <X size={14} />
+          </IconButton>
+        </div>
+      )}
       {!native && (
         <div className="is-preview-note">
           浏览器布局预览 · 请在桌面应用中使用 Agent、素材和生成服务。
@@ -336,11 +350,6 @@ export default function VideoStudio() {
           </div>
         </aside>
         <main className="is-main custom-scrollbar">
-          {error && (
-            <div role="alert" className="vs-error">
-              {error}
-            </div>
-          )}
           {busy && (
             <div role="status" className="vs-notice">
               <RefreshCw size={14} className="vs-spin" />
@@ -731,20 +740,32 @@ export default function VideoStudio() {
                       )}
                     </section>
                     <section className="vs-panel">
-                      <Field
-                        label={
-                          view === 'analysis' ? '重点分析什么' : '这次要拍什么'
-                        }
-                      >
+                      <div className="is-field">
+                        <div className="is-field-toolbar">
+                          <span>
+                            {view === 'analysis' ? '重点分析什么' : '这次要拍什么'}
+                          </span>
+                          <RequirementOptimize
+                            value={brief.request}
+                            disabled={controlsDisabled}
+                            preferredAssistantId="asst_builtin_video_prompt"
+                            purpose="video_brief"
+                            onChange={(request) => change({ request })}
+                            onError={setError}
+                          />
+                        </div>
                         <textarea
                           className="kv-textarea custom-scrollbar"
                           disabled={controlsDisabled}
                           rows={6}
+                          aria-label={
+                            view === 'analysis' ? '重点分析什么' : '这次要拍什么'
+                          }
                           placeholder="商品展示、使用动作、场景、镜头节奏、口播与结尾要求…"
                           value={brief.request}
                           onChange={(e) => change({ request: e.target.value })}
                         />
-                      </Field>
+                      </div>
                       {brief.template && (
                         <div className="vs-notice">
                           已选模板：{brief.template.name}

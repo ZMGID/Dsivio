@@ -101,6 +101,39 @@ pub struct SkillRegistry {
     pub warnings: Vec<String>,
 }
 
+/// Plugin-bundled skills are rewritten to `pkg-<package-uuid>-<original-id>`.
+/// Assistants whitelist the original id (`h3-prompt-writing`); the runtime id
+/// carries the package prefix. UUID is the canonical 8-4-4-4-12 form.
+pub fn packaged_skill_original_id(skill_id: &str) -> Option<&str> {
+    let rest = skill_id.strip_prefix("pkg-")?;
+    let uuid = rest.get(..36)?;
+    if rest.as_bytes().get(36) != Some(&b'-') {
+        return None;
+    }
+    uuid::Uuid::parse_str(uuid).ok()?;
+    let original = rest.get(37..)?;
+    if original.is_empty() {
+        None
+    } else {
+        Some(original)
+    }
+}
+
+/// True when `skill_id` is the allow-list entry, or a packaged rewrite of it.
+pub fn skill_id_matches_allow_entry(skill_id: &str, allowed: &str) -> bool {
+    if skill_id == allowed {
+        return true;
+    }
+    packaged_skill_original_id(skill_id) == Some(allowed)
+        || packaged_skill_original_id(allowed) == Some(skill_id)
+}
+
+pub fn skill_id_in_allowlist(skill_id: &str, allow: &[String]) -> bool {
+    allow
+        .iter()
+        .any(|id| skill_id_matches_allow_entry(skill_id, id))
+}
+
 impl SkillRegistry {
     pub fn find(&self, id_or_name: &str) -> Option<&SkillRecord> {
         let needle = id_or_name.trim();
@@ -113,6 +146,9 @@ impl SkillRegistry {
                 || record.meta.id == slug
                 || record.meta.name == needle
                 || slugify(&record.meta.name) == slug
+                || packaged_skill_original_id(&record.meta.id).is_some_and(|orig| {
+                    orig == needle || orig == slug || slugify(orig) == slug
+                })
         })
     }
 
@@ -290,5 +326,38 @@ mod tests {
         assert!(reg.find_by_trigger("/other").is_none());
         // exact only — no prefix matching
         assert!(reg.find_by_trigger("/comm").is_none());
+    }
+
+    #[test]
+    fn packaged_skill_original_id_strips_plugin_uuid_prefix() {
+        assert_eq!(
+            packaged_skill_original_id(
+                "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-h3-prompt-writing"
+            ),
+            Some("h3-prompt-writing")
+        );
+        assert_eq!(packaged_skill_original_id("h3-prompt-writing"), None);
+        assert_eq!(packaged_skill_original_id("pkg-not-a-uuid-h3"), None);
+        assert!(skill_id_in_allowlist(
+            "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-h3-prompt-writing",
+            &["h3-prompt-writing".to_string()]
+        ));
+        assert!(!skill_id_in_allowlist(
+            "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-ecom-h3-video",
+            &["h3-prompt-writing".to_string()]
+        ));
+    }
+
+    #[test]
+    fn find_resolves_packaged_plugin_skill_by_original_id() {
+        let packaged = "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-h3-prompt-writing";
+        let reg = registry(vec![record_with(
+            packaged,
+            "dsvideo:h3-prompt-writing",
+            vec![],
+        )]);
+        let found = reg.find("h3-prompt-writing").expect("original id");
+        assert_eq!(found.meta.id, packaged);
+        assert!(reg.find(packaged).is_some());
     }
 }

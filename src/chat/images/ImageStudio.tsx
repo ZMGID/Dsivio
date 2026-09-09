@@ -788,6 +788,8 @@ export default function ImageStudio() {
                           <RequirementOptimize
                             value={brief.requirement}
                             disabled={busy}
+                            preferredAssistantId="asst_builtin_ecom_visual"
+                            purpose="image_brief"
                             onChange={(requirement) => patch({ requirement })}
                             onError={report}
                           />

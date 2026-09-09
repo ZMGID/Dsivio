@@ -20,8 +20,14 @@ import { getSettingsCached } from '../api/settingsCache'
 import { Button, IconButton } from '../components/Button'
 import { isProviderEnabled } from '../settings/utils'
 import { Select } from '../settings/components'
-import { useT } from '../settings/i18n'
+import { useT, type I18n } from '../settings/i18n'
 import { builtinAssistantGlyph } from './assistantIcons'
+import {
+  ASSISTANT_PLAZA_CATEGORIES,
+  assistantMatchesPlazaCategory,
+  assistantPlazaCategory,
+  type PlazaCategoryFilter,
+} from './assistantCategories'
 import { AgentIcon } from '../settings/NavIcons'
 import { chatApi } from './api'
 import type { ChatAssistant, SkillMeta } from './types'
@@ -39,6 +45,28 @@ type CenterView = 'list' | 'detail' | 'edit'
 type SuiteTab = 'plaza' | 'installed' | 'mine'
 
 const assistantColors = ['#6A8FBD', '#2f6ff0', '#4F9D7A', '#8A6FBD', '#B7791F', '#5E8C6A']
+
+function plazaCategoryLabel(category: PlazaCategoryFilter, t: I18n): string {
+  switch (category) {
+    case 'writing':
+      return t.chatAssistantCategoryWriting
+    case 'coding':
+      return t.chatAssistantCategoryCoding
+    case 'research':
+      return t.chatAssistantCategoryResearch
+    case 'workplace':
+      return t.chatAssistantCategoryWorkplace
+    case 'ecommerce':
+      return t.chatAssistantCategoryEcommerce
+    default:
+      return t.chatAssistantCategoryAll
+  }
+}
+
+function assistantCategoryBadge(assistant: ChatAssistant, t: I18n): string | undefined {
+  const category = assistantPlazaCategory(assistant)
+  return category ? plazaCategoryLabel(category, t) : undefined
+}
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000)
@@ -78,6 +106,7 @@ function normalizeAssistantForDraft(assistant: ChatAssistant): AssistantDraft {
     icon: assistant.icon ?? 'bot',
     color: assistant.color ?? '#6A8FBD',
     source: assistant.source ?? (assistant.built_in ?? assistant.builtIn ? 'builtin' : 'user'),
+    category: assistant.category ?? '',
     system_prompt: assistant.system_prompt ?? assistant.systemPrompt ?? '',
     provider_id: assistant.provider_id ?? assistant.providerId ?? '',
     model: assistant.model ?? '',
@@ -101,6 +130,7 @@ function createBlankAssistant(): AssistantDraft {
     icon: 'bot',
     color: '#6A8FBD',
     source: 'user',
+    category: '',
     system_prompt: '',
     provider_id: '',
     model: '',
@@ -123,6 +153,7 @@ function draftPayload(draft: AssistantDraft): ChatAssistant {
     icon: draft.icon?.trim() || 'bot',
     color: draft.color?.trim() || '#6A8FBD',
     source: draft.source || (draft.built_in ?? draft.builtIn ? 'builtin' : 'user'),
+    category: draft.category ?? '',
     system_prompt: (draft.system_prompt ?? draft.systemPrompt ?? '').trim(),
     provider_id: (draft.provider_id ?? draft.providerId ?? '').trim(),
     model: draft.provider_id ? (draft.model ?? '').trim() : '',
@@ -161,12 +192,14 @@ function suiteStats(assistant: ChatAssistant) {
 function AssistantSuiteCard({
   assistant,
   index,
+  categoryLabel,
   onOpen,
   onStartChat,
   onToggleInstalled,
 }: {
   assistant: ChatAssistant
   index: number
+  categoryLabel?: string
   onOpen: (assistant: ChatAssistant) => void
   onStartChat: (assistant: ChatAssistant) => void
   onToggleInstalled: (assistant: ChatAssistant) => void
@@ -207,6 +240,11 @@ function AssistantSuiteCard({
         {!builtIn && (
           <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[10.5px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
             {t.chatAssistantCustom}
+          </span>
+        )}
+        {builtIn && categoryLabel && (
+          <span className="shrink-0 rounded-full bg-neutral-100 px-2 py-0.5 text-[10.5px] font-medium text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
+            {categoryLabel}
           </span>
         )}
       </div>
@@ -274,6 +312,7 @@ export function AssistantCenter({
   const [query, setQuery] = useState('')
   const [view, setView] = useState<CenterView>('list')
   const [tab, setTab] = useState<SuiteTab>('installed')
+  const [plazaCategory, setPlazaCategory] = useState<PlazaCategoryFilter>('all')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -332,11 +371,12 @@ export function AssistantCenter({
       if (!assistantMatches(assistant, normalizedQuery)) return false
       const builtIn = assistant.built_in ?? assistant.builtIn ?? false
       if (tab === 'plaza' && !builtIn) return false
+      if (tab === 'plaza' && !assistantMatchesPlazaCategory(assistant, plazaCategory)) return false
       if (tab === 'installed' && assistant.installed === false) return false
       if (tab === 'mine' && builtIn) return false
       return true
     })
-  }, [assistants, query, tab])
+  }, [assistants, query, tab, plazaCategory])
 
   const enabledProviders = useMemo(
     () => providers.filter(isProviderEnabled),
@@ -350,6 +390,17 @@ export function AssistantCenter({
   const canApplyCurrent = Boolean(onApplyAssistant)
   const builtInCount = assistants.filter((assistant) => assistant.built_in ?? assistant.builtIn).length
   const installedCount = assistants.filter((assistant) => assistant.installed !== false).length
+  const plazaCategoryCounts = useMemo(() => {
+    const counts = { all: 0 } as Record<PlazaCategoryFilter, number>
+    for (const category of ASSISTANT_PLAZA_CATEGORIES) counts[category] = 0
+    for (const assistant of assistants) {
+      if (!(assistant.built_in ?? assistant.builtIn)) continue
+      counts.all += 1
+      const category = assistantPlazaCategory(assistant)
+      if (category) counts[category] += 1
+    }
+    return counts
+  }, [assistants])
 
   const updateDraft = <K extends keyof AssistantDraft>(key: K, value: AssistantDraft[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
@@ -488,6 +539,29 @@ export function AssistantCenter({
           ))}
       </div>
 
+      {tab === 'plaza' && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {(['all', ...ASSISTANT_PLAZA_CATEGORIES] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              aria-pressed={plazaCategory === value}
+              onClick={() => setPlazaCategory(value)}
+              className={`flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium transition-colors ${
+                plazaCategory === value
+                  ? 'bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-950'
+                  : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:hover:bg-neutral-700'
+              }`}
+            >
+              {plazaCategoryLabel(value, t)}
+              <span className={`tabular-nums ${plazaCategory === value ? 'opacity-70' : 'text-neutral-400 dark:text-neutral-500'}`}>
+                {plazaCategoryCounts[value]}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* 工具行：搜索为主 + 创建动作（与技能商店/MCP 市场的工具行同规格） */}
       <div className="flex items-center gap-2">
         <div className="relative min-w-0 flex-1">
@@ -538,12 +612,13 @@ export function AssistantCenter({
             : t.chatAssistantNoMatch}
         </div>
       ) : (
-        <div key={tab} className="chat-motion-tab-in grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+        <div key={`${tab}-${plazaCategory}`} className="chat-motion-tab-in grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
           {filteredAssistants.map((assistant, index) => (
             <AssistantSuiteCard
               key={assistant.id}
               assistant={assistant}
               index={index}
+              categoryLabel={tab === 'plaza' ? assistantCategoryBadge(assistant, t) : undefined}
               onOpen={openDetail}
               onStartChat={(item) => void handleStartChat(item)}
               onToggleInstalled={(item) => void handleToggleInstalled(item)}
@@ -562,6 +637,7 @@ export function AssistantCenter({
     const mcpNames = usedMcpIds.map((id) => mcpServers.find((s) => s.id === id)?.name ?? id)
     const skillNames = usedSkillIds.map((id) => skills.find((s) => s.id === id)?.name ?? id)
     const systemPrompt = assistant.system_prompt ?? assistant.systemPrompt ?? ''
+    const categoryBadge = assistantCategoryBadge(assistant, t)
     return (
       <div className="space-y-7">
         <div className="flex flex-col gap-4 border-b border-neutral-200 pb-5 dark:border-neutral-800 lg:flex-row lg:items-start lg:justify-between">
@@ -585,6 +661,7 @@ export function AssistantCenter({
                 {assistant.name}
               </h2>
               <div className="mt-1 text-[13px] font-medium text-neutral-500">
+                {categoryBadge ? `${categoryBadge} · ` : ''}
                 {(assistant.installed ?? true) === false ? t.chatAssistantNotInFavorites : t.chatAssistantInFavorites}
               </div>
               <p className="mt-6 max-w-5xl text-[16px] leading-8 text-neutral-700 dark:text-neutral-300">

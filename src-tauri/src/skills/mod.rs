@@ -14,8 +14,8 @@ pub use runtime::{
     activate_skill, extract_skill_name, lookup_skill, substitute_arguments, SkillRunCache,
 };
 pub use types::{
-    slugify, SkillDetail, SkillImportResult, SkillListResult, SkillMeta, SkillOpenFolderResult,
-    SkillReadResult, SkillRecord, SkillRegistry,
+    skill_id_in_allowlist, slugify, SkillDetail, SkillImportResult, SkillListResult, SkillMeta,
+    SkillOpenFolderResult, SkillReadResult, SkillRecord, SkillRegistry,
 };
 
 use std::{
