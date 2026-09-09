@@ -166,12 +166,6 @@
 .image-studio--polished .is-result-meta { padding: 16px; }
 .image-studio--polished .is-result-meta h3 { font-size: 14px; }
 .image-studio--polished .is-sample-gate { background: var(--if-accent-soft); border-color: transparent; border-radius: 10px; padding: 18px; }
-.image-studio--polished .is-task-list { gap: 0; border: 1px solid var(--if-line); border-radius: 12px; overflow: hidden; }
-.image-studio--polished .is-task-list:empty { display: none; }
-.image-studio--polished .is-task-card { border: 0; border-bottom: 1px solid var(--if-line); border-radius: 0; padding: 20px; background: var(--bg); }
-.image-studio--polished .is-task-card:last-child { border-bottom: 0; }
-.image-studio--polished .is-task-card strong { font-size: 14px; }
-.image-studio--polished .is-task-card small { font-size: 12px; }
 .image-studio--polished :is(.if-navigation button, summary, .if-template-option):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 5px; }
 
 @container image-workspace (max-width: 850px) {

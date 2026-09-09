@@ -469,3 +469,19 @@ it('continues analysis across tasks and a new chat without overwriting another d
   expect(vi.mocked(api.videoStudioTask).mock.calls.filter(([action]) => action === 'analyze')).toHaveLength(1)
   localStorage.clear()
 })
+
+
+it('keeps unsaved video requirements when another task revision arrives on focus', async () => {
+  localStorage.clear()
+  const task: VideoTask = { id: 'editing', revision: 1, updatedAt: 0, brief: { ...newVideoBrief(), request: 'saved request' }, script: '', prompt: '', status: 'draft', approved: false }
+  const bootstrap = { tasks: [task], templates: [], config: {}, root: '', configPath: '', dependencies: { python: '3', comfy: true, node: true, ffmpeg: true } }
+  localStorage.setItem('dsivio-video-drafts-v1', JSON.stringify({ creation: { brief: task.brief, task, script: '', step: 0, dirty: false } }))
+  vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce(bootstrap)
+  render(<VideoStudio />)
+  await waitFor(() => expect(screen.getByLabelText('这次要拍什么')).toHaveValue('saved request'))
+  fireEvent.change(screen.getByLabelText('这次要拍什么'), { target: { value: 'local edit' } })
+  vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce({ ...bootstrap, tasks: [{ ...task, revision: 2 }] })
+  await act(async () => { fireEvent.focus(window) })
+  expect(screen.getByLabelText('这次要拍什么')).toHaveValue('local edit')
+  localStorage.clear()
+})

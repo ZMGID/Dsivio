@@ -514,3 +514,17 @@ it('keeps image work alive through chat navigation and does not replace a new br
   expect(screen.getByLabelText('图片要求')).toHaveValue('新的图片要求')
   expect(api.imageStudioAction).toHaveBeenCalledTimes(1)
 })
+
+
+it('keeps unsaved changes when an existing task changes during a focus refresh', async () => {
+  const task = fixture()
+  task.brief = { ...emptyBrief('gen'), requirement: 'saved request' }
+  localStorage.setItem('dsivio-image-draft-v1', JSON.stringify({ taskId: task.id, revision: task.revision, brief: task.brief }))
+  vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([task]))
+  render(<ImageStudio />)
+  await waitFor(() => expect(screen.getByLabelText('图片要求')).toHaveValue('saved request'))
+  fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: 'local edit' } })
+  vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([{ ...task, revision: task.revision + 1, progress: 'remote change' }]))
+  await act(async () => { fireEvent.focus(window) })
+  expect(screen.getByLabelText('图片要求')).toHaveValue('local edit')
+})

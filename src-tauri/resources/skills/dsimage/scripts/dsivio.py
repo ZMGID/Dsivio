@@ -7,6 +7,7 @@ import shutil
 import sys
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 
 def workspace() -> Path:
@@ -56,7 +57,11 @@ def load_config() -> dict:
     mode = {"openai": "sync", "grok": "grok", "gemini": "gemini", "gemini-chat": "gemini-chat", "async": "async"}.get(config.get("protocol"))
     if not mode:
         raise RuntimeError("图片接口协议未配置，请检查图片设置。")
-    os.environ.update(IMG_PROVIDER="custom", IMG_BASE_URL=provider["baseUrl"], IMG_API_KEY=key,
+    # Match the desktop adapter: a host-only URL implies /v1, while explicit
+    # paths such as /v1beta or gateway prefixes must be preserved.
+    url = urlsplit(provider['baseUrl'].strip())
+    base_url = urlunsplit((url.scheme, url.netloc, url.path.rstrip('/') or '/v1', '', ''))
+    os.environ.update(IMG_PROVIDER="custom", IMG_BASE_URL=base_url, IMG_API_KEY=key,
                       IMG_MODEL=config["model"], IMG_API_MODE=mode)
     return provider
 

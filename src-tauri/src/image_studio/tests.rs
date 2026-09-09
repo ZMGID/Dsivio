@@ -1006,3 +1006,15 @@ async fn stopped_batch_does_not_create_attempts_or_submit_requests() {
     assert!(task.results.is_empty());
     assert!(backend.submitted.lock().unwrap().is_empty());
 }
+
+#[test]
+fn async_download_accepts_dsimage_url_arrays_and_sync_urls() {
+    for response in [
+        json!({"data":{"result":{"images":[{"url":["https://cdn.example/image.png"]}]}}}),
+        json!({"data":{"result":{"images":[{"url":"https://cdn.example/image.png"}]}}}),
+        json!({"data":[{"url":"https://cdn.example/image.png"}]}),
+    ] {
+        assert_eq!(engine::image_download_url(&response), Some("https://cdn.example/image.png"));
+    }
+    assert_eq!(engine::image_download_url(&json!({"data":{"result":{"images":[]}}})), None);
+}

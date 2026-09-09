@@ -37,5 +37,6 @@ describe('studioModels', () => {
       inferImageStudioProtocol(makeProvider({ apiFormat: 'openai_chat' }), 'gemini-3.1-flash-image'),
     ).toBe('gemini-chat')
     expect(inferImageStudioProtocol(makeProvider(), 'gpt-image-1')).toBe('openai')
+    expect(inferImageStudioProtocol(makeProvider({ baseUrl: 'https://api.apimart.ai/v1' }), 'gpt-image-1')).toBe('async')
   })
 })

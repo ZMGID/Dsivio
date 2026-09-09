@@ -25,5 +25,6 @@ export function inferImageStudioProtocol(provider: ModelProvider | undefined, mo
   ) {
     return 'gemini-chat'
   }
+  if (base.includes('apimart')) return 'async'
   return 'openai'
 }

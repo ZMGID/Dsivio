@@ -31,7 +31,7 @@ import {
   type VideoTemplate,
 } from './types'
 import builtin from '../../../src-tauri/resources/plugins/dsvideo-plugin/skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json'
-import '../images/ImageStudio.css'
+import '../images/imageStudio.css'
 import '../images/studioLayout.css'
 import './VideoStudio.css'
 import { VideoMediaOptions } from './VideoMediaOptions'
@@ -141,8 +141,14 @@ export default function VideoStudio() {
     }, !!busy)
   const syncCurrent = useRef({ task, dirty, busy })
   syncCurrent.current = { task, dirty, busy }
-  const progressError = useVideoTaskProgress(data.tasks.filter(t => t.id !== task?.id && !operations[t.id]), native, updated => {
+  const progressError = useVideoTaskProgress([
+    ...(task ? [task] : []), ...data.tasks.filter(t => t.id !== task?.id),
+  ].filter(t => !operations[t.id]), native, updated => {
     setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === updated.id && t.revision <= updated.revision ? updated : t) }))
+    const current = syncCurrent.current
+    if (current.task?.id === updated.id && updated.revision >= current.task.revision && !current.busy && !current.dirty) {
+      setTask(updated)
+    }
   })
 
   const refresh = useCallback(async (silent = false) => {
@@ -154,7 +160,7 @@ export default function VideoStudio() {
       setData(next)
       const current = syncCurrent.current
       const updated = next.tasks.find(t => t.id === current.task?.id)
-      if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy) {
+      if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy && !current.dirty) {
         setTask(updated); setBrief(updated.brief); setScript(updated.script)
         setDirty(false)
         setStep(updated.prompt ? 2 : updated.script || updated.concepts?.length ? 1 : 0)
@@ -384,14 +390,6 @@ export default function VideoStudio() {
       setEditingScript(false)
     })
   }
-  const pollRef = useRef(() => { void run('poll') })
-  pollRef.current = () => { void run('poll') }
-  useEffect(() => {
-    if (!native || busy || task?.status !== 'running' || !task.remote?.id) return
-    const timer = window.setTimeout(() => pollRef.current(), 8000)
-    return () => window.clearTimeout(timer)
-  }, [native, busy, view, task?.id, task?.revision, task?.status, task?.remote?.id])
-
   async function pickImages() {
     await guarded('选择素材…', async () => {
       const result = await open({
