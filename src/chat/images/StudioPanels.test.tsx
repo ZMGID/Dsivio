@@ -94,3 +94,12 @@ it('updates an untouched image config when chat changes it', async () => {
   fireEvent.click(screen.getByRole('button', { name: '保存配置' }))
   await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ outputRoot: '/chat-updated' })))
 })
+
+it('preserves a saved protocol when saving unrelated image settings', async () => {
+  vi.mocked(getSettingsCached).mockResolvedValue({ providers: [] } as never)
+  const config = { providerId: 'custom', model: 'custom-image', protocol: 'async', agentProviderId: '', agentModel: '', outputRoot: '/images' }
+  const onSave = vi.fn().mockResolvedValue(undefined)
+  render(<ConfigPanel config={config} onSave={onSave} onClose={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }))
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith(config))
+})

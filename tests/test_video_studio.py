@@ -41,6 +41,31 @@ class WorkspaceTests(unittest.TestCase):
         studio.handle('config', {'name': 'grok', 'base_url': 'https://api.x.ai', 'api_key': 'test-secret'})
         return self.action(t, 'quote')
 
+    @unittest.skipIf(sys.platform == 'win32', 'POSIX flock regression')
+    def test_task_reads_do_not_wait_for_the_workspace_lock(self):
+        import fcntl
+        import os
+        import subprocess
+        t = self.draft()
+        with (self.root / '.lock').open('a+b') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            result = subprocess.run([sys.executable, '-B', str(SCRIPTS / 'studio.py'), 'get'],
+                input=json.dumps({'id': t['id']}), capture_output=True, text=True, timeout=5,
+                env={**os.environ, 'DSVIDEO_STUDIO_ROOT': str(self.root)})
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(json.loads(result.stdout)['id'], t['id'])
+
+    def test_comfy_preflight_retains_the_actionable_error(self):
+        self.brief.update(route='comfy', resolution='0.5')
+        t = self.draft()
+        t = self.action(t, 'plan_result', script='product shot')
+        t = self.action(t, 'approve')
+        t = self.action(t, 'prompt_result', prompt='product shot')
+        t = self.action(t, 'submit')
+        t = self.action(t, 'preflight_failed', detail='upload_file: connection refused')
+        self.assertEqual(t['status'], 'approved')
+        self.assertIn('upload_file: connection refused', t['error'])
+
     def test_concepts_cannot_be_approved_until_script_is_written(self):
         t = self.action(self.draft(), 'plan_result', script='', concepts=['细节', '场景', '动态'])
         self.assertEqual(len(t['concepts']), 3)

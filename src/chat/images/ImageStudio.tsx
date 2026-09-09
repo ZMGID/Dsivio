@@ -193,7 +193,7 @@ export default function ImageStudio() {
           setConfig(data.config)
           const current = syncCurrent.current
           const updated = data.tasks.find(t => t.id === current.task?.id)
-          if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy) {
+          if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy && !current.dirty && !current.editedPlans) {
             adopt(updated)
           }
         }

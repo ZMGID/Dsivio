@@ -64,9 +64,6 @@
   align-items: start;
   gap: 16px;
 }
-.image-studio .is-ratios {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
 .image-studio :is(.is-creation-footer, .studio-primary-actions) {
   grid-column: 1 / -1;
   position: sticky;

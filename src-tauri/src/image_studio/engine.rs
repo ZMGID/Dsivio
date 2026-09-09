@@ -397,11 +397,7 @@ async fn extract(app: &AppHandle, v: &Value) -> Result<Vec<u8>, String> {
                 .map_err(|_| "Gemini Chat 图片编码无效".into());
         }
     }
-    let u = v
-        .pointer("/data/0/url")
-        .or_else(|| v.pointer("/data/result/images/0/url"))
-        .or_else(|| v.pointer("/data/result/images/0"))
-        .and_then(Value::as_str)
+    let u = image_download_url(v)
         .ok_or("接口没有返回图片；请核对所选模型是否支持图片生成")?;
     let url = reqwest::Url::parse(u).map_err(|_| "图片下载 URL 无效")?;
     if !matches!(url.scheme(), "https" | "http")
@@ -422,6 +418,16 @@ async fn extract(app: &AppHandle, v: &Value) -> Result<Vec<u8>, String> {
         return Err(format!("图片下载 HTTP {}", r.status()));
     }
     body(r, 50 * 1024 * 1024).await
+}
+
+pub(super) fn image_download_url(v: &Value) -> Option<&str> {
+    v
+        .pointer("/data/0/url")
+        // dsimage async returns images[].url as an array, not a string.
+        .or_else(|| v.pointer("/data/result/images/0/url/0"))
+        .or_else(|| v.pointer("/data/result/images/0/url"))
+        .or_else(|| v.pointer("/data/result/images/0"))
+        .and_then(Value::as_str)
 }
 
 pub fn store_image(task_id: &str, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {

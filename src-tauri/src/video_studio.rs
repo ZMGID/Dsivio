@@ -368,7 +368,17 @@ async fn submit_comfy(app: &AppHandle, t: Value) -> Result<Value, String> {
     .await;
     match result {
         Ok(t) => Ok(t),
-        Err(_) => {
+        Err(error) => {
+            let settings = app.state::<AppState>().settings_read().clone();
+            let mut detail = error;
+            for provider in &settings.providers {
+                for key in &provider.api_keys {
+                    if !key.is_empty() {
+                        detail = detail.replace(key, "[redacted]");
+                    }
+                }
+            }
+            let detail: String = detail.chars().take(600).collect();
             worker(
                 app,
                 if submitting {
@@ -376,7 +386,7 @@ async fn submit_comfy(app: &AppHandle, t: Value) -> Result<Value, String> {
                 } else {
                     "preflight_failed"
                 },
-                json!({"id":id,"revision":t["revision"]}),
+                json!({"id":id,"revision":t["revision"],"detail":detail}),
             )
             .await
         }
@@ -484,10 +494,17 @@ pub async fn video_studio(app: AppHandle, action: String, input: Value) -> Resul
                 return Ok(t);
             }
             let id = t["id"].as_str().ok_or("无任务编号")?;
+            let remote_id = t["remote"]["id"].as_str().ok_or("无远程任务编号")?;
+            if remote_id.is_empty() || !remote_id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) {
+                return Err("远程任务编号无效".into());
+            }
             let dir = crate::app_data::app_data_dir()
                 .ok_or("无数据目录")?
                 .join("video-studio/outputs")
-                .join(id);
+                .join(id)
+                // Every remote job gets its own directory; a remake must never
+                // pick a previous render while fetching the new one.
+                .join(remote_id);
             let status = mcp(
                 &app,
                 "comfy-mcp",

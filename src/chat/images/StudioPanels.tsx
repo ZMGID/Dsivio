@@ -312,14 +312,7 @@ export function ConfigPanel({
             disabled={pending || configConflict}
             onClick={() => {
               setPending(true)
-              const next = {
-                ...draft,
-                protocol: inferImageStudioProtocol(
-                  providers.find((p) => p.id === draft.providerId),
-                  draft.model,
-                ),
-              }
-              void onSave(next)
+              void onSave(draft)
                 .catch((e) => setError(String(e)))
                 .finally(() => setPending(false))
             }}

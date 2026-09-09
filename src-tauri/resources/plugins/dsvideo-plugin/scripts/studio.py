@@ -364,10 +364,14 @@ def handle(action, data):
     elif action == 'uncertain':
         t['status'] = 'uncertain'
         t['error'] = '未获得可靠提交回执，请核查 ComfyUI 队列后处理；不会自动重新生成。'
+        if data.get('detail'):
+            t['error'] += '\n' + data['detail']
     elif action == 'preflight_failed':
         if t['status'] != 'submitting' or t.get('remote', {}).get('id'):
             raise ValueError('无法回退已提交任务')
         t.update(status='approved', error='素材或工作流准备失败，请检查 Comfy MCP 依赖和服务地址。本次未提交生成。')
+        if data.get('detail'):
+            t['error'] += '\n' + data['detail']
     elif action == 'recover':
         if t['status'] not in ('uncertain', 'submitting') or not t.get('remote'):
             raise ValueError('此任务不需要补录编号')
@@ -430,8 +434,14 @@ def main():
     parser.add_argument('action')
     args = parser.parse_args()
     ROOT.mkdir(parents=True, exist_ok=True)
-    # A cross-process lock keeps chat and desktop mutations serialized.
-    with (ROOT / '.lock').open('a+b') as lock:
+    data = json.load(sys.stdin)
+    # Only operations on the same task need serialization. A slow provider must
+    # not block bootstrap, settings, or progress of every other video task.
+    lock_path = ROOT / '.lock'
+    if data.get('id'):
+        lock_path = task_path(data['id']).with_suffix('.lock')
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open('a+b') as lock:
         lock.seek(0)
         if os.name == 'nt':
             import msvcrt
@@ -444,7 +454,7 @@ def main():
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            print(json.dumps(handle(args.action, json.load(sys.stdin)), ensure_ascii=False))
+            print(json.dumps(handle(args.action, data), ensure_ascii=False))
         finally:
             if os.name == 'nt':
                 lock.seek(0)
