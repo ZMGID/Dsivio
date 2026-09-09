@@ -466,10 +466,9 @@
   font-weight: 500;
 }
 .is-req textarea {
-  min-height: 132px;
-  max-height: 240px;
+  height: 132px;
   resize: none;
-  field-sizing: content;
+  overflow-y: auto;
   border-radius: 10px;
   padding: 12px 14px;
   font-size: 13px;
@@ -490,6 +489,10 @@
 .image-studio .kv-input,
 .image-studio .kv-textarea {
   min-width: 0;
+}
+.image-studio .kv-textarea {
+  resize: none;
+  overflow-y: auto;
 }
 .is-two-cols {
   display: grid;

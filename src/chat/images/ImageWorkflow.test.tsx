@@ -436,6 +436,26 @@ describe('制作、试品、反馈和持续出图', () => {
     expect(await screen.findByText('1. 原始商品.png')).toBeInTheDocument()
     expect(screen.queryByLabelText('商品名称')).not.toBeInTheDocument()
   })
+
+  it('imports files dropped on the trial panel as products, not original references', async () => {
+    const initial = task()
+    load(initial)
+    vi.mocked(api.imageStudioImport).mockResolvedValue([product('b')])
+    render(<ImageStudio />)
+    const zone = await screen.findByLabelText('试做商品投放区')
+    const source = screen.getByLabelText('原始参考投放区')
+    await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+    fireEvent.dragEnter(zone)
+    dropHandler?.({ payload: { type: 'enter' } })
+    await waitFor(() => expect(zone).toHaveClass('is-drop-active'))
+    expect(source).not.toHaveClass('is-drop-active')
+    dropHandler?.({ payload: { type: 'drop', paths: ['C:\\goods\\b.png'] } })
+    await waitFor(() =>
+      expect(api.imageStudioImport).toHaveBeenCalledWith(['C:\\goods\\b.png'], false),
+    )
+    expect(await screen.findByDisplayValue('商品 b')).toBeInTheDocument()
+    expect(screen.getByText('1. 原始商品.png')).toBeInTheDocument()
+  })
 })
 
 describe('workflow trial gate', () => {

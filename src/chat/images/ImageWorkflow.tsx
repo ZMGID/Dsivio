@@ -1,4 +1,5 @@
 import { useEffect, useState, type DragEvent } from 'react'
+import type { ImageDropZone } from './studioDrop'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   ArrowDown,
@@ -45,7 +46,8 @@ type Props = {
   onOpenResult: (result: ImageResult) => void
   onExport: () => void
   dropActive?: boolean
-  onDropSurface?: (event: DragEvent) => void
+  dropTarget?: ImageDropZone | null
+  onDropSurface?: (event: DragEvent, zone?: ImageDropZone) => void
 }
 
 export function ImageWorkflow({
@@ -60,6 +62,7 @@ export function ImageWorkflow({
   onOpenResult,
   onExport,
   dropActive = false,
+  dropTarget = null,
   onDropSurface,
 }: Props) {
   const input = brief.workflowInput || { mode: 'smart' as const, sources: [] }
@@ -257,11 +260,12 @@ export function ImageWorkflow({
           <div className="is-brief-layout">
             <div className="is-editor-column">
               <div
-                className={`is-upload-area${input.sources.length ? ' is-upload-area--filled' : ''}${dropActive ? ' is-drop-active' : ''}`}
+                className={`is-upload-area${input.sources.length ? ' is-upload-area--filled' : ''}${dropActive && dropTarget !== 'products' ? ' is-drop-active' : ''}`}
+                data-image-drop="sources"
                 aria-label="原始参考投放区"
-                onDragEnter={onDropSurface}
-                onDragOver={onDropSurface}
-                onDrop={onDropSurface}
+                onDragEnter={(event) => onDropSurface?.(event, 'sources')}
+                onDragOver={(event) => onDropSurface?.(event, 'sources')}
+                onDrop={(event) => onDropSurface?.(event, 'sources')}
               >
                 {input.sources.length ? (
                   <>
@@ -305,11 +309,6 @@ export function ImageWorkflow({
                         </div>
                       ))}
                     </div>
-                    <p>{dropActive ? '松开即可继续导入' : '还可以把图片继续拖进来'}</p>
-                    <Button size="sm" disabled={busy} onClick={() => void importImages('source')}>
-                      <Plus size={14} />
-                      {fromSet ? '继续添加套图' : '继续添加照片'}
-                    </Button>
                   </>
                 ) : (
                   <>
@@ -320,7 +319,7 @@ export function ImageWorkflow({
                       </span>
                     </div>
                     <h3>
-                      {dropActive
+                      {dropActive && dropTarget !== 'products'
                         ? '松开即可导入'
                         : fromSet
                           ? '按页序把套图拖到这里'
@@ -337,6 +336,15 @@ export function ImageWorkflow({
                   </>
                 )}
               </div>
+              {!!input.sources.length && (
+                <div className="iw-drop-bar">
+                  <small>{dropActive && dropTarget !== 'products' ? '松开即可继续导入' : '还可以把图片继续拖进来'}</small>
+                  <Button size="sm" disabled={busy} onClick={() => void importImages('source')}>
+                    <Plus size={14} />
+                    {fromSet ? '继续添加套图' : '继续添加照片'}
+                  </Button>
+                </div>
+              )}
               <Field label="制作要求">
                 <textarea className="kv-textarea custom-scrollbar" rows={3} disabled={busy}
                   value={brief.requirement} onChange={(event) => onChange({ requirement: event.target.value })}
@@ -483,20 +491,37 @@ export function ImageWorkflow({
               添加商品图片，系统自动挑选最多两款试做。
             </p>
           </div>
-          <div className="is-actions">
-            <Button size="sm" disabled={busy} onClick={() => void importImages('product')}>
-              <Plus size={14} />
-              添加一款商品
-            </Button>
-            <Button size="sm" disabled={busy} onClick={() => void importImages('folder')}>
-              <FolderOpen size={14} />
-              按文件夹添加多款
-            </Button>
-          </div>
         </div>
-        {!brief.products.length && (
-          <p className="iw-empty">规则制作完成后，在这里添加其他商品来验证效果。</p>
-        )}
+        <div
+          className={`iw-product-drop${brief.products.length ? ' is-upload-area--filled' : ' is-upload-area'}${dropActive && dropTarget === 'products' ? ' is-drop-active' : ''}`}
+          data-image-drop="products"
+          aria-label="试做商品投放区"
+          onDragEnter={(event) => onDropSurface?.(event, 'products')}
+          onDragOver={(event) => onDropSurface?.(event, 'products')}
+          onDrop={(event) => onDropSurface?.(event, 'products')}
+        >
+        {!brief.products.length ? (
+          <>
+            <div className="is-upload-illustration">
+              <ImageIcon size={35} strokeWidth={1.1} />
+              <span>
+                <Plus size={14} />
+              </span>
+            </div>
+            <h3>{dropActive && dropTarget === 'products' ? '松开即可导入' : '把商品图片或文件夹拖到这里'}</h3>
+            <p>规则制作完成后，在这里添加其他商品来验证效果。</p>
+            <div className="iw-drop-actions">
+              <Button size="sm" disabled={busy} onClick={() => void importImages('product')}>
+                <Plus size={14} />
+                添加一款商品
+              </Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void importImages('folder')}>
+                <FolderOpen size={14} />
+                按文件夹添加多款
+              </Button>
+            </div>
+          </>
+        ) : (
         <div className="iw-products">
           {brief.products.map((product) => (
             <article className="iw-product" key={product.id}>
@@ -574,6 +599,23 @@ export function ImageWorkflow({
             </article>
           ))}
         </div>
+        )}
+        </div>
+        {!!brief.products.length && (
+          <div className="iw-drop-bar">
+            <small>{dropActive && dropTarget === 'products' ? '松开即可继续导入' : '还可以把商品图片或文件夹继续拖进来'}</small>
+            <div className="iw-drop-actions">
+              <Button size="sm" disabled={busy} onClick={() => void importImages('product')}>
+                <Plus size={14} />
+                添加一款商品
+              </Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void importImages('folder')}>
+                <FolderOpen size={14} />
+                按文件夹添加多款
+              </Button>
+            </div>
+          </div>
+        )}
         <div className="iw-panel-title iw-trial-action">
           <span className="iw-hint">
             {sampleIds.length ? `先试做 ${sampleIds.length} 款商品` : '添加商品后即可试做'}

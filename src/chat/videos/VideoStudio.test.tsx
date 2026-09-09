@@ -184,6 +184,22 @@ describe('video material drag-drop', () => {
     )
     expect(screen.getByRole('button', { name: '更换本地视频' })).toBeTruthy()
   })
+
+  it('imports remake product images on the goods drop zone without replacing the reference video', async () => {
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('button', { name: '参考仿拍' }))
+    const images = await screen.findByLabelText('商品图片投放区')
+    const video = screen.getByLabelText('参考视频投放区')
+    await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+    fireEvent.dragEnter(images)
+    dropHandler?.({ payload: { type: 'enter' } })
+    await waitFor(() => expect(images).toHaveClass('is-drop-active'))
+    expect(video).not.toHaveClass('is-drop-active')
+    dropHandler?.({ payload: { type: 'drop', paths: ['C:\\goods\\front.png'] } })
+    expect(await screen.findByText('front.png')).toBeTruthy()
+    expect(screen.getByText('把参考视频拖到这里')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '继续添加商品图片' })).toBeTruthy()
+  })
 })
 
 
@@ -259,9 +275,47 @@ describe('video confirmation and monitoring', () => {
     })
     render(<VideoStudio />)
     fireEvent.click(screen.getByRole('button', { name: '确认方案' }))
-    await screen.findByText('预计 1.40 USD')
+    await screen.findByText('官方参考 1.40 USD')
     expect(vi.mocked(api.videoStudioTask).mock.calls.map(c => c[0])).toEqual(['approve', 'prepare', 'quote'])
-    fireEvent.click(screen.getByRole('button', { name: '确认费用并生成' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成视频' }))
+    await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('submit', expect.objectContaining({ confirmSpend: true })))
+  })
+  it('allows generation when the shared catalog has no price', async () => {
+    const task: VideoTask = { ...readyTask(), approved: true, status: 'approved', prompt: 'Approved shot', quote: { pricingStatus: 'unknown', note: '暂无价格数据，以供应商实际计费为准。', at: Date.now() } }
+    seed(task, 2)
+    vi.mocked(api.videoStudioTask).mockResolvedValue({ ...task, status: 'running' })
+    render(<VideoStudio />)
+    const button = await screen.findByRole('button', { name: '生成视频' })
+    expect(button).toBeEnabled()
+    expect(screen.getByText('以供应商实际计费为准')).toBeTruthy()
+    fireEvent.click(button)
+    await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('submit', expect.objectContaining({ confirmSpend: true })))
+  })
+  it('can continue an already approved task that has no quote', async () => {
+    const task: VideoTask = { ...readyTask(), approved: true, status: 'approved', prompt: 'Approved shot' }
+    seed(task, 2)
+    vi.mocked(api.videoStudioTask).mockImplementation(async action => ({ ...task,
+      quote: { pricingStatus: 'unknown', note: '按供应商实际计费', at: Date.now() / 1000 },
+      status: action === 'submit' ? 'running' : 'approved',
+    }))
+    render(<VideoStudio />)
+    const button = await screen.findByRole('button', { name: '生成视频' })
+    expect(button).toBeEnabled()
+    fireEvent.click(button)
+    await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('submit', expect.objectContaining({ confirmSpend: true })))
+    expect(vi.mocked(api.videoStudioTask).mock.calls.map(c => c[0])).toEqual(['quote', 'submit'])
+  })
+  it('keeps a rejected request editable and offers retry without asking for an ID', async () => {
+    const task: VideoTask = { ...readyTask(), approved: true, status: 'approved', prompt: 'Approved shot',
+      submission: { state: 'rejected', httpStatus: 401, reason: 'API Key 无效，请检查密钥。', retryable: true } }
+    seed(task, 2)
+    vi.mocked(api.videoStudioTask).mockResolvedValue({ ...task, quote: { note: '参考价', at: Date.now() / 1000 }, status: 'running' })
+    render(<VideoStudio />)
+    expect(await screen.findByText(/API Key 无效/)).toBeTruthy()
+    expect(screen.queryByText('补录远程任务编号')).toBeNull()
+    const retry = screen.getByRole('button', { name: '重试生成' })
+    expect(retry).toBeEnabled()
+    fireEvent.click(retry)
     await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('submit', expect.objectContaining({ confirmSpend: true })))
   })
   it('refreshes and polls a known running task without resubmission', async () => {

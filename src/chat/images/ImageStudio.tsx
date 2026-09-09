@@ -53,7 +53,7 @@ import './studioLayout.css'
 import { DRAFT_KEY, readStudioDraft, storeStudioDraft } from './draft'
 import { ImageBriefForm } from './ImageBriefForm'
 import './imageFlow.css'
-import { dropAsProducts } from './studioDrop'
+import { dropAsProducts, dropZoneFromPoint, type ImageDropZone } from './studioDrop'
 import { ImageWorkflow } from './ImageWorkflow'
 import { TaskPanel } from './TaskPanel'
 import { useSharedDraft } from '../studio/useSharedDraft'
@@ -97,6 +97,7 @@ export default function ImageStudio() {
   const [showHistory, setShowHistory] = useState(false)
   const [freezeName, setFreezeName] = useState('')
   const [dropActive, setDropActive] = useState(false)
+  const [dropTarget, setDropTarget] = useState<ImageDropZone | null>(null)
   const [draftSaved, setDraftSaved] = useState(true)
   const running = task?.status === 'running'
   const busy = pending || running
@@ -342,6 +343,16 @@ export default function ImageStudio() {
     accept: view !== 'templates' && view !== 'tasks' && (view === 'workflow' || stage === 'brief'),
     busy,
   }
+  const dropTargetRef = useRef<ImageDropZone | null>(null)
+  const markDropTarget = (zone: ImageDropZone | null) => {
+    dropTargetRef.current = zone
+    setDropTarget(zone)
+  }
+  const dropTargetFromPosition = (position?: { x: number; y: number }) => {
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return dropTargetRef.current
+    const scale = window.devicePixelRatio || 1
+    return dropZoneFromPoint(position.x / scale, position.y / scale) || dropTargetRef.current
+  }
   const mergeImportedProducts = useCallback((asFolder: boolean, products: ImageProduct[]) => {
     setBrief((b) => {
       if (!asFolder && b.feature !== 'client' && b.products.length === 1) {
@@ -385,10 +396,43 @@ export default function ImageStudio() {
         }
       })
     })
-  const importDropped = (paths: string[]) => {
+  const mergeReplaceSources = (products: ImageProduct[]) => {
+    const sources = [...(briefRef.current.workflowInput?.sources || []), ...products.flatMap((item) => item.assets)]
+    if (sources.length > 30) throw new Error('一套最多 30 张样图')
+    patch({ templateId: null, workflowInput: { mode: 'replace', sources } })
+  }
+  const importReplaceSources = (paths: string[]) =>
+    perform(async () => {
+      if (!paths.length) return
+      mergeReplaceSources(await api.imageStudioImport(paths, false))
+    })
+  const importWorkflowProducts = (paths: string[]) =>
+    perform(async () => {
+      if (!paths.length) return
+      const products = await api.imageStudioImport(
+        paths,
+        dropAsProducts(paths, briefFeatureRef.current),
+      )
+      if (products.some((item) => item.assets.length > 16)) {
+        throw new Error('每款商品最多 16 张参考图，请按商品分别选择')
+      }
+      if (briefRef.current.products.length + products.length > 200) {
+        throw new Error('一个任务最多 200 款商品')
+      }
+      setBrief((b) => ({ ...b, products: [...b.products, ...products] }))
+    })
+  const importDropped = (paths: string[], zone: ImageDropZone | null = dropTargetRef.current) => {
     if (dropReadyRef.current.busy || !paths.length) return
     if (briefFeatureRef.current === 'workflow') {
+      if (zone === 'products') {
+        void importWorkflowProducts(paths)
+        return
+      }
       void importWorkflowSources(paths)
+      return
+    }
+    if (briefFeatureRef.current === 'replace' && zone === 'examples') {
+      void importReplaceSources(paths)
       return
     }
     void importFromPaths(paths, dropAsProducts(paths, briefFeatureRef.current))
@@ -404,20 +448,29 @@ export default function ImageStudio() {
         if (cancelled) return
         const payload = event.payload
         if (!dropReadyRef.current.accept) {
-          if (payload.type === 'leave' || payload.type === 'drop') setDropActive(false)
+          if (payload.type === 'leave' || payload.type === 'drop') {
+            setDropActive(false)
+            markDropTarget(null)
+          }
           return
         }
         if (payload.type === 'enter' || payload.type === 'over') {
-          if (!dropReadyRef.current.busy) setDropActive(true)
+          if (!dropReadyRef.current.busy) {
+            markDropTarget(dropTargetFromPosition(payload.position))
+            setDropActive(true)
+          }
           return
         }
         if (payload.type === 'leave') {
           setDropActive(false)
+          markDropTarget(null)
           return
         }
         if (payload.type === 'drop') {
+          const zone = dropTargetFromPosition(payload.position)
           setDropActive(false)
-          importDroppedRef.current(payload.paths)
+          markDropTarget(null)
+          importDroppedRef.current(payload.paths, zone)
         }
       })
       .then((fn) => {
@@ -431,9 +484,10 @@ export default function ImageStudio() {
       unlisten?.()
     }
   }, [])
-  const keepOsDrop = (event: DragEvent) => {
+  const keepOsDrop = (event: DragEvent, zone?: ImageDropZone) => {
     event.preventDefault()
     event.stopPropagation()
+    if (zone) markDropTarget(zone)
   }
   const importImages = (folder: boolean) =>
     perform(async () => {
@@ -581,6 +635,7 @@ export default function ImageStudio() {
               }}
               onExport={() => setExportOpen(true)}
               dropActive={dropActive}
+              dropTarget={dropTarget}
               onDropSurface={keepOsDrop}
             />
           ) : (
@@ -658,11 +713,9 @@ export default function ImageStudio() {
                   onImportExamples={() => void perform(async () => {
                     const paths = await open({ multiple: true, title: '按页面顺序选择现成套图', filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
                     if (!paths) return
-                    const products = await api.imageStudioImport(Array.isArray(paths) ? paths : [paths], false)
-                    const sources = [...(brief.workflowInput?.sources || []), ...products.flatMap((product) => product.assets)]
-                    if (sources.length > 30) throw new Error('一套最多 30 张样图')
-                    patch({ templateId: null, workflowInput: { mode: 'replace', sources } })
+                    mergeReplaceSources(await api.imageStudioImport(Array.isArray(paths) ? paths : [paths], false))
                   })}
+                  dropTarget={dropTarget}
                   onDrop={keepOsDrop} onStart={() => void act({ kind: 'start' })} />
               )}
               {stage === 'plan' && (
