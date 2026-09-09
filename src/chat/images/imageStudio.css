@@ -448,6 +448,39 @@
   min-width: 160px;
   margin-top: 4px;
 }
+.is-req {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.is-req-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.is-req-bar > span {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+}
+.is-req textarea {
+  min-height: 132px;
+  max-height: 240px;
+  resize: none;
+  field-sizing: content;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.7;
+  box-shadow: none;
+  background: var(--bg);
+}
+.is-requirements-section .is-field .kv-textarea {
+  resize: none;
+  min-height: 64px;
+}
 .is-field small,
 .is-small {
   font-size: 10px;

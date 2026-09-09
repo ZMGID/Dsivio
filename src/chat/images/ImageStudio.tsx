@@ -56,7 +56,7 @@ import { builtinTemplates as initialTemplates } from './builtinTemplates'
 import './imageStudio.css'
 import './studioLayout.css'
 import { DRAFT_KEY, readStudioDraft, storeStudioDraft } from './draft'
-import { RequirementOptimize } from './RequirementOptimize'
+import { RequirementComposer } from './RequirementComposer'
 import { dropAsProducts } from './studioDrop'
 import { ImageWorkflow } from './ImageWorkflow'
 
@@ -805,36 +805,24 @@ export default function ImageStudio() {
                           <h3>这次要做什么</h3>
                         </div>
                       </div>
-                      <div className="is-field">
-                        <div className="is-field-toolbar">
-                          <span>图片要求</span>
-                          <RequirementOptimize
-                            value={brief.requirement}
-                            disabled={busy}
-                            preferredAssistantId="asst_builtin_ecom_visual"
-                            purpose="image_brief"
-                            mediaPaths={[
-                              ...brief.products.flatMap((product) => [
-                                product.front,
-                                product.back,
-                                ...product.assets.map((asset) => asset.path),
-                              ]),
-                              ...(brief.workflowInput?.sources.map((source) => source.path) ?? []),
-                            ]}
-                            onChange={(requirement) => patch({ requirement })}
-                            onError={report}
-                          />
-                        </div>
-                        <textarea
-                          className="kv-textarea custom-scrollbar"
-                          rows={5}
-                          aria-label="图片要求"
-                          disabled={busy}
-                          value={brief.requirement}
-                          onChange={(e) => patch({ requirement: e.target.value })}
-                          placeholder="例如：为这款背包做一套巴西市场商品图，突出大容量和通勤场景。画面简洁，保留商品原本的颜色和 Logo。"
-                        />
-                      </div>
+                      <RequirementComposer
+                        label="图片要求"
+                        value={brief.requirement}
+                        disabled={busy}
+                        preferredAssistantId="asst_builtin_ecom_visual"
+                        purpose="image_brief"
+                        mediaPaths={[
+                          ...brief.products.flatMap((product) => [
+                            product.front,
+                            product.back,
+                            ...product.assets.map((asset) => asset.path),
+                          ]),
+                          ...(brief.workflowInput?.sources.map((source) => source.path) ?? []),
+                        ]}
+                        placeholder="写清场景、卖点和必须保留的细节"
+                        onChange={(requirement) => patch({ requirement })}
+                        onError={report}
+                      />
                       <Field label="统一风格（可选）">
                         <textarea
                           className="kv-textarea custom-scrollbar"

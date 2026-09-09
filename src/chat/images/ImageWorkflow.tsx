@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { api } from '../../api/tauri'
 import { Button, IconButton } from '../../components/Button'
-import { RequirementOptimize } from './RequirementOptimize'
+import { RequirementComposer } from './RequirementComposer'
 import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 import {
   latestResults,
@@ -344,33 +344,21 @@ export function ImageWorkflow({
                   </>
                 )}
               </div>
-              <div className="is-field">
-                <div className="is-field-toolbar">
-                  <span>制作要求</span>
-                  <RequirementOptimize
-                    value={brief.requirement}
-                    disabled={busy}
-                    preferredAssistantId="asst_builtin_ecom_visual"
-                    purpose="image_brief"
-                    mediaPaths={input.sources.map((source) => source.path)}
-                    onChange={(requirement) => onChange({ requirement })}
-                    onError={(message) => onError?.(message)}
-                  />
-                </div>
-                <textarea
-                  className="kv-textarea custom-scrollbar"
-                  rows={5}
-                  aria-label="制作要求"
-                  disabled={busy}
-                  value={brief.requirement}
-                  onChange={(e) => onChange({ requirement: e.target.value })}
-                  placeholder={
-                    fromSet
-                      ? '例如：完全照这套样图的版式。背景、构图和字的位置都不要动，只把商品换成后面要出的背包。'
-                      : '例如：用这款背包的照片，做巴西市场 7 张图。统一白灰背景和蓝色标题，保留真实 Logo。以后换其他背包也沿用这套设计。'
-                  }
-                />
-              </div>
+              <RequirementComposer
+                label="制作要求"
+                value={brief.requirement}
+                disabled={busy}
+                preferredAssistantId="asst_builtin_ecom_visual"
+                purpose="image_brief"
+                mediaPaths={input.sources.map((source) => source.path)}
+                placeholder={
+                  fromSet
+                    ? '写清哪些版式必须保持，商品怎么换进去'
+                    : '写清版式、背景、文字和以后换品怎么沿用'
+                }
+                onChange={(requirement) => onChange({ requirement })}
+                onError={(message) => onError?.(message)}
+              />
             </div>
             <aside className="is-spec-column">
               <section className="is-section is-spec-section">
