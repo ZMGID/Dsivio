@@ -1878,7 +1878,11 @@ export const chatApi = {
   async optimizePrompt(
     text: string,
     conversationId?: string | null,
-    options?: { assistantId?: string | null; purpose?: 'question' | 'image_brief' | 'video_brief' },
+    options?: {
+      assistantId?: string | null
+      purpose?: 'question' | 'image_brief' | 'video_brief'
+      mediaPaths?: string[]
+    },
   ): Promise<string> {
     if (!isTauriRuntime()) return mockChatApi.optimizePrompt(text)
     return invoke<string>('chat_optimize_prompt', {
@@ -1886,6 +1890,7 @@ export const chatApi = {
       conversationId: conversationId ?? null,
       assistantId: options?.assistantId ?? null,
       purpose: options?.purpose ?? null,
+      mediaPaths: options?.mediaPaths ?? null,
     })
   },
 

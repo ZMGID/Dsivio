@@ -790,6 +790,14 @@ export default function ImageStudio() {
                             disabled={busy}
                             preferredAssistantId="asst_builtin_ecom_visual"
                             purpose="image_brief"
+                            mediaPaths={[
+                              ...brief.products.flatMap((product) => [
+                                product.front,
+                                product.back,
+                                ...product.assets.map((asset) => asset.path),
+                              ]),
+                              ...(brief.workflowInput?.sources.map((source) => source.path) ?? []),
+                            ]}
                             onChange={(requirement) => patch({ requirement })}
                             onError={report}
                           />
