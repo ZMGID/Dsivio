@@ -312,6 +312,16 @@ pub async fn plan(
     cfg: &StudioConfig,
     cancelled: Arc<AtomicBool>,
 ) -> Result<Vec<ImagePlan>, String> {
+    let requirement = if task.brief.feature == "workflow" {
+        "Follow the current template rules, including the latest shared feedback corrections. Adapt product-specific facts to this product."
+    } else {
+        &task.brief.requirement
+    };
+    let style_override = if task.brief.feature == "workflow" {
+        ""
+    } else {
+        &task.brief.style
+    };
     let template = template_for(task, p);
     if let Some(kinds) = template.and_then(|t| t.data["product_kinds"].as_object()) {
         if !kinds.is_empty() && !kinds.contains_key(&p.kind) {
@@ -324,7 +334,7 @@ pub async fn plan(
     if let Some(t) = template.filter(|t| t.data["mode"] == "replace") {
         return t.data["slots"].as_array().ok_or("模板缺少 slots")?.iter().map(|slot| {
             let text = slot["prompt_by_kind"].get(&p.kind).and_then(Value::as_str).or_else(|| slot["prompt"].as_str()).unwrap_or("Replace only the product in the example with the exact product from the product references. Preserve the layout, typography, background, lighting and all other elements of the example.");
-            let mut prompt = format!("{text}\nCustomer requirement: {}\nVerified product facts: {}\nTemplate style: {}\nStyle override: {}\nLanguage: {}. Preserve exact product identity. Do not invent features.", task.brief.requirement, p.facts, t.data["style"].as_str().unwrap_or(""), task.brief.style, task.brief.language).replace("{sku}",&p.name);
+            let mut prompt = format!("{text}\nCustomer requirement: {}\nVerified product facts: {}\nTemplate style: {}\nText policy: {}\nStyle override: {}\nLanguage: {}. Preserve exact product identity. Do not invent features.", requirement, p.facts, t.data["style"].as_str().unwrap_or(""), t.data["text_policy"].as_str().unwrap_or(""), style_override, task.brief.language).replace("{sku}",&p.name);
             if let Some(vary) = slot["vary"].as_array().filter(|a| !a.is_empty()) {
                 let index = task.brief.products.iter().position(|x| x.id == p.id).unwrap_or(0);
                 let variation = vary[index % vary.len()].as_str().unwrap_or("");
@@ -353,7 +363,7 @@ pub async fn plan(
             }
         }
     }
-    let input = json!({"requirement":task.brief.requirement,"platform":task.brief.platform,"language":task.brief.language,"ratio":task.brief.ratio,"styleOverride":task.brief.style,"product":p,"template":template.map(|t| &t.data),"slots":slots,"shootingGuide":include_str!("../../resources/image-studio/shots.md")});
+    let input = json!({"requirement":requirement,"platform":task.brief.platform,"language":task.brief.language,"ratio":task.brief.ratio,"styleOverride":style_override,"product":p,"template":template.map(|t| &t.data),"slots":slots,"shootingGuide":include_str!("../../resources/image-studio/shots.md")});
     let out = run(app, &task.id, cfg, "Plan one image for EVERY given slot of this product. Return {\"plans\":[{\"slotId\":\"exact input slot id\",\"purpose\":\"Chinese short label\",\"copy\":\"exact visible copy in requested language; empty if none\",\"prompt\":\"complete generation prompt tailored to THIS product, including the shared style, composition and exact copy\"}]}. Respect brief_by_kind/product kind and text_policy. Single gen images follow user's request; for a new set establish a coherent design across slots. Do not copy another SKU's unverified facts. Do not request a back view unless a real back reference exists. Never synthesize a product structure as fact.", input, images, cancelled).await?;
     let proposed = out["plans"].as_array().ok_or("Agent 方案缺少 plans")?;
     let mut plans = Vec::new();

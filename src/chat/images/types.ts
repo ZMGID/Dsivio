@@ -1,4 +1,4 @@
-export type ImageFeature = 'gen' | 'replace' | 'smart' | 'design' | 'client'
+export type ImageFeature = 'gen' | 'replace' | 'smart' | 'design' | 'client' | 'workflow'
 export type ImageAsset = { id: string; name: string; path: string }
 export type ImageProduct = {
   id: string
@@ -23,6 +23,7 @@ export type ImageBrief = {
   style: string
   templateId: string | null
   products: ImageProduct[]
+  workflowInput?: { mode: 'smart' | 'replace'; sources: ImageAsset[] } | null
 }
 export type ImagePlan = {
   productId: string
@@ -91,6 +92,21 @@ export type ImageTask = {
   progress: string
   error: string | null
   templates: ImageTemplate[]
+  workflow?: ImageWorkflow | null
+}
+export type ImageWorkflow = {
+  ruleVersion: number
+  rulesCurrent: boolean
+  approvedVersion: number | null
+  sampleIds: string[]
+  changes: {
+    version: number
+    revision: number
+    note: string
+    summary: string
+    createdAt: string
+    template: ImageTemplate
+  }[]
 }
 export type ImageProvider = { id: string; name: string; models: string[]; ready: boolean }
 export type ImageBootstrap = {
@@ -106,6 +122,8 @@ export type ImageAction = {
   slotId?: string
   resultId?: string
   note?: string
+  sampleIds?: string[]
+  templateData?: ImageTemplate['data']
 }
 
 export const FEATURES = [
@@ -114,6 +132,12 @@ export const FEATURES = [
     label: '快速出图',
     description: '主图、白底、场景与局部改图',
     step: '上传参考图，写下要求，让 Agent 把想法整理成可执行的画面。',
+  },
+  {
+    id: 'workflow',
+    label: '制作与试品',
+    description: '给图制作、换品试做、反馈修正、持续出图',
+    step: '把要求变成可复用的规则，用其他商品试做，调整满意后继续生成。',
   },
   {
     id: 'replace',
@@ -181,11 +205,13 @@ export const emptyBrief = (feature: ImageFeature): ImageBrief => ({
   style: '',
   templateId: null,
   products: [],
+  ...(feature === 'workflow' ? { workflowInput: { mode: 'smart' as const, sources: [] } } : {}),
 })
 export const productGroup = (p: ImageProduct) => p.category.trim() || '未分类'
 export function latestResults(task: ImageTask): ImageResult[] {
   const map = new Map<string, ImageResult>()
-  for (const r of task.results) if (r.revision === task.revision) map.set(`${r.productId}/${r.slotId}`, r)
+  for (const r of task.results)
+    if (r.revision === task.revision) map.set(`${r.productId}/${r.slotId}`, r)
   return [...map.values()]
 }
 export function sampleComplete(task: ImageTask, group: string): boolean {
@@ -200,8 +226,43 @@ export function sampleComplete(task: ImageTask, group: string): boolean {
       const plans = task.plans.filter((p) => p.productId === id)
       return (
         plans.length > 0 &&
-        plans.every((p) => results.some((r) => r.productId === id && r.slotId === p.slotId && !!r.path))
+        plans.every((p) =>
+          results.some((r) => r.productId === id && r.slotId === p.slotId && !!r.path),
+        )
       )
     })
   )
+}
+
+export function workflowSamplesComplete(task: ImageTask): boolean {
+  const workflow = task.workflow
+  const slots = task.templates[0]?.data.slots || []
+  const results = latestResults(task)
+  return (
+    !!workflow?.rulesCurrent &&
+    workflow.sampleIds.length > 0 &&
+    slots.length > 0 &&
+    workflow.sampleIds.every(
+      (id) =>
+        task.brief.products.some((p) => p.id === id) &&
+        slots.every((slot) =>
+          results.some((r) => r.productId === id && r.slotId === slot.id && !!r.path),
+        ),
+    )
+  )
+}
+
+export function workflowInputsChanged(brief: ImageBrief, saved: ImageBrief): boolean {
+  return (
+    [
+      'workflowInput',
+      'requirement',
+      'language',
+      'platform',
+      'ratio',
+      'resolution',
+      'count',
+      'style',
+    ] as const
+  ).some((key) => JSON.stringify(brief[key]) !== JSON.stringify(saved[key]))
 }

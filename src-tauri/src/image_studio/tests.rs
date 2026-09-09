@@ -70,6 +70,245 @@ fn fixture() -> Task {
 fn result(product: &str, rev: u64, path: Option<&str>) -> ImageResult {
     serde_json::from_value(json!({"id":storage::id(),"productId":product,"slotId":"h1","revision":rev,"path":path,"error":null,"remoteId":null,"prompt":"","width":800,"height":800,"review":null,"config":{}})).unwrap()
 }
+
+fn workflow_fixture() -> Task {
+    let mut task = fixture();
+    task.brief.feature = "workflow".into();
+    task.brief.workflow_input = Some(WorkflowInput {
+        mode: "smart".into(),
+        sources: vec![Asset {
+            id: "source".into(),
+            name: "原始商品.png".into(),
+            path: "assets/source.png".into(),
+        }],
+    });
+    let template = Template {
+        id: "rules".into(),
+        directory: "templates/rules".into(),
+        builtin: false,
+        data: json!({"name":"背包系列","mode":"smart","style":"white background","text_policy":"真实卖点",
+            "output":{"ratio":"1:1","resolution":"1k"},"slots":[{"id":"h1","purpose":"主图","brief":"主体居中","refs":["@product.front"]}]}),
+    };
+    workflow::install_rules(&mut task, template, "初次制作".into(), "共用版式".into());
+    task.workflow.as_mut().unwrap().sample_ids = vec!["a".into(), "b".into()];
+    task
+}
+
+fn workflow_action(kind: &str) -> Action {
+    Action {
+        kind: kind.into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn workflow_append_preserves_approval_and_only_new_products_need_generation() {
+    let mut task = workflow_fixture();
+    task.results.extend([
+        result("a", task.revision, Some("a.png")),
+        result("b", task.revision, Some("b.png")),
+    ]);
+    task.workflow.as_mut().unwrap().approved_version = Some(1);
+    let mut brief = task.brief.clone();
+    let mut product = brief.products[0].clone();
+    product.id = "next-product".into();
+    product.name = "下一款商品".into();
+    brief.products.push(product);
+    workflow::save_brief(&mut task, brief).unwrap();
+    assert!(workflow::sample_complete(&task));
+    assert_eq!(task.workflow.as_ref().unwrap().approved_version, Some(1));
+    workflow::validate_action(&task, &workflow_action("workflow_produce")).unwrap();
+    task.plans = ["a", "b", "next-product"]
+        .iter()
+        .map(|id| ImagePlan {
+            product_id: id.to_string(),
+            slot_id: "h1".into(),
+            purpose: "主图".into(),
+            copy: "".into(),
+            prompt: "product".into(),
+            refs: vec![],
+        })
+        .collect();
+    let ids = task
+        .brief
+        .products
+        .iter()
+        .map(|p| p.id.clone())
+        .collect::<Vec<_>>();
+    let pending = workflow::pending_plans(&task, &ids);
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].product_id, "next-product");
+    assert_eq!(task.results.len(), 2); // Saving does not duplicate unchanged image records.
+}
+
+#[test]
+fn workflow_feedback_versions_rules_and_requires_fresh_trial_evidence() {
+    let mut task = workflow_fixture();
+    task.results.extend([
+        result("a", task.revision, Some("a.png")),
+        result("b", task.revision, Some("b.png")),
+    ]);
+    task.workflow.as_mut().unwrap().approved_version = Some(1);
+    let mut rules = task.templates[0].clone();
+    rules.data["slots"][0]["brief"] = json!("主体放大至画面宽度 70%");
+    workflow::validate_rules(&rules.data, Some(&task.templates[0])).unwrap();
+    workflow::install_rules(
+        &mut task,
+        rules,
+        "产品太小".into(),
+        "后续商品统一放大主体".into(),
+    );
+    let workflow = task.workflow.as_ref().unwrap();
+    assert_eq!(workflow.rule_version, 2);
+    assert_eq!(workflow.sample_ids, vec!["a", "b"]);
+    assert_eq!(
+        workflow.changes[0].template.data["slots"][0]["brief"],
+        "主体居中"
+    );
+    assert_eq!(
+        workflow.changes[1].template.data["slots"][0]["brief"],
+        "主体放大至画面宽度 70%"
+    );
+    assert!(workflow.approved_version.is_none());
+    assert!(task.plans.is_empty());
+    assert_eq!(task.results.len(), 2);
+    assert!(workflow::validate_action(&task, &workflow_action("workflow_approve")).is_err());
+    assert!(workflow::validate_action(&task, &workflow_action("workflow_produce")).is_err());
+    task.results.extend([
+        result("a", task.revision, Some("a-v2.png")),
+        result("b", task.revision, Some("b-v2.png")),
+    ]);
+    workflow::validate_action(&task, &workflow_action("workflow_approve")).unwrap();
+    let reopened: Task = serde_json::from_value(serde_json::to_value(&task).unwrap()).unwrap();
+    assert!(workflow::sample_complete(&reopened));
+    assert_eq!(reopened.workflow.unwrap().changes[1].note, "产品太小");
+}
+
+#[test]
+fn workflow_changed_source_requirements_or_trial_product_invalidate_the_right_state() {
+    let mut task = workflow_fixture();
+    task.results.extend([
+        result("a", task.revision, Some("a.png")),
+        result("b", task.revision, Some("b.png")),
+    ]);
+    task.workflow.as_mut().unwrap().approved_version = Some(1);
+    let mut brief = task.brief.clone();
+    brief.products[0].facts = "改为真实容量 20L".into();
+    workflow::save_brief(&mut task, brief).unwrap();
+    assert!(task.workflow.as_ref().unwrap().rules_current);
+    assert!(task.workflow.as_ref().unwrap().approved_version.is_none());
+    assert!(!workflow::sample_complete(&task));
+    assert_eq!(
+        task.results
+            .iter()
+            .filter(|r| r.revision == task.revision)
+            .count(),
+        1
+    );
+    let mut brief = task.brief.clone();
+    brief.requirement = "更换整体版式".into();
+    workflow::save_brief(&mut task, brief).unwrap();
+    assert!(!task.workflow.as_ref().unwrap().rules_current);
+    assert!(workflow::validate_action(&task, &workflow_action("workflow_trial")).is_err());
+    workflow::validate_action(&task, &workflow_action("workflow_build")).unwrap();
+}
+
+#[test]
+fn workflow_latest_failed_edit_cannot_be_hidden_by_saving_or_older_success() {
+    let mut task = workflow_fixture();
+    task.results.extend([
+        result("a", task.revision, Some("a.png")),
+        result("b", task.revision, Some("b.png")),
+        result("a", task.revision, None),
+    ]);
+    let mut brief = task.brief.clone();
+    brief.name = "重命名任务".into();
+    workflow::save_brief(&mut task, brief).unwrap();
+    assert!(!workflow::sample_complete(&task));
+    assert!(workflow::validate_action(&task, &workflow_action("workflow_approve")).is_err());
+    assert!(task
+        .results
+        .iter()
+        .rev()
+        .find(|r| r.revision == task.revision && r.product_id == "a")
+        .unwrap()
+        .path
+        .is_none());
+}
+
+#[test]
+fn workflow_remote_attempt_survives_append_and_blocks_rule_or_source_replacement() {
+    let mut task = workflow_fixture();
+    let mut remote = result("a", task.revision, None);
+    remote.remote_id = Some("remote-id".into());
+    remote.error = Some("已停止查询".into());
+    task.results.push(remote);
+    let old = result("b", task.revision - 1, Some("old.png"));
+    let old_id = old.id.clone();
+    task.results.insert(0, old);
+    let mut brief = task.brief.clone();
+    brief.name = "继续这个流程".into();
+    workflow::save_brief(&mut task, brief).unwrap();
+    assert_eq!(
+        task.results.last().unwrap().remote_id.as_deref(),
+        Some("remote-id")
+    );
+    let mut refine = workflow_action("workflow_refine");
+    refine.note = "更换背景".into();
+    assert!(workflow::validate_action(&task, &refine)
+        .unwrap_err()
+        .contains("恢复查询"));
+    let mut changed = task.brief.clone();
+    changed.products.remove(0);
+    assert!(workflow::save_brief(&mut task, changed)
+        .unwrap_err()
+        .contains("恢复查询"));
+    let mut resume = workflow_action("resume");
+    resume.result_id = task.results.last().unwrap().id.clone();
+    workflow::validate_action(&task, &resume).unwrap();
+    resume.result_id = old_id;
+    assert!(workflow::validate_action(&task, &resume).is_err());
+}
+
+#[test]
+fn workflow_rejects_missing_sources_invalid_trial_selection_and_legacy_shortcuts() {
+    let mut task = workflow_fixture();
+    task.brief.workflow_input.as_mut().unwrap().sources.clear();
+    assert!(workflow::validate_action(&task, &workflow_action("workflow_build")).is_err());
+    for kind in ["bulk", "generate", "approve", "plan", "template"] {
+        assert!(workflow::validate_action(&task, &workflow_action(kind)).is_err());
+    }
+    let mut trial = workflow_action("workflow_trial");
+    for ids in [vec!["a", "a"], vec!["a", "b", "c"], vec!["missing"]] {
+        trial.sample_ids = ids.into_iter().map(String::from).collect();
+        assert!(workflow::validate_action(&task, &trial).is_err());
+    }
+    trial.sample_ids = vec!["b".into()];
+    workflow::validate_action(&task, &trial).unwrap();
+    task.brief.feature = "gen".into();
+    assert!(workflow::validate_action(&task, &trial).is_err());
+}
+
+#[test]
+fn workflow_rule_edits_cannot_rebind_assets_or_silently_change_page_identity_and_output() {
+    let task = workflow_fixture();
+    let template = &task.templates[0];
+    for path in ["refs", "id", "brief"] {
+        let mut data = template.data.clone();
+        data["slots"][0][path] = if path == "refs" {
+            json!(["../untrusted.png"])
+        } else {
+            json!("")
+        };
+        assert!(workflow::validate_rules(&data, Some(template)).is_err());
+    }
+    let mut data = template.data.clone();
+    data["output"]["resolution"] = json!("4k");
+    assert!(workflow::validate_rules(&data, Some(template)).is_err());
+    let mut data = template.data.clone();
+    data["style"] = json!("new shared visual style");
+    workflow::validate_rules(&data, Some(template)).unwrap();
+}
 #[test]
 fn sample_gate_is_per_category_and_requires_both_complete_products() {
     let mut t = fixture();
