@@ -21,6 +21,7 @@ import {
 import { isChatPopoutPath } from './chat/popout/popoutRoutes'
 import { ChatErrorBoundary } from './chat/ChatErrorBoundary'
 import { normalizeThemeColorId } from './themeColors'
+import { dismissBootSplash } from './bootSplash'
 import './index.css'
 
 const Lens = lazy(() => import('./Lens'))
@@ -400,8 +401,7 @@ function App() {
     }
   }, [persistChatWindowGeometry])
 
-  // 首次创建 chat 窗口时后端保持 hidden，把 show 交给前端；此处再把 show 从“App 挂载即弹出”
-  // 推迟到“Chat 首屏内容就绪”（onContentReady → revealChatWindowNow），避免窗口弹出后还在转圈。
+  // 冷启动先露出闪屏（几何恢复后立刻 show），Chat 首屏就绪再揭开。
   const revealedRef = useRef(false)
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const revealChatWindowNow = useCallback(() => {
@@ -413,6 +413,14 @@ function App() {
     }
     void revealChatWindow()
   }, [revealChatWindow])
+  const finishChatBoot = useCallback(() => {
+    if (revealTimerRef.current !== undefined) {
+      clearTimeout(revealTimerRef.current)
+      revealTimerRef.current = undefined
+    }
+    revealChatWindowNow()
+    dismissBootSplash()
+  }, [revealChatWindowNow])
 
   useLayoutEffect(() => {
     if (mode !== 'chat' && mode !== 'chat-popout') return
@@ -425,10 +433,10 @@ function App() {
       void revealChatWindow()
       return
     }
-    // 兜底：内容就绪信号 3s 内未到达（chunk 加载失败 / 组件抛错被 ErrorBoundary 接住 / 信号丢失）
-    // 也强制 show，绝不让窗口永久 hidden。
+    // 先露出闪屏，避免再等 React chunk。3s 兜底：chunk 失败 / ErrorBoundary / 信号丢失也揭开。
+    revealChatWindowNow()
     revealTimerRef.current = setTimeout(() => {
-      revealChatWindowNow()
+      finishChatBoot()
     }, 3000)
     return () => {
       if (revealTimerRef.current !== undefined) {
@@ -436,7 +444,7 @@ function App() {
         revealTimerRef.current = undefined
       }
     }
-  }, [mode, revealChatWindow, revealChatWindowNow])
+  }, [mode, revealChatWindow, revealChatWindowNow, finishChatBoot])
 
   useEffect(() => {
     if (mode !== 'chat') return
@@ -518,17 +526,13 @@ function App() {
       </Suspense>
     )
   }
-  const chatSuspenseFallback = (
-    <div className="flex h-full w-full items-center justify-center bg-transparent">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800 dark:border-neutral-700 dark:border-t-neutral-200" />
-    </div>
-  )
+  const chatSuspenseFallback = <div className="h-full w-full bg-transparent" />
   if (mode === 'chat-popout') {
     return (
       <ChatWindowHost translucentSidebar={translucentSidebar}>
         <Suspense fallback={chatSuspenseFallback}>
           <ChatErrorBoundary>
-            <ChatPopout onContentReady={revealChatWindowNow} />
+            <ChatPopout onContentReady={finishChatBoot} />
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>
@@ -539,7 +543,7 @@ function App() {
       <ChatWindowHost translucentSidebar={translucentSidebar}>
         <Suspense fallback={chatSuspenseFallback}>
           <ChatErrorBoundary>
-            <Chat onSettingsChange={applyTheme} onContentReady={revealChatWindowNow} />
+            <Chat onSettingsChange={applyTheme} onContentReady={finishChatBoot} />
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>
