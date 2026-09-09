@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn resolve_existing_image_reads_studio_relative_assets() {
+    let dir = std::env::temp_dir().join(format!("dsivio-resolve-img-{}", storage::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("h1.png");
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    std::fs::write(&source, TINY_PNG).unwrap();
+    let asset = storage::import_asset(&source).unwrap();
+    assert!(asset.path.starts_with("assets/"));
+    let resolved = resolve_existing_image(&asset.path).unwrap();
+    assert!(resolved.is_file());
+    assert!(resolve_existing_image(&source.to_string_lossy())
+        .unwrap()
+        .is_file());
+    let _ = std::fs::remove_file(&resolved);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn shared_templates_discover_chat_files_and_prefer_current_standard_over_stale_record() {
     let base = std::env::temp_dir().join(format!("dsivio-shared-test-{}", storage::id()));
     let directory = base.join("templates/chat-created");

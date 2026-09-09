@@ -1,6 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { collectStudioMediaPaths, RequirementOptimize } from './RequirementOptimize'
+import {
+  collectBriefImagePaths,
+  collectStudioMediaPaths,
+  RequirementOptimize,
+} from './RequirementOptimize'
 
 const getAssistants = vi.fn()
 const optimizePrompt = vi.fn()
@@ -29,6 +33,25 @@ describe('collectStudioMediaPaths', () => {
         'unbox.MOV',
       ]),
     ).toEqual(['bag.png', 'front.webp', 'clip.mp4', 'unbox.MOV'])
+  })
+})
+
+describe('collectBriefImagePaths', () => {
+  it('uses asset paths and ignores front/back ids', () => {
+    expect(
+      collectBriefImagePaths({
+        products: [
+          {
+            assets: [
+              { path: 'assets/front.jpg' },
+              { path: 'assets/front.jpg' },
+              { path: 'assets/detail.png' },
+            ],
+          },
+        ],
+        workflowInput: { sources: [{ path: 'assets/h1.jpg' }] },
+      }),
+    ).toEqual(['assets/front.jpg', 'assets/detail.png', 'assets/h1.jpg'])
   })
 })
 

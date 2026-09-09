@@ -108,6 +108,29 @@ fn is_video_media_path(path: &str) -> bool {
     )
 }
 
+fn attach_optimize_images(paths: &[String]) -> Result<Vec<serde_json::Value>, String> {
+    let stills: Vec<&str> = paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty() && !is_video_media_path(path))
+        .take(MAX_OPTIMIZE_IMAGES)
+        .collect();
+    let mut parts = Vec::new();
+    let mut errors = Vec::new();
+    for path in stills {
+        match crate::image_studio::resolve_existing_image(path)
+            .and_then(|resolved| super::image_content_part(&resolved))
+        {
+            Ok(part) => parts.push(part),
+            Err(err) => errors.push(format!("{}：{err}", media_file_name(path))),
+        }
+    }
+    if parts.is_empty() && !errors.is_empty() {
+        return Err(errors.join("；"));
+    }
+    Ok(parts)
+}
+
 pub(super) fn describe_optimize_media(paths: &[String]) -> String {
     let names: Vec<String> = paths
         .iter()
@@ -212,14 +235,16 @@ pub(super) fn image_brief_system_prompt(language: &str) -> &'static str {
 - 只输出优化后的图片要求，不要解释、不要前缀、不要用引号或代码块包起来\n\
 - 保留用户的意图、商品、市场和语言；不要作答，也不要编造用户没给的卖点或规格\n\
 - 补全含糊处（构图、光线、背景、必须保留的商品特征、文字语言），但不要发明事实\n\
-- 已经写得足够清楚时只做轻微润色"
+- 已经写得足够清楚时只做轻微润色\n\
+- 用户给了产品图时，按附图真实外观写，不要编看不见的细节，也不要说看不见图"
     } else {
         "You rewrite image-generation briefs so a model can follow them accurately.\n\
 Rules:\n\
 - Output only the rewritten brief: no explanation, prefix, quotes, or code fences\n\
 - Keep the user's intent, product, market, and language; do not answer or invent specs\n\
 - Fill in vagueness (composition, lighting, background, required product traits) without inventing facts\n\
-- If the draft is already clear, only lightly polish it"
+- If the draft is already clear, only lightly polish it\n\
+- When product images are attached, follow their visible appearance and do not claim you cannot see them"
     }
 }
 
@@ -338,17 +363,13 @@ async fn optimize_prompt_with_model(
     } else {
         draft
     };
-    let mut image_parts = Vec::new();
-    for path in media_paths
-        .iter()
-        .map(|path| path.trim())
-        .filter(|path| !path.is_empty() && !is_video_media_path(path))
-        .take(MAX_OPTIMIZE_IMAGES)
-    {
-        if let Ok(part) = super::image_content_part(&std::path::PathBuf::from(path)) {
-            image_parts.push(part);
-        }
-    }
+    let image_parts = attach_optimize_images(media_paths).map_err(|err| {
+        localize(
+            &language,
+            &format!("已加载的图片读不出来，优化助手看不到商品：{err}"),
+            &format!("Loaded images could not be read, so the optimizer cannot see the product: {err}"),
+        )
+    })?;
     let user_text = build_optimize_user_prompt(
         draft_for_prompt,
         recent_context,
@@ -629,6 +650,7 @@ mod tests {
             Some(("电商生图", "强调留白和商品比例")),
         );
         assert!(text.contains("出图要求优化助手"));
+        assert!(text.contains("不要说看不见图"));
         assert!(text.contains("电商生图"));
         assert!(text.contains("强调留白和商品比例"));
     }
@@ -788,6 +810,123 @@ mod tests {
         assert!(
             body.contains("optimize-model") && body.contains("提问优化助手"),
             "request should use the Chinese builtin prompt against optimize-model; body={body}"
+        );
+    }
+
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn attach_optimize_images_reads_absolute_files_and_rejects_unreadables() {
+        let dir = std::env::temp_dir().join(format!(
+            "kivio-prompt-optimize-img-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("bag.png");
+        std::fs::write(&path, TINY_PNG).expect("write png");
+
+        let parts = attach_optimize_images(&[path.to_string_lossy().into()]).expect("attach png");
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0]["type"], "image_url");
+        assert!(
+            parts[0]["image_url"]["url"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("data:image/"),
+            "attached part must be a data URL"
+        );
+
+        let err = attach_optimize_images(&["assets/missing-product.jpg".into()])
+            .expect_err("studio-relative miss must fail closed");
+        assert!(
+            err.contains("missing-product.jpg"),
+            "error should name the unread file; err={err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn prompt_optimize_attaches_readable_product_images() {
+        let dir = std::env::temp_dir().join(format!(
+            "kivio-prompt-optimize-attach-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("h1.png");
+        std::fs::write(&path, TINY_PNG).expect("write png");
+
+        let (base_url, captured) = start_sse_mock(vec![
+            r#"{"choices":[{"delta":{"content":"黑尼龙商务双肩包，正面多拉链，侧袋可放水瓶。"}}]}"#.to_string(),
+            "[DONE]".to_string(),
+        ]);
+
+        let state = test_app_state();
+        let mut settings = Settings::default();
+        settings.providers = vec![test_provider(&base_url)];
+        settings.default_models.prompt_optimize.provider_id = "optimize-provider".into();
+        settings.default_models.prompt_optimize.model = "optimize-model".into();
+        settings.retry_enabled = false;
+
+        let rewritten = optimize_prompt_with_model(
+            &settings,
+            &state,
+            "conv_opt_img",
+            None,
+            "巴西市场通用电商主图",
+            "",
+            "image_brief",
+            None,
+            &[path.to_string_lossy().into()],
+        )
+        .await
+        .expect("rewrite with attached image");
+        assert!(rewritten.contains("商务双肩包"));
+
+        let bodies = captured.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(bodies.len(), 1, "exactly one optimize request");
+        let body = &bodies[0];
+        assert!(
+            body.contains("image_url") && body.contains("data:image"),
+            "optimize request must attach the product photo; body={body}"
+        );
+        assert!(
+            body.contains("h1.png") && body.contains("请看附图"),
+            "user prompt should tell the model the photo is attached; body={body}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn prompt_optimize_errors_when_studio_images_cannot_be_read() {
+        let state = test_app_state();
+        let mut settings = Settings::default();
+        settings.providers = vec![test_provider("http://127.0.0.1:9/v1")];
+        settings.default_models.prompt_optimize.provider_id = "optimize-provider".into();
+        settings.default_models.prompt_optimize.model = "optimize-model".into();
+        settings.retry_enabled = false;
+
+        let err = optimize_prompt_with_model(
+            &settings,
+            &state,
+            "conv_opt_missing",
+            None,
+            "帮我写制作要求",
+            "",
+            "image_brief",
+            None,
+            &["assets/missing-product.jpg".into()],
+        )
+        .await
+        .expect_err("unread studio image must not silently continue");
+        assert!(
+            err.contains("看不到商品") && err.contains("missing-product.jpg"),
+            "must explain the photo was not attached; err={err}"
         );
     }
 }

@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex, OnceLock,
@@ -27,6 +27,15 @@ use tauri::{AppHandle, Manager};
 use types::*;
 
 static ACTIVE: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+
+/// Absolute files stay as-is; studio assets (`assets/…`) resolve inside the workspace.
+pub(crate) fn resolve_existing_image(path: &str) -> Result<PathBuf, String> {
+    let raw = PathBuf::from(path);
+    if raw.is_file() {
+        return Ok(raw);
+    }
+    storage::resolve(path)
+}
 
 pub fn initialize_skill_workspace(app: &AppHandle) -> Result<(), String> {
     let _guard = lock()?;
