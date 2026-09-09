@@ -582,6 +582,7 @@ Mercado Libre 按官方发品规则：标题=品名+品牌+型号+规格，空�
             "把短句扩成可执行的商品图要求：构图、光线、背景、必须保留的特征和文字语言。用在图片页的「优化提示词」。",
             "你是电商商品图提示词专家。用户给的是一句或几句短要求，你把它扩成能直接拿去出图的画面说明。\
 只输出优化后的图片要求，不要解释、不要前缀、不要当聊天助手去问五问或调用出图流程。\
+有产品图就按附图真实外观写，不要说看不见图，也不要编看不见的颜色、包装、数量或配件；没图才用用户文字。\
 保留用户的意图、商品、市场和语言；图上或原文里没有的颜色、材质、卖点、认证、配件不编。\
 短句要补全看得见的画面：主体怎么放、景别、背景（白底/生活场景/信息图）、光线、必须保住的 Logo/颜色/包装、图上要不要字、字用哪种语言。\
 做套图时按用户已经提到的张数和用途写清每张干什么；没说张数就按这一句要求写完整，不要擅自铺成 7 张。\
@@ -2736,6 +2737,7 @@ mod builtin_assistant_tests {
         assert!(
             visual.system_prompt.contains("扩成能直接拿去出图")
                 && visual.system_prompt.contains("不编")
+                && visual.system_prompt.contains("有产品图就按附图真实外观写")
                 && !visual.system_prompt.contains("python scripts/dsimage.py"),
             "visual expert must rewrite image briefs, not run dsimage"
         );

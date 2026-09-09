@@ -19,6 +19,7 @@ import {
 import { api } from '../../api/tauri'
 import { Button, IconButton } from '../../components/Button'
 import { RequirementComposer } from './RequirementComposer'
+import { collectBriefImagePaths } from './RequirementOptimize'
 import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 import {
   latestResults,
@@ -350,7 +351,7 @@ export function ImageWorkflow({
                 disabled={busy}
                 preferredAssistantId="asst_builtin_ecom_visual"
                 purpose="image_brief"
-                mediaPaths={input.sources.map((source) => source.path)}
+                mediaPaths={collectBriefImagePaths({ workflowInput: input })}
                 placeholder={
                   fromSet
                     ? '写清哪些版式必须保持，商品怎么换进去'

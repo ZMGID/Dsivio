@@ -26,6 +26,19 @@ export function collectStudioMediaPaths(
   return [...images, ...videos]
 }
 
+/** Product photos and workflow sources only — never front/back asset ids. */
+export function collectBriefImagePaths(brief: {
+  products?: Array<{ assets?: Array<{ path?: string | null | undefined }> }>
+  workflowInput?: { sources?: Array<{ path?: string | null | undefined }> } | null
+}): string[] {
+  return collectStudioMediaPaths([
+    ...(brief.products ?? []).flatMap((product) =>
+      (product.assets ?? []).map((asset) => asset.path),
+    ),
+    ...(brief.workflowInput?.sources ?? []).map((source) => source.path),
+  ])
+}
+
 export function RequirementOptimize({
   value,
   disabled,
