@@ -799,6 +799,15 @@ pub(crate) fn mcp_server_is_runtime_eligible(server: &ChatMcpServer) -> bool {
     if !server.enabled {
         return false;
     }
+    // Package ownership must be resolved before the broader catalog-plugin prefix.
+    // Use the same owner switch as package skills and lifecycle reconciliation.
+    if let Some(package_id) = server
+        .connector_id
+        .as_deref()
+        .and_then(|connector_id| connector_id.strip_prefix("plugin:package:"))
+    {
+        return crate::plugins::packages::owner_enabled(package_id);
+    }
     if let Some(plugin_id) = server
         .connector_id
         .as_deref()
@@ -1297,6 +1306,48 @@ mod tests {
         assert!(mcp_server_is_runtime_eligible(&server));
     }
 
+    #[test]
+    fn package_runtime_eligibility_tracks_owner_and_server_switches() {
+        let root = tempfile::tempdir().unwrap();
+        let _scope = crate::plugins::packages::TestPackagesRoot::new(root.path());
+        let id = uuid::Uuid::new_v4().to_string();
+        let dir = root.path().join(&id);
+        fs::create_dir(&dir).unwrap();
+        let record = dir.join("record.json");
+        let mut server = enabled_server("package-test");
+        server.connector_id = Some(format!("plugin:package:{id}"));
+
+        assert!(!mcp_server_is_runtime_eligible(&server), "missing package");
+        fs::write(&record, r#"{"enabled":true}"#).unwrap();
+        assert!(mcp_server_is_runtime_eligible(&server), "enabled package");
+        let settings = settings_with_servers(vec![server.clone()]);
+        assert_eq!(select_warmup_servers(&settings, None).len(), 1);
+        assert_eq!(
+            select_warmup_servers(&settings, Some(&[server.id.clone()])).len(),
+            1
+        );
+
+        server.enabled = false;
+        assert!(!mcp_server_is_runtime_eligible(&server), "disabled server");
+        server.enabled = true;
+        fs::write(&record, r#"{"enabled":false}"#).unwrap();
+        assert!(!mcp_server_is_runtime_eligible(&server), "disabled package");
+        assert!(select_warmup_servers(&settings, None).is_empty());
+        fs::write(&record, "invalid json").unwrap();
+        assert!(!mcp_server_is_runtime_eligible(&server), "broken record");
+
+        for connector in [
+            "plugin:package:",
+            "plugin:package:invalid",
+            "plugin:missing-plugin",
+        ] {
+            server.connector_id = Some(connector.into());
+            assert!(!mcp_server_is_runtime_eligible(&server), "{connector}");
+        }
+        server.connector_id = Some("connector:example".into());
+        assert!(mcp_server_is_runtime_eligible(&server));
+    }
+
     fn enabled_server(id: &str) -> ChatMcpServer {
         ChatMcpServer {
             id: id.to_string(),
@@ -1413,6 +1464,58 @@ while True:
                 args: vec!["120".to_string()],
                 ..ChatMcpServer::default()
             }
+        }
+
+        // The package-root override is thread-local; keep this test on one thread.
+        #[tokio::test]
+        async fn package_mcp_connects_and_enters_agent_catalog_only_while_enabled() {
+            let root = tempfile::tempdir().unwrap();
+            let _scope = crate::plugins::packages::TestPackagesRoot::new(root.path());
+            let id = uuid::Uuid::new_v4().to_string();
+            let source = root.path().join("source");
+            fs::create_dir_all(source.join(".codex-plugin")).unwrap();
+            fs::write(
+                source.join(".codex-plugin/plugin.json"),
+                r#"{"name":"runtime-test"}"#,
+            )
+            .unwrap();
+            let script = write_fast_fake_server();
+            fs::write(
+                source.join(".mcp.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "mcpServers": {"echo": {"command":"python3", "args":["-u", script]}}
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            let resolved = crate::plugins::packages::ensure_builtin(&id, &source).unwrap();
+            let server = resolved.servers.into_iter().next().unwrap();
+            let settings = settings_with_servers(vec![server.clone()]);
+            let state = test_app_state();
+
+            assert_eq!(select_warmup_servers(&settings, None).len(), 1);
+            let (tools, unavailable) = collect_enabled_mcp_tool_defs(&state, None, &settings).await;
+            assert!(unavailable.is_empty());
+            assert!(
+                tools.iter().any(|tool| tool.name == "echo"
+                    && tool.server_id.as_deref() == Some(server.id.as_str())),
+                "package tools must reach the agent catalog: {tools:?}"
+            );
+
+            // Even an already connected server must disappear when its owner is disabled.
+            let mut package = resolved.package;
+            package.enabled = false;
+            let record = root.path().join(&id).join("record.json");
+            fs::write(&record, serde_json::to_vec(&package).unwrap()).unwrap();
+            let (tools, unavailable) = collect_enabled_mcp_tool_defs(&state, None, &settings).await;
+            assert!(tools.is_empty());
+            assert!(unavailable.is_empty());
+            fs::remove_file(record).unwrap();
+            assert!(eligible_mcp_servers(&settings).is_empty());
+
+            state.mcp_disconnect_all().await;
+            fs::remove_file(script).unwrap();
+            let _ = fs::remove_dir_all(&state.usage_dir);
         }
 
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
