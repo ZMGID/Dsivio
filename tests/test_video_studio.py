@@ -164,7 +164,7 @@ class WorkspaceTests(unittest.TestCase):
                 with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job'):
                     t = self.action(t, 'submit', confirmSpend=True)
                 result = {'status': 'done', 'video': {'duration': 10, 'url': url}}
-                with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video') as download:
+                with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video') as download, patch.object(studio, 'probe_video', return_value={'width': 720, 'height': 1280, 'duration': 10.04, 'hasAudio': True}):
                     t = self.action(t, 'poll')
                 self.assertEqual(t['status'], 'succeeded')
                 self.assertEqual(download.call_args.kwargs['api_key'], expected_key)
@@ -258,9 +258,61 @@ class WorkspaceTests(unittest.TestCase):
                 studio.request({'brief': {**b, **changes}, 'prompt': 'confirmed'})
 
     def test_grok_single_frame_and_silent_requests(self):
-        payload = studio.request({'brief': {**self.brief, 'images': ['https://example.test/1.png'], 'inputMode': 'image', 'resolution': '1080p', 'speechMode': 'silent'}, 'prompt': 'confirmed'})
+        with patch.object(studio, 'prepare_grok_frame', return_value='https://example.test/prepared.png'):
+            payload = studio.request({'brief': {**self.brief, 'images': ['https://example.test/1.png'], 'inputMode': 'image', 'resolution': '1080p', 'speechMode': 'silent'}, 'prompt': 'confirmed'})
         self.assertIn('image', payload)
         self.assertFalse(payload['generate_audio'])
+
+    def test_grok_frame_preserves_product_and_requested_canvas(self):
+        source = self.root / 'square.png'
+        studio.subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=red:s=128x128',
+                               '-frames:v', '1', str(source)], check=True)
+        task = self.draft()
+        task['brief'].update(images=[str(source)], resolution='720p', ratio='9:16')
+        frame = studio.prepare_grok_frame(task)
+        media = studio.probe_video(frame)
+        self.assertEqual((media['width'], media['height']), (720, 1280))
+        self.assertEqual(studio.probe_video(source)['width'], 128)
+        task['brief'].update(resolution='1080p', ratio='16:9')
+        frame = studio.prepare_grok_frame(task)
+        media = studio.probe_video(frame)
+        self.assertEqual((media['width'], media['height']), (1920, 1080))
+
+    def test_grok_output_contract_uses_actual_media(self):
+        requested = dict(aspect_ratio='9:16', resolution='720p', duration=5, generate_audio=True)
+        self.assertEqual(studio.output_mismatches(dict(width=720, height=1280, duration=5.04, hasAudio=True), requested), [])
+        issues = studio.output_mismatches(dict(width=544, height=544, duration=3, hasAudio=False), requested)
+        self.assertEqual(len(issues), 4)
+        self.assertIn('画幅不符', issues[0])
+        self.assertEqual(studio.output_mismatches(dict(width=720, height=1280, duration=5, hasAudio=False), dict(requested, generate_audio=False)), [])
+
+    def test_grok_wrong_output_is_preserved_but_not_successful(self):
+        task = self.approved()
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job'):
+            task = self.action(task, 'submit')
+        self.assertEqual(task['requested']['aspect_ratio'], '9:16')
+        self.assertTrue(task['requested']['generate_audio'])
+        with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value={'status':'done', 'video':{'url':'/video.mp4'}}), \
+             patch.object(studio.grok, 'download_video'), \
+             patch.object(studio, 'probe_video', return_value=dict(width=960, height=960, duration=10, hasAudio=False)):
+            task = self.action(task, 'poll')
+        self.assertEqual(task['status'], 'failed')
+        self.assertIn('画幅不符', task['error'])
+        self.assertIn('没有音轨', task['error'])
+        self.assertTrue(task['output'])
+        self.assertEqual(task['remote']['id'], 'job')
+
+    def test_reference_template_keeps_measured_ratio_without_invalid_generation_duration(self):
+        task = self.draft()
+        task = self.action(task, 'save', brief=dict(task['brief'], mode='analysis'))
+        metadata = dict(width=576, height=1024, duration=20.04, hasAudio=True)
+        task = self.action(task, 'analysis_result', script='portrait reference', analysis={'content':[
+            {'type':'text', 'text':json.dumps({'metadata':metadata, 'transcript':[]})}]})
+        template = self.action(task, 'template_save', name='reference')
+        self.assertEqual(template['spec']['aspect_ratio'], '9:16')
+        self.assertTrue(template['spec']['source_has_audio'])
+        self.assertEqual(template['spec']['source_duration_seconds'], 20.04)
+        self.assertNotIn('duration_seconds', template['spec'])
 
     def test_minimax_frame_roles_and_reference_media(self):
         b = {**self.brief, 'route': 'minimax', 'resolution': '768P', 'inputMode': 'frames',
@@ -280,7 +332,7 @@ class WorkspaceTests(unittest.TestCase):
         with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job-1'):
             t = self.action(t, 'submit')
         result = {'status': 'done', 'video': {'duration': 10, 'url': '/v1/videos/job/content'}}
-        with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video'):
+        with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video'), patch.object(studio, 'probe_video', return_value={'width': 720, 'height': 1280, 'duration': 10.04, 'hasAudio': True}):
             t = self.action(t, 'poll')
         self.assertEqual(t['status'], 'succeeded')
         task_id = t['id']
@@ -297,7 +349,7 @@ class WorkspaceTests(unittest.TestCase):
             t = self.action(t, 'submit')
         self.assertEqual(t['remote']['id'], 'job-2')
         create.assert_called_once()
-        with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video'):
+        with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video'), patch.object(studio, 'probe_video', return_value={'width': 720, 'height': 1280, 'duration': 10.04, 'hasAudio': True}):
             t = self.action(t, 'poll')
         self.assertEqual(t['status'], 'succeeded')
         self.assertEqual(t['output'], old_output)

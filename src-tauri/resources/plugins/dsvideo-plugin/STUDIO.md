@@ -55,3 +55,10 @@ Do not choose a route on the user's behalf. `mode: analysis` is for read-only re
 
 With the host `studio` tool, ComfyUI uses the same `submit` and `poll` actions as the API routes. The host handles uploading, workflow preparation, MCP calls and recording results. `comfy_workflow`, `comfy_submitted` and `comfy_complete` are internal bookkeeping operations, not public tool actions. Only external hosts without `studio` use the Python/MCP sequence from the original skill. Retain the original task endpoint on recovery. Only free models when the server queue is empty.
 The desktop uses the same script actions and MCP servers. Never introduce a parallel template registry or provider configuration.
+
+### Grok 的画幅与声音
+
+- 请求必须明确 `ratio`、`resolution`、`duration`，与用户和参考模板一致；不要只在提示词里写尺寸。参考分析的转录缺失不代表原视频没有对白。
+- `speechMode: auto` 是自动设计可听见的声音，不是默认无对白、无音乐或近乎静音。带人物讲解的广告应在剧本中设计具体口播；转换提示词时保留已确认的声音设计。用户选择 `silent` 才关闭音频生成。
+- 单图首帧由工作区等比缩放并补足所选画布，防止兼容网关沿用商品图的正方形比例；参考图模式不作这种处理。
+- 下载后以 `media` 中的实测尺寸、时长、音轨为准。`failed` 且保留 `output` 表示成片可检查但未通过规格检查，不能当作成功交付，也不要自动重新付费生成。

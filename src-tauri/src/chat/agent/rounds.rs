@@ -126,8 +126,8 @@ struct ToolExecutionResult {
     response_message: Value,
     record: Option<ToolCallRecord>,
     cancelled: bool,
-    /// Extra user-role messages (OpenAI shape) appended right after this tool's
-    /// result message — used by `read` to feed an image to a vision model.
+    /// Extra user-role messages (OpenAI shape) appended after all tool
+    /// result messages in the round — used by `read` to feed an image to a vision model.
     follow_up_messages: Vec<Value>,
 }
 
@@ -372,9 +372,12 @@ fn push_tool_execution_result(
     if let Some(record) = result.record {
         tool_records.push(record);
     }
-    response_messages.push(result.response_message);
-    // Follow-up user messages (e.g. an image for a vision model) must come
-    // after the tool-result message so tool_call_ids are answered first.
+    // Complete the entire tool-call batch before introducing any user-role images.
+    let insert_at = response_messages
+        .iter()
+        .position(|message| message["role"] != "tool")
+        .unwrap_or(response_messages.len());
+    response_messages.insert(insert_at, result.response_message);
     response_messages.extend(result.follow_up_messages);
     cancelled
 }
@@ -786,6 +789,36 @@ pub(crate) fn tool_call_parallel_eligible(settings: &Settings, tool: &ChatToolDe
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn image_batch_completes_all_results_before_followups() {
+        let mut messages = Vec::new();
+        let mut records = Vec::new();
+        for id in ["a", "b", "c"] {
+            push_tool_execution_result(
+                ToolExecutionResult {
+                    response_message: tool_message(id.into(), "read succeeded"),
+                    record: None,
+                    cancelled: id == "c",
+                    follow_up_messages: if id == "c" {
+                        vec![]
+                    } else {
+                        vec![
+                            json!({"role":"user", "content": [{"type":"image_url", "image_url":{"url":id}}]}),
+                        ]
+                    },
+                },
+                &mut messages,
+                &mut records,
+            );
+        }
+        assert_eq!(messages.len(), 5);
+        for (index, id) in ["a", "b", "c"].iter().enumerate() {
+            assert_eq!(messages[index]["tool_call_id"], *id);
+        }
+        assert_eq!(messages[3]["content"][0]["image_url"]["url"], "a");
+        assert_eq!(messages[4]["content"][0]["image_url"]["url"], "b");
+    }
 
     #[test]
     fn follow_up_messages_are_appended_after_tool_result() {

@@ -228,13 +228,30 @@ pub(crate) async fn synthesis_step(
 }
 
 fn last_user_text(messages: &[Value]) -> Option<String> {
-    messages
-        .iter()
-        .rev()
-        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
-        .map(|s| s.to_string())
+    messages.iter().rev().find_map(|message| {
+        if message.get("role").and_then(Value::as_str) != Some("user") {
+            return None;
+        }
+        let text = match message.get("content")? {
+            Value::String(text) => text.clone(),
+            Value::Array(parts) => parts
+                .iter()
+                .filter_map(|part| match part.get("type").and_then(Value::as_str) {
+                    Some("text" | "input_text") => part.get("text").and_then(Value::as_str),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => return None,
+        };
+        let text = text.trim();
+        if text.is_empty() || text == "[与后文同一张图片，此处省略，不重复上传]"
+        {
+            None
+        } else {
+            Some(text.to_string())
+        }
+    })
 }
 
 /// 收集本轮成功工具产出的可读摘要(用于去敏重做的输入)。
@@ -490,4 +507,30 @@ fn log_empty_synthesis_output(
         stream.reasoning.as_deref().map(|value| value.chars().count()).unwrap_or(0),
         stream.tool_calls.len(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_keeps_multimodal_question_after_tool_images() {
+        let mut messages = vec![
+            json!({"role":"user","content":"old question"}),
+            json!({"role":"user","content":[
+                {"type":"text","text":"我也要做一个相似的，商品是这个"},
+                {"type":"image_url","image_url":{"url":"data:image/png;base64,YQ=="}}
+            ]}),
+            json!({"role":"tool","tool_call_id":"a","content":"read succeeded"}),
+            json!({"role":"user","content":[{"type":"text","text":"[与后文同一张图片，此处省略，不重复上传]"}]}),
+            json!({"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,YQ=="}}]}),
+        ];
+        assert_eq!(
+            last_user_text(&messages).as_deref(),
+            Some("我也要做一个相似的，商品是这个")
+        );
+        messages.push(json!({"role":"user","content":"是"}));
+        assert_eq!(last_user_text(&messages).as_deref(), Some("是"));
+        assert_eq!(last_user_text(&[json!({"role":"user","content":[]})]), None);
+    }
 }
