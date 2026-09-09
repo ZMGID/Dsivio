@@ -400,6 +400,16 @@ describe('制作、试品、反馈和持续出图', () => {
     expect(screen.getByRole('button', { name: '更新制作' })).toBeEnabled()
   })
 
+  it('keeps the requirement field as a plain writing box', async () => {
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
+    const field = screen.getByLabelText('制作要求')
+    expect(field.closest('.is-req')).toBeTruthy()
+    expect(field.previousElementSibling).toHaveClass('is-req-bar')
+    expect(field).toHaveAttribute('placeholder', '写清版式、背景、文字和以后换品怎么沿用')
+    expect(screen.queryByRole('button', { name: '统一白灰背景' })).not.toBeInTheDocument()
+  })
+
   it('switches the drop zone copy when starting from a finished set', async () => {
     render(<ImageStudio />)
     fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
