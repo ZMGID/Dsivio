@@ -65,6 +65,8 @@ export interface VideoBootstrap {
     comfy: boolean
     node: boolean
     ffmpeg: boolean
+    analyzer?: boolean
+    bundled?: boolean
   }
 }
 export const newVideoBrief = (

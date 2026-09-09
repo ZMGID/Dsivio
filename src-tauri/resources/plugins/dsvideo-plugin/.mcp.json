@@ -1,18 +1,32 @@
 {
   "mcpServers": {
     "comfy-mcp": {
-      "command": "python",
+      "command": "${DSVIDEO_PYTHON}",
       "args": [
+        "-s",
         "-B",
         "${PLUGIN_ROOT}/scripts/mcp_comfy.py"
-      ]
+      ],
+      "env": {
+        "DSVIDEO_RUNTIME_ROOT": "${DSVIDEO_RUNTIME_ROOT}",
+        "PYTHONPATH": "${DSVIDEO_RUNTIME_ROOT}/python-packages",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONHOME": "",
+        "PATH": "${DSVIDEO_RUNTIME_PATH}"
+      }
     },
     "video-analyzer": {
-      "command": "npx",
+      "command": "${DSVIDEO_NODE}",
       "args": [
-        "-y",
-        "mcp-video-analyzer@0.10.0"
-      ]
+        "${DSVIDEO_RUNTIME_ROOT}/analyzer/node_modules/mcp-video-analyzer/dist/index.js"
+      ],
+      "env": {
+        "DSVIDEO_RUNTIME_ROOT": "${DSVIDEO_RUNTIME_ROOT}",
+        "PATH": "${DSVIDEO_RUNTIME_PATH}",
+        "PYTHONPATH": "${DSVIDEO_RUNTIME_ROOT}/python-packages",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONHOME": ""
+      }
     }
   }
 }

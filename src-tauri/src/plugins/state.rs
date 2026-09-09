@@ -223,6 +223,9 @@ pub fn is_enabled(id: &str) -> bool {
 /// 仅 **已安装且启用** 时返回 bin 目录，供 PATH prepend。
 pub fn enabled_bin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    if super::packages::owner_enabled(crate::video_studio::PACKAGE_ID) {
+        dirs.extend(crate::video_studio::runtime::bin_dirs());
+    }
     for plugin in PLUGIN_CATALOG {
         if !is_enabled(plugin.id) {
             continue;

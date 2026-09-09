@@ -14,20 +14,14 @@ use std::{
 use tauri::{AppHandle, Manager};
 use tokio::io::AsyncWriteExt;
 
-const PACKAGE_ID: &str = "42df724b-34e1-47b8-aa2c-6c738b09d280";
+pub(crate) mod runtime;
+pub(crate) const PACKAGE_ID: &str = "42df724b-34e1-47b8-aa2c-6c738b09d280";
 
 fn source(app: &AppHandle) -> Result<PathBuf, String> {
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins/dsvideo-plugin");
-    if cfg!(debug_assertions) && dev.is_dir() {
-        return Ok(dev);
-    }
-    Ok(app
-        .path()
-        .resource_dir()
-        .map_err(|e| e.to_string())?
-        .join("plugins/dsvideo-plugin"))
+    Ok(runtime::resource_directory(app)?.join("plugins/dsvideo-plugin"))
 }
 pub fn initialize(app: &AppHandle) -> Result<(), String> {
+    runtime::initialize(app)?;
     packages::ensure_builtin(PACKAGE_ID, &source(app)?)?;
     Ok(())
 }
@@ -36,13 +30,32 @@ pub fn sync_settings(settings: &mut crate::settings::Settings) {
     let Ok(p) = plugin() else {
         return;
     };
-    for server in p.servers {
-        if !settings
+    sync_builtin_servers(settings, p.servers);
+}
+
+fn sync_builtin_servers(
+    settings: &mut crate::settings::Settings,
+    servers: Vec<crate::settings::ChatMcpServer>,
+) {
+    for mut server in servers {
+        if let Some(previous) = settings
             .chat_tools
             .servers
-            .iter()
-            .any(|s| s.id == server.id)
+            .iter_mut()
+            .find(|s| s.id == server.id)
         {
+            // Preserve user switches while upgrading old npx/system-Python paths,
+            // including when the application bundle itself has moved.
+            server.enabled = previous.enabled;
+            server.enabled_tools = previous.enabled_tools.clone();
+            for (key, value) in &previous.env {
+                server
+                    .env
+                    .entry(key.clone())
+                    .or_insert_with(|| value.clone());
+            }
+            *previous = server;
+        } else {
             settings.chat_tools.servers.push(server);
         }
     }
@@ -81,10 +94,11 @@ fn image_url(path: &str) -> Result<String, String> {
 
 async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, String> {
     let script = source(app)?.join("scripts/studio.py");
-    let mut command =
-        tokio::process::Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let environment = runtime::environment()?;
+    let mut command = tokio::process::Command::new(&environment["DSVIDEO_PYTHON"]);
     command
-        .args(["-B", "-X", "utf8"])
+        .envs(&environment)
+        .args(["-s", "-B", "-X", "utf8"])
         .arg(script)
         .arg(action)
         .env(
@@ -101,7 +115,7 @@ async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     command.creation_flags(0x08000000);
     let mut child = command
         .spawn()
-        .map_err(|_| "无法启动 Python，请安装 Python 3.10+ 并加入 PATH")?;
+        .map_err(|e| format!("内置视频运行环境无法启动，请重新安装 Dsivio：{e}"))?;
     child
         .stdin
         .take()
@@ -477,6 +491,54 @@ mod tests {
             .servers
             .iter()
             .all(|s| !s.args.join(" ").contains("${")));
+        for server in &resolved.servers {
+            assert!(std::path::Path::new(&server.command).is_absolute());
+            assert!(server.command.contains("video-runtime"));
+            assert!(!server.args.iter().any(|arg| arg == "-y"));
+            assert!(server.env.contains_key("DSVIDEO_RUNTIME_ROOT"));
+        }
+    }
+
+    #[test]
+    fn upgrade_replaces_old_launch_commands_without_resetting_user_switches() {
+        use crate::settings::{ChatMcpServer, Settings};
+        let mut settings = Settings::default();
+        settings.chat_tools.servers.push(ChatMcpServer {
+            id: "builtin-analyzer".into(),
+            command: "npx".into(),
+            args: vec!["-y".into()],
+            enabled: false,
+            enabled_tools: vec!["get_metadata".into()],
+            env: [
+                ("CUSTOM_ENDPOINT".into(), "http://localhost:8188".into()),
+                ("PATH".into(), "old runtime".into()),
+            ]
+            .into(),
+            ..Default::default()
+        });
+        settings.chat_tools.servers.push(ChatMcpServer {
+            id: "user-server".into(),
+            command: "user-command".into(),
+            ..Default::default()
+        });
+        let new = ChatMcpServer {
+            id: "builtin-analyzer".into(),
+            command: "/moved app/node".into(),
+            args: vec!["/moved app/analyzer.js".into()],
+            enabled: true,
+            env: [("PATH".into(), "new runtime".into())].into(),
+            ..Default::default()
+        };
+        sync_builtin_servers(&mut settings, vec![new.clone()]);
+        sync_builtin_servers(&mut settings, vec![new]);
+        let server = &settings.chat_tools.servers[0];
+        assert_eq!(server.command, "/moved app/node");
+        assert!(!server.enabled);
+        assert_eq!(server.enabled_tools, vec!["get_metadata"]);
+        assert_eq!(server.env["PATH"], "new runtime");
+        assert_eq!(server.env["CUSTOM_ENDPOINT"], "http://localhost:8188");
+        assert_eq!(settings.chat_tools.servers.len(), 2);
+        assert_eq!(settings.chat_tools.servers[1].command, "user-command");
     }
     #[test]
     fn reads_actual_comfy_cli_upload_and_submission_envelopes() {

@@ -63,6 +63,17 @@ fn apply_shell_tool_env(cmd: &mut Command, state: Option<&AppState>) {
         return;
     };
     let settings = state.settings_read();
+    if crate::plugins::packages::owner_enabled(crate::video_studio::PACKAGE_ID) {
+        if let Ok(environment) = crate::video_studio::runtime::environment() {
+            // Expose explicit runtime paths to bundled skills without changing
+            // PYTHONPATH/PYTHONHOME for unrelated user commands.
+            cmd.envs(
+                environment
+                    .into_iter()
+                    .filter(|(key, _)| key.starts_with("DSVIDEO_")),
+            );
+        }
+    }
     // PATH 合并：启用插件 bin 目录，再接系统 Path。
     let plugin_dirs = crate::plugins::enabled_bin_dirs();
     if !plugin_dirs.is_empty() {
