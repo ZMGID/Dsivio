@@ -36,6 +36,7 @@ import { AsyncQuestionsContext } from './asyncQuestionsContext'
 import { ChatTitlebar } from './ChatTitlebar'
 import { withExternalModel } from './externalModelEffort'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
+import { StudioPage } from './StudioPage'
 import {
   beginConversationTransition,
   cancelConversationTransition,
@@ -5489,15 +5490,23 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             </Suspense>
           </div>
         ) : chatView === 'videos' ? (
-          <div key="center" className={centerPageClass}>
-            {centerPageTopStrip}
+          <StudioPage
+            key="center"
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={handleTitlebarToggleSidebar}
+            onNewConversation={handleTitlebarNewConversation}
+          >
             <Suspense fallback={null}><VideoStudio /></Suspense>
-          </div>
+          </StudioPage>
         ) : chatView === 'images' ? (
-          <div key="center" className={centerPageClass}>
-            {centerPageTopStrip}
+          <StudioPage
+            key="center"
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={handleTitlebarToggleSidebar}
+            onNewConversation={handleTitlebarNewConversation}
+          >
             <Suspense fallback={null}><ImageStudio /></Suspense>
-          </div>
+          </StudioPage>
         ) : chatView === 'notes' ? (
           <div key="center" className={centerPageClass}>
             {centerPageTopStrip}

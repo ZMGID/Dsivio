@@ -20,11 +20,13 @@
   flex-wrap: wrap;
 }
 .image-studio .is-work-toolbar {
+  align-items: flex-end;
   gap: 12px;
   margin-bottom: 24px;
 }
 .image-studio .is-task-actions {
   justify-content: flex-end;
+  padding-bottom: 13px;
 }
 .image-studio :is(.is-brief-layout, .vs-layout) {
   grid-template-columns: minmax(0, 1fr) 280px;
@@ -179,4 +181,15 @@
   .image-studio .is-creation-footer > div {
     flex-basis: 100%;
   }
+}
+
+/* 侧栏收起时顶栏已占行（见 StudioPage），rail/main 只留内容内边距。 */
+.chat-window-host--mac-titlebar .chat-studio-page--collapsed .image-studio {
+  background: transparent;
+}
+.chat-window-host--mac-titlebar .chat-studio-page--collapsed .image-studio .is-rail {
+  padding-top: 16px;
+}
+.chat-window-host--mac-titlebar .chat-studio-page--collapsed .image-studio .is-main {
+  padding-top: 16px;
 }
