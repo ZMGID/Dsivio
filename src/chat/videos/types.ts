@@ -37,6 +37,7 @@ export interface VideoTask {
   output?: string
   remote?: { route: VideoRoute; id?: string; base_url: string }
   quote?: {
+    pricingStatus?: 'reference' | 'unknown'
     currency?: string
     estimated_cost?: Record<string, string>
     balance?: unknown
@@ -106,7 +107,7 @@ export const videoStatus: Record<string, string> = {
   running: '生成中',
   succeeded: '已完成',
   failed: '生成失败',
-  uncertain: '提交结果待核查',
+  uncertain: '未收到提交结果',
 }
 
 export const languages = [

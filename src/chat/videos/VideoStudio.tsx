@@ -36,7 +36,11 @@ import { VideoMediaOptions } from './VideoMediaOptions'
 import { readVideoDrafts, writeVideoDraft, type VideoEntry } from './videoDrafts'
 import { ChatMarkdown } from '../ChatMarkdown'
 import { useSharedDraft } from '../studio/useSharedDraft'
-import { applyVideoStudioDrop } from './videoDrop'
+import {
+  applyVideoStudioDrop,
+  videoDropZoneFromPoint,
+  type VideoDropZone,
+} from './videoDrop'
 import { useTaskLibrary } from '../studio/useTaskLibrary'
 import { VideoTaskPanel } from './VideoTaskPanel'
 import { useVideoTaskProgress } from './useVideoTaskProgress'
@@ -105,6 +109,7 @@ export default function VideoStudio() {
   const [video, setVideo] = useState('')
   const [recoveryId, setRecoveryId] = useState('')
   const [dropActive, setDropActive] = useState(false)
+  const [dropTarget, setDropTarget] = useState<VideoDropZone | null>(null)
   const isAnalysis = view === 'analysis' || view === 'remake'
   const locked =
     !!task &&
@@ -321,6 +326,11 @@ export default function VideoStudio() {
             ? await api.videoStudioTask('get', { id: task.id })
             : await saved(patch)
         if (action === 'poll' && (t.status === 'succeeded' || !t.remote?.id)) { accept(t); return }
+        if (action === 'submit' && (!t.quote || Date.now() / 1000 - t.quote.at > 600)) {
+          // Local catalog lookup: missing pricing is informational, never a dead end.
+          t = await api.videoStudioTask('quote', { id: t.id, revision: t.revision })
+          accept(t)
+        }
         if (action !== 'save' && action !== 'get') {
           t = await api.videoStudioTask(action, {
             id: t.id,
@@ -371,10 +381,22 @@ export default function VideoStudio() {
         })
     })
   }
-  const importDropped = (paths: string[]) => {
+  const dropTargetRef = useRef<VideoDropZone | null>(null)
+  const markDropTarget = (zone: VideoDropZone | null) => {
+    dropTargetRef.current = zone
+    setDropTarget(zone)
+  }
+  const dropTargetFromPosition = (position?: { x: number; y: number }) => {
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+      return dropTargetRef.current
+    }
+    const scale = window.devicePixelRatio || 1
+    return videoDropZoneFromPoint(position.x / scale, position.y / scale) || dropTargetRef.current
+  }
+  const importDropped = (paths: string[], zone: VideoDropZone | null = dropTargetRef.current) => {
     if (dropReadyRef.current.busy || !paths.length) return
     const page = viewRef.current
-    const result = applyVideoStudioDrop(page, briefRef.current, paths)
+    const result = applyVideoStudioDrop(page, briefRef.current, paths, zone)
     if ('error' in result) {
       setError(result.error)
       return
@@ -392,20 +414,29 @@ export default function VideoStudio() {
         if (cancelled) return
         const payload = event.payload
         if (!dropReadyRef.current.accept) {
-          if (payload.type === 'leave' || payload.type === 'drop') setDropActive(false)
+          if (payload.type === 'leave' || payload.type === 'drop') {
+            setDropActive(false)
+            markDropTarget(null)
+          }
           return
         }
         if (payload.type === 'enter' || payload.type === 'over') {
-          if (!dropReadyRef.current.busy) setDropActive(true)
+          if (!dropReadyRef.current.busy) {
+            markDropTarget(dropTargetFromPosition(payload.position))
+            setDropActive(true)
+          }
           return
         }
         if (payload.type === 'leave') {
           setDropActive(false)
+          markDropTarget(null)
           return
         }
         if (payload.type === 'drop') {
+          const zone = dropTargetFromPosition(payload.position)
           setDropActive(false)
-          importDroppedRef.current(payload.paths)
+          markDropTarget(null)
+          importDroppedRef.current(payload.paths, zone)
         }
       })
       .then((fn) => {
@@ -416,12 +447,14 @@ export default function VideoStudio() {
     return () => {
       cancelled = true
       setDropActive(false)
+      markDropTarget(null)
       unlisten?.()
     }
   }, [native])
-  const keepOsDrop = (event: DragEvent) => {
+  const keepOsDrop = (event: DragEvent, zone?: VideoDropZone) => {
     event.preventDefault()
     event.stopPropagation()
+    if (zone) markDropTarget(zone)
   }
   const controlsDisabled = !!busy || locked
   const route = brief.route
@@ -835,9 +868,9 @@ export default function VideoStudio() {
                   <div className="vs-editor-column">
                     <section
                       className="vs-panel vs-media"
-                      onDragEnter={keepOsDrop}
-                      onDragOver={keepOsDrop}
-                      onDrop={keepOsDrop}
+                      onDragEnter={(event) => keepOsDrop(event, isAnalysis ? 'source' : 'images')}
+                      onDragOver={(event) => keepOsDrop(event, isAnalysis ? 'source' : 'images')}
+                      onDrop={(event) => keepOsDrop(event, isAnalysis ? 'source' : 'images')}
                     >
                       <div className="vs-media-head">
                         <h3>{isAnalysis ? '参考视频' : '商品素材'}</h3>
@@ -850,8 +883,12 @@ export default function VideoStudio() {
                       {isAnalysis ? (
                         <>
                           <div
-                            className={`vs-drop${brief.source ? ' is-upload-area--filled' : ''}${dropActive ? ' is-drop-active' : ''}`}
+                            className={`vs-drop${brief.source ? ' is-upload-area--filled' : ''}${dropActive && dropTarget !== 'images' ? ' is-drop-active' : ''}`}
+                            data-video-drop="source"
                             aria-label="参考视频投放区"
+                            onDragEnter={(event) => keepOsDrop(event, 'source')}
+                            onDragOver={(event) => keepOsDrop(event, 'source')}
+                            onDrop={(event) => keepOsDrop(event, 'source')}
                           >
                             {brief.source ? (
                               <div className="vs-drop-file">
@@ -863,7 +900,7 @@ export default function VideoStudio() {
                                     {brief.source.split(/[\\/]/).pop() || brief.source}
                                   </strong>
                                   <span title={brief.source}>
-                                    {dropActive
+                                    {dropActive && dropTarget !== 'images'
                                       ? '松开即可替换'
                                       : '还可以把视频继续拖进来替换'}
                                   </span>
@@ -882,7 +919,7 @@ export default function VideoStudio() {
                                   <Film size={22} strokeWidth={1.5} />
                                 </span>
                                 <strong>
-                                  {dropActive
+                                  {dropActive && dropTarget !== 'images'
                                     ? '松开即可导入'
                                     : '把参考视频拖到这里'}
                                 </strong>
@@ -927,8 +964,12 @@ export default function VideoStudio() {
                       ) : (
                         <>
                           <div
-                            className={`vs-drop${brief.images.length ? ' is-upload-area--filled' : ''}${dropActive ? ' is-drop-active' : ''}`}
+                            className={`vs-drop${brief.images.length ? ' is-upload-area--filled' : ''}${dropActive && dropTarget !== 'referenceVideos' && dropTarget !== 'referenceAudios' ? ' is-drop-active' : ''}`}
+                            data-video-drop="images"
                             aria-label="商品素材投放区"
+                            onDragEnter={(event) => keepOsDrop(event, 'images')}
+                            onDragOver={(event) => keepOsDrop(event, 'images')}
+                            onDrop={(event) => keepOsDrop(event, 'images')}
                           >
                             {brief.images.length ? (
                               <div className="vs-assets">
@@ -960,7 +1001,7 @@ export default function VideoStudio() {
                                   <FileImage size={22} strokeWidth={1.5} />
                                 </span>
                                 <strong>
-                                  {dropActive
+                                  {dropActive && dropTarget !== 'referenceVideos' && dropTarget !== 'referenceAudios'
                                     ? '松开即可导入'
                                     : '把商品图片拖到这里'}
                                 </strong>
@@ -990,13 +1031,43 @@ export default function VideoStudio() {
                     </section>
                     {view === 'remake' && <section className="vs-panel">
                       <h3>我的商品</h3>
-                      <div className="vs-images">{brief.images.map(path => <div key={path}><AssetImage path={path} name={path.split(/[\\/]/).pop() || '商品'} /><IconButton label="移除商品图片" disabled={controlsDisabled} onClick={() => change({ images: brief.images.filter(p => p !== path) })}><X size={14} /></IconButton></div>)}</div>
-                      <Button disabled={!native || controlsDisabled} onClick={() => void pickImages()}>添加商品图片</Button>
-                      <p className="vs-muted">参考视频决定镜头和节奏，你的图片决定商品外观。</p>
+                      <div
+                        className={`vs-drop${brief.images.length ? ' is-upload-area--filled' : ''}${dropActive && dropTarget === 'images' ? ' is-drop-active' : ''}`}
+                        data-video-drop="images"
+                        aria-label="商品图片投放区"
+                        onDragEnter={(event) => keepOsDrop(event, 'images')}
+                        onDragOver={(event) => keepOsDrop(event, 'images')}
+                        onDrop={(event) => keepOsDrop(event, 'images')}
+                      >
+                        {brief.images.length ? (
+                          <div className="vs-images">{brief.images.map(path => <div key={path}><AssetImage path={path} name={path.split(/[\\/]/).pop() || '商品'} /><IconButton label="移除商品图片" disabled={controlsDisabled} onClick={() => change({ images: brief.images.filter(p => p !== path) })}><X size={14} /></IconButton></div>)}</div>
+                        ) : (
+                          <div className="vs-drop-empty">
+                            <span className="vs-drop-mark">
+                              <FileImage size={22} strokeWidth={1.5} />
+                            </span>
+                            <strong>{dropActive && dropTarget === 'images' ? '松开即可导入' : '把商品图片拖到这里'}</strong>
+                            <span>PNG / JPG / WebP</span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="vs-drop-bar">
+                        <small>
+                          {dropActive && dropTarget === 'images'
+                            ? '松开即可继续导入'
+                            : brief.images.length
+                              ? '还可以把商品图片继续拖进来'
+                              : '参考视频定镜头，图片定商品外观'}
+                        </small>
+                        <Button size="sm" disabled={!native || controlsDisabled} onClick={() => void pickImages()}>
+                          <Plus size={14} />
+                          {brief.images.length ? '继续添加商品图片' : '添加商品图片'}
+                        </Button>
+                      </div>
                     </section>}
                     <section className="vs-panel">
                       <Field label={isAnalysis ? '重点分析什么（可选）' : '这次要拍什么'}>
-                        <textarea className="kv-textarea vs-request" value={brief.request} disabled={controlsDisabled}
+                        <textarea className="kv-textarea vs-request custom-scrollbar" value={brief.request} disabled={controlsDisabled}
                           placeholder={isAnalysis ? '例如：重点看开场、商品展示和镜头节奏。留空则完整拆解。' : '例如：让背包在自然光下缓慢转动，展示正面细节，不要口播。'}
                           onChange={e => change({ request: e.target.value, selectedConcept: undefined })} />
                       </Field>
@@ -1021,6 +1092,9 @@ export default function VideoStudio() {
                           change={change}
                           disabled={controlsDisabled}
                           native={native}
+                          dropActive={dropActive}
+                          dropTarget={dropTarget}
+                          onDrop={keepOsDrop}
                           onError={setError}
                         />
                       </details>
@@ -1257,7 +1331,7 @@ export default function VideoStudio() {
                       {brief.duration} 秒 · {brief.ratio} ·{' '}
                       {brief.resolution || '未选清晰度'}
                     </p>
-                    <details>
+                    <details className="vs-generation-prompt">
                       <summary>查看转换后的提示词</summary>
                       <pre className="custom-scrollbar">
                         {dirty
@@ -1268,9 +1342,9 @@ export default function VideoStudio() {
                     {task?.quote && !dirty && (
                       <div className="vs-quote">
                         <strong>
-                          {task.quote.currency && task.quote.estimated_cost
-                            ? `预计 ${task.quote.estimated_cost[brief.resolution]} ${task.quote.currency}`
-                            : 'ComfyUI 工作流执行'}
+                          {task.quote.currency && task.quote.estimated_cost?.[brief.resolution] != null
+                            ? `官方参考 ${task.quote.estimated_cost[brief.resolution]} ${task.quote.currency}`
+                            : route === 'comfy' ? 'ComfyUI 工作流执行' : '以供应商实际计费为准'}
                         </strong>
                         <p>{task.quote.note}</p>
                         {task.quote.balance != null && (
@@ -1283,6 +1357,11 @@ export default function VideoStudio() {
                         )}
                       </div>
                     )}
+                    {task?.submission?.state === 'rejected' && <div role="alert" className="vs-notice">
+                      <p>{task.submission.reason}{task.submission.httpStatus ? `（HTTP ${task.submission.httpStatus}）` : ''}</p>
+                      <Button onClick={() => setView('settings')}>检查视频设置</Button>
+                      <small>剧本、素材和提示词已保留，处理后可直接重试。</small>
+                    </div>}
                     {!locked && (
                       <div className="vs-actions">
                         <Button
@@ -1297,12 +1376,11 @@ export default function VideoStudio() {
                             !native ||
                             !!busy ||
                             dirty ||
-                            !task?.quote ||
-                            !task.prompt
+                            !task?.prompt
                           }
                           onClick={() => void run('submit')}
                         >
-                          {route === 'comfy' ? '开始生成' : '确认费用并生成'}
+                          {task?.submission?.retryable ? '重试生成' : route === 'comfy' ? '开始生成' : '生成视频'}
                         </Button>
                       </div>
                     )}
@@ -1315,10 +1393,12 @@ export default function VideoStudio() {
                   {task?.remote && (
                     <section className="vs-panel">
                       <h3>{videoStatus[task.status]}</h3>
-                      <p className="vs-path">
-                        任务编号：{task.remote.id || '尚未获得可靠编号'}
-                      </p>
-                      {task.error && <p role="alert">{task.error}</p>}
+                      {task.remote.id && <p className="vs-path">任务编号：{task.remote.id}</p>}
+                      {task.status === 'uncertain' ? <>
+                        <p role="alert">{task.submission?.reason || '这次提交没有记录到任务编号或具体接口错误，暂时无法确认服务是否接单。'}</p>
+                        {task.submission?.httpStatus && <small>HTTP {task.submission.httpStatus}</small>}
+                        <Button onClick={() => setView('settings')}>检查视频设置</Button>
+                      </> : task.error && <p role="alert">{task.error}</p>}
                       {task.remote.id && task.status !== 'succeeded' && (
                         <Button
                           disabled={!!busy}
@@ -1328,17 +1408,16 @@ export default function VideoStudio() {
                           查询进度 / 恢复结果
                         </Button>
                       )}
-                      <p className="vs-muted">
-                        已提交任务保留原服务地址和编号。重新打开后可继续查询。
-                      </p>
+                      {task.remote.id && <p className="vs-muted">已保存任务编号，重新打开后可继续查询。</p>}
                     </section>
                   )}
                   {task &&
                     ['uncertain', 'submitting'].includes(task.status) && (
-                      <section className="vs-panel">
+                      <details className="vs-panel">
+                        <summary>已有任务编号？恢复查询</summary>
                         <Field
                           label="补录远程任务编号"
-                          hint="到原供应商控制台或 ComfyUI 队列核实该任务，再粘贴编号恢复查询。"
+                          hint="仅当你已经拿到该任务编号时使用。"
                         >
                           <input
                             className="kv-input"
@@ -1362,7 +1441,7 @@ export default function VideoStudio() {
                         >
                           保存编号并恢复任务
                         </Button>
-                      </section>
+                      </details>
                     )}
                   {task?.output && (
                     <section className="vs-panel">

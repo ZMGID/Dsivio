@@ -198,6 +198,10 @@ describe('Built-in image workflows', () => {
     expect(screen.queryByLabelText('自定义图内语言')).not.toBeInTheDocument()
     expect(screen.getByText('跟随样图')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '开始换货' })).toBeDisabled()
+    expect(screen.getByText('已有换货模板')).toBeInTheDocument()
+    expect(screen.getByLabelText('搜索模板')).toBeInTheDocument()
+    expect(screen.queryByText('使用已有换货模板')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('样图投放区')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '选择现成套图' }))
     await screen.findByRole('button', { name: '移除样图 1' })
     expect(screen.getByRole('button', { name: '开始换货' })).toBeDisabled()
@@ -205,10 +209,45 @@ describe('Built-in image workflows', () => {
     dropHandler?.({ payload: { type: 'drop', paths: ['C:/product.png'] } })
     await waitFor(() => expect(screen.getByRole('button', { name: '开始换货' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: '开始换货' }))
-    await waitFor(() => expect(api.imageStudioSave).toHaveBeenCalledWith(expect.objectContaining({
+    await waitFor(() =>     expect(api.imageStudioSave).toHaveBeenCalledWith(expect.objectContaining({
       feature: 'replace', requirement: '', language: '跟随样图', templateId: null,
       products: [importedProduct()], workflowInput: { mode: 'replace', sources: [sample] },
     }), undefined, undefined))
+  })
+
+  it('searches templates beside the product dropzone and keeps matching heights', async () => {
+    const data = bootstrap()
+    data.templates = [
+      {
+        id: 'tpl-default',
+        directory: '',
+        builtin: true,
+        data: {
+          name: '默认电商套图',
+          mode: 'smart',
+          slots: [
+            { id: 'h1', purpose: '主图 · 展示' },
+            { id: 'h2', purpose: '核心卖点 · 三点' },
+          ],
+        },
+      },
+      {
+        id: 'tpl-kids',
+        directory: '',
+        builtin: true,
+        data: { name: '童装套图', mode: 'smart', slots: [{ id: 'k1', purpose: '爆款首图' }] },
+      },
+    ]
+    vi.mocked(api.imageStudioBootstrap).mockResolvedValue(data)
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '模板套图' }))
+    const search = await screen.findByLabelText('搜索模板')
+    expect(screen.getByRole('option', { name: /默认电商套图/ })).toBeInTheDocument()
+    fireEvent.change(search, { target: { value: '童装' } })
+    expect(screen.queryByRole('option', { name: /默认电商套图/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /童装套图/ }))
+    expect(screen.getByRole('option', { name: /童装套图/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByLabelText('商品素材投放区')).toBeInTheDocument()
   })
 
   it('reports a local draft failure instead of claiming it was saved', async () => {
@@ -388,6 +427,25 @@ describe('Built-in image workflows', () => {
     expect(screen.getByText('图片接口 HTTP 429').closest('article')).toHaveClass('failed')
     expect(screen.getByRole('button', { name: '查看 / 修改' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '恢复查询' })).toBeDisabled()
+  })
+})
+
+describe('Replace sample drag-drop', () => {
+  it('imports images dropped on the sample panel as layout sources', async () => {
+    const sample = { id: 'layout', path: 'assets/layout.png', name: '样图.png' }
+    vi.mocked(api.imageStudioImport).mockResolvedValue([{ ...importedProduct(), assets: [sample] }])
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '样图换货' }))
+    const zone = await screen.findByLabelText('样图投放区')
+    await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+    fireEvent.dragEnter(zone)
+    dropHandler?.({ payload: { type: 'enter' } })
+    await waitFor(() => expect(zone).toHaveClass('is-drop-active'))
+    expect(screen.getByLabelText('商品素材投放区')).not.toHaveClass('is-drop-active')
+    dropHandler?.({ payload: { type: 'drop', paths: ['C:/layout.png'] } })
+    await waitFor(() => expect(api.imageStudioImport).toHaveBeenCalledWith(['C:/layout.png'], false))
+    expect(await screen.findByRole('button', { name: '移除样图 1' })).toBeInTheDocument()
+    expect(screen.getByLabelText('商品素材投放区')).not.toHaveClass('is-upload-area--filled')
   })
 })
 

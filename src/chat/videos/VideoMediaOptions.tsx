@@ -1,19 +1,28 @@
 import { open } from '@tauri-apps/plugin-dialog'
-import { Button } from '../../components/Button'
+import { Film, Music, Plus, X } from 'lucide-react'
+import type { DragEvent } from 'react'
+import { Button, IconButton } from '../../components/Button'
 import { Field, StudioSelect } from '../images/StudioPanels'
 import type { VideoBrief } from './types'
+import type { VideoDropZone } from './videoDrop'
 
 export function VideoMediaOptions({
   brief: b,
   change,
   disabled,
   native,
+  dropActive = false,
+  dropTarget = null,
+  onDrop,
   onError,
 }: {
   brief: VideoBrief
   change: (v: Partial<VideoBrief>) => void
   disabled: boolean
   native: boolean
+  dropActive?: boolean
+  dropTarget?: VideoDropZone | null
+  onDrop?: (event: DragEvent, zone?: VideoDropZone) => void
   onError: (v: string) => void
 }) {
   const mode = b.inputMode || 'auto'
@@ -39,7 +48,7 @@ export function VideoMediaOptions({
               ...(b[field] || []),
               ...(Array.isArray(result) ? result : [result]),
             ]),
-          ],
+          ].slice(0, 3),
         })
     } catch (e) {
       onError(String(e))
@@ -106,29 +115,71 @@ export function VideoMediaOptions({
               <span>
                 {i ? '参考音频' : '参考视频'} · {(b[field] || []).length} / 3
               </span>
-              {(b[field] || []).map((p, n) => (
-                <div className="vs-actions" key={p}>
-                  <span className="vs-path">
-                    {n + 1}. {p.split(/[\\/]/).pop()}
-                  </span>
-                  <Button
-                    size="sm"
-                    disabled={disabled}
-                    onClick={() =>
-                      change({ [field]: b[field]?.filter((v) => v !== p) })
-                    }
-                  >
-                    移除
-                  </Button>
-                </div>
-              ))}
-              <Button
-                size="sm"
-                disabled={disabled || !native || (b[field]?.length || 0) >= 3}
-                onClick={() => void pick(field)}
+              <div
+                className={`vs-drop vs-ref-drop${(b[field] || []).length ? ' is-upload-area--filled' : ''}${dropActive && dropTarget === field ? ' is-drop-active' : ''}`}
+                data-video-drop={field}
+                aria-label={i ? '参考音频投放区' : '参考视频投放区'}
+                onDragEnter={(event) => onDrop?.(event, field)}
+                onDragOver={(event) => onDrop?.(event, field)}
+                onDrop={(event) => onDrop?.(event, field)}
               >
-                添加{i ? '音频' : '视频'}
-              </Button>
+                {(b[field] || []).length ? (
+                  (b[field] || []).map((p, n) => (
+                    <div className="vs-drop-file" key={p}>
+                      <span className="vs-drop-mark">
+                        {i ? <Music size={18} strokeWidth={1.6} /> : <Film size={18} strokeWidth={1.6} />}
+                      </span>
+                      <div>
+                        <strong title={p}>
+                          {n + 1}. {p.split(/[\\/]/).pop()}
+                        </strong>
+                      </div>
+                      <IconButton
+                        label={i ? '移除参考音频' : '移除参考视频'}
+                        disabled={disabled}
+                        onClick={() =>
+                          change({ [field]: b[field]?.filter((v) => v !== p) })
+                        }
+                      >
+                        <X size={14} />
+                      </IconButton>
+                    </div>
+                  ))
+                ) : (
+                  <div className="vs-drop-empty">
+                    <span className="vs-drop-mark">
+                      {i ? <Music size={20} strokeWidth={1.5} /> : <Film size={20} strokeWidth={1.5} />}
+                    </span>
+                    <strong>
+                      {dropActive && dropTarget === field
+                        ? '松开即可导入'
+                        : i
+                          ? '把参考音频拖到这里'
+                          : '把参考视频拖到这里'}
+                    </strong>
+                    <span>{i ? 'MP3 / WAV' : 'MP4 / MOV'}</span>
+                  </div>
+                )}
+              </div>
+              <div className="vs-drop-bar">
+                <small>
+                  {dropActive && dropTarget === field
+                    ? '松开即可继续导入'
+                    : (b[field] || []).length
+                      ? '还可以把文件继续拖进来'
+                      : i
+                        ? 'MP3 / WAV，最多 3 段'
+                        : 'MP4 / MOV，最多 3 段'}
+                </small>
+                <Button
+                  size="sm"
+                  disabled={disabled || !native || (b[field]?.length || 0) >= 3}
+                  onClick={() => void pick(field)}
+                >
+                  <Plus size={14} />
+                  添加{i ? '音频' : '视频'}
+                </Button>
+              </div>
             </div>
           ))}
           <p className="vs-muted">
@@ -143,7 +194,7 @@ export function VideoMediaOptions({
           hint="留空由导演编写；填写后按原文保留。"
         >
           <textarea
-            className="kv-textarea"
+            className="kv-textarea custom-scrollbar"
             rows={3}
             disabled={disabled}
             value={b.dialogue || ''}
