@@ -57,8 +57,9 @@ import './studioLayout.css'
 import { DRAFT_KEY, readStudioDraft, storeStudioDraft } from './draft'
 import { RequirementOptimize } from './RequirementOptimize'
 import { dropAsProducts } from './studioDrop'
+import { ImageWorkflow } from './ImageWorkflow'
 
-const ICONS = [WandSparkles, ScanLine, Layers3, Palette, Grid2X2]
+const ICONS = [WandSparkles, Sparkles, ScanLine, Layers3, Palette, Grid2X2]
 const DEFAULT_CONFIG: ImageConfig = {
   providerId: '',
   model: '',
@@ -250,7 +251,11 @@ export default function ImageStudio() {
   }
   const switchView = async (next: View, template?: ImageTemplate) => {
     if (pending) return
-    if (native && dirty && (brief.products.length || brief.requirement.trim())) {
+    if (
+      native &&
+      dirty &&
+      (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length)
+    ) {
       try {
         await save()
       } catch (e) {
@@ -305,7 +310,7 @@ export default function ImageStudio() {
   briefFeatureRef.current = brief.feature
   const dropReadyRef = useRef({ accept: false, busy: false })
   dropReadyRef.current = {
-    accept: view !== 'templates' && stage === 'brief',
+    accept: view !== 'templates' && view !== 'workflow' && stage === 'brief',
     busy,
   }
   const mergeImportedProducts = useCallback((asFolder: boolean, products: ImageProduct[]) => {
@@ -498,7 +503,13 @@ export default function ImageStudio() {
                 className={task?.id === t.id ? 'active' : ''}
                 onClick={() =>
                   void perform(async () => {
-                    if (dirty && (brief.products.length || brief.requirement.trim())) await save()
+                    if (
+                      dirty &&
+                      (brief.products.length ||
+                        brief.requirement.trim() ||
+                        brief.workflowInput?.sources.length)
+                    )
+                      await save()
                     const latest = await api.imageStudioGet(t.id)
                     adopt(latest)
                     setView(latest.brief.feature)
@@ -536,6 +547,27 @@ export default function ImageStudio() {
               onChange={updateTemplate}
               onUse={(t) => void switchView(t.data.mode === 'replace' ? 'replace' : 'smart', t)}
               report={report}
+            />
+          ) : view === 'workflow' ? (
+            <ImageWorkflow
+              key={task?.id || 'new-workflow'}
+              brief={brief}
+              task={task}
+              busy={busy || loading}
+              onChange={patch}
+              onAction={act}
+              perform={perform}
+              onSave={() =>
+                perform(async () => {
+                  await save()
+                })
+              }
+              onNew={() => void switchView('workflow')}
+              onOpenResult={(result) => {
+                setSelected(result)
+                setEditNote('')
+              }}
+              onExport={() => setExportOpen(true)}
             />
           ) : (
             <>
@@ -737,7 +769,9 @@ export default function ImageStudio() {
                               </div>
                             )
                           })}
-                          <p>{dropActive ? '松开即可继续导入' : '还可以直接拖入更多图片或文件夹'}</p>
+                          <p>
+                            {dropActive ? '松开即可继续导入' : '还可以直接拖入更多图片或文件夹'}
+                          </p>
                         </div>
                       )}
                     </section>
@@ -1389,7 +1423,7 @@ export default function ImageStudio() {
                 </Button>
                 <Button
                   size="sm"
-                  disabled={busy || dirty}
+                  disabled={busy || dirty || selected.revision !== task?.revision}
                   onClick={() => {
                     void act({ kind: 'review', resultId: selected.id })
                     setSelected(null)
@@ -1437,34 +1471,43 @@ export default function ImageStudio() {
                 <summary>查看生成提示词</summary>
                 <p>{selected.prompt}</p>
               </details>
-              <div className="is-divider" />
-              <Field label="把这一款完整套图存成模板">
-                <input
-                  className="kv-input"
-                  value={freezeName}
-                  onChange={(e) => setFreezeName(e.target.value)}
-                  placeholder="模板名称"
-                />
-              </Field>
-              <Button
-                disabled={
-                  busy || dirty || !freezeName.trim() || selected.revision !== task?.revision
-                }
-                onClick={() =>
-                  void perform(async () => {
-                    if (task) {
-                      updateTemplate(
-                        await api.imageStudioFreeze(task.id, selected.productId, freezeName),
-                      )
-                      setSelected(null)
-                      setNotice('已保存为样图模板，请在模板库检查文案和商品专属规则后复用。')
+              {brief.feature === 'workflow' && (
+                <p className="is-muted">
+                  要让后续商品也采用同样的修改，请回到流程中填写「对共用规则的修改意见」。
+                </p>
+              )}
+              {brief.feature !== 'workflow' && (
+                <>
+                  <div className="is-divider" />
+                  <Field label="把这一款完整套图存成模板">
+                    <input
+                      className="kv-input"
+                      value={freezeName}
+                      onChange={(e) => setFreezeName(e.target.value)}
+                      placeholder="模板名称"
+                    />
+                  </Field>
+                  <Button
+                    disabled={
+                      busy || dirty || !freezeName.trim() || selected.revision !== task?.revision
                     }
-                  })
-                }
-              >
-                <Layers3 size={15} />
-                冻结为样图模板
-              </Button>
+                    onClick={() =>
+                      void perform(async () => {
+                        if (task) {
+                          updateTemplate(
+                            await api.imageStudioFreeze(task.id, selected.productId, freezeName),
+                          )
+                          setSelected(null)
+                          setNotice('已保存为样图模板，请在模板库检查文案和商品专属规则后复用。')
+                        }
+                      })
+                    }
+                  >
+                    <Layers3 size={15} />
+                    冻结为样图模板
+                  </Button>
+                </>
+              )}
             </div>
           </section>
         </div>

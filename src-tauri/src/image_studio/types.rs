@@ -47,6 +47,37 @@ pub struct Brief {
     pub style: String,
     pub template_id: Option<String>,
     pub products: Vec<Product>,
+    #[serde(default)]
+    pub workflow_input: Option<WorkflowInput>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowInput {
+    pub mode: String,
+    pub sources: Vec<Asset>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Workflow {
+    pub rule_version: u64,
+    pub rules_current: bool,
+    pub approved_version: Option<u64>,
+    pub sample_ids: Vec<String>,
+    pub changes: Vec<RuleChange>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleChange {
+    pub version: u64,
+    #[serde(default)]
+    pub revision: u64,
+    pub note: String,
+    pub summary: String,
+    pub created_at: String,
+    pub template: Template,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -94,6 +125,8 @@ pub struct Task {
     pub progress: String,
     pub error: Option<String>,
     pub templates: Vec<Template>,
+    #[serde(default)]
+    pub workflow: Option<Workflow>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -114,6 +147,8 @@ pub struct Action {
     pub slot_id: String,
     pub result_id: String,
     pub note: String,
+    pub sample_ids: Vec<String>,
+    pub template_data: Option<Value>,
 }
 
 pub fn group_of(p: &Product) -> String {

@@ -8,6 +8,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 pub mod types;
+mod workflow;
 
 use crate::state::AppState;
 use serde_json::{json, Value};
@@ -28,8 +29,15 @@ static ACTIVE: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new
 pub fn initialize_skill_workspace(app: &AppHandle) -> Result<(), String> {
     let _guard = lock()?;
     storage::templates()?;
-    let settings_file = app.path().app_data_dir().map_err(|e| e.to_string())?.join("settings.json");
-    storage::write(&storage::root()?.join("runtime.json"), &json!({ "settingsFile": settings_file }))
+    let settings_file = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("settings.json");
+    storage::write(
+        &storage::root()?.join("runtime.json"),
+        &json!({ "settingsFile": settings_file }),
+    )
 }
 fn active() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     ACTIVE.get_or_init(Default::default)
@@ -109,7 +117,7 @@ pub fn image_studio_get(id: String) -> Result<Task, String> {
 fn validate_brief(b: &Brief) -> Result<(), String> {
     if !matches!(
         b.feature.as_str(),
-        "gen" | "replace" | "smart" | "design" | "client"
+        "gen" | "replace" | "smart" | "design" | "client" | "workflow"
     ) {
         return Err("未知图片功能".into());
     }
@@ -117,6 +125,9 @@ fn validate_brief(b: &Brief) -> Result<(), String> {
         return Err("每套 1–30 页、每批最多 200 个商品".into());
     }
     let mut ids = HashSet::new();
+    if b.feature == "workflow" {
+        workflow::validate_input(b)?;
+    }
     for p in &b.products {
         if !ids.insert(&p.id) {
             return Err("商品 ID 重复".into());
@@ -165,8 +176,14 @@ pub fn image_studio_save(
             progress: String::new(),
             error: None,
             templates: vec![],
+            workflow: None,
         }
     };
+    if brief.feature == "workflow" {
+        workflow::save_brief(&mut t, brief)?;
+        storage::save_task(&mut t)?;
+        return Ok(t);
+    }
     if t.revision == 0 || t.brief != brief {
         t.revision += 1;
         t.plans.clear();
@@ -200,6 +217,9 @@ pub fn image_studio_save_plans(
     check_idle(&id)?;
     let mut t = storage::load_task(&id)?;
     check_revision(&t, revision)?;
+    if t.brief.feature == "workflow" {
+        return Err("请在制作与试品中修改共用规则，或只修改一张结果图".into());
+    }
     if plans.len() != t.plans.len() {
         return Err("不能删除或添加已规划的页面，请修改需求后重新规划".into());
     }
@@ -362,6 +382,9 @@ pub fn image_studio_action(
     check_idle(&id)?;
     let mut t = storage::load_task(&id)?;
     check_revision(&t, revision)?;
+    if t.brief.feature == "workflow" || workflow::is_action(&action.kind) {
+        workflow::validate_action(&t, &action)?;
+    }
     if action.kind == "approve" {
         if !samples_complete(&t, &action.group) {
             return Err(
@@ -387,10 +410,11 @@ pub fn image_studio_action(
             | "resume"
             | "review"
             | "template"
-    ) {
+    ) && !workflow::is_action(&action.kind)
+    {
         return Err("未知图片操作".into());
     }
-    if t.brief.products.is_empty() {
+    if t.brief.products.is_empty() && !workflow::is_action(&action.kind) {
         if t.brief.feature == "gen" {
             t.brief.products.push(Product {
                 id: storage::id(),
@@ -407,7 +431,8 @@ pub fn image_studio_action(
             return Err("请先导入商品图片".into());
         }
     }
-    if t.brief.requirement.trim().is_empty()
+    if !workflow::is_action(&action.kind)
+        && t.brief.requirement.trim().is_empty()
         && t.brief.template_id.is_none()
         && t.brief.products.iter().all(|p| p.template_id.is_none())
     {
@@ -426,6 +451,9 @@ pub fn image_studio_action(
     if matches!(
         action.kind.as_str(),
         "sample" | "bulk" | "generate" | "retry" | "revise"
+    ) || matches!(
+        action.kind.as_str(),
+        "workflow_trial" | "workflow_refine" | "workflow_edit" | "workflow_produce"
     ) {
         engine::validate(&cfg, &t.brief)?;
     }
@@ -482,6 +510,16 @@ async fn execute(
     a: &Action,
     flag: &Arc<AtomicBool>,
 ) -> Result<(), String> {
+    if workflow::is_action(&a.kind) {
+        return workflow::execute(app, t, cfg, a, flag).await;
+    }
+    if matches!(a.kind.as_str(), "retry" | "revise") {
+        if let Some(w) = &mut t.workflow {
+            if w.sample_ids.contains(&a.product_id) {
+                w.approved_version = None;
+            }
+        }
+    }
     if a.kind == "template" {
         let product = t
             .brief
