@@ -354,6 +354,7 @@ function normalizeAssistant(assistant: ChatAssistant): ChatAssistant {
     icon: assistant.icon?.trim() ?? '',
     color: assistant.color?.trim() ?? '',
     source: assistant.source ?? (assistant.built_in ?? assistant.builtIn ? 'builtin' : 'user'),
+    category: assistant.category ?? '',
     system_prompt: (assistant.system_prompt ?? assistant.systemPrompt ?? '').trim(),
     provider_id: (assistant.provider_id ?? assistant.providerId ?? '').trim(),
     model: (assistant.model ?? '').trim(),
@@ -1877,7 +1878,7 @@ export const chatApi = {
   async optimizePrompt(
     text: string,
     conversationId?: string | null,
-    options?: { assistantId?: string | null; purpose?: 'question' | 'image_brief' },
+    options?: { assistantId?: string | null; purpose?: 'question' | 'image_brief' | 'video_brief' },
   ): Promise<string> {
     if (!isTauriRuntime()) return mockChatApi.optimizePrompt(text)
     return invoke<string>('chat_optimize_prompt', {

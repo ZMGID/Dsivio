@@ -129,6 +129,40 @@ const BUILTIN_ASSISTANT_GLYPHS: Record<string, (size: number) => ReactElement> =
       <path d="M3.5 13h17" />
     </svg>
   ),
+  // 电商运营：购物袋
+  asst_builtin_ecom: (size) => (
+    <svg width={size} height={size} {...baseProps}>
+      <path d="M6.5 8h11l-1 12.5H7.5z" />
+      <path d="M9 8V7a3 3 0 0 1 6 0v1" />
+    </svg>
+  ),
+  // 电商生图：相框 + 山形
+  asst_builtin_ecom_visual: (size) => (
+    <svg width={size} height={size} {...baseProps}>
+      <rect x="3.5" y="6" width="17" height="13" rx="2" />
+      <circle cx="9" cy="11" r="1.5" />
+      <path d="m7.5 16.5 3.2-3.2 2.3 2.2 2.2-2.6 3.3 3.6" />
+    </svg>
+  ),
+  // 跨境运营：包装箱
+  asst_builtin_ecom_global: (size) => (
+    <svg width={size} height={size} {...baseProps}>
+      <path d="M4 10h16v10H4z" />
+      <path d="M4 14h16" />
+      <path d="M12 10v10" />
+      <path d="M8.5 10 12 5.5 15.5 10" />
+    </svg>
+  ),
+  // 视频提示词：场记板
+  asst_builtin_video_prompt: (size) => (
+    <svg width={size} height={size} {...baseProps}>
+      <path d="m5 8 14-3v3H5z" />
+      <rect x="4" y="8" width="16" height="12" rx="1.5" />
+      <path d="M8 5.5 9.2 8" />
+      <path d="m12 4.7 1.2 2.5" />
+      <path d="M16 3.8 17.2 6.3" />
+    </svg>
+  ),
 }
 
 /** 返回内置专家的 SVG 图标；非内置（无映射）返回 null，调用处回退到首字头像。 */

@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { api } from '../../api/tauri'
 import VideoStudio from './VideoStudio'
 
 vi.mock('../../api/tauri', () => ({
@@ -13,8 +14,18 @@ vi.mock('../../api/tauri', () => ({
   },
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
+vi.mock('../api', () => ({
+  chatApi: {
+    getAssistants: vi.fn().mockResolvedValue([]),
+    optimizePrompt: vi.fn(),
+  },
+}))
 
 describe('shared video workspace navigation', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('loads chat templates and starts a draft without silently choosing a generation route', async () => {
     render(<VideoStudio />)
     await screen.findByRole('button', { name: '模板库 1' })
@@ -25,5 +36,35 @@ describe('shared video workspace navigation', () => {
     expect(screen.getByRole('button', { name: '生成路线' }).textContent).toContain('请选择')
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
     expect(await screen.findByRole('heading', { name: '运行环境' })).toBeTruthy()
+  })
+
+  it('does not toast bootstrap failures when opening the page', async () => {
+    vi.mocked(api.videoStudioBootstrap).mockRejectedValueOnce(
+      '视频操作失败，请检查配置、依赖和网络。远程任务可通过任务编号继续查询。',
+    )
+    render(<VideoStudio />)
+    await screen.findByRole('button', { name: '模板库 1' })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('shows a floating error toast for a user action, then auto-dismisses', async () => {
+    render(<VideoStudio />)
+    await screen.findByRole('button', { name: '模板库 1' })
+    vi.mocked(api.videoStudioBootstrap).mockRejectedValueOnce(
+      '视频操作失败，请检查配置、依赖和网络。远程任务可通过任务编号继续查询。',
+    )
+    vi.useFakeTimers()
+    fireEvent.click(screen.getByRole('button', { name: '模板库 1' }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const toast = screen.getByRole('alert')
+    expect(toast.className).toContain('vs-toast')
+    expect(toast.textContent).toContain('视频操作失败')
+    expect(toast.closest('.is-main')).toBeNull()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

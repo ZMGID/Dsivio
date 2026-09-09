@@ -5,19 +5,25 @@ import { chatApi } from '../api'
 import { canOptimizeComposerText } from '../promptOptimize'
 import type { ChatAssistant } from '../types'
 
+export type RequirementOptimizePurpose = 'image_brief' | 'video_brief'
+
 export function RequirementOptimize({
   value,
   disabled,
   onChange,
   onError,
+  purpose = 'image_brief',
+  preferredAssistantId,
 }: {
   value: string
   disabled?: boolean
   onChange: (next: string) => void
   onError: (message: string) => void
+  purpose?: RequirementOptimizePurpose
+  preferredAssistantId?: string
 }) {
   const [assistants, setAssistants] = useState<ChatAssistant[]>([])
-  const [assistantId, setAssistantId] = useState('')
+  const [assistantId, setAssistantId] = useState(preferredAssistantId ?? '')
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [snapshot, setSnapshot] = useState<string | null>(null)
@@ -26,9 +32,27 @@ export function RequirementOptimize({
   useEffect(() => {
     void chatApi
       .getAssistants()
-      .then((all) => setAssistants(all.filter((a) => (a.installed ?? true) !== false && !a.archived)))
+      .then((all) => {
+        const listed = all.filter((assistant) => {
+          if (assistant.archived) return false
+          if (preferredAssistantId && assistant.id === preferredAssistantId) return true
+          return (assistant.installed ?? true) !== false
+        })
+        listed.sort((a, b) => {
+          if (a.id === preferredAssistantId) return -1
+          if (b.id === preferredAssistantId) return 1
+          return a.name.localeCompare(b.name, 'zh')
+        })
+        setAssistants(listed)
+      })
       .catch(() => setAssistants([]))
-  }, [])
+  }, [preferredAssistantId])
+
+  useEffect(() => {
+    if (!preferredAssistantId) return
+    if (!assistants.some((assistant) => assistant.id === preferredAssistantId)) return
+    setAssistantId((current) => current || preferredAssistantId)
+  }, [assistants, preferredAssistantId])
 
   useEffect(() => {
     if (!open) return
@@ -43,6 +67,7 @@ export function RequirementOptimize({
   const selected = assistants.find((a) => a.id === assistantId) ?? null
   const canUndo = snapshot !== null && snapshot !== value
   const canRun = canOptimizeComposerText(value)
+  const emptyHint = purpose === 'video_brief' ? '先写下拍摄要求' : '先写下图片要求'
 
   const optimize = async () => {
     if (disabled || busy) return
@@ -58,7 +83,7 @@ export function RequirementOptimize({
     try {
       const result = await chatApi.optimizePrompt(original, null, {
         assistantId: selected?.id ?? null,
-        purpose: 'image_brief',
+        purpose,
       })
       setSnapshot(original)
       onChange(result)
@@ -115,7 +140,7 @@ export function RequirementOptimize({
       )}
       <IconButton
         size="sm"
-        label={busy ? '正在优化' : canUndo ? '撤销优化' : !canRun ? '先写下图片要求' : '优化提示词'}
+        label={busy ? '正在优化' : canUndo ? '撤销优化' : !canRun ? emptyHint : '优化提示词'}
         disabled={disabled || busy || (!canUndo && !canRun)}
         onClick={() => void optimize()}
       >

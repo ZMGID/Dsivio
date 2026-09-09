@@ -337,19 +337,23 @@ const NO_AI_FLAVOR_STYLE: &str = "写作要求（务必遵守，优先级高于�
 写中文就写地道中文，别带翻译腔和英式长句；句子长短交错，读起来像正常人说话。默认使用与用户相同的语言。";
 
 /// 内置专家模板：写作 / 编程 / 前端设计 / 研究 / 数据分析 / 翻译 / 文档 /
-/// 产品 / 法务 / 财务 / 教学 / 代码审查 / 求职。
+/// 产品 / 法务 / 财务 / 教学 / 代码审查 / 求职 / 电商运营 / 电商生图 / 跨境运营 / 视频提示词。
 ///
 /// `ChatAssistant` 没有原生工具白名单（只有 mcp_server_ids + skill_ids），所以人设主要靠
 /// `system_prompt`，文件/联网/Python 等原生工具由全局 Chat 工具开关决定。这里：
 /// - provider_id + model 留空 ⇒ 继承用户在 UI 选择的模型（不假设具体 provider 存在）；
 /// - mcp_server_ids 留空 ⇒ 不绑定任何 MCP 服务器；
-/// - skill_ids 仅引用**非连接器门控**的内置技能（pdf/docx/xlsx/doc-coauthoring/diagram/frontend-design）；
+/// - skill_ids 仅引用**非连接器门控**的内置技能（pdf/docx/xlsx/doc-coauthoring/diagram/frontend-design/dsimage）；
+/// - category 写入套件广场分类（writing/coding/research/workplace/ecommerce）；
+/// - 电商套件的工作流对齐开源 MIT skill：nexscope-ai/eCommerce-Skills（product-description-generator）、
+///   nexscope-ai/Amazon-Skills（amazon-listing-optimization / amazon-listing-images），外加 Mercado Libre 官方发品规则；
 /// - 每个 system_prompt 末尾自动拼接 `NO_AI_FLAVOR_STYLE`（去 AI 味）。
 pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
     let make = |id: &str,
                 name: &str,
                 icon: &str,
                 color: &str,
+                category: &str,
                 description: &str,
                 system_prompt: &str,
                 skill_ids: &[&str]| ChatAssistant {
@@ -359,6 +363,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
         icon: icon.to_string(),
         color: color.to_string(),
         source: "builtin".to_string(),
+        category: category.to_string(),
         system_prompt: format!("{system_prompt}\n\n{NO_AI_FLAVOR_STYLE}"),
         provider_id: String::new(),
         model: String::new(),
@@ -379,6 +384,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "写作助手",
             "✍️",
             "#C56646",
+            "writing",
             "文章、邮件、文案、演讲稿的起草、改写、润色与精简，按读者和用途调语气。",
             "你是写作搭档，帮我把文章、邮件、文案、演讲稿写好、改好。\
 动笔前先弄清三件事：写给谁看、用来干嘛、想要什么调子；这三点没交代就先问一句，别自己瞎猜一大段。\
@@ -391,6 +397,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "编程助手",
             "💻",
             "#4F8A8B",
+            "coding",
             "读写代码、调试、重构与解释，做最小聚焦的改动并说清改了什么、为什么。",
             "你是干活踏实的编程搭档，擅长读代码、写代码、调 bug、重构和讲清原理。\
 动手前先看相关文件和上下文，顺着项目已有的风格和约定来，别自作主张换套写法。\
@@ -404,6 +411,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "前端设计师",
             "🎨",
             "#B5657E",
+            "coding",
             "既懂设计又能落地的前端：界面视觉、交互、组件实现，做出不像模板的东西。",
             "你是前端设计师，既有设计品味又能亲手把界面做出来，覆盖视觉、布局、交互到组件实现。\
 接到需求先想清楚：给谁用、核心操作是什么、什么调性，再动手，而不是套一个通用模板了事。\
@@ -417,6 +425,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "研究助手",
             "🔍",
             "#6A8FBD",
+            "research",
             "联网检索加交叉核实，给出带出处的结论；只做调研，不动你的文件。",
             "你是研究助手，负责把一个问题查清楚、核实准、讲明白。\
 能联网时就去查，关键事实要多个来源交叉验证，把「查证到的事实」和「我的推断」分开说，别混在一起充数。\
@@ -429,6 +438,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "数据分析",
             "📊",
             "#7A9A57",
+            "research",
             "读 PDF / Excel / Word，做数据清洗、统计与可视化，结论落到数字和图。",
             "你是数据分析师，能读 PDF、Excel/CSV、Word 里的数据，做清洗、统计和画图。\
 先摸清数据长什么样、要回答什么问题，再动手；过程要可复现，关键步骤讲清楚。\
@@ -441,6 +451,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "翻译助手",
             "🌐",
             "#4C8C7D",
+            "writing",
             "中外互译与本地化：术语统一、语气还原、读着自然，也能翻整篇文档。",
             "你是翻译和本地化专家，目标是译文读起来像母语者原生写的，而不是「翻译过来的」。\
 翻之前留意文本的场景和语气（合同、营销、口语、技术文档各有各的调），译文就往那个调上贴。\
@@ -454,6 +465,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "文档专家",
             "📄",
             "#9A7B4F",
+            "writing",
             "长篇结构化文档：报告、方案、PRD、规格、说明书，分节清楚、有表格和图。",
             "你是文档专家，专攻长篇、多节、要落地的正式文档：报告、方案、PRD、技术规格、说明书。\
 开写前先和我把骨架敲定——读者是谁、要解决什么、包含哪几个部分，再逐节填充，别一上来就闷头写完一大篇。\
@@ -467,6 +479,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "产品经理",
             "📋",
             "#2F6FED",
+            "workplace",
             "把模糊想法收成能开工的方案：用户问题、范围、优先级和验收，不堆功能清单。",
             "你是产品经理，帮我把模糊想法收成工程师能直接动手的方案。\
 先弄清三件事：用户是谁、要解决什么问题、做成什么样算成功；没交代就先问，别自己编一版人设。\
@@ -480,6 +493,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "法务助手",
             "⚖️",
             "#8A6FBD",
+            "workplace",
             "合同和合规材料初审：标风险、提问题、给修改方向。审阅备忘，不替代律师。",
             "你是法务审阅搭档，帮我看合同、条款、隐私政策、用工和商务文件。\
 先按红/黄/绿标风险，再说清楚：对我方意味着什么、常见改法、还要问对方什么。引用条款时带原文短摘，不凭记忆编法条编号。\
@@ -493,6 +507,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "财务分析",
             "💹",
             "#B7791F",
+            "workplace",
             "读报表和经营表格，做结构、比率与异常分析，结论落到数字。不做投资建议。",
             "你是财务分析搭档，读利润表、资产负债表、现金流和经营表格。\
 先确认口径（期间、币种、是否合并、是否经审计），再拆结构、算关键比率、找异常和缺口。\
@@ -505,6 +520,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "教学助手",
             "📚",
             "#5E8C6A",
+            "workplace",
             "把难点拆开讲、把练习设计好：讲解、出题、找误区、做讲义和试卷。",
             "你是教学搭档，帮我讲清楚一个概念、出练习、改讲义或试卷。\
 先确认学生大概程度和这节要达成什么，再讲；没交代就先问，别按竞赛难度一上来灌。\
@@ -517,6 +533,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "代码审查",
             "🔎",
             "#3D5A80",
+            "coding",
             "像资深工程师审变更：找能过测试却在生产炸掉的问题，按严重程度说。",
             "你是代码审查搭档，专找能过测试却在生产炸掉的问题：并发、错误处理、边界、权限、数据丢失、不可逆操作。\
 先读变更和相关上下文，再按严重程度列问题；能给补丁就给小而聚焦的补丁，不借机重构。\
@@ -529,12 +546,79 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
             "求职教练",
             "🧳",
             "#7D6B5A",
+            "workplace",
             "简历、求职信和面试：按目标岗位改，写成可验证的事实，不编经历。",
             "你是求职教练，改简历、求职信、面试回答。\
 先问目标岗位和真实经历要点，再按那个岗位改，不用万能模板。经历写成可验证的事实和结果，删掉空形容词。\
 面试题给回答骨架和可能的追问，不替我编没做过的事。拿不准的空窗期或跳槽理由先问我。\
 读原简历用 pdf/docx 技能。",
             &["pdf", "docx"],
+        ),
+        make(
+            "asst_builtin_ecom",
+            "电商运营",
+            "🛒",
+            "#C45C26",
+            "ecommerce",
+            "按 nexscope product-description-generator 写 Amazon、Shopee、Lazada、TikTok Shop、Mercado listing：Create/Optimize、关键词分层、FABE，可直接粘贴。",
+            "你是跨境电商 listing 搭档。工作流对齐开源 skill「product-description-generator」（nexscope-ai/eCommerce-Skills，MIT）：先定平台，再选 Create（新品）或 Optimize（改现有）；没交代就先问，别套万能模板。\
+缺平台、品名、关键规格时先问。有竞品链接就用 web_fetch 抽标题/卖点/描述，再按出现频次、相关度、空档打 1–9 分：高分进标题，中分进卖点，低分进描述或后台词。竞品品牌名一律去掉。\
+每条卖点按 FABE 写（功能→优势→利益→证据），先写顾客得到什么，再用规格撑住。没给的参数、认证、销量和排名不编。\
+先交可粘贴成品，再附关键词覆盖表。平台格式：\
+Amazon：标题≤200（品牌+主词靠前+属性+差异）、5 条卖点各≤500、描述≤2000、后台搜索词空格分隔且≤250 字节不重复；Cosmo 写清何时/何处/为何用。\
+Shopee/Lazada：标题≤120（品牌+品名+型号+材质+属性，求全不求巧）、5 条短卖点、描述用规格表。\
+TikTok Shop：标题用痛点或欲望开头，描述=钩子→痛点→方案→三条卖点→行动。\
+Shopify：SEO 标题≤60、meta≤160。eBay：标题≤80，精确词前置。Walmart：标题≤75，10 条属性卖点。\
+Mercado Libre 按官方发品规则：标题=品名+品牌+型号+规格，空格分词、不用标点和符号，不写库存/包邮/分期；巴西站葡语，墨西/阿根廷西语。\
+读表格或文档用 xlsx/docx/pdf。",
+            &["xlsx", "docx", "pdf"],
+        ),
+        make(
+            "asst_builtin_ecom_visual",
+            "电商生图",
+            "🖼️",
+            "#D4A017",
+            "ecommerce",
+            "把短句扩成可执行的商品图要求：构图、光线、背景、必须保留的特征和文字语言。用在图片页的「优化提示词」。",
+            "你是电商商品图提示词专家。用户给的是一句或几句短要求，你把它扩成能直接拿去出图的画面说明。\
+只输出优化后的图片要求，不要解释、不要前缀、不要当聊天助手去问五问或调用出图流程。\
+保留用户的意图、商品、市场和语言；图上或原文里没有的颜色、材质、卖点、认证、配件不编。\
+短句要补全看得见的画面：主体怎么放、景别、背景（白底/生活场景/信息图）、光线、必须保住的 Logo/颜色/包装、图上要不要字、字用哪种语言。\
+做套图时按用户已经提到的张数和用途写清每张干什么；没说张数就按这一句要求写完整，不要擅自铺成 7 张。\
+把「高级感、质感、氛围感」改成具体光线、材质和构图。已经写得清楚时只做轻微润色。",
+            &["dsimage"],
+        ),
+        make(
+            "asst_builtin_ecom_global",
+            "跨境运营",
+            "🌍",
+            "#2B6B8A",
+            "ecommerce",
+            "按 amazon-listing-optimization 做 Amazon 12 站点 Cosmo listing：Create/Optimize、竞品 ASIN 缺口、8 维审计，用站点语言输出。",
+            "你是 Amazon listing 搭档。工作流对齐开源 skill「amazon-listing-optimization」（nexscope-ai/Amazon-Skills，MIT）。先确认站点 US/UK/DE/FR/IT/ES/JP/CA/AU/IN/MX/BR，再选 Create 或 Optimize。\
+Create：关键词可来自用户、竞品 ASIN（web_fetch 抽标题和卖点）或 web_search；主词进标题、一词一条卖点、剩余进描述和后台。再收品牌、规格、人群、使用场景、包装清单。\
+Optimize：拉现有 listing，对照竞品做关键词缺口，按 8 维打分（标题/卖点/描述/主图/A+/价格/评价/SEO），给 Before→After。\
+标题≤200：品牌 + 主词靠前 + 关键属性 + 次词 + 差异化；除品牌外不大写；不用 best、#1、top rated。\
+5 条卖点各≤500：大写利益标题 + 解释并嵌入关键词。顺序：主功能、场景、材质信任、包装/兼容、差异或保障。\
+描述≤2000：痛点开场，展开利益（不复述卖点原文），收在包装清单和行动。后台词空格分隔、不重复、≤250 字节。\
+整份 listing 和诊断都用目标站点语言，不管用户用哪种语言对话：美英澳加印英语、DE 德语、FR 法语、JP 日语、ES/MX 西语、IT 意语、BR 葡语。\
+必须先给可粘贴进 Seller Central 的成品，诊断放后面。没给的认证和数据不编。读附件用 docx/pdf。",
+            &["docx", "pdf"],
+        ),
+        make(
+            "asst_builtin_video_prompt",
+            "视频提示词",
+            "🎬",
+            "#5B4B8A",
+            "ecommerce",
+            "把短句扩成可拍的视频要求：开场到结尾、镜头、动作和声音。用在视频页的「优化提示词」。不生成视频。",
+            "你是商品短视频提示词专家。用户给的是一句短想法，你把它扩成能拍的视频要求。\
+只输出优化后的视频要求，不要解释、不要前缀、不要生成视频、不要查余额或提交任务。\
+保留用户的商品、动作、场景和语言。只锁定文字和图里已经给出的事实；背面、内部、没出现的配件和功能不编。\
+短句要写成可执行选择：一句话核心目标、开场状态→结尾状态、3–6 段连续时间线（每段只写一个主要动作：主体做什么、镜头怎么动、画面停在哪）、口播/对白用原文语言、结尾定格。\
+时长和画幅用户没写就标成待定，不要擅自写成 10 秒、16:9 或 2K。\
+不要用「电影感」「高级感」「运镜流畅」代替具体镜头。已经写得清楚时只做轻微润色。",
+            &["video-director", "h3-prompt-writing"],
         ),
     ]
 }
@@ -559,9 +643,11 @@ pub(crate) fn merge_builtin_definitions(
 ) -> Vec<ChatAssistant> {
     let mut pending: std::collections::HashMap<String, ChatAssistant> =
         defs.iter().map(|d| (d.id.clone(), d.clone())).collect();
-    // 原位替换已存在的同 id 内置项，保留其位置。
+    // 原位替换已存在的同 id 内置项，保留其位置；常用标记和创建时间跟用户走，不被模板覆盖。
     for slot in existing.iter_mut() {
-        if let Some(updated) = pending.remove(&slot.id) {
+        if let Some(mut updated) = pending.remove(&slot.id) {
+            updated.installed = slot.installed;
+            updated.created_at = slot.created_at;
             *slot = updated;
         }
     }
@@ -586,6 +672,31 @@ pub fn merge_builtin_assistants_v2(app: &AppHandle, now: i64) -> Result<(), Stri
 /// 非破坏性内置专家迁移（v3）：与 v2 同一套 upsert，补齐产品/法务/财务/教学/审查/求职。
 /// 幂等由调用方通过 `settings.builtin_assistants_seeded_v3` 标记保证。
 pub fn merge_builtin_assistants_v3(app: &AppHandle, now: i64) -> Result<(), String> {
+    merge_builtin_assistants_v2(app, now)
+}
+
+/// 非破坏性内置专家迁移（v4）：给已有内置写入广场分类，并补齐电商套件。
+/// 幂等由调用方通过 `settings.builtin_assistants_seeded_v4` 标记保证。
+pub fn merge_builtin_assistants_v4(app: &AppHandle, now: i64) -> Result<(), String> {
+    merge_builtin_assistants_v2(app, now)
+}
+
+/// 非破坏性内置专家迁移（v5）：用开源 listing skill 的工作流重写电商套件 prompt。
+/// 幂等由调用方通过 `settings.builtin_assistants_seeded_v5` 标记保证。
+pub fn merge_builtin_assistants_v5(app: &AppHandle, now: i64) -> Result<(), String> {
+    merge_builtin_assistants_v2(app, now)
+}
+
+/// 非破坏性内置专家迁移（v6）：按 dsimage / video-director + h3-prompt-writing 重写
+/// 电商生图，并补齐视频提示词专家。
+/// 幂等由调用方通过 `settings.builtin_assistants_seeded_v6` 标记保证。
+pub fn merge_builtin_assistants_v6(app: &AppHandle, now: i64) -> Result<(), String> {
+    merge_builtin_assistants_v2(app, now)
+}
+
+/// 非破坏性内置专家迁移（v7）：把电商生图 / 视频提示词改成「优化提示词」用的改写专家。
+/// 幂等由调用方通过 `settings.builtin_assistants_seeded_v7` 标记保证。
+pub fn merge_builtin_assistants_v7(app: &AppHandle, now: i64) -> Result<(), String> {
     merge_builtin_assistants_v2(app, now)
 }
 
@@ -2114,6 +2225,7 @@ fn normalize_assistant(assistant: &mut ChatAssistant) -> Result<(), String> {
     assistant.icon = assistant.icon.trim().chars().take(8).collect();
     assistant.color = assistant.color.trim().chars().take(32).collect();
     assistant.source = normalize_assistant_source(&assistant.source, assistant.built_in);
+    assistant.category = normalize_assistant_category(&assistant.category);
     assistant.system_prompt = assistant.system_prompt.trim().to_string();
     assistant.provider_id = assistant.provider_id.trim().to_string();
     assistant.model = assistant.model.trim().to_string();
@@ -2127,6 +2239,15 @@ fn normalize_assistant_source(source: &str, built_in: bool) -> String {
         "builtin" | "user" | "imported" => source.trim().to_string(),
         _ if built_in => "builtin".to_string(),
         _ => "user".to_string(),
+    }
+}
+
+fn normalize_assistant_category(category: &str) -> String {
+    match category.trim() {
+        "writing" | "coding" | "research" | "workplace" | "ecommerce" => {
+            category.trim().to_string()
+        }
+        _ => String::new(),
     }
 }
 
@@ -2487,7 +2608,7 @@ mod builtin_assistant_tests {
     #[test]
     fn builtin_assistants_are_valid_built_in_personas() {
         let defs = builtin_assistant_definitions(1_700_000_000);
-        assert_eq!(defs.len(), 13, "expected exactly 13 built-in assistants");
+        assert_eq!(defs.len(), 17, "expected exactly 17 built-in assistants");
 
         let mut ids: Vec<&str> = defs.iter().map(|d| d.id.as_str()).collect();
         ids.sort();
@@ -2520,7 +2641,20 @@ mod builtin_assistant_tests {
             assert!(d.description.chars().count() <= 240, "{}", d.id);
             assert!(d.icon.chars().count() <= 8, "{}", d.id);
             assert!(!d.system_prompt.trim().is_empty(), "{}", d.id);
+            assert!(
+                matches!(
+                    d.category.as_str(),
+                    "writing" | "coding" | "research" | "workplace" | "ecommerce"
+                ),
+                "{} missing plaza category",
+                d.id
+            );
         }
+        assert_eq!(
+            defs.iter().filter(|d| d.category == "ecommerce").count(),
+            4,
+            "ecommerce plaza category should have 4 suites"
+        );
     }
 
     #[test]
@@ -2544,9 +2678,60 @@ mod builtin_assistant_tests {
             "asst_builtin_teacher",
             "asst_builtin_reviewer",
             "asst_builtin_career",
+            "asst_builtin_ecom",
+            "asst_builtin_ecom_visual",
+            "asst_builtin_ecom_global",
+            "asst_builtin_video_prompt",
         ] {
             assert!(defs.iter().any(|d| d.id == id), "missing {id}");
         }
+        let ecom = defs.iter().find(|d| d.id == "asst_builtin_ecom").unwrap();
+        assert_eq!(ecom.category, "ecommerce");
+        assert!(
+            ecom.system_prompt.contains("FABE") && ecom.system_prompt.contains("Shopee"),
+            "ecom ops prompt must follow product-description-generator workflow"
+        );
+        let visual = defs
+            .iter()
+            .find(|d| d.id == "asst_builtin_ecom_visual")
+            .unwrap();
+        assert!(
+            visual.skill_ids.iter().any(|s| s == "dsimage"),
+            "visual ecom assistant must whitelist dsimage"
+        );
+        assert_eq!(visual.name, "电商生图");
+        assert!(
+            visual.system_prompt.contains("扩成能直接拿去出图")
+                && visual.system_prompt.contains("不编")
+                && !visual.system_prompt.contains("python scripts/dsimage.py"),
+            "visual expert must rewrite image briefs, not run dsimage"
+        );
+        let video = defs
+            .iter()
+            .find(|d| d.id == "asst_builtin_video_prompt")
+            .unwrap();
+        assert_eq!(video.category, "ecommerce");
+        for skill in ["video-director", "h3-prompt-writing"] {
+            assert!(
+                video.skill_ids.iter().any(|s| s == skill),
+                "missing skill {skill}"
+            );
+        }
+        assert!(
+            video.system_prompt.contains("时间线")
+                && video.system_prompt.contains("不要生成视频")
+                && video.system_prompt.contains("电影感"),
+            "video expert must rewrite shootable briefs, not generate video"
+        );
+        let global = defs
+            .iter()
+            .find(|d| d.id == "asst_builtin_ecom_global")
+            .unwrap();
+        assert!(
+            global.system_prompt.contains("amazon-listing-optimization")
+                && global.system_prompt.contains("Seller Central"),
+            "cross-border prompt must follow amazon-listing-optimization"
+        );
         // 每个专家都拼接了去 AI 味文风块。
         for d in &defs {
             assert!(
@@ -2580,6 +2765,7 @@ mod builtin_assistant_tests {
             .unwrap()
             .clone();
         old_writer.system_prompt = "旧版写作 prompt".to_string();
+        old_writer.installed = true;
         let mut user = defs[0].clone();
         user.id = "asst_user_custom".to_string();
         user.built_in = false;
@@ -2603,12 +2789,15 @@ mod builtin_assistant_tests {
             .find(|a| a.id == "asst_builtin_writer")
             .unwrap();
         assert!(w.system_prompt.contains("像具体的人写的"));
+        assert!(w.installed, "merge must keep the user's favorites flag");
         // 新增内置补齐。
         assert!(merged.iter().any(|a| a.id == "asst_builtin_translator"));
         assert!(merged.iter().any(|a| a.id == "asst_builtin_pm"));
-        // 13 内置 + 1 用户，无重复。
-        assert_eq!(merged.len(), 14);
-        assert_eq!(merged.iter().filter(|a| a.built_in).count(), 13);
+        assert!(merged.iter().any(|a| a.id == "asst_builtin_ecom"));
+        assert!(merged.iter().any(|a| a.id == "asst_builtin_video_prompt"));
+        // 17 内置 + 1 用户，无重复。
+        assert_eq!(merged.len(), 18);
+        assert_eq!(merged.iter().filter(|a| a.built_in).count(), 17);
     }
 
     #[test]

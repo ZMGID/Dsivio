@@ -34,7 +34,7 @@ impl SkillRunCache {
     /// 某技能 id 是否在助手白名单内(无助手 = 不限)。
     pub fn skill_id_allowed(&self, skill_id: &str) -> bool {
         match &self.allowed_skill_ids {
-            Some(ids) => ids.iter().any(|id| id == skill_id),
+            Some(ids) => super::types::skill_id_in_allowlist(skill_id, ids),
             None => true,
         }
     }
@@ -301,6 +301,19 @@ mod tests {
             &["a".to_string(), "ab".to_string()],
         );
         assert_eq!(out, "x|y");
+    }
+
+    #[test]
+    fn skill_run_cache_allowlist_matches_packaged_plugin_ids() {
+        let mut cache = SkillRunCache::default();
+        cache.set_allowed_skill_ids(Some(vec!["h3-prompt-writing".to_string()]));
+        assert!(cache.skill_id_allowed("h3-prompt-writing"));
+        assert!(cache.skill_id_allowed(
+            "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-h3-prompt-writing"
+        ));
+        assert!(!cache.skill_id_allowed(
+            "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-ecom-h3-video"
+        ));
     }
 
     #[test]
