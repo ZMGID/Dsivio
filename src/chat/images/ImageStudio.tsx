@@ -57,6 +57,7 @@ import { dropAsProducts } from './studioDrop'
 import { ImageWorkflow } from './ImageWorkflow'
 import { TaskPanel } from './TaskPanel'
 import { useSharedDraft } from '../studio/useSharedDraft'
+import { useTaskLibrary } from '../studio/useTaskLibrary'
 
 const DEFAULT_CONFIG: ImageConfig = {
   providerId: '',
@@ -101,6 +102,7 @@ export default function ImageStudio() {
   const busy = pending || running
   const dirty = task ? JSON.stringify(brief) !== JSON.stringify(task.brief) : true
   const native = isTauriRuntime()
+  const library = useTaskLibrary('image', native)
   const report = useCallback(
     (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
     [],
@@ -533,7 +535,7 @@ export default function ImageStudio() {
             <button type="button" className={view === 'tasks' ? 'active' : ''}
               aria-current={view === 'tasks' ? 'page' : undefined}
               onClick={() => void switchView('tasks')}>
-              <History size={15} /><span>任务</span><span className="is-nav-count">{tasks.length}</span>
+              <History size={15} /><span>任务</span><span className="is-nav-count">{tasks.filter(t => t.status === 'running' || !library.organization[t.id]?.archived).length}</span>
             </button>
             <Button variant="ghost" aria-label="图片设置"
               title={hasConfig ? `图片设置 · ${config.model}` : '图片设置 · 待配置图片模型'}
@@ -559,7 +561,9 @@ export default function ImageStudio() {
               report={report}
             />
           ) : view === 'tasks' ? (
-            <TaskPanel tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} />
+            <TaskPanel tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} library={library} disabled={pending}
+              onNew={() => void switchView('gen')}
+              onRefresh={async () => { const next = await api.imageStudioBootstrap(); setTasks(next.tasks); setTemplates(next.templates) }} />
           ) : view === 'workflow' ? (
             <ImageWorkflow
               key={task?.id || 'new-workflow'}

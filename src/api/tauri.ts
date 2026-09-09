@@ -2,6 +2,7 @@
 // 所有 invoke 调用和事件监听都集中在这里，作为前后端的统一接口层
 
 import { invoke } from '@tauri-apps/api/core'
+import type { TaskOrganizations, TaskOrganizationPatch } from '../chat/studio/taskLibraryModel'
 import type { VideoBootstrap, VideoTask, VideoTemplate, VideoProvider } from '../chat/videos/types'
 import { listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
@@ -1928,6 +1929,8 @@ async function onChatProtocol(
 // ========== API 导出 ==========
 
 export const api = {
+  studioTaskLibrary: (domain: 'image' | 'video', ids?: string[], patch?: TaskOrganizationPatch) =>
+    invoke<TaskOrganizations>('studio_task_library', { domain, ids: ids ?? null, patch: patch ?? null }),
   videoStudioBootstrap: () => invoke<VideoBootstrap>('video_studio', { action: 'bootstrap', input: {} }),
   videoStudioTask: (action: string, input: Record<string, unknown>) => invoke<VideoTask>('video_studio', { action, input }),
   videoStudioConfig: (input: Record<string, unknown>) => invoke<Record<string, VideoProvider>>('video_studio', { action: 'config', input }),

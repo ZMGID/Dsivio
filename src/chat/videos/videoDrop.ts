@@ -10,7 +10,7 @@ export function looksLikeVideoPath(path: string): boolean {
 }
 
 export function applyVideoStudioDrop(
-  view: 'creation' | 'analysis' | 'remake' | 'templates' | 'settings',
+  view: 'creation' | 'analysis' | 'remake' | 'templates' | 'settings' | 'tasks',
   current: { images: string[]; source: string },
   paths: string[],
 ): { images?: string[]; source?: string } | { error: string } {

@@ -17,6 +17,28 @@ use tokio::io::AsyncWriteExt;
 pub(crate) mod runtime;
 pub(crate) const PACKAGE_ID: &str = "42df724b-34e1-47b8-aa2c-6c738b09d280";
 
+// Public worker operations shared by the chat tool and the video page.
+// Submission bookkeeping (comfy_submitted, uncertain, etc.) stays host-only.
+const WORKER_ACTIONS: &[&str] = &[
+    "bootstrap", "get", "create", "save", "plan_result", "analysis_result",
+    "approve", "prompt_result", "quote", "template_save", "template_import",
+    "install_comfy", "recover",
+];
+const HOST_ACTIONS: &[&str] = &[
+    "config", "image_preview", "open", "preview", "plan", "prepare", "analyze", "submit", "poll",
+];
+
+pub(crate) fn public_actions() -> Vec<&'static str> {
+    WORKER_ACTIONS.iter().chain(HOST_ACTIONS).copied().collect()
+}
+
+fn unknown_action(action: &str) -> String {
+    format!(
+        "未知视频操作 {action:?}；支持的操作：{}。请按 studio 工具说明调用；若文档中的操作仍不可用，请报告接口版本不一致并停止，不要搜索或修改安装目录，也不要绕过工具提交。",
+        public_actions().join(", ")
+    )
+}
+
 fn source(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(runtime::resource_directory(app)?.join("plugins/dsvideo-plugin"))
 }
@@ -465,9 +487,8 @@ pub async fn video_studio(app: AppHandle, action: String, input: Value) -> Resul
             )
             .await
         }
-        "bootstrap" | "get" | "create" | "save" | "approve" | "quote" | "template_save"
-        | "template_import" | "install_comfy" | "recover" => worker(&app, &action, input).await,
-        _ => Err("未知视频操作".into()),
+        _ if WORKER_ACTIONS.contains(&action.as_str()) => worker(&app, &action, input).await,
+        _ => Err(unknown_action(&action)),
     }
 }
 
@@ -478,6 +499,42 @@ fn analysis_context(evidence: Value, brief: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn documented_chat_task_actions_reach_the_public_video_service() {
+        let guide = include_str!("../resources/plugins/dsvideo-plugin/STUDIO.md");
+        let shared_tasks = guide.split("## Shared tasks").nth(1).unwrap();
+        let supported = public_actions();
+        for line in shared_tasks.lines().filter(|line| line.starts_with('`')) {
+            let (heading, _) = line.split_once(':').expect("documented action must have a description");
+            for action in heading.split('`').skip(1).step_by(2) {
+                assert!(supported.contains(&action), "documented action {action} is not exposed");
+            }
+        }
+        for action in ["plan_result", "analysis_result", "prompt_result"] {
+            assert!(WORKER_ACTIONS.contains(&action), "chat-authored results must reach the worker");
+        }
+        for internal in ["comfy_workflow", "comfy_submitted", "comfy_complete", "uncertain"] {
+            assert!(!supported.contains(&internal), "internal bookkeeping must stay host-owned");
+        }
+    }
+
+    #[test]
+    fn unknown_action_error_lists_recovery_options_without_sending_agents_to_source_code() {
+        let error = unknown_action("convert_prompt");
+        assert!(error.contains("convert_prompt"));
+        assert!(error.contains("prompt_result"));
+        assert!(error.contains("prepare"));
+        assert!(error.contains("不要搜索或修改安装目录"));
+    }
+
+    #[test]
+    fn studio_tool_advertises_all_public_video_operations() {
+        let tool = crate::mcp::types::native_studio_tool();
+        for action in public_actions() {
+            assert!(tool.description.contains(action), "tool does not advertise {action}");
+        }
+    }
+
     #[test]
     fn reference_analysis_preserves_user_focus_and_report_language() {
         let context = analysis_context(json!({"warnings":["missing audio"]}), &json!({"request":"focus on opening", "language":"zh-CN"}));

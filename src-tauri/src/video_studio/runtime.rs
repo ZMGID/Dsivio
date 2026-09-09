@@ -15,12 +15,28 @@ pub(super) fn initialize(app: &AppHandle) -> Result<(), String> {
 }
 
 pub(super) fn resource_directory(app: &AppHandle) -> Result<PathBuf, String> {
-    let bundled = app.path().resource_dir().map_err(|e| e.to_string())?;
+    resolve_resource_directory(
+        app.path().resource_dir().map_err(|e| e.to_string()),
+        cfg!(debug_assertions),
+    )
+}
+
+fn resolve_resource_directory(
+    bundled: Result<PathBuf, String>,
+    development: bool,
+) -> Result<PathBuf, String> {
     // Packaged debug apps must also work away from the developer checkout.
-    if bundled.join("video-runtime/runtime.json").is_file() || !cfg!(debug_assertions) {
-        return Ok(bundled);
+    if let Ok(path) = &bundled {
+        if path.join("video-runtime/runtime.json").is_file() || !development {
+            return Ok(path.clone());
+        }
     }
-    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"))
+    // Tauri can fail to resolve resource_dir for a custom CARGO_TARGET_DIR.
+    // That failure must not bypass the development resource fallback.
+    if development {
+        return Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"));
+    }
+    bundled.map_err(|error| format!("无法定位内置视频资源目录：{error}"))
 }
 
 pub(crate) fn root() -> Result<PathBuf, String> {
@@ -98,6 +114,30 @@ fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn custom_development_target_falls_back_when_tauri_cannot_resolve_resources() {
+        assert_eq!(
+            resolve_resource_directory(Err("unknown path".into()), true).unwrap(),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")
+        );
+    }
+
+    #[test]
+    fn packaged_debug_resources_take_precedence_over_the_checkout() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("video-runtime")).unwrap();
+        std::fs::write(temp.path().join("video-runtime/runtime.json"), "{}").unwrap();
+        assert_eq!(
+            resolve_resource_directory(Ok(temp.path().into()), true).unwrap(),
+            temp.path()
+        );
+    }
+
+    #[test]
+    fn release_does_not_fall_back_to_the_developer_checkout() {
+        assert!(resolve_resource_directory(Err("unknown path".into()), false).is_err());
+    }
+
     #[test]
     fn runtime_paths_follow_the_installation_directory() {
         let temp = tempfile::tempdir().unwrap();
