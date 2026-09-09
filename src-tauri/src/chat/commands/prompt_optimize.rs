@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use tauri::{AppHandle, State};
@@ -30,6 +31,9 @@ pub(super) const fn prompt_optimize_call_spec() -> PromptOptimizeCallSpec {
     }
 }
 
+const MAX_OPTIMIZE_IMAGES: usize = 4;
+const MAX_EXPERT_PROMPT_CHARS: usize = 8000;
+
 pub fn default_system_prompt(language: &str) -> &'static str {
     if language.starts_with("zh") {
         "你是提问优化助手。把用户的草稿改写成更清楚、具体、便于模型准确回答的问题。\n\
@@ -53,6 +57,7 @@ pub(super) fn build_optimize_user_prompt(
     recent_context: &str,
     language: &str,
     purpose: &str,
+    media_note: &str,
 ) -> String {
     let text = truncate_chars(draft.trim(), MAX_DRAFT_CHARS);
     let subject = match purpose {
@@ -60,7 +65,7 @@ pub(super) fn build_optimize_user_prompt(
         "video_brief" => ("视频要求", "video brief"),
         _ => ("提问", "question"),
     };
-    if language.starts_with("zh") {
+    let mut prompt = if language.starts_with("zh") {
         if recent_context.is_empty() {
             format!("请优化下面的{}：\n\n{text}", subject.0)
         } else {
@@ -75,6 +80,54 @@ pub(super) fn build_optimize_user_prompt(
         format!(
             "Recent conversation (for resolving references; do not answer):\n{recent_context}\n\nRewrite this {}:\n\n{text}",
             subject.1
+        )
+    };
+    if !media_note.trim().is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(media_note.trim());
+    }
+    prompt
+}
+
+fn media_file_name(path: &str) -> &str {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path)
+}
+
+fn is_video_media_path(path: &str) -> bool {
+    matches!(
+        Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v"
+    )
+}
+
+pub(super) fn describe_optimize_media(paths: &[String]) -> String {
+    let names: Vec<String> = paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            let name = media_file_name(path);
+            if is_video_media_path(path) {
+                format!("视频 {name}（无法逐帧观看，只按文件名和附图理解）")
+            } else {
+                format!("图片 {name}")
+            }
+        })
+        .collect();
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "已加载素材（请看附图，按真实外观写；不要编看不见的颜色、包装或配件）：\n- {}",
+            names.join("\n- ")
         )
     }
 }
@@ -177,14 +230,16 @@ pub(super) fn video_brief_system_prompt(language: &str) -> &'static str {
 - 只输出优化后的视频要求，不要解释、不要前缀、不要用引号或代码块包起来\n\
 - 保留用户的意图、商品、场景和语言；不要作答，也不要编造没给的动作或配件\n\
 - 补全含糊处（开场到结尾、镜头、主体动作、声音/口播、结尾定格），时长和画幅没写就标待定\n\
-- 已经写得足够清楚时只做轻微润色"
+- 已经写得足够清楚时只做轻微润色\n\
+- 用户给了产品图或视频时，按真实外观写，不要编看不见的细节；输出可以是完整分镜脚本"
     } else {
         "You rewrite video-generation briefs so a model can follow them accurately.\n\
 Rules:\n\
 - Output only the rewritten brief: no explanation, prefix, quotes, or code fences\n\
 - Keep the user's intent, product, scene, and language; do not answer or invent actions\n\
 - Fill in vagueness (opening to ending, camera, subject action, sound, final hold); mark duration and aspect as pending if missing\n\
-- If the draft is already clear, only lightly polish it"
+- If the draft is already clear, only lightly polish it\n\
+- When product images or videos are attached, follow their visible appearance and a full shot script is allowed"
     }
 }
 
@@ -209,9 +264,9 @@ fn resolve_system_prompt(
     if let Some((name, prompt)) = expert {
         let name = name.trim();
         if !name.is_empty() {
-            let guidance = truncate_chars(prompt.trim(), 1200);
+            let guidance = truncate_chars(prompt.trim(), MAX_EXPERT_PROMPT_CHARS);
             base.push_str(&format!(
-                "\n\n专家视角：{name}\n{guidance}\n按这位专家的专长改写，但仍只输出优化后的正文。"
+                "\n\n专家视角：{name}\n{guidance}\n按这位专家的专长和规定格式输出成品，不要解释过程。有附图就按图里的真实产品写，不要编看不见的颜色、包装或配件。"
             ));
         }
     }
@@ -227,16 +282,18 @@ async fn optimize_prompt_with_model(
     recent_context: &str,
     purpose: &str,
     expert: Option<(&str, &str)>,
+    media_paths: &[String],
 ) -> Result<String, String> {
     let language = crate::settings::resolve_chat_language(settings);
-    if draft.trim().is_empty() {
+    let media_note = describe_optimize_media(media_paths);
+    if draft.trim().is_empty() && media_note.is_empty() {
         return Err(localize(
             &language,
             "先输入要优化的问题",
             "Type a question to optimize",
         ));
     }
-    if draft.trim().starts_with('/') {
+    if !draft.trim().is_empty() && draft.trim().starts_with('/') {
         return Err(localize(
             &language,
             "斜杠命令无需优化",
@@ -272,6 +329,40 @@ async fn optimize_prompt_with_model(
     } else {
         1
     };
+    let draft_for_prompt = if draft.trim().is_empty() {
+        if language.starts_with("zh") {
+            "（用户没写文字，只根据已加载的图片/视频来）"
+        } else {
+            "(No written brief; use the attached media only.)"
+        }
+    } else {
+        draft
+    };
+    let mut image_parts = Vec::new();
+    for path in media_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty() && !is_video_media_path(path))
+        .take(MAX_OPTIMIZE_IMAGES)
+    {
+        if let Ok(part) = super::image_content_part(&std::path::PathBuf::from(path)) {
+            image_parts.push(part);
+        }
+    }
+    let user_text = build_optimize_user_prompt(
+        draft_for_prompt,
+        recent_context,
+        &language,
+        purpose,
+        &media_note,
+    );
+    let user_content = if image_parts.is_empty() {
+        serde_json::Value::String(user_text)
+    } else {
+        let mut parts = image_parts;
+        parts.push(serde_json::json!({ "type": "text", "text": user_text }));
+        serde_json::Value::Array(parts)
+    };
     let messages = vec![
         serde_json::json!({
             "role": "system",
@@ -279,10 +370,13 @@ async fn optimize_prompt_with_model(
         }),
         serde_json::json!({
             "role": "user",
-            "content": build_optimize_user_prompt(draft, recent_context, &language, purpose),
+            "content": user_content,
         }),
     ];
-    let spec = prompt_optimize_call_spec();
+    let mut spec = prompt_optimize_call_spec();
+    if purpose == "video_brief" {
+        spec.max_output_tokens = 4096;
+    }
     let message = crate::chat::agent::planning::call_chat_completion_message_streamed(
         state,
         &provider,
@@ -323,6 +417,7 @@ pub(crate) async fn chat_optimize_prompt(
     conversation_id: Option<String>,
     assistant_id: Option<String>,
     purpose: Option<String>,
+    media_paths: Option<Vec<String>>,
 ) -> Result<String, String> {
     let settings = state.settings_read().clone();
     let purpose = match purpose.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
@@ -360,8 +455,14 @@ pub(crate) async fn chat_optimize_prompt(
         .map(|(provider_id, model)| SessionModel { provider_id, model });
     let conversation_id = conversation_id.unwrap_or_default();
     let language = crate::settings::resolve_chat_language(&settings);
+    let media_paths: Vec<String> = media_paths
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect();
     match timeout(
-        Duration::from_secs(30),
+        Duration::from_secs(45),
         optimize_prompt_with_model(
             &settings,
             state.inner(),
@@ -371,6 +472,7 @@ pub(crate) async fn chat_optimize_prompt(
             &recent_context,
             purpose,
             expert,
+            &media_paths,
         ),
     )
     .await
@@ -474,21 +576,47 @@ mod tests {
 
     #[test]
     fn user_prompt_includes_draft_and_optional_context() {
-        let plain = build_optimize_user_prompt("帮我看看这个", "", "zh", "question");
+        let plain = build_optimize_user_prompt("帮我看看这个", "", "zh", "question", "");
         assert!(plain.contains("帮我看看这个"));
         assert!(!plain.contains("最近对话"));
 
-        let with_ctx = build_optimize_user_prompt("那这个呢", "用户：第一问", "zh", "question");
+        let with_ctx = build_optimize_user_prompt("那这个呢", "用户：第一问", "zh", "question", "");
         assert!(with_ctx.contains("最近对话"));
         assert!(with_ctx.contains("那这个呢"));
 
-        let brief = build_optimize_user_prompt("白底主图", "", "zh", "image_brief");
+        let brief = build_optimize_user_prompt("白底主图", "", "zh", "image_brief", "");
         assert!(brief.contains("出图要求"));
         assert!(brief.contains("白底主图"));
 
-        let video = build_optimize_user_prompt("背包展示 15 秒", "", "zh", "video_brief");
+        let video = build_optimize_user_prompt("背包展示 15 秒", "", "zh", "video_brief", "");
         assert!(video.contains("视频要求"));
         assert!(video.contains("背包展示"));
+
+        let with_media = build_optimize_user_prompt(
+            "背包展示",
+            "",
+            "zh",
+            "video_brief",
+            &describe_optimize_media(&[
+                r"C:\studio\bag.png".to_string(),
+                r"C:\studio\unbox.mp4".to_string(),
+            ]),
+        );
+        assert!(with_media.contains("bag.png"));
+        assert!(with_media.contains("unbox.mp4"));
+        assert!(with_media.contains("无法逐帧观看"));
+    }
+
+    #[test]
+    fn describe_optimize_media_labels_images_and_videos() {
+        let note = describe_optimize_media(&[
+            "product.webp".to_string(),
+            "clip.mov".to_string(),
+            "  ".to_string(),
+        ]);
+        assert!(note.contains("product.webp"));
+        assert!(note.contains("clip.mov"));
+        assert!(note.contains("视频"));
     }
 
     #[test]
@@ -638,6 +766,7 @@ mod tests {
                 "",
                 "question",
                 None,
+                &[],
             )
                 .await
                 .expect("rewrite from streamed model");

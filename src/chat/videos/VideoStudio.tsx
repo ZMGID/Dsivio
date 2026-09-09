@@ -750,6 +750,13 @@ export default function VideoStudio() {
                             disabled={controlsDisabled}
                             preferredAssistantId="asst_builtin_video_prompt"
                             purpose="video_brief"
+                            mediaPaths={[
+                              ...brief.images,
+                              brief.firstFrame,
+                              brief.lastFrame,
+                              brief.source,
+                              ...(brief.referenceVideos ?? []),
+                            ]}
                             onChange={(request) => change({ request })}
                             onError={setError}
                           />
