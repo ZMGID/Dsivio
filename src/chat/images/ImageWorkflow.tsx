@@ -18,8 +18,6 @@ import {
 } from 'lucide-react'
 import { api } from '../../api/tauri'
 import { Button, IconButton } from '../../components/Button'
-import { RequirementComposer } from './RequirementComposer'
-import { collectBriefImagePaths } from './RequirementOptimize'
 import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 import {
   latestResults,
@@ -39,32 +37,30 @@ type Props = {
   brief: ImageBrief
   task: ImageTask | null
   busy: boolean
+  draftSaved: boolean
   onChange: (patch: Partial<ImageBrief>) => void
   onAction: (action: ImageAction) => Promise<void>
   perform: (fn: () => Promise<void>) => Promise<void>
-  onSave: () => Promise<void>
   onNew: () => void
   onOpenResult: (result: ImageResult) => void
   onExport: () => void
   dropActive?: boolean
   onDropSurface?: (event: DragEvent) => void
-  onError?: (message: string) => void
 }
 
 export function ImageWorkflow({
   brief,
   task,
   busy,
+  draftSaved,
   onChange,
   onAction,
   perform,
-  onSave,
   onNew,
   onOpenResult,
   onExport,
   dropActive = false,
   onDropSurface,
-  onError,
 }: Props) {
   const input = brief.workflowInput || { mode: 'smart' as const, sources: [] }
   const workflow = task?.workflow
@@ -80,11 +76,9 @@ export function ImageWorkflow({
   const approved =
     current && !sampleInputsChanged && workflow?.approvedVersion === workflow?.ruleVersion
   const [feedback, setFeedback] = useState('')
-  const [picked, setPicked] = useState<string[] | null>(null)
   const [showHistory, setShowHistory] = useState(false)
   const sampleIds = (
-    picked ||
-    (workflow?.sampleIds.length ? workflow.sampleIds : brief.products.slice(0, 2).map((p) => p.id))
+    (workflow?.approvedVersion === workflow?.ruleVersion && workflow?.sampleIds.length ? workflow.sampleIds : brief.products.slice(0, 2).map((p) => p.id))
   ).filter((id) => brief.products.some((p) => p.id === id))
   const results = task ? latestResults(task) : []
   const selectedSamplesMatch =
@@ -176,20 +170,18 @@ export function ImageWorkflow({
     <div className="iw-workflow">
       <div className="is-work-heading">
         <div>
-          <h2>制作与试品</h2>
-          <p>先做出一套可复用的规则，换其他商品试效果，确认后再批量出图。</p>
+          <h2>制作模板</h2>
+          <p>把现成套图或设计要求做成模板，下次换商品继续用。</p>
         </div>
         <div className="is-actions">
           <Button size="sm" variant="ghost" disabled={busy} onClick={onNew}>
             新流程
           </Button>
-          <Button size="sm" variant="ghost" disabled={busy || !dirty} onClick={() => void onSave()}>
-            {task && !dirty ? '已保存' : '保存'}
-          </Button>
+          <span className="if-draft-status">{task && !dirty ? '已保存' : draftSaved ? '草稿保存在本机' : '草稿保存失败'}</span>
         </div>
       </div>
-      <ol className="iw-progress" aria-label="制作与试品进度">
-        {['给图制作', '换品试做', '反馈修正', '持续出图'].map((label, index) => (
+      <ol className="iw-progress" aria-label="制作模板进度">
+        {['提供素材', '试做效果', '调整模板', '完成复用'].map((label, index) => (
           <li
             key={label}
             aria-current={step === index ? 'step' : undefined}
@@ -242,7 +234,7 @@ export function ImageWorkflow({
                 aria-label="商品照片"
                 checked={input.mode === 'smart'}
                 disabled={busy}
-                onChange={() => onChange({ workflowInput: { ...input, mode: 'smart' } })}
+                onChange={() => onChange({ workflowInput: { ...input, mode: 'smart' }, language: brief.language === '跟随样图' ? 'zh-CN' : brief.language })}
               />
               <ImageIcon size={16} strokeWidth={1.6} />
               <strong>商品照片</strong>
@@ -255,7 +247,7 @@ export function ImageWorkflow({
                 aria-label="现成套图"
                 checked={fromSet}
                 disabled={busy}
-                onChange={() => onChange({ workflowInput: { ...input, mode: 'replace' } })}
+                onChange={() => onChange({ workflowInput: { ...input, mode: 'replace' }, language: brief.language === 'zh-CN' ? '跟随样图' : brief.language })}
               />
               <Layers3 size={16} strokeWidth={1.6} />
               <strong>现成套图</strong>
@@ -345,25 +337,15 @@ export function ImageWorkflow({
                   </>
                 )}
               </div>
-              <RequirementComposer
-                label="制作要求"
-                value={brief.requirement}
-                disabled={busy}
-                preferredAssistantId="asst_builtin_ecom_visual"
-                purpose="image_brief"
-                mediaPaths={collectBriefImagePaths({ workflowInput: input })}
-                placeholder={
-                  fromSet
-                    ? '写清哪些版式必须保持，商品怎么换进去'
-                    : '写清版式、背景、文字和以后换品怎么沿用'
-                }
-                onChange={(requirement) => onChange({ requirement })}
-                onError={(message) => onError?.(message)}
-              />
+              <Field label="制作要求">
+                <textarea className="kv-textarea custom-scrollbar" rows={3} disabled={busy}
+                  value={brief.requirement} onChange={(event) => onChange({ requirement: event.target.value })}
+                  placeholder={fromSet ? '例如：保留这套图的版式，以后只换商品。' : '例如：做一套简洁的电商主图模板，包含卖点、细节和场景。'} />
+              </Field>
             </div>
             <aside className="is-spec-column">
               <section className="is-section is-spec-section">
-                <Field label="任务名称">
+                <details className="if-more"><summary>更多设置</summary><Field label="任务名称">
                   <input
                     className="kv-input"
                     disabled={busy}
@@ -385,8 +367,9 @@ export function ImageWorkflow({
                     )}
                   </StudioSelect>
                 </Field>
-                <Field label="图内语言">
+                </details><Field label="图内语言">
                   <ImageLanguageSelect
+                    allowFollowExample={fromSet}
                     disabled={busy}
                     value={brief.language}
                     onChange={(language) => onChange({ language })}
@@ -456,7 +439,7 @@ export function ImageWorkflow({
                 onClick={() => void onAction({ kind: 'workflow_build' })}
               >
                 <Sparkles size={15} />
-                {template ? '更新制作' : '开始制作'}
+                {template ? '更新模板' : '制作模板'}
               </Button>
             </div>
           </div>
@@ -492,12 +475,12 @@ export function ImageWorkflow({
         </section>
       )}
 
-      <section className="iw-panel" aria-label="换品试做">
+      {template && <section className="iw-panel" aria-label="换品试做">
         <div className="iw-panel-title">
           <div>
             <h3>02 · 换其他商品试做</h3>
             <p className="iw-hint">
-              每款可添加正面、背面和细节图。先选 1–2 款试做，确认规则适合换品。
+              添加商品图片，系统自动挑选最多两款试做。
             </p>
           </div>
           <div className="is-actions">
@@ -518,21 +501,7 @@ export function ImageWorkflow({
           {brief.products.map((product) => (
             <article className="iw-product" key={product.id}>
               <div className="iw-product-top">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={sampleIds.includes(product.id)}
-                    disabled={busy || (!sampleIds.includes(product.id) && sampleIds.length >= 2)}
-                    onChange={(e) =>
-                      setPicked(
-                        e.target.checked
-                          ? [...sampleIds, product.id]
-                          : sampleIds.filter((id) => id !== product.id),
-                      )
-                    }
-                  />
-                  选作试品
-                </label>
+                <span className="iw-hint">{sampleIds.includes(product.id) ? '自动试做' : '确认效果后生成'}</span>
                 <IconButton
                   label={`移除商品 ${product.name}`}
                   disabled={busy}
@@ -564,7 +533,7 @@ export function ImageWorkflow({
               <details>
                 <summary>素材与商品信息 · {product.assets.length} 张</summary>
                 <div className="iw-product-assets">
-                  {product.assets.map((asset) => (
+                  {product.assets.filter((asset) => !asset.name.startsWith('__dsimage_')).map((asset) => (
                     <div key={asset.id}>
                       <AssetImage path={asset.path} name={asset.name} />
                       <span title={asset.name}>{asset.name}</span>
@@ -591,34 +560,6 @@ export function ImageWorkflow({
                 >
                   补充商品图片
                 </Button>
-                <Field label="商品正面">
-                  <StudioSelect
-                    disabled={busy}
-                    value={product.front || ''}
-                    onChange={(e) => patchProduct(product.id, { front: e.target.value || null })}
-                  >
-                    <option value="">请选择真实正面</option>
-                    {product.assets.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </StudioSelect>
-                </Field>
-                <Field label="商品背面">
-                  <StudioSelect
-                    disabled={busy}
-                    value={product.back || ''}
-                    onChange={(e) => patchProduct(product.id, { back: e.target.value || null })}
-                  >
-                    <option value="">无真实背面图</option>
-                    {product.assets.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}
-                      </option>
-                    ))}
-                  </StudioSelect>
-                </Field>
                 <Field label="这款商品的真实信息">
                   <textarea
                     className="kv-textarea custom-scrollbar"
@@ -635,7 +576,7 @@ export function ImageWorkflow({
         </div>
         <div className="iw-panel-title iw-trial-action">
           <span className="iw-hint">
-            {sampleIds.length ? `已选 ${sampleIds.length} 款试品` : '请选择试品'}
+            {sampleIds.length ? `先试做 ${sampleIds.length} 款商品` : '添加商品后即可试做'}
             {template ? ` · 每款 ${template.data.slots.length} 页` : ''}
           </span>
           <Button
@@ -644,10 +585,10 @@ export function ImageWorkflow({
             onClick={() => void onAction({ kind: 'workflow_trial', sampleIds })}
           >
             <Sparkles size={14} />
-            生成所选试品
+            试做模板效果
           </Button>
         </div>
-      </section>
+      </section>}
 
       {template && (
         <section className="iw-panel" aria-label="试品结果与反馈">
@@ -746,7 +687,7 @@ export function ImageWorkflow({
                               )
                             }
                           >
-                            反馈这页规则
+                            修改这页模板
                           </Button>
                         </div>
                       </article>
@@ -755,7 +696,7 @@ export function ImageWorkflow({
                 </div>
               </div>
             ))}
-          <Field label="对共用规则的修改意见">
+          <Field label="模板要怎么改">
             <textarea
               className="kv-textarea custom-scrollbar"
               rows={4}
@@ -771,7 +712,7 @@ export function ImageWorkflow({
             onClick={() => void onAction({ kind: 'workflow_refine', note: feedback })}
           >
             <Sparkles size={14} />
-            修改共用规则并重试
+            修改模板并重新试做
           </Button>
           {unresolved && (
             <p className="iw-hint">先恢复查询未完成的远程图片，再修改规则，以保留本次生成结果。</p>

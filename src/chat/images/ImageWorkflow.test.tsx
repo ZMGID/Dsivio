@@ -203,19 +203,19 @@ describe('制作、试品、反馈和持续出图', () => {
     }))
     vi.mocked(api.imageStudioAction).mockResolvedValue(made)
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
+    fireEvent.click(await within(screen.getByRole('navigation', { name: '图片功能' })).findByRole('button', { name: '制作模板' }))
     expect(screen.getByRole('radio', { name: '商品照片' })).toBeChecked()
     expect(screen.getByText('新做一套')).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: '现成套图' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '商品图起步' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '成套样图起步' })).not.toBeInTheDocument()
-    expect(screen.getByLabelText('任务名称')).toHaveAttribute('placeholder', '通用电商 · 巴西市场')
+    expect(screen.getByLabelText('任务名称')).toHaveAttribute('placeholder', '通用电商 · 中国市场')
     fireEvent.click(screen.getByRole('button', { name: '选择商品照片' }))
     await waitFor(() => expect(screen.getByText('1. 原始商品.png')).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('制作要求'), {
       target: { value: made.brief.requirement },
     })
-    fireEvent.click(screen.getByRole('button', { name: '开始制作' }))
+    fireEvent.click(within(screen.getByRole('main')).getByRole('button', { name: '制作模板' }))
     await waitFor(() =>
       expect(api.imageStudioAction).toHaveBeenCalledWith('workflow', 2, {
         kind: 'workflow_build',
@@ -225,7 +225,7 @@ describe('制作、试品、反馈和持续出图', () => {
     expect(api.imageStudioSave).toHaveBeenCalledWith(
       expect.objectContaining({
         feature: 'workflow',
-        name: '通用电商 · 巴西市场',
+        name: '通用电商 · 中国市场',
         products: [],
         workflowInput: { mode: 'smart', sources: [source] },
       }),
@@ -235,7 +235,7 @@ describe('制作、试品、反馈和持续出图', () => {
     expect(
       await screen.findByRole('heading', { name: '已制作 · 背包共用规则' }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '生成所选试品' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '试做模板效果' })).toBeDisabled()
   })
 
   it('restores a completed trial, confirms it and saves appended products into the same workflow', async () => {
@@ -298,9 +298,9 @@ describe('制作、试品、反馈和持续出图', () => {
     next.plans = []
     vi.mocked(api.imageStudioAction).mockResolvedValue(next)
     render(<ImageStudio />)
-    const feedback = await screen.findByLabelText('对共用规则的修改意见')
+    const feedback = await screen.findByLabelText('模板要怎么改')
     fireEvent.change(feedback, { target: { value: '产品放大，后续都用这个比例' } })
-    fireEvent.click(screen.getByRole('button', { name: '修改共用规则并重试' }))
+    fireEvent.click(screen.getByRole('button', { name: '修改模板并重新试做' }))
     await waitFor(() =>
       expect(api.imageStudioAction).toHaveBeenCalledWith(
         'workflow',
@@ -324,12 +324,12 @@ describe('制作、试品、反馈和持续出图', () => {
       workflow: { ...initial.workflow!, sampleIds: ['a', 'b'] },
     })
     render(<ImageStudio />)
-    await waitFor(() =>
-      expect(screen.getAllByRole('checkbox', { name: '选作试品' })[1]).toBeEnabled(),
-    )
-    fireEvent.click(screen.getAllByRole('checkbox', { name: '选作试品' })[1])
+    await screen.findByRole('button', { name: '试做模板效果' })
+    expect(screen.queryByRole('checkbox', { name: '选作试品' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('商品正面')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('商品背面')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '试品满意，确认这版' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: '生成所选试品' }))
+    fireEvent.click(screen.getByRole('button', { name: '试做模板效果' }))
     await waitFor(() =>
       expect(api.imageStudioAction).toHaveBeenCalledWith(
         'workflow',
@@ -375,10 +375,10 @@ describe('制作、试品、反馈和持续出图', () => {
     load(initial)
     vi.mocked(api.imageStudioAction).mockResolvedValue(initial)
     render(<ImageStudio />)
-    fireEvent.change(await screen.findByLabelText('对共用规则的修改意见'), {
+    fireEvent.change(await screen.findByLabelText('模板要怎么改'), {
       target: { value: '修改标题大小' },
     })
-    expect(screen.getByRole('button', { name: '修改共用规则并重试' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '修改模板并重新试做' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: '恢复查询' }))
     await waitFor(() =>
       expect(api.imageStudioAction).toHaveBeenCalledWith(
@@ -395,24 +395,24 @@ describe('制作、试品、反馈和持续出图', () => {
     render(<ImageStudio />)
     fireEvent.click(await screen.findByText('01 · 原始素材'))
     fireEvent.change(screen.getByLabelText('制作要求'), { target: { value: '换个全新的版式' } })
-    expect(screen.getByRole('button', { name: '生成所选试品' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '试做模板效果' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '试品满意，确认这版' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '更新制作' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '更新模板' })).toBeEnabled()
   })
 
   it('keeps the requirement field as a plain writing box', async () => {
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
+    fireEvent.click(await within(screen.getByRole('navigation', { name: '图片功能' })).findByRole('button', { name: '制作模板' }))
     const field = screen.getByLabelText('制作要求')
-    expect(field.closest('.is-req')).toBeTruthy()
-    expect(field.previousElementSibling).toHaveClass('is-req-bar')
-    expect(field).toHaveAttribute('placeholder', '写清版式、背景、文字和以后换品怎么沿用')
+    expect(field).toHaveClass('kv-textarea')
+    expect(screen.queryByRole('button', { name: '选择助手' })).not.toBeInTheDocument()
+    expect(field).toHaveAttribute('placeholder', '例如：做一套简洁的电商主图模板，包含卖点、细节和场景。')
     expect(screen.queryByRole('button', { name: '统一白灰背景' })).not.toBeInTheDocument()
   })
 
   it('switches the drop zone copy when starting from a finished set', async () => {
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
+    fireEvent.click(await within(screen.getByRole('navigation', { name: '图片功能' })).findByRole('button', { name: '制作模板' }))
     fireEvent.click(screen.getByRole('radio', { name: '现成套图' }))
     expect(screen.getByRole('button', { name: '选择现成套图' })).toBeInTheDocument()
     expect(screen.getByText('按页序把套图拖到这里')).toBeInTheDocument()
@@ -423,7 +423,7 @@ describe('制作、试品、反馈和持续出图', () => {
   it('imports dropped files as original references instead of trial products', async () => {
     vi.mocked(api.imageStudioImport).mockResolvedValue([{ ...product('source'), assets: [source] }])
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
+    fireEvent.click(await within(screen.getByRole('navigation', { name: '图片功能' })).findByRole('button', { name: '制作模板' }))
     const zone = screen.getByLabelText('原始参考投放区')
     await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
     dropHandler?.({ payload: { type: 'enter' } })

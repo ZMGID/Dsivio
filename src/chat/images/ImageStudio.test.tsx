@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { api } from '../../api/tauri'
 import ImageStudio from './ImageStudio'
+import { open } from '@tauri-apps/plugin-dialog'
 import {
   emptyBrief,
   latestResults,
@@ -169,9 +170,59 @@ describe('Image workspace state gates', () => {
 })
 
 describe('Built-in image workflows', () => {
+  it('starts a text-only image directly, with no preparation controls or mandatory plan step', async () => {
+    const saved = fixture()
+    saved.brief = { ...emptyBrief('gen'), requirement: '一只白色马克杯，不要文字' }
+    vi.mocked(api.imageStudioSave).mockResolvedValue(saved)
+    vi.mocked(api.imageStudioAction).mockResolvedValue({ ...saved, status: 'running' })
+    render(<ImageStudio />)
+    expect(await screen.findByRole('button', { name: '生成图片' })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: saved.brief.requirement } })
+    fireEvent.click(screen.getByRole('button', { name: '生成图片' }))
+    await waitFor(() => expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, { kind: 'start', group: '未分类' }))
+    expect(api.imageStudioSave).toHaveBeenCalledWith(expect.objectContaining({ language: '无文字', products: [] }), undefined, undefined)
+    expect(screen.queryByRole('tab', { name: /画面方案/ })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('商品正面')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('商品背面')).not.toBeInTheDocument()
+  })
+
+  it('keeps replacement examples separate from product photos and accepts no extra prompt', async () => {
+    const sample = { id: 'layout', path: 'assets/layout.png', name: '样图.png' }
+    vi.mocked(open).mockResolvedValue(['C:/layout.png'])
+    vi.mocked(api.imageStudioImport).mockResolvedValueOnce([{ ...importedProduct(), assets: [sample] }])
+    vi.mocked(api.imageStudioSave).mockImplementation(async (brief) => ({ ...fixture(), brief }))
+    vi.mocked(api.imageStudioAction).mockResolvedValue({ ...fixture(), status: 'running' })
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '样图换货' }))
+    expect(screen.queryByLabelText('自定义图内语言')).not.toBeInTheDocument()
+    expect(screen.getByText('跟随样图')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '开始换货' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '选择现成套图' }))
+    await screen.findByRole('button', { name: '移除样图 1' })
+    expect(screen.getByRole('button', { name: '开始换货' })).toBeDisabled()
+    vi.mocked(api.imageStudioImport).mockResolvedValue([importedProduct()])
+    dropHandler?.({ payload: { type: 'drop', paths: ['C:/product.png'] } })
+    await waitFor(() => expect(screen.getByRole('button', { name: '开始换货' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: '开始换货' }))
+    await waitFor(() => expect(api.imageStudioSave).toHaveBeenCalledWith(expect.objectContaining({
+      feature: 'replace', requirement: '', language: '跟随样图', templateId: null,
+      products: [importedProduct()], workflowInput: { mode: 'replace', sources: [sample] },
+    }), undefined, undefined))
+  })
+
+  it('reports a local draft failure instead of claiming it was saved', async () => {
+    const storage = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota exceeded') })
+    try {
+      render(<ImageStudio />)
+      expect(await screen.findByText('本机草稿未能保存，请先保存任务。')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '保存任务' })).toBeEnabled()
+      expect(screen.queryByText('草稿保存在本机')).not.toBeInTheDocument()
+    } finally { storage.mockRestore() }
+  })
+
   it('refreshes shared chat templates on focus without replacing the unsaved image brief', async () => {
     render(<ImageStudio />)
-    await waitFor(() => expect(screen.getByRole('button', { name: '生成画面方案' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: '生成图片' })).toBeDisabled())
     fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: '尚未保存的需求' } })
     const next = bootstrap()
     next.templates = [
@@ -194,11 +245,12 @@ describe('Built-in image workflows', () => {
   })
   it('uses the shared theme, scrollbar, input and select controls', async () => {
     render(<ImageStudio />)
-    await waitFor(() => expect(screen.getByRole('button', { name: '生成画面方案' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: '生成图片' })).toBeDisabled())
     expect(screen.getByRole('region', { name: '图片工作台' })).toHaveClass('kv')
     expect(screen.getByRole('main')).toHaveClass('custom-scrollbar')
     expect(screen.getByLabelText('图片要求')).toHaveClass('kv-textarea', 'custom-scrollbar')
-    expect(screen.getByRole('button', { name: '先写下图片要求或加载素材' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '选择助手' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('更多设置'))
     expect(screen.queryByText('更多场景')).not.toBeInTheDocument()
     expect(screen.queryByText('最近任务')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '任务 0' })).toBeInTheDocument()
@@ -208,7 +260,7 @@ describe('Built-in image workflows', () => {
     expect(await screen.findByRole('listbox')).toHaveClass('kv-select-menu', 'custom-scrollbar')
     fireEvent.click(screen.getByRole('option', { name: 'Amazon' }))
     expect(screen.getByRole('button', { name: '使用平台' })).toHaveTextContent('Amazon')
-    expect(screen.getByLabelText('任务名称')).toHaveAttribute('placeholder', 'Amazon · 巴西市场')
+    expect(screen.queryByLabelText('任务名称')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '图片设置' }))
     expect(screen.getByRole('dialog', { name: '图片设置' })).toHaveClass('kv-modal', 'custom-scrollbar')
   })
@@ -240,18 +292,18 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioSave).mockResolvedValue(t)
     vi.mocked(api.imageStudioAction).mockResolvedValue({ ...t, progress: '规划完成' })
     render(<ImageStudio />)
-    await waitFor(() => expect(screen.getByRole('button', { name: '生成画面方案' })).toBeEnabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: '生成图片' })).toBeDisabled())
     fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: '纯白底，保留产品细节' } })
-    fireEvent.click(screen.getByRole('button', { name: '生成画面方案' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成图片' }))
     await waitFor(() =>
-      expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, { kind: 'plan', group: '未分类' }),
+      expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, { kind: 'start', group: '未分类' }),
     )
     expect(api.imageStudioSave).toHaveBeenCalledWith(
       expect.objectContaining({ feature: 'gen', requirement: '纯白底，保留产品细节', ratio: '1:1' }),
       undefined,
       undefined,
     )
-    expect(screen.getByRole('tab', { name: /画面方案/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: /生成结果/ })).toHaveAttribute('aria-selected', 'true')
   })
   it('does not offer bulk approval before all sample pages have succeeded', async () => {
     const t = fixture()
@@ -260,8 +312,23 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioGet).mockResolvedValue(t)
     render(<ImageStudio />)
     await openSavedTask('背包秋季套图')
-    expect(await screen.findByRole('button', { name: /样品通过，允许批量/ })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: /确认样品效果/ })).toBeDisabled()
     expect(api.imageStudioAction).not.toHaveBeenCalled()
+  })
+  it('shows results for the selected category and hides bulk controls when none remain', async () => {
+    const t = fixture()
+    t.brief.feature = 'client'
+    t.brief.products[2].category = '童装'
+    t.results = [result('a'), result('b'), result('c')]
+    vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([t]))
+    vi.mocked(api.imageStudioGet).mockResolvedValue(t)
+    render(<ImageStudio />)
+    await openSavedTask('背包秋季套图')
+    expect(await screen.findAllByRole('button', { name: '查看 / 修改' })).toHaveLength(2)
+    expect(screen.queryByRole('button', { name: '确认样品效果' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /童装/ }))
+    expect(screen.getAllByRole('button', { name: '查看 / 修改' })).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: '确认样品效果' })).not.toBeInTheDocument()
   })
   it('records human approval as a separate action, then offers bulk generation', async () => {
     const t = fixture()
@@ -271,12 +338,12 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioAction).mockResolvedValue({ ...t, approvedGroups: ['背包'] })
     render(<ImageStudio />)
     await openSavedTask('背包秋季套图')
-    fireEvent.click(await screen.findByRole('button', { name: /样品通过，允许批量/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /确认样品效果/ }))
     await waitFor(() =>
       expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, { kind: 'approve', group: '背包' }),
     )
     expect(api.imageStudioAction).toHaveBeenCalledTimes(1)
-    expect(await screen.findByRole('button', { name: /规划剩余商品并批量出图/ })).toBeEnabled()
+    expect(await screen.findByRole('button', { name: /生成剩余商品/ })).toBeEnabled()
   })
   it('resumes a persisted remote job instead of submitting a second generation', async () => {
     const t = fixture()
@@ -297,6 +364,7 @@ describe('Built-in image workflows', () => {
   })
   it('shows concurrent pending pages alongside completed and failed results', async () => {
     const t = fixture()
+    t.brief.products.push({ ...t.brief.products[0], id: 'd', name: 'd' })
     t.status = 'running'
     t.progress = '并发生成中 · 已完成 2/4 张 · 进行中 2 张 · 失败 1 张'
     t.results = [
@@ -333,6 +401,7 @@ describe('Product material drag-drop', () => {
     await waitFor(() =>
       expect(api.imageStudioImport).toHaveBeenCalledWith(['C:\\goods\\front.png'], false),
     )
+    fireEvent.click(screen.getByText('更多设置'))
     expect(await screen.findByLabelText('商品信息（可选）')).toBeInTheDocument()
     expect(screen.queryByText('再加图')).not.toBeInTheDocument()
     expect(screen.queryByText('1 款')).not.toBeInTheDocument()
@@ -354,6 +423,7 @@ describe('Product material drag-drop', () => {
       ),
     )
     expect(await screen.findByText('sku-a')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('更多设置'))
     expect(screen.getByLabelText('商品信息（可选）')).toBeInTheDocument()
   })
 })

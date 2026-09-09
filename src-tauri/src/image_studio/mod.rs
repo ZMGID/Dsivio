@@ -6,6 +6,7 @@ mod engine;
 mod generation;
 mod imports;
 mod output;
+mod preparation;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -138,14 +139,20 @@ fn validate_brief(b: &Brief) -> Result<(), String> {
         return Err("每套 1–30 页、每批最多 200 个商品".into());
     }
     let mut ids = HashSet::new();
-    if b.feature == "workflow" {
+    if b.feature == "workflow" || b.workflow_input.is_some() {
         workflow::validate_input(b)?;
     }
     for p in &b.products {
         if !ids.insert(&p.id) {
             return Err("商品 ID 重复".into());
         }
-        if p.assets.len() > 16 {
+        if p.assets.len() > 18
+            || p.assets
+                .iter()
+                .filter(|a| !a.name.starts_with("__dsimage_"))
+                .count()
+                > 16
+        {
             return Err("每款最多 16 张参考图".into());
         }
         for a in &p.assets {
@@ -166,7 +173,7 @@ fn validate_brief(b: &Brief) -> Result<(), String> {
 pub fn image_studio_save(
     id: Option<String>,
     revision: Option<u64>,
-    brief: Brief,
+    mut brief: Brief,
 ) -> Result<Task, String> {
     let _lock = lock()?;
     validate_brief(&brief)?;
@@ -191,9 +198,17 @@ pub fn image_studio_save(
             templates: vec![],
             output_directory: None,
             workflow: None,
+            materials: HashMap::new(),
         }
     };
     output::prepare(&mut t, &storage::config()?)?;
+    if preparation::unresolved(&t) && {
+        let mut previous = t.brief.clone();
+        previous.name = brief.name.clone();
+        previous != brief
+    } {
+        return Err("商品素材仍有未完成的生成请求，请先继续当前任务".into());
+    }
     if brief.feature == "workflow" {
         workflow::save_brief(&mut t, brief)?;
         storage::save_task(&mut t)?;
@@ -202,11 +217,28 @@ pub fn image_studio_save(
     let mut comparable = t.brief.clone();
     comparable.name = brief.name.clone();
     if t.revision == 0 || comparable != brief {
+        // A freshly designed set follows the new brief; do not silently reuse its old generated rules.
+        let new_rules = t.brief.requirement != brief.requirement
+            || t.brief.style != brief.style
+            || t.brief.count != brief.count
+            || t.brief.language != brief.language
+            || t.brief.platform != brief.platform
+            || t.brief.ratio != brief.ratio
+            || t.brief.resolution != brief.resolution
+            || t.brief.workflow_input != brief.workflow_input;
+        if new_rules
+            && brief.template_id.is_none()
+            && matches!(brief.feature.as_str(), "design" | "client" | "replace")
+        {
+            for product in &mut brief.products {
+                product.template_id = None;
+            }
+        }
         t.revision += 1;
         t.plans.clear();
         t.approved_groups.clear();
         t.status = "draft".into();
-        t.progress = "需求已保存，下一步生成方案".into();
+        t.progress = "草稿已保存".into();
         t.error = None;
         let all = storage::templates()?;
         let ids: HashSet<_> = brief
@@ -361,7 +393,8 @@ pub fn image_studio_action(
     }
     if !matches!(
         action.kind.as_str(),
-        "plan"
+        "start"
+            | "plan"
             | "classify"
             | "sample"
             | "bulk"
@@ -396,6 +429,11 @@ pub fn image_studio_action(
         && t.brief.requirement.trim().is_empty()
         && t.brief.template_id.is_none()
         && t.brief.products.iter().all(|p| p.template_id.is_none())
+        && !t
+            .brief
+            .workflow_input
+            .as_ref()
+            .is_some_and(|input| !input.sources.is_empty())
     {
         return Err("请填写图片要求或选择模板".into());
     }
@@ -412,7 +450,7 @@ pub fn image_studio_action(
     output::prepare(&mut t, &cfg)?;
     if matches!(
         action.kind.as_str(),
-        "sample" | "bulk" | "generate" | "retry" | "revise"
+        "start" | "sample" | "bulk" | "generate" | "retry" | "revise"
     ) || matches!(
         action.kind.as_str(),
         "workflow_trial" | "workflow_refine" | "workflow_edit" | "workflow_produce"
@@ -466,6 +504,85 @@ fn stopped(flag: &AtomicBool) -> Result<(), String> {
     }
 }
 async fn execute(
+    app: &AppHandle,
+    t: &mut Task,
+    cfg: &StudioConfig,
+    a: &Action,
+    flag: &Arc<AtomicBool>,
+) -> Result<(), String> {
+    if a.kind == "start" {
+        if t.brief.feature != "gen" {
+            for index in 0..t.brief.products.len() {
+                preparation::identify(app, t, index, cfg, flag).await?;
+            }
+            preparation::templates(app, t, cfg, flag).await?;
+        }
+        let groups: std::collections::BTreeSet<_> = t.brief.products.iter().map(group_of).collect();
+        for group in groups {
+            let sample_ids = sample_ids(t, &group);
+            if t.brief.feature != "gen" {
+                for index in 0..t.brief.products.len() {
+                    if sample_ids.contains(&t.brief.products[index].id) {
+                        preparation::prepare_product(app, t, index, cfg, flag).await?;
+                    }
+                }
+            }
+            execute_step(
+                app,
+                t,
+                cfg,
+                &Action {
+                    kind: "plan".into(),
+                    group: group.clone(),
+                    ..Default::default()
+                },
+                flag,
+            )
+            .await?;
+            let kind = if t.brief.feature == "gen" {
+                "generate"
+            } else {
+                "sample"
+            };
+            let pending = t.plans.iter().any(|plan| {
+                (t.brief.feature == "gen" || sample_ids.contains(&plan.product_id))
+                    && !t.results.iter().any(|r| {
+                        r.revision == t.revision
+                            && r.product_id == plan.product_id
+                            && r.slot_id == plan.slot_id
+                    })
+            });
+            if pending {
+                execute_step(
+                    app,
+                    t,
+                    cfg,
+                    &Action {
+                        kind: kind.into(),
+                        group,
+                        ..Default::default()
+                    },
+                    flag,
+                )
+                .await?;
+            }
+            if t.brief.feature == "gen" {
+                break;
+            }
+        }
+        return Ok(());
+    }
+    if a.kind == "bulk" {
+        for index in 0..t.brief.products.len() {
+            if group_of(&t.brief.products[index]) == a.group {
+                preparation::prepare_product(app, t, index, cfg, flag).await?;
+            }
+        }
+    }
+    execute_step(app, t, cfg, a, flag).await
+}
+
+async fn execute_step(
     app: &AppHandle,
     t: &mut Task,
     cfg: &StudioConfig,

@@ -27,10 +27,11 @@ export function readStudioDraft(): StudioDraft | null {
   }
 }
 
-export function storeStudioDraft(draft: StudioDraft): void {
+export function storeStudioDraft(draft: StudioDraft): boolean {
   try {
     localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+    return true
   } catch {
-    /* Explicit native Save remains available. */
+    return false
   }
 }

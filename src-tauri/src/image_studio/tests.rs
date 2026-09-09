@@ -93,6 +93,141 @@ fn fixture() -> Task {
 }
 
 #[test]
+fn automatic_view_identification_accepts_missing_views_but_rejects_foreign_ids() {
+    let assets = vec![Asset {
+        id: "front-photo".into(),
+        name: "unknown.jpg".into(),
+        path: "assets/source.jpg".into(),
+    }];
+    let identified = json!({"front":"front-photo","back":null});
+    assert_eq!(
+        preparation::identified_view(&identified, "front", &assets)
+            .unwrap()
+            .as_deref(),
+        Some("front-photo")
+    );
+    assert!(preparation::identified_view(&identified, "back", &assets)
+        .unwrap()
+        .is_none());
+    assert!(
+        preparation::identified_view(&json!({"front":"other-product"}), "front", &assets).is_err()
+    );
+    assert!(preparation::identified_view(&json!({}), "front", &assets).is_err());
+}
+
+#[test]
+fn automatic_back_generation_is_only_needed_by_relevant_template_refs() {
+    let mut task = fixture();
+    let mut template = Template {
+        id: "template".into(),
+        directory: String::new(),
+        builtin: false,
+        data: json!({"derive":{"back":false},"slots":[{"refs":["@product.front"]}]}),
+    };
+    assert!(!preparation::needs_back(
+        Some(&template),
+        &task.brief.products[0]
+    ));
+    template.data["slots"][0]["refs_by_kind"] = json!({"coat":["@product.back"]});
+    assert!(!preparation::needs_back(
+        Some(&template),
+        &task.brief.products[0]
+    ));
+    task.brief.products[0].kind = "coat".into();
+    assert!(preparation::needs_back(
+        Some(&template),
+        &task.brief.products[0]
+    ));
+    template.data = json!({"derive":{"back":{"prompt":"Rear view"}},"slots":[]});
+    assert!(preparation::needs_back(
+        Some(&template),
+        &task.brief.products[0]
+    ));
+}
+
+#[test]
+fn generated_templates_wire_rear_pages_to_the_automatically_prepared_back() {
+    let mut slot = json!({"id":"h2","purpose":"背部结构","view":"back","prompt":"replace the rear view","refs":["/model/path"]});
+    workflow::assign_slot_refs(&mut slot, "replace").unwrap();
+    assert_eq!(slot["refs"], json!(["@example", "@product.back"]));
+    let mut task = fixture();
+    task.brief.products[0].assets.push(Asset {
+        id: "back".into(),
+        name: "__dsimage_back.png".into(),
+        path: "assets/back.png".into(),
+    });
+    task.brief.products[0].back = Some("back".into());
+    let mut smart_slot = json!({"id":"h2","view":"back","brief":"Rear view"});
+    workflow::assign_slot_refs(&mut smart_slot, "smart").unwrap();
+    let template = Template {
+        id: "t".into(),
+        directory: "templates/t".into(),
+        builtin: false,
+        data: json!({"mode":"smart","slots":[smart_slot.clone()]}),
+    };
+    assert!(preparation::needs_back(
+        Some(&template),
+        &task.brief.products[0]
+    ));
+    assert_eq!(
+        agent::template_refs(&template, &task.brief.products[0], &smart_slot).unwrap(),
+        vec!["assets/back.png"]
+    );
+    assert!(workflow::assign_slot_refs(&mut json!({"view":"/unexpected/path"}), "smart").is_err());
+}
+
+#[test]
+fn internal_material_attempts_survive_restart_without_counting_as_deliverables() {
+    let mut task = fixture();
+    let attempt: ImageResult = serde_json::from_value(
+        json!({"id":"derived","productId":"a","slotId":"_material_back",
+        "revision":3,"path":null,"error":null,"remoteId":"pending-123","prompt":"back",
+        "width":0,"height":0,"review":null,"config":{}}),
+    )
+    .unwrap();
+    let mut view = DerivedView::default();
+    view.attempts.push(attempt);
+    let mut state = MaterialState::default();
+    state.derived.insert("back".into(), view);
+    task.materials.insert("a".into(), state);
+    let mut restored: Task = serde_json::from_value(serde_json::to_value(&task).unwrap()).unwrap();
+    assert!(preparation::unresolved(&restored));
+    assert!(restored.results.is_empty());
+    assert!(!samples_complete(&restored, "背包"));
+    let pending = &mut restored
+        .materials
+        .get_mut("a")
+        .unwrap()
+        .derived
+        .get_mut("back")
+        .unwrap()
+        .attempts[0];
+    pending.error = Some("等待超时，远程任务编号已保存".into());
+    assert!(preparation::unresolved(&restored));
+    restored
+        .materials
+        .get_mut("a")
+        .unwrap()
+        .derived
+        .get_mut("back")
+        .unwrap()
+        .attempts[0]
+        .error = Some("远程图片任务失败，请重新尝试".into());
+    assert!(!preparation::unresolved(&restored));
+    restored
+        .materials
+        .get_mut("a")
+        .unwrap()
+        .derived
+        .get_mut("back")
+        .unwrap()
+        .attempts[0]
+        .path = Some("assets/derived.png".into());
+    assert!(!preparation::unresolved(&restored));
+    assert!(fixture().materials.is_empty()); // Older saved tasks remain compatible.
+}
+
+#[test]
 fn image_import_keeps_identically_named_skus_and_nested_material_separate() {
     let base = std::env::temp_dir().join(format!("dsivio-import-test-{}", storage::id()));
     for client in ["客户A", "客户B"] {

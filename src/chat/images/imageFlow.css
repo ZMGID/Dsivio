@@ -1,0 +1,70 @@
+/* Image-only flow geometry. Video keeps the shared studio layout. */
+.image-studio .if-form { max-width: 900px; display: flex; flex-direction: column; gap: 20px; padding-bottom: 8px; }
+.image-studio .if-section-title { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.image-studio .if-section-title h3 { font-size: 14px; font-weight: 600; }
+.image-studio .if-section-title > span, .image-studio .if-hint { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+.image-studio .if-section-title > button { margin-left: auto; }
+.image-studio .if-upload { min-height: 106px; padding: 18px; display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 14px; flex-wrap: wrap; text-align: left; border-radius: 10px; }
+.image-studio .if-upload > svg { flex-shrink: 0; color: var(--text-muted); }
+.image-studio .if-upload > div:not(.if-product) { flex: 1; min-width: 150px; }
+.image-studio .if-upload strong { display: block; font-size: 13px; font-weight: 500; }
+.image-studio .if-upload small { display: block; margin-top: 5px; font-size: 11px; color: var(--text-muted); }
+.image-studio .if-upload .kv-btn { margin: 0; }
+.image-studio .if-upload.is-upload-area--filled { min-height: 96px; max-height: 240px; overflow-y: auto; align-items: flex-start; }
+.image-studio .if-product { flex: 0 1 auto; max-width: 100%; }
+.image-studio .if-product > strong { margin-bottom: 8px; }
+.image-studio .if-assets, .image-studio .if-examples { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.image-studio .if-asset, .image-studio .if-example { width: 78px; height: 78px; border-radius: 7px; overflow: hidden; position: relative; border: 1px solid var(--border); background: var(--bg-input); }
+.image-studio .if-asset img, .image-studio .if-example img { width: 100%; height: 100%; object-fit: contain; }
+.image-studio .if-asset > button, .image-studio .if-example > button { position: absolute; top: 2px; right: 2px; background: var(--bg); }
+.image-studio .if-example small { position: absolute; bottom: 0; left: 0; right: 0; background: var(--bg); text-align: center; font-size: 10px; }
+.image-studio .if-requirements .is-field, .image-studio .if-options .is-field { margin-bottom: 0; }
+.image-studio .if-requirements textarea { min-height: 108px; resize: vertical; padding: 14px; line-height: 1.7; }
+.image-studio .if-options { display: grid; grid-template-columns: minmax(80px, .6fr) minmax(120px, 1fr) minmax(140px, 1.3fr); gap: 16px; max-width: 640px; }
+.image-studio .if-more { color: var(--text-muted); font-size: 12px; }
+.image-studio .if-more > summary { cursor: pointer; width: fit-content; padding: 4px 0; }
+.image-studio .if-more[open] > summary { margin-bottom: 16px; color: var(--text); }
+.image-studio .if-more > .if-options { margin-bottom: 16px; }
+.image-studio .if-template-choice { padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+.image-studio .if-template-choice > .is-field { max-width: 480px; margin-bottom: 0; }
+.image-studio .if-template-picker > summary { cursor: pointer; color: var(--text-muted); font-size: 12px; padding: 8px 0; }
+.image-studio .if-template-picker .is-field { margin: 4px 0 0; }
+.image-studio .if-template-picker[open] > summary { display: none; }
+.image-studio .if-form--split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+.image-studio .if-form--split > :not(.if-template-choice):not(.if-materials) { grid-column: 1 / -1; }
+.image-studio .if-form--split .if-template-choice { border: 0; padding-bottom: 0; }
+.image-studio .if-form--split .if-upload { min-height: 130px; }
+.image-studio .if-examples { margin: 12px 0 18px; }
+.image-studio .if-template-summary { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; font-size: 12px; }
+.image-studio .if-template-summary span { color: var(--text-muted); }
+.image-studio .if-submit { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--border); padding: 16px 0; }
+.image-studio .if-submit p { font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+.image-studio .if-submit button { flex-shrink: 0; }
+.image-studio .if-draft-status { color: var(--text-muted); font-size: 11px; }
+.image-studio .if-nav-divider { display: block; margin: 20px 10px 6px; padding-top: 18px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 10px; }
+.image-studio .is-main > .is-work-heading { margin-bottom: 18px; }
+.image-studio .is-main > .is-work-toolbar { margin-bottom: 20px; }
+.image-studio .is-template-pages .is-template-slot { transform: none; }
+.image-studio .is-template-slot-summary { line-height: 1.6; }
+.image-studio .iw-workflow { max-width: 1000px; margin: 0; }
+.image-studio .iw-source { padding: 0 0 20px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.image-studio .iw-source .is-brief-layout { grid-template-columns: minmax(0, 1fr) 210px; gap: 20px; }
+.image-studio .iw-source .is-upload-area { min-height: 130px; padding: 18px; }
+.image-studio .iw-source .is-upload-illustration { display: none; }
+.image-studio .iw-source .is-creation-footer { position: static; background: transparent; padding: 12px 0 0; }
+.image-studio .iw-source .is-spec-section { padding: 0; }
+.image-studio .iw-source .is-editor-column { gap: 14px; }
+.image-studio .iw-panel:not(.iw-source) { background: transparent; }
+@container studio (max-width: 500px) {
+  .image-studio .if-form--split { grid-template-columns: minmax(0, 1fr); }
+  .image-studio .iw-source .is-brief-layout { grid-template-columns: minmax(0, 1fr); }
+  .image-studio .if-options { grid-template-columns: 80px minmax(100px, 1fr); }
+  .image-studio .if-options > .is-field:last-child { grid-column: 1 / -1; }
+  .image-studio .if-submit { flex-wrap: wrap; }
+  .image-studio .if-submit button { margin-left: auto; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .image-studio .if-upload { transition: border-color 120ms, background-color 120ms; }
+  .image-studio .if-asset img { animation: if-appear 140ms ease-out; }
+  @keyframes if-appear { from { opacity: 0; } to { opacity: 1; } }
+}
