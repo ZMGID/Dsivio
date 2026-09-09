@@ -1,5 +1,5 @@
 import type { DragEvent } from 'react'
-import { ArrowRight, FolderOpen, ImagePlus, Loader2, Plus, X } from 'lucide-react'
+import { ArrowRight, FolderOpen, ImagePlus, Layers3, Loader2, Plus, X } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
 import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 import type { ImageAsset, ImageBrief, ImageTemplate } from './types'
@@ -75,7 +75,8 @@ export function ImageBriefForm({ brief, templates, busy, dropActive, onChange, o
             {replace && <span>保留版式，换成你的商品</span>}
           </div>
           {replace && !brief.templateId && (
-            <div className="if-examples">
+            <div className={`if-examples${!sources.length ? ' if-examples--empty' : ''}`}>
+              {!sources.length && <span className="if-upload-icon"><Layers3 size={25} strokeWidth={1.5} /></span>}
               {sources.map((asset, index) => (
                 <div className="if-example" key={asset.id}>
                   <AssetImage path={asset.path} name={asset.name} />
@@ -87,7 +88,7 @@ export function ImageBriefForm({ brief, templates, busy, dropActive, onChange, o
                 </div>
               ))}
               <Button disabled={busy} onClick={onImportExamples}><ImagePlus size={16} />{sources.length ? '添加样图' : '选择现成套图'}</Button>
-              {!sources.length && <span className="if-hint">按页面顺序选择，系统会自动整理成模板</span>}
+              {!sources.length && <span className="if-hint">按页面顺序选择样图</span>}
             </div>
           )}
           <details className="if-template-picker" open={!replace || !!brief.templateId}>
@@ -105,15 +106,15 @@ export function ImageBriefForm({ brief, templates, busy, dropActive, onChange, o
       <section className="if-materials" onDragEnter={onDrop} onDragOver={onDrop} onDrop={onDrop}>
         <div className="if-section-title">
           <h3>{quick ? '参考图片' : replace ? '要换进去的商品' : '商品素材'}</h3>
-          <span>{quick ? '可选' : '直接拖入图片或商品文件夹'}</span>
+          {quick && <span>可选</span>}
           {!!brief.products.length && <Button size="sm" variant="ghost" disabled={busy} onClick={() => onImport(batch)}><Plus size={14} />添加素材</Button>}
         </div>
         <div className={`if-upload is-upload-area${brief.products.length ? ' is-upload-area--filled' : ''}${dropActive ? ' is-drop-active' : ''}`} aria-label="商品素材投放区">
           {!brief.products.length ? (
             <>
-              <ImagePlus size={24} strokeWidth={1.4} />
-              <div><strong>{dropActive ? '松开即可导入' : quick ? '放入要修改的图片，或作为画面参考' : '放入商品，系统自动整理素材'}</strong><small>PNG、JPG、WebP</small></div>
-              <Button disabled={busy} onClick={() => onImport(batch)}>{batch ? '选择商品文件夹' : '选择图片'}</Button>
+              <span className="if-upload-icon"><ImagePlus size={25} strokeWidth={1.5} /></span>
+              <div className="if-upload-copy"><strong>{dropActive ? '松开即可导入' : quick ? '拖入参考图片' : '拖入商品图片或文件夹'}</strong><small>PNG、JPG、WebP</small></div>
+              <Button className="if-upload-button" disabled={busy} onClick={() => onImport(batch)}>{batch ? '选择商品文件夹' : '选择图片'}</Button>
               {!quick && !batch && <Button variant="ghost" size="sm" disabled={busy} onClick={() => onImport(true)}><FolderOpen size={14} />导入文件夹</Button>}
             </>
           ) : brief.products.map((product) => (

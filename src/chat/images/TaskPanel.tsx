@@ -40,7 +40,7 @@ export function TaskPanel({
       <p className="is-muted">保存过的制作会留在这里，点开就能接着做。</p>
       {loading && <p className="is-muted">正在加载…</p>}
       {!loading && tasks.length === 0 && (
-        <p className="iw-empty">还没有保存的任务。在左侧选一种做法，做完保存就会出现在这里。</p>
+        <p className="iw-empty">还没有保存的任务。在左侧选择一种做法，开始创作后会自动保存在这里。</p>
       )}
       <div className="is-task-list">
         {tasks.map((task) => {

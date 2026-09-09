@@ -137,26 +137,6 @@ export function VideoMediaOptions({
           </p>
         </>
       )}
-      <Field
-        label="声音与口播"
-        hint={
-          b.route === 'grok'
-            ? '静音会关闭 API 音轨生成。'
-            : '声音要求写入导演剧本与提示词，成片需检查模型执行效果。'
-        }
-      >
-        <StudioSelect
-          disabled={disabled}
-          value={b.speechMode || 'dialogue'}
-          onChange={(e) =>
-            change({ speechMode: e.target.value as VideoBrief['speechMode'] })
-          }
-        >
-          <option value="dialogue">有口播 / 对白</option>
-          <option value="ambient">无口播，保留环境音与音乐</option>
-          <option value="silent">静音</option>
-        </StudioSelect>
-      </Field>
       {(b.speechMode || 'dialogue') === 'dialogue' && (
         <Field
           label="口播文案（可选）"

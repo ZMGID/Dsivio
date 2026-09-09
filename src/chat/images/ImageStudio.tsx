@@ -5,10 +5,8 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
-  ChevronRight,
   Download,
   FolderOpen,
-  Grid2X2,
   History,
   Image as ImageIcon,
   Layers3,
@@ -59,7 +57,6 @@ import { dropAsProducts } from './studioDrop'
 import { ImageWorkflow } from './ImageWorkflow'
 import { TaskPanel } from './TaskPanel'
 
-const ICONS = [WandSparkles, Sparkles, ScanLine, Layers3, Palette, Grid2X2]
 const DEFAULT_CONFIG: ImageConfig = {
   providerId: '',
   model: '',
@@ -465,7 +462,7 @@ export default function ImageStudio() {
   const successCount = task ? latestResults(task).filter((r) => r.path).length : 0
 
   return (
-    <section className="kv image-studio" aria-label="图片工作台">
+    <section className="kv image-studio image-studio--polished" aria-label="图片工作台">
       {!native && (
         <div className="is-preview-note">
           界面预览模式 · 素材导入和生成需要在 Dsivio 桌面窗口中使用
@@ -491,62 +488,41 @@ export default function ImageStudio() {
         </div>
       )}
       <div className="is-shell">
-        <aside className="is-rail custom-scrollbar">
-          <span className="is-rail-label">开始创作</span>
-          <nav aria-label="图片功能">
-            {FEATURES.filter((f) => f.id !== 'workflow').map((f) => {
-              const Icon = ICONS[FEATURES.findIndex((item) => item.id === f.id)]
-              return (
-                <button
-                  key={f.id}
-                  type="button"
-                  className={view === f.id ? 'active' : ''}
-                  title={f.description}
-                  aria-current={view === f.id ? 'page' : undefined}
-                  onClick={() => void switchView(f.id)}
-                >
-                  <Icon size={18} />
-                  <span>{f.label}</span>
-                  {view === f.id && <ChevronRight size={13} />}
-                </button>
-              )
-            })}
-            <span className="if-nav-divider">模板与记录</span>
-            <button type="button" className={view === 'workflow' ? 'active' : ''}
-              onClick={() => void switchView('workflow')}><Sparkles size={18} /><span>制作模板</span></button>
-            <button
-              type="button"
-              className={view === 'templates' ? 'active' : ''}
-              onClick={() => void switchView('templates')}
-            >
-              <FolderOpen size={18} />
-              <span>模板库</span>
-              <span className="is-nav-count">{templates.length}</span>
-            </button>
-            <button
-              type="button"
-              className={view === 'tasks' ? 'active' : ''}
-              onClick={() => void switchView('tasks')}
-            >
-              <History size={18} />
-              <span>任务</span>
-              <span className="is-nav-count">{tasks.length}</span>
-            </button>
+        <aside className="if-navigation custom-scrollbar">
+          <span className="if-nav-label">开始创作</span>
+          <nav className="if-feature-nav custom-scrollbar" aria-label="图片功能">
+            {FEATURES.filter((feature) => feature.id !== 'workflow').map((feature) => (
+              <button key={feature.id} type="button"
+                className={view === feature.id ? 'active' : ''}
+                title={feature.description}
+                aria-current={view === feature.id ? 'page' : undefined}
+                onClick={() => void switchView(feature.id)}>
+                {feature.label}
+              </button>
+            ))}
           </nav>
-          <div className="is-rail-foot">
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-label="图片设置"
+          <nav className="if-tools-nav" aria-label="模板与记录">
+            <span className="if-nav-label">模板与记录</span>
+            <button type="button" className={view === 'workflow' ? 'active' : ''}
+              aria-current={view === 'workflow' ? 'page' : undefined}
+              onClick={() => void switchView('workflow')}><Sparkles size={15} /><span>制作模板</span></button>
+            <button type="button" className={view === 'templates' ? 'active' : ''}
+              aria-current={view === 'templates' ? 'page' : undefined}
+              onClick={() => void switchView('templates')}>
+              <FolderOpen size={15} /><span>模板库</span><span className="is-nav-count">{templates.length}</span>
+            </button>
+            <button type="button" className={view === 'tasks' ? 'active' : ''}
+              aria-current={view === 'tasks' ? 'page' : undefined}
+              onClick={() => void switchView('tasks')}>
+              <History size={15} /><span>任务</span><span className="is-nav-count">{tasks.length}</span>
+            </button>
+            <Button variant="ghost" aria-label="图片设置"
               title={hasConfig ? `图片设置 · ${config.model}` : '图片设置 · 待配置图片模型'}
-              onClick={() => setSettingsOpen(true)}
-            >
-              <Settings2 size={16} />
-              <span>图片设置</span>
-            </Button>
-          </div>
+              onClick={() => setSettingsOpen(true)}><Settings2 size={15} /><span>图片设置</span></Button>
+          </nav>
         </aside>
         <main className="is-main custom-scrollbar">
+          <div className="if-workspace">
           {view === 'templates' ? (
             <TemplatePanel
               templates={templates}
@@ -582,6 +558,8 @@ export default function ImageStudio() {
                   <h2>{currentFeature.label}</h2>
                   <p>{currentFeature.step}</p>
                 </div>
+                <Button size="sm" variant="ghost" disabled={pending}
+                  onClick={() => void switchView(brief.feature)}><Plus size={15} />新任务</Button>
               </div>
               <div className="is-work-toolbar">
                 <div className="is-stage-tabs" role="tablist" aria-label="制作阶段">
@@ -600,16 +578,7 @@ export default function ImageStudio() {
                   ))}
                 </div>
                 <div className="is-actions is-task-actions">
-                  <Button
-                    size="sm"
-                    disabled={pending}
-                    onClick={() => void switchView(brief.feature)}
-                  >
-                    <Plus size={14} />
-                    新任务
-                  </Button>
                   <span className="if-draft-status">{task && !dirty ? '已保存' : draftSaved ? '草稿保存在本机' : '草稿保存失败'}</span>
-
                 </div>
               </div>
               {task && (
@@ -966,6 +935,7 @@ export default function ImageStudio() {
               )}
             </>
           )}
+          </div>
         </main>
       </div>
       {settingsOpen && (

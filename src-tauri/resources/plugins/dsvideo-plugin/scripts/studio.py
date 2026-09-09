@@ -257,9 +257,9 @@ def handle(action, data):
         if t['status'] in ('submitting', 'running', 'succeeded', 'uncertain'):
             raise ValueError('已提交的任务不能修改，请新建任务')
     if action == 'save':
-        t.update(brief=import_brief(data['brief']), script=data.get('script', ''), approved=False, prompt='', quote=None, status='draft')
+        t.update(brief=import_brief(data['brief']), script=data.get('script', ''), concepts=[], approved=False, prompt='', quote=None, status='draft')
     elif action in ('plan_result', 'analysis_result'):
-        t.update(script=data['script'], approved=False, prompt='', quote=None, status='draft')
+        t.update(script=data['script'], concepts=data.get('concepts', []), approved=False, prompt='', quote=None, status='draft')
         if action == 'analysis_result':
             t['analysis'] = data.get('analysis')
     elif action == 'approve':

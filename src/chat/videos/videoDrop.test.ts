@@ -38,3 +38,8 @@ describe('video studio drop paths', () => {
     ).toEqual({ error: '当前页不能导入素材' })
   })
 })
+
+
+it('imports both reference video and product images for remake without losing existing images', () => {
+  expect(applyVideoStudioDrop('remake', { images: ['/old.png'], source: '' }, ['/reference.mp4', '/new.jpg'])).toEqual({ source: '/reference.mp4', images: ['/old.png', '/new.jpg'] })
+})

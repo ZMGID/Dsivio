@@ -1,6 +1,7 @@
 export type VideoRoute = '' | 'comfy' | 'minimax' | 'grok'
 export interface VideoBrief {
   name: string
+  selectedConcept?: string
   mode: 'creation' | 'analysis'
   request: string
   images: string[]
@@ -12,7 +13,7 @@ export interface VideoBrief {
   source: string
   template?: VideoTemplate
   inputMode?: 'auto' | 'text' | 'image' | 'reference' | 'frames'
-  speechMode?: 'dialogue' | 'ambient' | 'silent'
+  speechMode?: 'auto' | 'dialogue' | 'ambient' | 'silent'
   dialogue?: string
   music?: string
   firstFrame?: string
@@ -27,6 +28,7 @@ export interface VideoTask {
   updatedAt: number
   brief: VideoBrief
   script: string
+  concepts?: string[]
   prompt: string
   approved: boolean
   status: string
@@ -80,10 +82,10 @@ export const newVideoBrief = (
   ratio: '9:16',
   route: '',
   resolution: '',
-  language: 'pt-BR',
+  language: 'zh-CN',
   source: '',
   inputMode: 'auto',
-  speechMode: 'dialogue',
+  speechMode: 'auto',
   dialogue: '',
   music: '',
   referenceVideos: [],

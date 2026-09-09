@@ -41,6 +41,19 @@ class WorkspaceTests(unittest.TestCase):
         studio.handle('config', {'name': 'grok', 'base_url': 'https://api.x.ai', 'api_key': 'test-secret'})
         return self.action(t, 'quote')
 
+    def test_concepts_cannot_be_approved_until_script_is_written(self):
+        t = self.action(self.draft(), 'plan_result', script='', concepts=['细节', '场景', '动态'])
+        self.assertEqual(len(t['concepts']), 3)
+        with self.assertRaises(ValueError):
+            self.action(t, 'approve')
+        brief = dict(t['brief'], selectedConcept='场景')
+        t = self.action(t, 'save', brief=brief, script='')
+        self.assertEqual(t['concepts'], [])
+        self.assertEqual(t['brief']['selectedConcept'], '场景')
+        t = self.action(t, 'plan_result', script='0–10秒：场景展示')
+        self.assertEqual(t['concepts'], [])
+        self.assertTrue(self.action(t, 'approve')['approved'])
+
     def test_no_implicit_route(self):
         self.brief['route'] = ''
         t = self.action(self.draft(), 'plan_result', script='script')
