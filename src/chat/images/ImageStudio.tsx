@@ -57,8 +57,10 @@ import './imageStudio.css'
 import './studioLayout.css'
 import { DRAFT_KEY, readStudioDraft, storeStudioDraft } from './draft'
 import { RequirementComposer } from './RequirementComposer'
+import { collectBriefImagePaths } from './RequirementOptimize'
 import { dropAsProducts } from './studioDrop'
 import { ImageWorkflow } from './ImageWorkflow'
+import { TaskPanel } from './TaskPanel'
 
 const ICONS = [WandSparkles, Sparkles, ScanLine, Layers3, Palette, Grid2X2]
 const DEFAULT_CONFIG: ImageConfig = {
@@ -68,7 +70,7 @@ const DEFAULT_CONFIG: ImageConfig = {
   agentProviderId: '',
   agentModel: '',
 }
-type View = ImageFeature | 'templates'
+type View = ImageFeature | 'templates' | 'tasks'
 type Stage = 'brief' | 'plan' | 'results'
 
 export default function ImageStudio() {
@@ -188,7 +190,9 @@ export default function ImageStudio() {
     }
   }, [native, loading])
   useEffect(() => {
-    setView(brief.feature)
+    setView((current) =>
+      current === 'templates' || current === 'tasks' ? current : brief.feature,
+    )
   }, [brief.feature])
   useEffect(() => {
     if (!running || !taskId) return
@@ -248,6 +252,19 @@ export default function ImageStudio() {
     localStorage.removeItem(DRAFT_KEY)
     return saved
   }
+  const openTask = (item: ImageTask) =>
+    void perform(async () => {
+      if (
+        dirty &&
+        (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length)
+      )
+        await save()
+      const latest = await api.imageStudioGet(item.id)
+      adopt(latest)
+      setView(latest.brief.feature)
+      setStage(latest.results.length ? 'results' : latest.plans.length ? 'plan' : 'brief')
+      setGroup(productGroup(latest.brief.products[0] || ({ category: '' } as ImageProduct)))
+    })
   const switchView = async (next: View, template?: ImageTemplate) => {
     if (pending) return
     if (
@@ -262,7 +279,7 @@ export default function ImageStudio() {
         return
       }
     }
-    if (next === 'templates') {
+    if (next === 'templates' || next === 'tasks') {
       setView(next)
       return
     }
@@ -311,7 +328,7 @@ export default function ImageStudio() {
   briefRef.current = brief
   const dropReadyRef = useRef({ accept: false, busy: false })
   dropReadyRef.current = {
-    accept: view !== 'templates' && (view === 'workflow' || stage === 'brief'),
+    accept: view !== 'templates' && view !== 'tasks' && (view === 'workflow' || stage === 'brief'),
     busy,
   }
   const mergeImportedProducts = useCallback((asFolder: boolean, products: ImageProduct[]) => {
@@ -508,45 +525,16 @@ export default function ImageStudio() {
               <span>模板库</span>
               <span className="is-nav-count">{templates.length}</span>
             </button>
+            <button
+              type="button"
+              className={view === 'tasks' ? 'active' : ''}
+              onClick={() => void switchView('tasks')}
+            >
+              <History size={18} />
+              <span>任务</span>
+              <span className="is-nav-count">{tasks.length}</span>
+            </button>
           </nav>
-          <div className="is-rail-history custom-scrollbar">
-            <div className="is-rail-label">
-              <span>最近任务</span>
-              <History size={13} />
-            </div>
-            {loading && <span className="is-muted">正在加载…</span>}
-            {!loading && tasks.length === 0 && <p>保存的图片任务会留在这里，下次接着做。</p>}
-            {tasks.slice(0, 20).map((t) => (
-              <button
-                type="button"
-                key={t.id}
-                className={task?.id === t.id ? 'active' : ''}
-                onClick={() =>
-                  void perform(async () => {
-                    if (
-                      dirty &&
-                      (brief.products.length ||
-                        brief.requirement.trim() ||
-                        brief.workflowInput?.sources.length)
-                    )
-                      await save()
-                    const latest = await api.imageStudioGet(t.id)
-                    adopt(latest)
-                    setView(latest.brief.feature)
-                    setStage(
-                      latest.results.length ? 'results' : latest.plans.length ? 'plan' : 'brief',
-                    )
-                    setGroup(
-                      productGroup(latest.brief.products[0] || ({ category: '' } as ImageProduct)),
-                    )
-                  })
-                }
-              >
-                <span className={`is-history-dot ${t.status}`} />
-                <span>{t.brief.name || '未命名任务'}</span>
-              </button>
-            ))}
-          </div>
           <div className="is-rail-foot">
             <Button
               variant="ghost"
@@ -568,6 +556,8 @@ export default function ImageStudio() {
               onUse={(t) => void switchView(t.data.mode === 'replace' ? 'replace' : 'smart', t)}
               report={report}
             />
+          ) : view === 'tasks' ? (
+            <TaskPanel tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} />
           ) : view === 'workflow' ? (
             <ImageWorkflow
               key={task?.id || 'new-workflow'}
@@ -811,14 +801,7 @@ export default function ImageStudio() {
                         disabled={busy}
                         preferredAssistantId="asst_builtin_ecom_visual"
                         purpose="image_brief"
-                        mediaPaths={[
-                          ...brief.products.flatMap((product) => [
-                            product.front,
-                            product.back,
-                            ...product.assets.map((asset) => asset.path),
-                          ]),
-                          ...(brief.workflowInput?.sources.map((source) => source.path) ?? []),
-                        ]}
+                        mediaPaths={collectBriefImagePaths(brief)}
                         placeholder="写清场景、卖点和必须保留的细节"
                         onChange={(requirement) => patch({ requirement })}
                         onError={report}

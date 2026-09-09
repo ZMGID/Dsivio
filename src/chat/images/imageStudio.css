@@ -922,6 +922,55 @@
   margin-bottom: 24px;
   font-size: 12px;
 }
+.is-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 720px;
+}
+.is-task-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.is-task-card > span:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+}
+.is-task-card strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+.is-task-card small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.is-task-card > b {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.is-task-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.is-task-card.active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent);
+}
 .is-template-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 235px), 1fr));

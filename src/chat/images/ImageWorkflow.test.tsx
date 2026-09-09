@@ -181,7 +181,7 @@ describe('制作、试品、反馈和持续出图', () => {
     vi.mocked(api.imageStudioExport).mockResolvedValue('C:/Images/backpack/deliveries/batch')
     render(<ImageStudio />)
     const nav = screen.getByRole('navigation', { name: '图片功能' })
-    expect(within(nav).getAllByRole('button')).toHaveLength(7)
+    expect(within(nav).getAllByRole('button')).toHaveLength(8)
     fireEvent.click(await screen.findByRole('button', { name: '导出本版图片' }))
     expect(screen.getByLabelText('交付保存位置')).toHaveValue('C:/Images/backpack/deliveries')
     fireEvent.click(screen.getByRole('button', { name: '导出到任务文件夹' }))

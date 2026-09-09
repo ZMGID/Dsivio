@@ -119,6 +119,11 @@ function bootstrap(tasks: ImageTask[] = []): ImageBootstrap {
     templates: [],
   }
 }
+
+async function openSavedTask(name: string) {
+  fireEvent.click(await screen.findByRole('button', { name: /^任务 / }))
+  fireEvent.click(await screen.findByRole('button', { name }))
+}
 function importedProduct(name = '商品素材'): ImageProduct {
   return {
     id: 'imported',
@@ -195,6 +200,8 @@ describe('Built-in image workflows', () => {
     expect(screen.getByLabelText('图片要求')).toHaveClass('kv-textarea', 'custom-scrollbar')
     expect(screen.getByRole('button', { name: '先写下图片要求或加载素材' })).toBeDisabled()
     expect(screen.queryByText('更多场景')).not.toBeInTheDocument()
+    expect(screen.queryByText('最近任务')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '任务 0' })).toBeInTheDocument()
     const platform = screen.getByRole('button', { name: '使用平台' })
     expect(platform).toHaveClass('kv-select')
     fireEvent.click(platform)
@@ -204,6 +211,18 @@ describe('Built-in image workflows', () => {
     expect(screen.getByLabelText('任务名称')).toHaveAttribute('placeholder', 'Amazon · 巴西市场')
     fireEvent.click(screen.getByRole('button', { name: '图片设置' }))
     expect(screen.getByRole('dialog', { name: '图片设置' })).toHaveClass('kv-modal', 'custom-scrollbar')
+  })
+  it('opens saved tasks from a dedicated page instead of the rail', async () => {
+    const t = fixture()
+    vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([t]))
+    vi.mocked(api.imageStudioGet).mockResolvedValue(t)
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '任务 1' }))
+    expect(screen.getByRole('heading', { name: '任务' })).toBeInTheDocument()
+    expect(screen.queryByText('最近任务')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '背包秋季套图' }))
+    await waitFor(() => expect(api.imageStudioGet).toHaveBeenCalledWith('job'))
+    expect(screen.getByRole('heading', { name: '模板套图' })).toBeInTheDocument()
   })
   it('restores unsaved edits without replacing a newer task revision', async () => {
     const t = fixture()
@@ -240,7 +259,7 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([t]))
     vi.mocked(api.imageStudioGet).mockResolvedValue(t)
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByRole('button', { name: '背包秋季套图' }))
+    await openSavedTask('背包秋季套图')
     expect(await screen.findByRole('button', { name: /样品通过，允许批量/ })).toBeDisabled()
     expect(api.imageStudioAction).not.toHaveBeenCalled()
   })
@@ -251,7 +270,7 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioGet).mockResolvedValue(t)
     vi.mocked(api.imageStudioAction).mockResolvedValue({ ...t, approvedGroups: ['背包'] })
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByRole('button', { name: '背包秋季套图' }))
+    await openSavedTask('背包秋季套图')
     fireEvent.click(await screen.findByRole('button', { name: /样品通过，允许批量/ }))
     await waitFor(() =>
       expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, { kind: 'approve', group: '背包' }),
@@ -266,7 +285,7 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioGet).mockResolvedValue(t)
     vi.mocked(api.imageStudioAction).mockResolvedValue(t)
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByRole('button', { name: '背包秋季套图' }))
+    await openSavedTask('背包秋季套图')
     fireEvent.click(await screen.findByRole('button', { name: '恢复查询' }))
     await waitFor(() =>
       expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, {
@@ -289,7 +308,7 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([t]))
     vi.mocked(api.imageStudioGet).mockResolvedValue(t)
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByRole('button', { name: '背包秋季套图' }))
+    await openSavedTask('背包秋季套图')
     const pending = await screen.findAllByText('正在生成')
     expect(pending).toHaveLength(2)
     for (const label of pending) {
