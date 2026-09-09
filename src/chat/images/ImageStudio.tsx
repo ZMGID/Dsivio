@@ -56,6 +56,7 @@ import './imageFlow.css'
 import { dropAsProducts } from './studioDrop'
 import { ImageWorkflow } from './ImageWorkflow'
 import { TaskPanel } from './TaskPanel'
+import { useSharedDraft } from '../studio/useSharedDraft'
 
 const DEFAULT_CONFIG: ImageConfig = {
   providerId: '',
@@ -104,6 +105,18 @@ export default function ImageStudio() {
     (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
     [],
   )
+  const shared = useSharedDraft('image', 'main', native && !loading,
+    { brief, taskId: task?.id, revision: task?.revision, plans: editedPlans },
+    async (draft) => {
+      // A chat-created task may not have reached the polled list yet.
+      const saved = draft.taskId ? await api.imageStudioGet(draft.taskId) : null
+      setBrief(draft.brief)
+      setEditedPlans(draft.plans || null)
+      setTask(saved || null)
+      if (saved && draft.revision !== saved.revision) { setBrief(saved.brief); setEditedPlans(null) }
+    }, busy)
+  const syncCurrent = useRef({ task, dirty, editedPlans, busy })
+  syncCurrent.current = { task, dirty, editedPlans, busy }
   const taskId = task?.id
 
   const adopt = useCallback((t: ImageTask) => {
@@ -169,6 +182,12 @@ export default function ImageStudio() {
           setTemplates(data.templates)
           setTasks(data.tasks)
           setConfig(data.config)
+          const current = syncCurrent.current
+          const updated = data.tasks.find(t => t.id === current.task?.id)
+          if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy) {
+            if (!current.dirty && !current.editedPlans) adopt(updated)
+            else setNotice('此任务已在聊天中更新。本地编辑已保留，请从任务列表重新打开最新版本后继续。')
+          }
         }
       } catch {
         /* A template being saved in chat may be temporarily unavailable. */
@@ -183,7 +202,7 @@ export default function ImageStudio() {
       clearInterval(timer)
       window.removeEventListener('focus', refresh)
     }
-  }, [native, loading])
+  }, [native, loading, adopt])
   useEffect(() => {
     setView((current) =>
       current === 'templates' || current === 'tasks' ? current : brief.feature,
@@ -522,6 +541,15 @@ export default function ImageStudio() {
           </nav>
         </aside>
         <main className="is-main custom-scrollbar">
+          {shared.message && (
+            <div role="status">
+              {shared.message}
+              {shared.hasConflict && <>
+                <Button onClick={shared.reload}>载入共享版本</Button>
+                <Button onClick={shared.keep}>保留本地版本</Button>
+              </>}
+            </div>
+          )}
           <div className="if-workspace">
           {view === 'templates' ? (
             <TemplatePanel

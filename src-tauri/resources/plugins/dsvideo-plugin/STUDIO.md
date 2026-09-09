@@ -1,3 +1,11 @@
+# 内置聊天统一入口
+
+当宿主提供 `studio` 工具时，优先使用 `{domain:"video",action,input}` 调用下文同名操作，不直接执行 Python 或 MCP 提交。工具复用页面服务，包括 ComfyUI 上传、提交、轮询、结果记录和配置更新后的连接重建。下面的 Python 方式只用于没有此工具的外部宿主。
+
+先 bootstrap 查找共享任务和模板。用户接续任务时 get 最新 id/revision；修改、确认、生成都沿用此任务。不要重复创建。
+`draft_get` 的 input 为 `{entry:"creation"}`（也支持 analysis/remake），返回 `{revision,value}`。value 为 `{brief,task?,script,step,dirty}`。草稿 revision 与 task.revision 独立；接续前先 get 最新任务。`draft_save` 使用 `{entry,revision,value}`，把当前方案交回页面；冲突时重读并合并。
+页面与聊天的模板、模型、供应商地址共用 bootstrap/config；不能在对话中另建配置。用工具 config 更新后连接会重新建立，避免继续使用旧 ComfyUI 地址。
+
 # Dsivio shared video workspace
 
 Upstream: https://github.com/ZMGID/dsvideo-plugin

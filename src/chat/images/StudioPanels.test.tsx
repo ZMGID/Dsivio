@@ -83,3 +83,14 @@ describe('ConfigPanel', () => {
     )
   })
 })
+
+it('updates an untouched image config when chat changes it', async () => {
+  vi.mocked(getSettingsCached).mockResolvedValue({ providers: [] } as never)
+  const config = { providerId: '', model: '', protocol: 'openai' as const, agentProviderId: '', agentModel: '', outputRoot: '/old' }
+  const onSave = vi.fn().mockResolvedValue(undefined)
+  const { rerender } = render(<ConfigPanel config={config} onSave={onSave} onClose={() => {}} />)
+  rerender(<ConfigPanel config={{ ...config, outputRoot: '/chat-updated' }} onSave={onSave} onClose={() => {}} />)
+  expect(await screen.findByDisplayValue('/chat-updated')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }))
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ outputRoot: '/chat-updated' })))
+})

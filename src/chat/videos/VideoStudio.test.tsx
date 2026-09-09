@@ -230,3 +230,21 @@ describe('video confirmation and monitoring', () => {
     expect(api.videoStudioTask).not.toHaveBeenCalled()
   })
 })
+
+it('shows the shared ComfyUI address and protects a local config edit from chat updates', async () => {
+  localStorage.clear()
+  const data = { tasks: [], templates: [], config: { comfy: { base_url: 'http://shared:8188' } }, root: '', configPath: '', dependencies: { python: '3.14', comfy: true, node: true, ffmpeg: true } }
+  vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce(data)
+  render(<VideoStudio />)
+  fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
+  const address = await screen.findByDisplayValue('http://shared:8188')
+  fireEvent.change(address, { target: { value: 'http://local-edit:8188' } })
+  vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce({ ...data, config: { comfy: { base_url: 'http://chat-edit:8188' } } })
+  fireEvent.focus(window)
+  await screen.findByText('配置已在其他入口修改，请载入最新配置后再编辑。')
+  expect(screen.getByDisplayValue('http://local-edit:8188')).toBeTruthy()
+  expect(screen.getByRole('button', { name: '保存配置' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: '载入最新配置' }))
+  expect(await screen.findByDisplayValue('http://chat-edit:8188')).toBeTruthy()
+  expect(screen.getByRole('button', { name: '保存配置' })).toBeEnabled()
+})

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
@@ -34,6 +34,7 @@ import './VideoStudio.css'
 import { VideoMediaOptions } from './VideoMediaOptions'
 import { readVideoDrafts, writeVideoDraft, type VideoEntry } from './videoDrafts'
 import { ChatMarkdown } from '../ChatMarkdown'
+import { useSharedDraft } from '../studio/useSharedDraft'
 import { applyVideoStudioDrop } from './videoDrop'
 
 const preview: VideoBootstrap = {
@@ -88,6 +89,9 @@ export default function VideoStudio() {
   const [provider, setProvider] = useState('comfy')
   const [base, setBase] = useState('http://127.0.0.1:8188')
   const [key, setKey] = useState('')
+  const [configDirty, setConfigDirty] = useState(false)
+  const [configConflict, setConfigConflict] = useState(false)
+  const configVersion = useRef('')
   const [model, setModel] = useState('grok-imagine-video-1.5')
   const [video, setVideo] = useState('')
   const [recoveryId, setRecoveryId] = useState('')
@@ -106,16 +110,33 @@ export default function VideoStudio() {
     busy: !!busy || locked,
   }
 
-  async function refresh() {
-    if (native) setData(await api.videoStudioBootstrap())
-  }
-  useEffect(() => {
-    if (native)
-      void api
-        .videoStudioBootstrap()
-        .then(setData)
-        .catch(() => {})
+  const shared = useSharedDraft('video', entry, native,
+    { brief, task, script, step, dirty },
+    (draft) => {
+      setBrief(draft.brief); setTask(draft.task); setScript(draft.script)
+      setStep(draft.step); setDirty(draft.dirty)
+    }, !!busy)
+  const syncCurrent = useRef({ task, dirty, busy })
+  syncCurrent.current = { task, dirty, busy }
+
+  const refresh = useCallback(async () => {
+    if (!native) return
+
+      const next = await api.videoStudioBootstrap()
+      setData(next)
+      const current = syncCurrent.current
+      const updated = next.tasks.find(t => t.id === current.task?.id)
+      if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy) {
+        if (!current.dirty) {
+          setTask(updated); setBrief(updated.brief); setScript(updated.script)
+          setStep(updated.prompt ? 2 : updated.script || updated.concepts?.length ? 1 : 0)
+        } else setError('此任务已在聊天中更新。本地编辑已保留，请重新打开最新任务后继续。')
+      }
+
   }, [native])
+  useEffect(() => {
+    void refresh().catch(() => {})
+  }, [refresh])
   useEffect(() => {
     if (!error) return
     const timer = window.setTimeout(() => setError(''), 5000)
@@ -138,15 +159,24 @@ export default function VideoStudio() {
   // Refresh shared chat-created templates when returning to this window.
   useEffect(() => {
     const focus = () => {
-      if (native)
-        void api
-          .videoStudioBootstrap()
-          .then(setData)
-          .catch(() => {})
+      void refresh().catch(() => {})
     }
+    const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') focus() }, 3000)
     window.addEventListener('focus', focus)
-    return () => window.removeEventListener('focus', focus)
-  }, [native])
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', focus) }
+  }, [refresh])
+
+  useEffect(() => {
+    const version = JSON.stringify([provider, data.config[provider]])
+    if (configDirty) {
+      if (configVersion.current !== version) setConfigConflict(true)
+      return
+    }
+    configVersion.current = version
+    setBase(data.config[provider]?.base_url || ({ comfy: 'http://127.0.0.1:8188', minimax: 'https://api.minimaxi.com', grok: 'https://api.x.ai' } as Record<string, string>)[provider])
+    setModel(data.config[provider]?.model || 'grok-imagine-video-1.5')
+    setConfigConflict(false)
+  }, [provider, data.config, configDirty])
 
   useEffect(() => {
     if (view !== 'creation' && view !== 'analysis' && view !== 'remake') return
@@ -465,6 +495,15 @@ export default function VideoStudio() {
           </div>
         </aside>
         <main className="is-main custom-scrollbar">
+          {shared.message && (
+            <div role="status">
+              {shared.message}
+              {shared.hasConflict && <>
+                <Button onClick={shared.reload}>载入共享版本</Button>
+                <Button onClick={shared.keep}>保留本地版本</Button>
+              </>}
+            </div>
+          )}
           {busy && (
             <div role="status" className="vs-notice">
               <RefreshCw size={14} className="vs-spin" />
@@ -485,6 +524,7 @@ export default function VideoStudio() {
                       onChange={(e) => {
                         const p = e.target.value
                         setProvider(p)
+                        setConfigDirty(false)
                         setKey('')
                         setBase(
                           data.config[p]?.base_url ||
@@ -512,7 +552,7 @@ export default function VideoStudio() {
                     <input
                       className="kv-input"
                       value={base}
-                      onChange={(e) => setBase(e.target.value)}
+                      onChange={(e) => { setConfigDirty(true); setBase(e.target.value) }}
                     />
                   </Field>
                   {provider !== 'comfy' && (
@@ -529,7 +569,7 @@ export default function VideoStudio() {
                         type="password"
                         autoComplete="new-password"
                         value={key}
-                        onChange={(e) => setKey(e.target.value)}
+                        onChange={(e) => { setConfigDirty(true); setKey(e.target.value) }}
                       />
                     </Field>
                   )}
@@ -538,14 +578,15 @@ export default function VideoStudio() {
                       <input
                         className="kv-input"
                         value={model}
-                        onChange={(e) => setModel(e.target.value)}
+                        onChange={(e) => { setConfigDirty(true); setModel(e.target.value) }}
                       />
                     </Field>
                   )}
                   <div className="vs-actions">
+                    {configConflict && <span role="status">配置已在其他入口修改，请载入最新配置后再编辑。<Button onClick={() => { setConfigDirty(false); setKey('') }}>载入最新配置</Button></span>}
                     <Button
                       variant="primary"
-                      disabled={!native || !!busy}
+                      disabled={!native || !!busy || configConflict}
                       onClick={() =>
                         void guarded('保存配置…', async () => {
                           const config = await api.videoStudioConfig({
@@ -555,6 +596,7 @@ export default function VideoStudio() {
                             model,
                           })
                           setData((d) => ({ ...d, config }))
+                          setConfigDirty(false)
                           setKey('')
                         })
                       }

@@ -7,7 +7,7 @@ description: 电商商品图技能，也能当普通生图工具用。套图走�
 
 这是 Dsivio 内置图片 Skill，与左侧「图片」页面共用模板和图片设置。首次使用先读 `guides/studio.md`，运行 `python scripts/dsimage.py studio paths` 定位共享目录。不要在技能安装目录另建模板库，不要安装另一个 dsimage，不要自行更新此内置副本。
 
-脚本出图。你定**路**、看图、在该写的地方写 prompt、改模板。命令在本技能目录跑（Windows `python`，其他 `python3`）：`python scripts/dsimage.py <子命令>`。
+内置聊天提供 `studio` 工具时，任务和出图必须走该工具，调用顺序见 `guides/studio.md`；不要再用 gen/run 脚本建立独立批次。没有该工具的外部宿主才使用原脚本出图。你定**路**、看图、在该写的地方写 prompt、改模板。命令在本技能目录跑（Windows `python`，其他 `python3`）：`python scripts/dsimage.py <子命令>`。
 
 一个模板 = 共享模板目录下的一个文件夹：`template.json` + `h1.png…` + 可选 `assets/`。同一甲方多套放 `{甲方}/{模板名}/`，共用 `要求.json`。页面创建的模板直接可用；聊天创建或修改后页面会自动刷新，无需导入。
 图片供应商、模型和协议读取「图片 → 图片设置」，凭据读取应用供应商设置，仅在脚本进程内使用，不复制到 `.env`。未配置 → `SETUP.md`。不要读取或回显整个 settings.json，不在对话里索要或展示 key。
