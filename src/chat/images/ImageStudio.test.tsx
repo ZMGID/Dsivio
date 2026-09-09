@@ -275,6 +275,31 @@ describe('Built-in image workflows', () => {
       }),
     )
   })
+  it('shows concurrent pending pages alongside completed and failed results', async () => {
+    const t = fixture()
+    t.status = 'running'
+    t.progress = '并发生成中 · 已完成 2/4 张 · 进行中 2 张 · 失败 1 张'
+    t.results = [
+      result('a'),
+      result('b', 2, null),
+      { ...result('c', 2, null), remoteId: 'remote-123' },
+      { ...result('d', 2, null), error: '图片接口 HTTP 429' },
+    ]
+    vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([t]))
+    vi.mocked(api.imageStudioGet).mockResolvedValue(t)
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '背包秋季套图' }))
+    const pending = await screen.findAllByText('正在生成')
+    expect(pending).toHaveLength(2)
+    for (const label of pending) {
+      const card = label.closest('article')
+      expect(card).not.toHaveClass('failed')
+      expect(card?.querySelector('.is-spinning')).toBeInTheDocument()
+    }
+    expect(screen.getByText('图片接口 HTTP 429').closest('article')).toHaveClass('failed')
+    expect(screen.getByRole('button', { name: '查看 / 修改' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '恢复查询' })).toBeDisabled()
+  })
 })
 
 describe('Product material drag-drop', () => {

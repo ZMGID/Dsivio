@@ -187,3 +187,306 @@ fn grok_multi_image_edits_identify_the_target_and_product_refs() {
         "Single reference"
     );
 }
+
+struct GenerationBackend {
+    snapshots: Mutex<Vec<Task>>,
+    submitted: Mutex<Vec<String>>,
+    polled: Mutex<Vec<String>>,
+    active: std::sync::atomic::AtomicUsize,
+    peak: std::sync::atomic::AtomicUsize,
+    remote: bool,
+    failures: Vec<String>,
+}
+
+impl GenerationBackend {
+    fn new(remote: bool) -> Self {
+        Self {
+            snapshots: Mutex::new(vec![]),
+            submitted: Mutex::new(vec![]),
+            polled: Mutex::new(vec![]),
+            active: 0.into(),
+            peak: 0.into(),
+            remote,
+            failures: vec![],
+        }
+    }
+
+    fn persist(&self, task: &mut Task) -> Result<(), String> {
+        self.snapshots.lock().unwrap().push(task.clone());
+        Ok(())
+    }
+}
+
+impl generation::Backend for GenerationBackend {
+    fn submit<'a>(
+        &'a self,
+        plan: &'a ImagePlan,
+    ) -> futures::future::BoxFuture<'a, Result<engine::Submission, String>> {
+        Box::pin(async move {
+            assert!(
+                self.snapshots
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .results
+                    .iter()
+                    .any(|r| {
+                        r.product_id == plan.product_id
+                            && r.slot_id == plan.slot_id
+                            && r.path.is_none()
+                    }),
+                "an attempt must be saved before submission"
+            );
+            self.submitted.lock().unwrap().push(plan.slot_id.clone());
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(active, Ordering::SeqCst);
+            if self.remote {
+                return Ok(engine::Submission::Pending(plan.slot_id.clone()));
+            }
+            // A slow first page must not block starting or saving later pages.
+            let delay = if plan.slot_id == "h0" { 30 } else { 1 };
+            tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            if self.failures.contains(&plan.slot_id) {
+                return Err("模拟图片接口失败".into());
+            }
+            Ok(engine::Submission::Image(plan.slot_id.as_bytes().to_vec()))
+        })
+    }
+
+    fn poll<'a>(
+        &'a self,
+        cfg: &'a StudioConfig,
+        remote: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<Option<Vec<u8>>, String>> {
+        Box::pin(async move {
+            assert!(
+                self.snapshots
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .results
+                    .iter()
+                    .any(|r| { r.remote_id.as_deref() == Some(remote) && r.config == *cfg }),
+                "remote IDs and provider snapshots must be saved before polling"
+            );
+            self.polled.lock().unwrap().push(remote.into());
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(Some(remote.as_bytes().to_vec()))
+        })
+    }
+
+    fn store(&self, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
+        assert_eq!(
+            result.slot_id.as_bytes(),
+            bytes,
+            "out-of-order results must keep their identity"
+        );
+        result.path = Some(format!("results/{}.png", result.id));
+        result.width = 1024;
+        result.height = 1024;
+        result.error = None;
+        Ok(())
+    }
+}
+
+fn generation_plans(task: &Task, count: usize) -> Vec<ImagePlan> {
+    (0..count)
+        .map(|i| ImagePlan {
+            slot_id: format!("h{i}"),
+            ..task.plans[0].clone()
+        })
+        .collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn image_generation_overlaps_nine_requests_and_saves_out_of_order_results_in_plan_order() {
+    let mut task = fixture();
+    task.results.push(result("a", 2, Some("previous.png")));
+    let plans = generation_plans(&task, 14);
+    let backend = GenerationBackend::new(false);
+    let cfg = StudioConfig {
+        provider_id: "chosen-provider".into(),
+        ..Default::default()
+    };
+    generation::run(
+        &mut task,
+        &cfg,
+        plans,
+        &AtomicBool::new(false),
+        &backend,
+        |t| backend.persist(t),
+    )
+    .await
+    .unwrap();
+    assert_eq!(backend.peak.load(Ordering::SeqCst), 9);
+    assert_eq!(backend.active.load(Ordering::SeqCst), 0);
+    assert_eq!(backend.submitted.lock().unwrap().len(), 14);
+    assert_eq!(task.results[0].path.as_deref(), Some("previous.png"));
+    for (i, r) in task.results.iter().skip(1).enumerate() {
+        assert_eq!(r.slot_id, format!("h{i}"));
+        assert_eq!(r.revision, task.revision);
+        assert!(r.config == cfg && r.path.is_some() && r.error.is_none());
+    }
+    assert!(backend.snapshots.lock().unwrap().iter().any(|t| {
+        t.results[1].path.is_none() && t.results.iter().skip(2).any(|r| r.path.is_some())
+    }));
+    assert!(task.progress.contains("14/14"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_pages_do_not_abort_other_images_or_automatically_resubmit() {
+    let mut task = fixture();
+    let plans = generation_plans(&task, 14);
+    let mut backend = GenerationBackend::new(false);
+    backend.failures = vec!["h1".into(), "h11".into()];
+    let error = generation::run(
+        &mut task,
+        &StudioConfig::default(),
+        plans,
+        &AtomicBool::new(false),
+        &backend,
+        |t| backend.persist(t),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("2/14"));
+    assert_eq!(backend.submitted.lock().unwrap().len(), 14);
+    assert_eq!(task.results.iter().filter(|r| r.path.is_some()).count(), 12);
+    assert_eq!(task.results.iter().filter(|r| r.error.is_some()).count(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn stopping_drains_submitted_images_and_leaves_queued_pages_unsubmitted() {
+    let mut task = fixture();
+    let plans = generation_plans(&task, 14);
+    let backend = GenerationBackend::new(false);
+    let flag = AtomicBool::new(false);
+    generation::run(
+        &mut task,
+        &StudioConfig::default(),
+        plans,
+        &flag,
+        &backend,
+        |t| {
+            backend.persist(t)?;
+            if t.results.iter().any(|r| r.path.is_some()) {
+                flag.store(true, Ordering::Relaxed);
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(backend.submitted.lock().unwrap().len(), 9);
+    assert_eq!(backend.active.load(Ordering::SeqCst), 0);
+    assert_eq!(task.results.len(), 9);
+    assert!(task.results.iter().all(|r| r.path.is_some()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn remote_images_share_the_concurrency_limit_and_persist_ids_before_polling() {
+    let mut task = fixture();
+    let plans = generation_plans(&task, 14);
+    let backend = GenerationBackend::new(true);
+    generation::run(
+        &mut task,
+        &StudioConfig::default(),
+        plans,
+        &AtomicBool::new(false),
+        &backend,
+        |t| backend.persist(t),
+    )
+    .await
+    .unwrap();
+    assert_eq!(backend.peak.load(Ordering::SeqCst), 9);
+    assert_eq!(backend.submitted.lock().unwrap().len(), 14);
+    assert_eq!(backend.polled.lock().unwrap().len(), 14);
+    assert!(task
+        .results
+        .iter()
+        .all(|r| r.path.is_some() && r.remote_id.is_some()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn stopping_preserves_all_submitted_remote_ids_without_polling_or_resubmitting() {
+    let mut task = fixture();
+    let plans = generation_plans(&task, 14);
+    let backend = GenerationBackend::new(true);
+    let flag = AtomicBool::new(false);
+    generation::run(
+        &mut task,
+        &StudioConfig::default(),
+        plans,
+        &flag,
+        &backend,
+        |t| {
+            backend.persist(t)?;
+            if t.results.iter().any(|r| r.remote_id.is_some()) {
+                flag.store(true, Ordering::Relaxed);
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(backend.submitted.lock().unwrap().len(), 9);
+    assert!(backend.polled.lock().unwrap().is_empty());
+    assert_eq!(task.results.len(), 9);
+    assert!(task
+        .results
+        .iter()
+        .all(|r| r.remote_id.is_some() && r.path.is_none()));
+    assert!(task
+        .results
+        .iter()
+        .all(|r| r.error.as_deref().unwrap().contains("可稍后恢复")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn persistence_failure_stops_new_submissions_but_drains_in_flight_results() {
+    let mut task = fixture();
+    let plans = generation_plans(&task, 14);
+    let backend = GenerationBackend::new(false);
+    let error = generation::run(
+        &mut task,
+        &StudioConfig::default(),
+        plans,
+        &AtomicBool::new(false),
+        &backend,
+        |t| {
+            if t.results.iter().any(|r| r.path.is_some()) {
+                return Err("模拟磁盘写入失败".into());
+            }
+            backend.persist(t)
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("磁盘"));
+    assert_eq!(backend.submitted.lock().unwrap().len(), 9);
+    assert_eq!(backend.active.load(Ordering::SeqCst), 0);
+    assert!(task.results.iter().all(|r| r.path.is_some()));
+}
+
+#[tokio::test]
+async fn stopped_batch_does_not_create_attempts_or_submit_requests() {
+    let mut task = fixture();
+    let plans = generation_plans(&task, 14);
+    let backend = GenerationBackend::new(false);
+    generation::run(
+        &mut task,
+        &StudioConfig::default(),
+        plans,
+        &AtomicBool::new(true),
+        &backend,
+        |t| backend.persist(t),
+    )
+    .await
+    .unwrap();
+    assert!(task.results.is_empty());
+    assert!(backend.submitted.lock().unwrap().is_empty());
+}
