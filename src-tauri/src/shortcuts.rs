@@ -1436,7 +1436,7 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
         .build(app)
         .map_err(|e| e.to_string())?;
 
-    tray.set_tooltip(Some("Dskivio".to_string()))
+    tray.set_tooltip(Some("Dsivio".to_string()))
         .map_err(|e| e.to_string())?;
     Ok(())
 }

@@ -222,7 +222,7 @@ pub(crate) async fn chat_clear_context(
 
 pub(super) fn apply_context_clear(conversation: &mut Conversation) -> Result<(), String> {
     if conversation.agent_runtime.is_external() {
-        return Err("清空上下文仅支持 Dskivio Agent 和 Dskivio Chat".to_string());
+        return Err("清空上下文仅支持 Dsivio Agent 和 Dsivio Chat".to_string());
     }
     let last_id = conversation
         .messages

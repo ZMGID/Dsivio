@@ -44,8 +44,8 @@ function renderTab(overrides: Partial<MockedProps> = {}) {
     } as Props['chatConfig'],
     chatTools: { enabled: false, servers: [], nativeTools: { workingDirectory: '/w' } } as unknown as Props['chatTools'],
     chatMemory: { enabled: false } as Props['chatMemory'],
-    chatDefaults: 'You are the AI assistant inside Dskivio.',
-    chatRuntimeDefaults: 'Chat runtime (internal runtime mode): this conversation uses Dskivio Chat.',
+    chatDefaults: 'You are the AI assistant inside Dsivio.',
+    chatRuntimeDefaults: 'Chat runtime (internal runtime mode): this conversation uses Dsivio Chat.',
     effectiveChatMaxOutput: { maxOutput: 131072, source: 'override' },
     chatMaxOutputSourceLabel: '来自模型覆盖',
     chatMaxOutputModelLabel: 'p1 / gpt-4o',
@@ -102,13 +102,13 @@ describe('ChatTab', () => {
 
   it('Agent 提示词为空时显示内置 defaultText（英文原文）', () => {
     renderTab()
-    expect(screen.getByDisplayValue('You are the AI assistant inside Dskivio.')).toBeTruthy()
+    expect(screen.getByDisplayValue('You are the AI assistant inside Dsivio.')).toBeTruthy()
   })
 
   it('Chat runtime 提示词为空时显示内置 defaultText（英文原文）', () => {
     renderTab()
     expect(
-      screen.getByDisplayValue('Chat runtime (internal runtime mode): this conversation uses Dskivio Chat.'),
+      screen.getByDisplayValue('Chat runtime (internal runtime mode): this conversation uses Dsivio Chat.'),
     ).toBeTruthy()
   })
 

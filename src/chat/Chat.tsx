@@ -5317,7 +5317,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         {pendingSessionConsent && (
           <ApprovalCard
             title="允许本次会话使用文件和命令工具？"
-            subtitle="授权后，本会话内 Dskivio 可读写、删除磁盘上的任意文件并执行任意终端命令（包括项目目录之外）。仅本次会话有效，重启后需重新授权。"
+            subtitle="授权后，本会话内 Dsivio 可读写、删除磁盘上的任意文件并执行任意终端命令（包括项目目录之外）。仅本次会话有效，重启后需重新授权。"
             error={sessionConsentError}
             actions={[
               {

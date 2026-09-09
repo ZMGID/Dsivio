@@ -14,7 +14,7 @@ pub(super) fn root(config: &StudioConfig) -> Result<PathBuf, String> {
     Ok(dirs
         .picture_dir()
         .unwrap_or(dirs.home_dir())
-        .join("Dskivio")
+        .join("Dsivio")
         .join("Images"))
 }
 

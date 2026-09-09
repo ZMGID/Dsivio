@@ -228,7 +228,7 @@ export function ConfigPanel({
         </p>
         <Field label="图片保存位置">
           <div className="is-actions">
-            <input className="kv-input" readOnly value={draft.outputRoot || '系统图片目录 / Dskivio / Images'} />
+            <input className="kv-input" readOnly value={draft.outputRoot || '系统图片目录 / Dsivio / Images'} />
             <IconButton label="选择图片保存位置" disabled={pending} onClick={() => {
               void open({ directory: true, title: '选择新任务的图片保存位置' }).then((path) => {
                 if (typeof path === 'string') setDraft((d) => ({ ...d, outputRoot: path }))
