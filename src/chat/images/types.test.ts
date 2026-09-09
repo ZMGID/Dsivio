@@ -3,7 +3,7 @@ import { emptyBrief, suggestImageTaskName } from './types'
 
 describe('suggestImageTaskName', () => {
   it('uses platform and language market when the name is left blank', () => {
-    expect(suggestImageTaskName(emptyBrief('workflow'))).toBe('通用电商 · 巴西市场')
+    expect(suggestImageTaskName(emptyBrief('workflow'))).toBe('通用电商 · 中国市场')
     expect(
       suggestImageTaskName({
         ...emptyBrief('gen'),
@@ -30,7 +30,7 @@ describe('suggestImageTaskName', () => {
           },
         ],
       }),
-    ).toBe('通勤双肩包 · 巴西市场')
+    ).toBe('通勤双肩包 · 中国市场')
   })
   it('drops the market when the image has no text', () => {
     expect(suggestImageTaskName({ ...emptyBrief('gen'), language: '无文字' })).toBe('通用电商')

@@ -131,13 +131,13 @@ export type ImageAction = {
 export const FEATURES = [
   {
     id: 'gen',
-    label: '快速出图',
+    label: '单张 / 改图',
     description: '主图、白底、场景与局部改图',
-    step: '上传参考图，写下要求，让 Agent 把想法整理成可执行的画面。',
+    step: '生成一张图片，或修改已有图片。写下要求即可开始。',
   },
   {
     id: 'workflow',
-    label: '制作与试品',
+    label: '制作模板',
     description: '给图制作、换品试做、反馈修正、持续出图',
     step: '把要求变成可复用的规则，用其他商品试做，调整满意后继续生成。',
   },
@@ -145,25 +145,25 @@ export const FEATURES = [
     id: 'replace',
     label: '样图换货',
     description: '保留版式，替换成你的商品',
-    step: '选择已有样图模板，核对商品正反面。先生成两款样品，确认后再铺量。',
+    step: '沿用现成套图的版式，只把商品换成你的。',
   },
   {
     id: 'smart',
     label: '模板套图',
     description: '沿用风格，逐款设计内容',
-    step: '选一套风格规则，让 Agent 为每个商品的每一页编写专属方案。',
+    step: '选择已有模板，为你的商品生成同一风格的整套图片。',
   },
   {
     id: 'design',
     label: '从零设计',
     description: '没有模板，也能做完整套图',
-    step: '给出商品、市场和风格要求。先审阅页面方案，再把成图沉淀为模板。',
+    step: '没有模板也没关系，放入商品，描述你想要的一套图。',
   },
   {
     id: 'client',
     label: '多品类批量',
     description: '分类、选模板、分批交付',
-    step: '按商品文件夹导入素材，识别分类后检查分组。每个分类单独打样、确认和批量。',
+    step: '导入一批商品，自动分类、安排套图，每类先出样品。',
   },
 ] as const
 
@@ -233,7 +233,7 @@ export const emptyBrief = (feature: ImageFeature): ImageBrief => ({
   feature,
   name: '',
   requirement: '',
-  language: 'pt-BR',
+  language: feature === 'gen' ? '无文字' : feature === 'replace' ? '跟随样图' : 'zh-CN',
   platform: '通用电商',
   ratio: '1:1',
   resolution: '1k',

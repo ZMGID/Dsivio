@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -130,6 +131,26 @@ pub struct Task {
     pub output_directory: Option<String>,
     #[serde(default)]
     pub workflow: Option<Workflow>,
+    #[serde(default)]
+    pub materials: HashMap<String, MaterialState>,
+}
+
+/// Internal preparation stays separate from user-facing results and exports.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MaterialState {
+    pub sources: Vec<String>,
+    pub requirement: String,
+    pub identified: bool,
+    pub needs_back: bool,
+    pub derived: HashMap<String, DerivedView>,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DerivedView {
+    pub asset: Option<Asset>,
+    pub attempts: Vec<ImageResult>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -324,12 +324,30 @@ pub(super) fn install_rules(task: &mut Task, template: Template, note: String, s
     task.templates = vec![template];
 }
 
-async fn build(
+/// Convert the model's view choice into trusted references; no model-provided paths.
+pub(super) fn assign_slot_refs(slot: &mut Value, mode: &str) -> Result<(), String> {
+    let reference = match slot["view"].as_str() {
+        Some("front") => "@product.front",
+        Some("back") => "@product.back",
+        _ => return Err("页面缺少有效的商品视角，请重新制作模板".into()),
+    };
+    slot.as_object_mut()
+        .ok_or("页面规则无效")?
+        .retain(|key, _| matches!(key.as_str(), "id" | "purpose" | "brief" | "prompt"));
+    slot["refs"] = if mode == "replace" {
+        json!(["@example", reference])
+    } else {
+        json!([reference])
+    };
+    Ok(())
+}
+
+pub(super) async fn make_template(
     app: &AppHandle,
-    task: &mut Task,
+    task: &Task,
     cfg: &StudioConfig,
     flag: &Arc<AtomicBool>,
-) -> Result<(), String> {
+) -> Result<(Template, String), String> {
     let input = task
         .brief
         .workflow_input
@@ -342,8 +360,6 @@ async fn build(
         task.brief.count
     };
     let slots: Vec<_> = (0..count).map(|i| json!({"id":format!("h{}",i+1),"sourceIndex": if input.mode == "replace" { Some(i+1) } else { None }})).collect();
-    task.progress = "Agent 正在看原始素材，整理每页构图、文字和以后换品要遵守的规则…".into();
-    persist(task)?;
     let images = input
         .sources
         .iter()
@@ -356,7 +372,7 @@ async fn build(
         })
         .collect();
     let out = agent::run(app, &task.id, cfg,
-        "Create reusable e-commerce image rules from the supplied source images and requirements. Return {\"summary\":\"Chinese explanation\",\"template\":{\"name\":\"Chinese name\",\"mode\":\"exact requested mode\",\"category\":\"category\",\"style\":\"complete shared visual system\",\"text_policy\":\"exact copy and language policy\",\"slots\":[{\"id\":\"exact supplied id\",\"purpose\":\"Chinese page label\",\"brief\":\"complete reusable per-page composition for smart\",\"prompt\":\"complete English replacement instructions for replace\"}]}}. Include every supplied slot in order. For replace, inspect each corresponding source image, specify the original text, product position, angle, typography, what stays and what changes; preserve layout and change only the product using future product references. For smart, use product material to design reusable rules for similar products, not a prompt locked to this SKU. Separate shared layout/style from product-specific facts. Do not invent dimensions or copy this source product's features onto future products. Do not output file paths, refs, examples, or product kind branches.",
+        "Create reusable e-commerce image rules from the supplied source images and requirements. Return {\"summary\":\"Chinese explanation\",\"template\":{\"name\":\"Chinese name\",\"mode\":\"exact requested mode\",\"category\":\"category\",\"style\":\"complete shared visual system\",\"text_policy\":\"exact copy and language policy\",\"slots\":[{\"id\":\"exact supplied id\",\"purpose\":\"Chinese page label\",\"view\":\"front or back\",\"brief\":\"complete reusable per-page composition for smart\",\"prompt\":\"complete English replacement instructions for replace\"}]}}. Include every supplied slot in order. Set view to back for rear-view pages and front otherwise; missing product views will be prepared automatically. For replace, inspect each corresponding source image, specify the original text, product position, angle, typography, what stays and what changes; preserve layout and change only the product using future product references. For smart, use product material to design reusable rules for similar products, not a prompt locked to this SKU. Separate shared layout/style from product-specific facts. Do not invent dimensions or copy this source product's features onto future products. Do not output file paths, refs, examples, or product kind branches.",
         json!({"brief":task.brief,"mode":input.mode,"slots":slots,"shootingGuide":include_str!("../../resources/image-studio/shots.md")}), images, flag.clone()).await?;
     stopped(flag)?;
     let mut data = out["template"].clone();
@@ -373,14 +389,7 @@ async fn build(
         if slot["id"] != format!("h{}", i + 1) {
             return Err("Agent 返回的页面顺序不匹配，请重新制作".into());
         }
-        slot.as_object_mut()
-            .ok_or("页面规则无效")?
-            .retain(|k, _| matches!(k.as_str(), "id" | "purpose" | "brief" | "prompt"));
-        slot["refs"] = if input.mode == "replace" {
-            json!(["@example", "@product.front"])
-        } else {
-            json!(["@product.front"])
-        };
+        assign_slot_refs(slot, &input.mode)?;
     }
     data.as_object_mut().ok_or("规则无效")?.retain(|k, _| {
         matches!(
@@ -430,18 +439,25 @@ async fn build(
         builtin: false,
         data,
     };
-    install_rules(
-        task,
+    Ok((
         template,
-        task.brief.requirement.clone(),
-        out["summary"]
-            .as_str()
-            .unwrap_or("已完成共用规则制作")
-            .into(),
-    );
+        out["summary"].as_str().unwrap_or("模板已制作").into(),
+    ))
+}
+
+async fn build(
+    app: &AppHandle,
+    task: &mut Task,
+    cfg: &StudioConfig,
+    flag: &Arc<AtomicBool>,
+) -> Result<(), String> {
+    task.progress = "正在整理模板…".into();
+    persist(task)?;
+    let (template, summary) = make_template(app, task, cfg, flag).await?;
+    install_rules(task, template, task.brief.requirement.clone(), summary);
     persist(task)?;
     storage::save_template(&task.templates[0])?;
-    task.progress = "规则已制作并保存。添加其他商品，选择 1–2 款试做。".into();
+    task.progress = "模板已保存，可以换一款商品试做。".into();
     Ok(())
 }
 
@@ -543,8 +559,16 @@ async fn generate(
         .filter(|p| ids.contains(&p.id))
         .cloned()
         .collect();
-    for product in products {
+    for mut product in products {
         stopped(flag)?;
+        let index = task
+            .brief
+            .products
+            .iter()
+            .position(|p| p.id == product.id)
+            .ok_or("商品不存在")?;
+        super::preparation::prepare_product(app, task, index, cfg, flag).await?;
+        product = task.brief.products[index].clone();
         if task.plans.iter().any(|p| p.product_id == product.id) {
             continue;
         }

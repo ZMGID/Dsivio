@@ -79,12 +79,22 @@ export function ImageLanguageSelect({
   value,
   onChange,
   disabled,
+  allowFollowExample = false,
+  inheritedValue,
 }: {
   value: string
   onChange: (value: string) => void
   disabled?: boolean
+  allowFollowExample?: boolean
+  inheritedValue?: string
 }) {
-  const known = imageLanguages.some(([code]) => code === value)
+  const languages = allowFollowExample || value === '跟随样图'
+    ? [['跟随样图', '跟随样图'], ...imageLanguages] : [...imageLanguages]
+  if (inheritedValue && !languages.some(([code]) => code === inheritedValue)) {
+    const label = imageLanguages.find(([code]) => inheritedValue.includes(code))?.[1]
+    languages.unshift([inheritedValue, label ? `模板语言 · ${label}` : '跟随模板语言'])
+  }
+  const known = languages.some(([code]) => code === value)
   return (
     <div className="is-field">
       <StudioSelect
@@ -93,7 +103,7 @@ export function ImageLanguageSelect({
         value={known ? value : 'custom'}
         onChange={(e) => onChange(e.target.value === 'custom' ? '' : e.target.value)}
       >
-        {imageLanguages.map(([code, label]) => (
+        {languages.map(([code, label]) => (
           <option key={code} value={code}>
             {label}
           </option>

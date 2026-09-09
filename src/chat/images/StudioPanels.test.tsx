@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { getSettingsCached } from '../../api/settingsCache'
 import { makeProvider } from '../../settings/tabs/testFixtures'
-import { ConfigPanel } from './StudioPanels'
+import { ConfigPanel, ImageLanguageSelect } from './StudioPanels'
 
 vi.mock('../../api/tauri', () => ({
   isTauriRuntime: () => true,
@@ -16,6 +16,20 @@ vi.mock('../../api/tauri', () => ({
 vi.mock('../../api/settingsCache', () => ({
   getSettingsCached: vi.fn(),
 }))
+
+describe('Image language inheritance', () => {
+  it('keeps the full template policy without showing it as a custom input', () => {
+    const policy = '巴西葡萄牙语（pt-BR）。保留品牌名称。'
+    const onChange = vi.fn()
+    render(<ImageLanguageSelect value={policy} inheritedValue={policy} onChange={onChange} />)
+    expect(screen.getByText('模板语言 · 葡萄牙语（巴西）')).toBeInTheDocument()
+    expect(screen.queryByLabelText('自定义图内语言')).not.toBeInTheDocument()
+    expect(onChange).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '图内语言' }))
+    fireEvent.click(screen.getByRole('option', { name: '无文字' }))
+    expect(onChange).toHaveBeenCalledWith('无文字')
+  })
+})
 
 describe('ConfigPanel', () => {
   it('lists only image-generation models in the shared model picker', async () => {
