@@ -51,24 +51,121 @@
 .video-studio .is-rail-history > .vs-muted {
   padding: 0 10px;
 }
-.video-studio .vs-empty {
-  min-height: 180px;
+.video-studio .vs-media-head {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.video-studio .vs-media-head h3 {
+  margin: 0;
+}
+.video-studio .vs-media-head small {
   color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.video-studio .vs-drop {
+  min-height: 176px;
+  display: grid;
+  place-items: center;
+  padding: 22px 18px;
+  border: 1px dashed color-mix(in srgb, var(--border) 70%, var(--text-muted));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg) 72%, var(--bg-input));
+}
+.video-studio .vs-drop.is-drop-active {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.video-studio .vs-drop.is-upload-area--filled {
+  min-height: 0;
+  display: block;
+  padding: 12px;
+  border-style: solid;
+  border-color: var(--border);
+  background: var(--bg);
+}
+.video-studio .vs-drop-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
 }
-.video-studio .vs-empty p {
-  color: var(--text);
-  margin: 16px 0 4px;
+.video-studio .vs-drop-mark {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.video-studio .vs-drop-empty strong {
+  margin-top: 14px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.video-studio .vs-drop-empty span {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.video-studio .vs-drop-file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.video-studio .vs-drop-file > div {
+  flex: 1;
+  min-width: 0;
+}
+.video-studio .vs-drop-file strong {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
+}
+.video-studio .vs-drop-file span {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.video-studio .vs-drop-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.video-studio .vs-drop-bar .kv-input {
+  flex: 1;
+  min-width: 0;
+}
+.video-studio .vs-drop-bar small {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.video-studio .vs-drop-bar .kv-btn {
+  flex-shrink: 0;
+}
+.video-studio .vs-drop .vs-assets {
+  width: 100%;
 }
 .video-studio .vs-assets {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
 }
 .video-studio .vs-assets > div {
   width: 96px;
@@ -252,5 +349,12 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0 16px;
+  }
+  .video-studio .vs-drop-bar {
+    flex-wrap: wrap;
+  }
+  .video-studio .vs-drop-bar .kv-input,
+  .video-studio .vs-drop-bar small {
+    flex: 1 1 100%;
   }
 }
