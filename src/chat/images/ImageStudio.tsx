@@ -1220,7 +1220,7 @@ export default function ImageStudio() {
                       title={running ? '正在把方案变成图片' : '你的成图会出现在这里'}
                       text={
                         running
-                          ? '每完成一张就会保存一张，可以切换到其他页面。'
+                          ? '最多同时生成 9 张，每完成一张就会保存一张，可以切换到其他页面。'
                           : '先生成画面方案，再开始出图。成图支持逐张修改和质检。'
                       }
                       action={
@@ -1238,7 +1238,7 @@ export default function ImageStudio() {
                         )
                         return (
                           <article
-                            className={`is-result-card ${r.path ? '' : 'failed'}`}
+                            className={`is-result-card ${r.error ? 'failed' : ''}`}
                             key={r.id}
                           >
                             <button
@@ -1260,7 +1260,15 @@ export default function ImageStudio() {
                                   ) : (
                                     <ImageIcon size={28} />
                                   )}
-                                  <p>{r.remoteId ? '远程任务已保存' : '等待图片结果'}</p>
+                                  <p>
+                                    {r.error
+                                      ? '本张图片未完成'
+                                      : running
+                                        ? '正在生成'
+                                        : r.remoteId
+                                          ? '远程任务已保存'
+                                          : '等待图片结果'}
+                                  </p>
                                   <small>{r.error}</small>
                                 </div>
                               )}

@@ -3,6 +3,7 @@
 use super::{storage, types::*};
 use crate::{settings::ModelProvider, state::AppState};
 use base64::{engine::general_purpose::STANDARD, Engine};
+use futures::{future::BoxFuture, FutureExt};
 use reqwest::{Client, Response};
 use serde_json::{json, Value};
 use std::{fs, time::Duration};
@@ -11,6 +12,31 @@ use tauri::{AppHandle, Manager};
 pub enum Submission {
     Image(Vec<u8>),
     Pending(String),
+}
+
+pub(super) struct NativeBackend<'a> {
+    pub app: &'a AppHandle,
+    pub cfg: &'a StudioConfig,
+    pub task_id: &'a str,
+    pub brief: &'a Brief,
+}
+
+impl super::generation::Backend for NativeBackend<'_> {
+    fn submit<'a>(&'a self, plan: &'a ImagePlan) -> BoxFuture<'a, Result<Submission, String>> {
+        submit(self.app, self.cfg, self.task_id, self.brief, plan).boxed()
+    }
+
+    fn poll<'a>(
+        &'a self,
+        cfg: &'a StudioConfig,
+        remote: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Vec<u8>>, String>> {
+        poll(self.app, cfg, self.task_id, remote).boxed()
+    }
+
+    fn store(&self, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
+        store_image(result, bytes)
+    }
 }
 
 pub fn validate(cfg: &StudioConfig, brief: &Brief) -> Result<(), String> {
@@ -140,10 +166,11 @@ fn data_uri(path: &str) -> Result<String, String> {
 pub async fn submit(
     app: &AppHandle,
     cfg: &StudioConfig,
-    task: &Task,
+    task_id: &str,
+    brief: &Brief,
     plan: &ImagePlan,
 ) -> Result<Submission, String> {
-    validate(cfg, &task.brief)?;
+    validate(cfg, brief)?;
     let p = provider(app, cfg)?;
     if plan.refs.len() > if cfg.protocol == "grok" { 5 } else { 16 } {
         return Err("参考图数量超出该接口限制，请减少参考素材".into());
@@ -175,9 +202,9 @@ pub async fn submit(
         reqwest::Method::POST,
         &endpoint(&p, &suffix)?,
         cfg,
-        &task.id,
+        task_id,
     );
-    let b = &task.brief;
+    let b = brief;
     if cfg.protocol == "openai" && refs {
         let size = openai_size(&b.ratio);
         let mut form = reqwest::multipart::Form::new()

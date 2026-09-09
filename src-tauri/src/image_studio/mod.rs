@@ -3,6 +3,7 @@
 pub(crate) mod agent;
 mod builtins;
 mod engine;
+mod generation;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -90,6 +91,11 @@ fn recover(mut t: Task) -> Result<Task, String> {
     {
         t.status = "interrupted".into();
         t.progress = "应用退出时任务未完成。已有结果已保留；远程任务可恢复查询。".into();
+        for result in &mut t.results {
+            if result.path.is_none() && result.remote_id.is_none() && result.error.is_none() {
+                result.error = Some("请求可能已提交；请先核对供应商记录再重试".into());
+            }
+        }
         storage::save_task(&mut t)?;
     }
     Ok(t)
@@ -349,7 +355,7 @@ pub fn image_studio_action(
             flag.store(true, Ordering::Relaxed);
         }
         let mut t = storage::load_task(&id)?;
-        t.progress = "正在停止，等待已提交的当前图片保存完成…".into();
+        t.progress = "正在停止，等待已提交的图片收尾并保存…".into();
         storage::save_task(&mut t)?;
         return Ok(t);
     }
@@ -623,7 +629,7 @@ async fn execute(
         return Ok(());
     }
     let retry = matches!(a.kind.as_str(), "retry" | "revise");
-    let plans: Vec<_> = t
+    let mut plans: Vec<_> = t
         .plans
         .iter()
         .filter(|plan| {
@@ -650,7 +656,7 @@ async fn execute(
     if plans.is_empty() {
         return Err("没有待生成的页面。失败的页面请单独重试；已有远程任务请恢复查询。".into());
     }
-    for (i, mut plan) in plans.into_iter().enumerate() {
+    for plan in &mut plans {
         stopped(flag)?;
         if retry {
             if t.results
@@ -695,43 +701,16 @@ async fn execute(
                 .insert(0, previous.path.clone().unwrap_or_default());
             plan.prompt=format!("Edit the FIRST image. Preserve everything except the requested change. Remaining images are ground-truth product references. Requested change: {}\nOriginal plan: {}",a.note,plan.prompt);
         }
-        t.progress = format!("正在生成第 {} 张 · {}；结果会逐张保存", i + 1, plan.purpose);
-        let index = t.results.len();
-        t.results.push(ImageResult {
-            id: storage::id(),
-            product_id: plan.product_id.clone(),
-            slot_id: plan.slot_id.clone(),
-            revision: t.revision,
-            path: None,
-            error: Some("请求准备提交；若应用中断，请先核对供应商记录再重试".into()),
-            remote_id: None,
-            prompt: plan.prompt.clone(),
-            width: 0,
-            height: 0,
-            review: None,
-            config: cfg.clone(),
-        });
-        persist(t)?;
-        let result = engine::submit(app, cfg, t, &plan).await;
-        let outcome = match result {
-            Ok(engine::Submission::Image(bytes)) => {
-                engine::store_image(&mut t.results[index], &bytes)
-            }
-            Ok(engine::Submission::Pending(id)) => {
-                t.results[index].remote_id = Some(id);
-                t.results[index].error = None;
-                persist(t)?;
-                resume(app, t, index, flag).await
-            }
-            Err(e) => Err(e),
-        };
-        if let Err(e) = outcome {
-            t.results[index].error = Some(e.clone());
-            persist(t)?;
-            return Err(e);
-        }
-        persist(t)?;
     }
+    let task_id = t.id.clone();
+    let brief = t.brief.clone();
+    let backend = engine::NativeBackend {
+        app,
+        cfg,
+        task_id: &task_id,
+        brief: &brief,
+    };
+    generation::run(t, cfg, plans, flag, &backend, persist).await?;
     t.progress = if t.brief.feature == "gen" {
         "图片已生成，可逐张修改、质检或导出"
     } else {
@@ -751,19 +730,16 @@ async fn resume(
         .clone()
         .ok_or("此版本没有远程任务编号；请核对供应商记录")?;
     let cfg = t.results[index].config.clone();
-    for _ in 0..180 {
-        if flag.load(Ordering::Relaxed) {
-            return Err("已停止查询，远程任务编号已保存，可稍后恢复".into());
-        }
-        match engine::poll(app, &cfg, &t.id, &remote).await? {
-            Some(bytes) => return engine::store_image(&mut t.results[index], &bytes),
-            None => {}
-        }
-        t.progress = "远程服务正在生图，任务编号已保存，可离开此页面".into();
-        persist(t)?;
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-    }
-    Err("等待超时，远程任务编号已保存。稍后点击恢复查询，不会重新下单。".into())
+    t.progress = "远程服务正在生图，任务编号已保存，可离开此页面".into();
+    persist(t)?;
+    let backend = engine::NativeBackend {
+        app,
+        cfg: &cfg,
+        task_id: &t.id,
+        brief: &t.brief,
+    };
+    let bytes = generation::resume(&backend, &cfg, &remote, flag).await?;
+    engine::store_image(&mut t.results[index], &bytes)
 }
 
 #[tauri::command]
