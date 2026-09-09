@@ -4,6 +4,8 @@ pub(crate) mod agent;
 mod builtins;
 mod engine;
 mod generation;
+mod imports;
+mod output;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -13,7 +15,7 @@ mod workflow;
 use crate::state::AppState;
 use serde_json::{json, Value};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     fs,
     path::Path,
     sync::{
@@ -86,8 +88,10 @@ pub fn image_studio_bootstrap(app: AppHandle) -> Result<Value, String> {
     tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     let settings = app.state::<AppState>().settings_read().clone();
     let providers:Vec<_>=settings.providers.iter().filter(|p|p.enabled).map(|p|json!({"id":p.id,"name":p.name,"models":p.available_models,"ready":p.has_credentials()})).collect();
+    let mut config = storage::config()?;
+    config.output_root = output::root(&config)?.to_string_lossy().into();
     Ok(
-        json!({"tasks":tasks,"templates":storage::templates()?,"config":storage::config()?,"providers":providers}),
+        json!({"tasks":tasks,"templates":storage::templates()?,"config":config,"providers":providers}),
     )
 }
 fn recover(mut t: Task) -> Result<Task, String> {
@@ -176,15 +180,19 @@ pub fn image_studio_save(
             progress: String::new(),
             error: None,
             templates: vec![],
+            output_directory: None,
             workflow: None,
         }
     };
+    output::prepare(&mut t, &storage::config()?)?;
     if brief.feature == "workflow" {
         workflow::save_brief(&mut t, brief)?;
         storage::save_task(&mut t)?;
         return Ok(t);
     }
-    if t.revision == 0 || t.brief != brief {
+    let mut comparable = t.brief.clone();
+    comparable.name = brief.name.clone();
+    if t.revision == 0 || comparable != brief {
         t.revision += 1;
         t.plans.clear();
         t.approved_groups.clear();
@@ -247,70 +255,13 @@ pub async fn image_studio_import(
     as_products: bool,
 ) -> Result<Vec<Product>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut grouped = BTreeMap::<String, Vec<Asset>>::new();
-        fn scan(
-            path: &Path,
-            group: &str,
-            depth: u8,
-            grouped: &mut BTreeMap<String, Vec<Asset>>,
-        ) -> Result<(), String> {
-            if depth > 6 {
-                return Err("商品目录层级超过 6 层，请选择更具体的文件夹".into());
-            }
-            if path.is_symlink() {
-                return Ok(());
-            }
-            if path.is_dir() {
-                for e in fs::read_dir(path).map_err(|e| e.to_string())?.flatten() {
-                    let p = e.path();
-                    let label = if p.is_dir() {
-                        p.file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string()
-                    } else {
-                        group.into()
-                    };
-                    scan(&p, &label, depth + 1, grouped)?;
-                }
-            } else if path.extension().is_some_and(|x| {
-                matches!(
-                    x.to_string_lossy().to_lowercase().as_str(),
-                    "png" | "jpg" | "jpeg" | "webp"
-                )
-            }) {
-                if grouped.values().map(Vec::len).sum::<usize>() >= 1000 {
-                    return Err("一次最多导入 1000 张素材".into());
-                }
-                grouped
-                    .entry(group.into())
-                    .or_default()
-                    .push(storage::import_asset(path)?);
-            }
-            Ok(())
-        }
-        for p in paths {
-            let p = Path::new(&p);
-            let name = if as_products {
-                p.file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            } else {
-                "商品素材".into()
-            };
-            scan(p, &name, 0, &mut grouped)?;
-        }
-        if !as_products {
-            let all = grouped.into_values().flatten().collect();
-            grouped = BTreeMap::from([("商品素材".into(), all)]);
-        }
+        let grouped = imports::collect(&paths, as_products)?;
         let mut products = vec![];
-        for (name, mut assets) in grouped {
-            if assets.is_empty() {
-                continue;
-            }
-            assets.sort_by(|a, b| a.name.cmp(&b.name));
+        for (name, files) in grouped {
+            let assets: Vec<_> = files
+                .iter()
+                .map(|p| storage::import_asset(p))
+                .collect::<Result<_, _>>()?;
             let back = assets
                 .iter()
                 .find(|a| {
@@ -349,6 +300,7 @@ pub async fn image_studio_import(
 
 #[tauri::command]
 pub fn image_studio_config(config: StudioConfig) -> Result<(), String> {
+    output::root(&config)?;
     let _lock = lock()?;
     if config.agent_provider_id.is_empty() != config.agent_model.is_empty() {
         return Err("Agent 供应商和模型需要一起选择，或同时留空使用当前聊天模型".into());
@@ -448,6 +400,7 @@ pub fn image_studio_action(
         return Err("请先生成并检查方案".into());
     }
     let cfg = storage::config()?;
+    output::prepare(&mut t, &cfg)?;
     if matches!(
         action.kind.as_str(),
         "sample" | "bulk" | "generate" | "retry" | "revise"
@@ -777,7 +730,7 @@ async fn resume(
         brief: &t.brief,
     };
     let bytes = generation::resume(&backend, &cfg, &remote, flag).await?;
-    engine::store_image(&mut t.results[index], &bytes)
+    engine::store_image(&t.id, &mut t.results[index], &bytes)
 }
 
 #[tauri::command]
@@ -974,43 +927,36 @@ pub async fn image_studio_export(
     height: u32,
     max_kb: u32,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move||{
-        if width>8192||height>8192||(width==0)!=(height==0){return Err("交付宽高须同时填写，且不超过 8192；填 0 导出原图".into());}
-        let t=storage::load_task(&id)?;let base=Path::new(&destination).canonicalize().map_err(|e|e.to_string())?;
-        let dest=base.join(format!("dsivio-images-{}",storage::id()));fs::create_dir(&dest).map_err(|e|e.to_string())?;
-        let mut selected=BTreeMap::new();for r in &t.results {if r.revision==t.revision{selected.insert((r.product_id.clone(),r.slot_id.clone()),r);}}
-        let mut manifest=vec![];
-        for ((pid,sid),r) in selected {
-            let Some(path)=&r.path else{continue;};let source=storage::resolve(path)?;
-            let sku=t.brief.products.iter().find(|p|p.id==pid).map(|p|p.name.as_str()).unwrap_or("product");
-            let safe=|s:&str|s.chars().map(|c|if c.is_alphanumeric()||matches!(c,'-'|'_'){c}else{'_'}).take(60).collect::<String>();
-            let stem=format!("{}-{}-{}",safe(sku),safe(&sid),&r.id[..8]);
-            let filename=if width==0&&max_kb==0 {let name=format!("{stem}.{}",source.extension().unwrap_or_default().to_string_lossy());fs::copy(&source,dest.join(&name)).map_err(|e|e.to_string())?;name}else{
-                let img=storage::decode(&fs::read(&source).map_err(|e|e.to_string())?)?;
-                let img=if width>0{img.resize(width,height,image::imageops::FilterType::Lanczos3)}else{img};
-                // Keep aspect ratio and pad to requested delivery canvas; never distort the product.
-                let img=if width>0{let mut canvas=image::RgbImage::from_pixel(width,height,image::Rgb([255,255,255]));let rgb=img.to_rgb8();image::imageops::overlay(&mut canvas,&rgb,((width-rgb.width())/2) as i64,((height-rgb.height())/2) as i64);image::DynamicImage::ImageRgb8(canvas)}else{image::DynamicImage::ImageRgb8(img.to_rgb8())};
-                let mut chosen=None;
-                for q in [95,90,85,80,75,65,55,45,35] {let mut bytes=vec![];image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes,q).encode_image(&img).map_err(|e|e.to_string())?;if max_kb==0||bytes.len()<=max_kb as usize*1024{chosen=Some(bytes);break;}}
-                let bytes=chosen.ok_or("无法在当前尺寸下满足文件大小限制，请降低交付尺寸或放宽大小限制。原图未更改。")?;
-                let name=format!("{stem}.jpg");fs::write(dest.join(&name),bytes).map_err(|e|e.to_string())?;name
-            };
-            manifest.push(json!({"product":sku,"slot":sid,"file":filename,"sourceVersion":r.id,"prompt":r.prompt}));
-        }
-        if manifest.is_empty(){return Err("当前需求版本还没有可导出的成图".into());}
-        storage::write(&dest.join("manifest.json"),&json!({"task":t.brief.name,"revision":t.revision,"images":manifest}))?;
-        Ok(dest.to_string_lossy().into())
-    }).await.map_err(|e|e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let task = {
+            let _guard = lock()?;
+            check_idle(&id)?;
+            let mut task = storage::load_task(&id)?;
+            if task.output_directory.is_none() {
+                output::prepare(&mut task, &storage::config()?)?;
+                storage::save_task(&mut task)?;
+            }
+            task
+        };
+        output::export(&task, &destination, width, height, max_kb)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn image_studio_open(path: Option<String>) -> Result<(), String> {
-    let root = storage::root()?;
     let relative = path.unwrap_or_else(|| "results".into());
-    storage::resolve(&relative)?;
-    crate::dock::fs::dock_fs_open_path(root.to_string_lossy().into(), relative, None)
-        .await
-        .map(|_| ())
+    let full = storage::resolve(&relative)?;
+    let parent = full.parent().ok_or("图片路径缺少上级目录")?;
+    let name = full.file_name().ok_or("图片路径缺少文件名")?;
+    crate::dock::fs::dock_fs_open_path(
+        parent.to_string_lossy().into(),
+        name.to_string_lossy().into(),
+        None,
+    )
+    .await
+    .map(|_| ())
 }
 
 #[tauri::command]

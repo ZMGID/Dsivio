@@ -35,7 +35,7 @@ impl super::generation::Backend for NativeBackend<'_> {
     }
 
     fn store(&self, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
-        store_image(result, bytes)
+        store_image(self.task_id, result, bytes)
     }
 }
 
@@ -424,7 +424,15 @@ async fn extract(app: &AppHandle, v: &Value) -> Result<Vec<u8>, String> {
     body(r, 50 * 1024 * 1024).await
 }
 
-pub fn store_image(result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
+pub fn store_image(task_id: &str, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
+    store_image_in(&storage::load_task(task_id)?, result, bytes)
+}
+
+pub(super) fn store_image_in(
+    task: &Task,
+    result: &mut ImageResult,
+    bytes: &[u8],
+) -> Result<(), String> {
     let img = storage::decode(bytes)?;
     let fmt = image::guess_format(bytes).map_err(|e| e.to_string())?;
     let ext = match fmt {
@@ -432,8 +440,32 @@ pub fn store_image(result: &mut ImageResult, bytes: &[u8]) -> Result<(), String>
         image::ImageFormat::WebP => "webp",
         _ => "png",
     };
-    let path = format!("results/{}.{}", result.id, ext);
-    fs::write(storage::root()?.join(&path), bytes).map_err(|e| e.to_string())?;
+    let relative = super::output::original_relative(task, result, ext);
+    let base = super::output::directory(task)?;
+    let target = base.join(&relative);
+    fs::create_dir_all(target.parent().ok_or("无效成图路径")?).map_err(|e| e.to_string())?;
+    let canonical_base = base.canonicalize().map_err(|e| e.to_string())?;
+    if !target
+        .parent()
+        .unwrap()
+        .canonicalize()
+        .map_err(|e| e.to_string())?
+        .starts_with(canonical_base)
+    {
+        return Err("成图目录超出任务文件夹".into());
+    }
+    use std::io::Write;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .map_err(|e| e.to_string())?;
+    file.write_all(bytes).map_err(|e| e.to_string())?;
+    let path = format!(
+        "outputs/{}/{}",
+        task.id,
+        relative.to_string_lossy().replace('\\', "/")
+    );
     result.path = Some(path);
     result.width = img.width();
     result.height = img.height();

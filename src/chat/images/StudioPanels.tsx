@@ -226,6 +226,17 @@ export function ConfigPanel({
         <p className="is-muted">
           配置一次，所有图片功能共用。只列出已标记生图能力的模型；密钥和适配器沿用「设置 → 模型」。
         </p>
+        <Field label="图片保存位置">
+          <div className="is-actions">
+            <input className="kv-input" readOnly value={draft.outputRoot || '系统图片目录 / Dskivio / Images'} />
+            <IconButton label="选择图片保存位置" disabled={pending} onClick={() => {
+              void open({ directory: true, title: '选择新任务的图片保存位置' }).then((path) => {
+                if (typeof path === 'string') setDraft((d) => ({ ...d, outputRoot: path }))
+              }).catch((e) => setError(String(e)))
+            }}><FolderOpen size={16} /></IconButton>
+          </div>
+          <small>按任务分文件夹，原图自动保存。更换位置只影响新任务。</small>
+        </Field>
         <div className="is-field">
           <span>图片模型</span>
           <ModelPairSelect

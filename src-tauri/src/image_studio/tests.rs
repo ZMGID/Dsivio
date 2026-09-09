@@ -67,6 +67,124 @@ fn fixture() -> Task {
         "results":[],"approvedGroups":[],"status":"planned","progress":"","error":null,"templates":[]
     })).unwrap()
 }
+
+#[test]
+fn image_import_keeps_identically_named_skus_and_nested_material_separate() {
+    let base = std::env::temp_dir().join(format!("dsivio-import-test-{}", storage::id()));
+    for client in ["客户A", "客户B"] {
+        let folder = base.join(client).join("001").join("细节");
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("detail.png"), b"fixture").unwrap();
+    }
+    let paths: Vec<_> = ["客户A", "客户B"]
+        .iter()
+        .map(|c| base.join(c).join("001").to_string_lossy().into())
+        .collect();
+    let products = imports::collect(&paths, true).unwrap();
+    assert_eq!(products.len(), 2);
+    assert_eq!(products[0].0, "001");
+    assert_eq!(products[1].0, "001");
+    assert_ne!(products[0].1[0], products[1].1[0]);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn image_import_parent_folder_uses_one_product_per_child_and_natural_page_order() {
+    let base = std::env::temp_dir().join(format!("dsivio-import-test-{}", storage::id()));
+    for sku in ["商品A", "商品B"] {
+        let nested = base.join(sku).join("素材");
+        fs::create_dir_all(&nested).unwrap();
+        for name in ["h10.png", "h2.png", "h1.png"] {
+            fs::write(nested.join(name), b"fixture").unwrap();
+        }
+    }
+    let products = imports::collect(&[base.to_string_lossy().into()], true).unwrap();
+    assert_eq!(products.len(), 2);
+    for (_, files) in products {
+        let names: Vec<_> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, ["h1.png", "h2.png", "h10.png"]);
+    }
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn task_output_folder_survives_renames_and_default_root_changes() {
+    let base = std::env::temp_dir().join(format!("dsivio-output-test-{}", storage::id()));
+    let mut task = fixture();
+    let mut cfg = StudioConfig {
+        output_root: base.to_string_lossy().into(),
+        ..Default::default()
+    };
+    output::prepare(&mut task, &cfg).unwrap();
+    let original = task.output_directory.clone();
+    task.brief.name = "修改后的任务名称".into();
+    cfg.output_root = base.join("另一个目录").to_string_lossy().into();
+    output::prepare(&mut task, &cfg).unwrap();
+    assert_eq!(task.output_directory, original);
+    assert!(!base.join("另一个目录").exists());
+    assert!(!output::name("../A:B? ").contains(['/', '\\', ':', '?']));
+    assert!(output::root(&StudioConfig {
+        output_root: "relative".into(),
+        ..Default::default()
+    })
+    .is_err());
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn originals_and_deliveries_are_grouped_and_never_overwrite_previous_versions() {
+    let base = std::env::temp_dir().join(format!("dsivio-output-test-{}", storage::id()));
+    let mut task = fixture();
+    task.brief.products[1].name = task.brief.products[0].name.clone();
+    output::prepare(
+        &mut task,
+        &StudioConfig {
+            output_root: base.to_string_lossy().into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut bytes = std::io::Cursor::new(vec![]);
+    image::DynamicImage::new_rgb8(12, 8)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let mut a = result("a", task.revision, None);
+    let mut b = result("b", task.revision, None);
+    engine::store_image_in(&task, &mut a, bytes.get_ref()).unwrap();
+    engine::store_image_in(&task, &mut b, bytes.get_ref()).unwrap();
+    assert_ne!(
+        output::original_relative(&task, &a, "png").parent(),
+        output::original_relative(&task, &b, "png").parent()
+    );
+    assert!(engine::store_image_in(&task, &mut a, bytes.get_ref()).is_err());
+    let old = a.clone();
+    let mut revised = result("a", task.revision, None);
+    engine::store_image_in(&task, &mut revised, bytes.get_ref()).unwrap();
+    let directory = output::directory(&task).unwrap();
+    assert_eq!(
+        fs::read(directory.join(output::original_relative(&task, &old, "png"))).unwrap(),
+        *bytes.get_ref()
+    );
+    task.results = vec![old, b, revised];
+    let resolver = |path: &str| -> Result<std::path::PathBuf, String> {
+        Ok(directory.join(path.strip_prefix(&format!("outputs/{}/", task.id)).unwrap()))
+    };
+    let first = output::export_resolved(&task, "", 0, 0, 0, resolver).unwrap();
+    let second = output::export_resolved(&task, "", 16, 16, 0, resolver).unwrap();
+    assert_ne!(first, second);
+    assert!(Path::new(&first).starts_with(directory.join("deliveries")));
+    let manifest: Value = storage::read(&Path::new(&second).join("manifest.json")).unwrap();
+    assert_eq!(manifest["images"].as_array().unwrap().len(), 2);
+    for entry in manifest["images"].as_array().unwrap() {
+        let image = image::open(Path::new(&second).join(entry["file"].as_str().unwrap())).unwrap();
+        assert_eq!((image.width(), image.height()), (16, 16));
+    }
+    fs::remove_dir_all(base).unwrap();
+}
+
 fn result(product: &str, rev: u64, path: Option<&str>) -> ImageResult {
     serde_json::from_value(json!({"id":storage::id(),"productId":product,"slotId":"h1","revision":rev,"path":path,"error":null,"remoteId":null,"prompt":"","width":800,"height":800,"review":null,"config":{}})).unwrap()
 }

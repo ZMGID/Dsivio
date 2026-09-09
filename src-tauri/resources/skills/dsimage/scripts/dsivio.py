@@ -86,7 +86,8 @@ def main(argv: list[str]) -> int:
             try:
                 task = read_json(file)
                 print(json.dumps({"id": task["id"], "name": task["brief"]["name"],
-                                  "status": task["status"], "path": str(file)}, ensure_ascii=False))
+                                  "status": task["status"], "path": str(file),
+                                  "outputDirectory": task.get("outputDirectory")}, ensure_ascii=False))
             except (OSError, ValueError, KeyError):
                 continue
         return 0

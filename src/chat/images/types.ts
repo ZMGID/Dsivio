@@ -39,6 +39,7 @@ export type ImageConfig = {
   protocol: string
   agentProviderId: string
   agentModel: string
+  outputRoot?: string
 }
 export type ImageResult = {
   id: string
@@ -92,6 +93,7 @@ export type ImageTask = {
   progress: string
   error: string | null
   templates: ImageTemplate[]
+  outputDirectory?: string | null
   workflow?: ImageWorkflow | null
 }
 export type ImageWorkflow = {
