@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   Clapperboard,
+  FileImage,
   Film,
   FolderOpen,
   Layers,
@@ -30,7 +32,8 @@ import '../images/ImageStudio.css'
 import './VideoStudio.css'
 import '../images/studioLayout.css'
 import { VideoMediaOptions } from './VideoMediaOptions'
-import { RequirementOptimize } from '../images/RequirementOptimize'
+import { RequirementComposer } from '../images/RequirementComposer'
+import { applyVideoStudioDrop } from './videoDrop'
 
 const preview: VideoBootstrap = {
   tasks: [],
@@ -83,9 +86,19 @@ export default function VideoStudio() {
   const [model, setModel] = useState('grok-imagine-video-1.5')
   const [video, setVideo] = useState('')
   const [recoveryId, setRecoveryId] = useState('')
+  const [dropActive, setDropActive] = useState(false)
   const locked =
     !!task &&
     ['submitting', 'running', 'succeeded', 'uncertain'].includes(task.status)
+  const dropReadyRef = useRef({ accept: false, busy: false })
+  const briefRef = useRef(brief)
+  const viewRef = useRef(view)
+  briefRef.current = brief
+  viewRef.current = view
+  dropReadyRef.current = {
+    accept: native && (view === 'creation' || view === 'analysis') && step === 0,
+    busy: !!busy || locked,
+  }
 
   async function refresh() {
     if (native) setData(await api.videoStudioBootstrap())
@@ -241,6 +254,58 @@ export default function VideoStudio() {
           ],
         })
     })
+  }
+  const importDropped = (paths: string[]) => {
+    if (dropReadyRef.current.busy || !paths.length) return
+    const page = viewRef.current === 'analysis' ? 'analysis' : viewRef.current
+    const result = applyVideoStudioDrop(page, briefRef.current, paths)
+    if ('error' in result) {
+      setError(result.error)
+      return
+    }
+    change(result)
+  }
+  const importDroppedRef = useRef(importDropped)
+  importDroppedRef.current = importDropped
+  useEffect(() => {
+    if (!native) return
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (cancelled) return
+        const payload = event.payload
+        if (!dropReadyRef.current.accept) {
+          if (payload.type === 'leave' || payload.type === 'drop') setDropActive(false)
+          return
+        }
+        if (payload.type === 'enter' || payload.type === 'over') {
+          if (!dropReadyRef.current.busy) setDropActive(true)
+          return
+        }
+        if (payload.type === 'leave') {
+          setDropActive(false)
+          return
+        }
+        if (payload.type === 'drop') {
+          setDropActive(false)
+          importDroppedRef.current(payload.paths)
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn()
+        else unlisten = fn
+      })
+      .catch((err) => console.error('Video studio drag-drop listen failed:', err))
+    return () => {
+      cancelled = true
+      setDropActive(false)
+      unlisten?.()
+    }
+  }, [native])
+  const keepOsDrop = (event: DragEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
   }
   const controlsDisabled = !!busy || locked
   const route = brief.route
@@ -652,127 +717,179 @@ export default function VideoStudio() {
               {step === 0 ? (
                 <div className="vs-layout">
                   <div className="vs-editor-column">
-                    <section className="vs-panel">
-                      <h3>{view === 'analysis' ? '参考视频' : '商品素材'}</h3>
+                    <section
+                      className="vs-panel vs-media"
+                      onDragEnter={keepOsDrop}
+                      onDragOver={keepOsDrop}
+                      onDrop={keepOsDrop}
+                    >
+                      <div className="vs-media-head">
+                        <h3>{view === 'analysis' ? '参考视频' : '商品素材'}</h3>
+                        <small>
+                          {view === 'analysis'
+                            ? '单条视频 · 拆解不会提交生成'
+                            : '也可以只写要求，不放图'}
+                        </small>
+                      </div>
                       {view === 'analysis' ? (
                         <>
-                          <Field
-                            label="视频链接或本地路径"
-                            hint="支持单条视频。分析不会提交任何生成任务。"
+                          <div
+                            className={`vs-drop${brief.source ? ' is-upload-area--filled' : ''}${dropActive ? ' is-drop-active' : ''}`}
+                            aria-label="参考视频投放区"
                           >
+                            {brief.source ? (
+                              <div className="vs-drop-file">
+                                <span className="vs-drop-mark">
+                                  <Film size={20} strokeWidth={1.6} />
+                                </span>
+                                <div>
+                                  <strong>
+                                    {brief.source.split(/[\\/]/).pop() || brief.source}
+                                  </strong>
+                                  <span title={brief.source}>
+                                    {dropActive
+                                      ? '松开即可替换'
+                                      : '还可以把视频继续拖进来替换'}
+                                  </span>
+                                </div>
+                                <IconButton
+                                  label="移除参考视频"
+                                  disabled={controlsDisabled}
+                                  onClick={() => change({ source: '' })}
+                                >
+                                  <X size={14} />
+                                </IconButton>
+                              </div>
+                            ) : (
+                              <div className="vs-drop-empty">
+                                <span className="vs-drop-mark">
+                                  <Film size={22} strokeWidth={1.5} />
+                                </span>
+                                <strong>
+                                  {dropActive
+                                    ? '松开即可导入'
+                                    : '把参考视频拖到这里'}
+                                </strong>
+                                <span>MP4 / MOV / WebM</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="vs-drop-bar">
                             <input
                               className="kv-input"
+                              aria-label="视频链接或本地路径"
                               disabled={controlsDisabled}
-                              placeholder="粘贴视频链接，或选择本地文件"
+                              placeholder="粘贴视频链接，或把视频拖到这里"
                               value={brief.source}
                               onChange={(e) =>
                                 change({ source: e.target.value })
                               }
                             />
-                          </Field>
-                          <Button
-                            size="sm"
-                            disabled={!native || controlsDisabled}
-                            onClick={() =>
-                              void guarded('选择视频…', async () => {
-                                const path = await open({
-                                  filters: [
-                                    {
-                                      name: '视频',
-                                      extensions: ['mp4', 'mov', 'webm'],
-                                    },
-                                  ],
+                            <Button
+                              size="sm"
+                              disabled={!native || controlsDisabled}
+                              onClick={() =>
+                                void guarded('选择视频…', async () => {
+                                  const path = await open({
+                                    filters: [
+                                      {
+                                        name: '视频',
+                                        extensions: ['mp4', 'mov', 'webm'],
+                                      },
+                                    ],
+                                  })
+                                  if (typeof path === 'string')
+                                    change({ source: path })
                                 })
-                                if (typeof path === 'string')
-                                  change({ source: path })
-                              })
-                            }
-                          >
-                            <FolderOpen size={14} />
-                            选择本地视频
-                          </Button>
+                              }
+                            >
+                              <FolderOpen size={14} />
+                              {brief.source ? '更换本地视频' : '选择本地视频'}
+                            </Button>
+                          </div>
                         </>
                       ) : (
                         <>
-                          <div className="vs-assets">
-                            {brief.images.map((path) => (
-                              <div key={path}>
-                                <AssetImage
-                                  path={path}
-                                  name={path.split(/[\\/]/).pop() || '参考图'}
-                                />
-                                <IconButton
-                                  label="移除参考图"
-                                  disabled={controlsDisabled}
-                                  onClick={() =>
-                                    change({
-                                      images: brief.images.filter(
-                                        (p) => p !== path,
-                                      ),
-                                    })
-                                  }
-                                >
-                                  <X size={13} />
-                                </IconButton>
-                              </div>
-                            ))}
-                          </div>
-                          {!brief.images.length && (
-                            <div className="vs-empty">
-                              <Film size={30} />
-                              <p>添加商品图片，让视频保持商品原貌</p>
-                              <small>也可以仅用文字创作视频</small>
-                            </div>
-                          )}
-                          <Button
-                            size="sm"
-                            disabled={!native || controlsDisabled}
-                            onClick={() => void pickImages()}
+                          <div
+                            className={`vs-drop${brief.images.length ? ' is-upload-area--filled' : ''}${dropActive ? ' is-drop-active' : ''}`}
+                            aria-label="商品素材投放区"
                           >
-                            <Plus size={14} />
-                            添加参考图
-                          </Button>
-                          <p className="vs-muted">
-                            Grok 单图 1 张 / 参考图最多 7 张 · ComfyUI 最多 3 张
-                            · MiniMax 最多 9 张
-                          </p>
+                            {brief.images.length ? (
+                              <div className="vs-assets">
+                                {brief.images.map((path) => (
+                                  <div key={path}>
+                                    <AssetImage
+                                      path={path}
+                                      name={path.split(/[\\/]/).pop() || '参考图'}
+                                    />
+                                    <IconButton
+                                      label="移除参考图"
+                                      disabled={controlsDisabled}
+                                      onClick={() =>
+                                        change({
+                                          images: brief.images.filter(
+                                            (p) => p !== path,
+                                          ),
+                                        })
+                                      }
+                                    >
+                                      <X size={13} />
+                                    </IconButton>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="vs-drop-empty">
+                                <span className="vs-drop-mark">
+                                  <FileImage size={22} strokeWidth={1.5} />
+                                </span>
+                                <strong>
+                                  {dropActive
+                                    ? '松开即可导入'
+                                    : '把商品图片拖到这里'}
+                                </strong>
+                                <span>PNG / JPG / WebP</span>
+                              </div>
+                            )}
+                          </div>
+                          <div className="vs-drop-bar">
+                            <small>
+                              {dropActive
+                                ? '松开即可继续导入'
+                                : brief.images.length
+                                  ? '还可以把图片继续拖进来'
+                                  : 'Grok 单图 1 张 / 参考图最多 7 张 · ComfyUI 最多 3 张 · MiniMax 最多 9 张'}
+                            </small>
+                            <Button
+                              size="sm"
+                              disabled={!native || controlsDisabled}
+                              onClick={() => void pickImages()}
+                            >
+                              <Plus size={14} />
+                              {brief.images.length ? '继续添加参考图' : '选择商品图片'}
+                            </Button>
+                          </div>
                         </>
                       )}
                     </section>
                     <section className="vs-panel">
-                      <div className="is-field">
-                        <div className="is-field-toolbar">
-                          <span>
-                            {view === 'analysis' ? '重点分析什么' : '这次要拍什么'}
-                          </span>
-                          <RequirementOptimize
-                            value={brief.request}
-                            disabled={controlsDisabled}
-                            preferredAssistantId="asst_builtin_video_prompt"
-                            purpose="video_brief"
-                            mediaPaths={[
-                              ...brief.images,
-                              brief.firstFrame,
-                              brief.lastFrame,
-                              brief.source,
-                              ...(brief.referenceVideos ?? []),
-                            ]}
-                            onChange={(request) => change({ request })}
-                            onError={setError}
-                          />
-                        </div>
-                        <textarea
-                          className="kv-textarea custom-scrollbar"
-                          disabled={controlsDisabled}
-                          rows={6}
-                          aria-label={
-                            view === 'analysis' ? '重点分析什么' : '这次要拍什么'
-                          }
-                          placeholder="商品展示、使用动作、场景、镜头节奏、口播与结尾要求…"
-                          value={brief.request}
-                          onChange={(e) => change({ request: e.target.value })}
-                        />
-                      </div>
+                      <RequirementComposer
+                        label={view === 'analysis' ? '重点分析什么' : '这次要拍什么'}
+                        value={brief.request}
+                        disabled={controlsDisabled}
+                        preferredAssistantId="asst_builtin_video_prompt"
+                        purpose="video_brief"
+                        mediaPaths={[
+                          ...brief.images,
+                          brief.firstFrame,
+                          brief.lastFrame,
+                          brief.source,
+                          ...(brief.referenceVideos ?? []),
+                        ]}
+                        placeholder="商品展示、使用动作、场景、镜头节奏、口播与结尾要求"
+                        onChange={(request) => change({ request })}
+                        onError={setError}
+                      />
                       {brief.template && (
                         <div className="vs-notice">
                           已选模板：{brief.template.name}
