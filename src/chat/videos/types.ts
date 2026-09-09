@@ -35,6 +35,7 @@ export interface VideoTask {
   submission?: { state: 'rejected' | 'uncertain'; httpStatus?: number; reason: string; retryable: boolean }
   error?: string
   output?: string
+  media?: { width: number; height: number; duration: number; hasAudio: boolean }
   remote?: { route: VideoRoute; id?: string; base_url: string }
   quote?: {
     pricingStatus?: 'reference' | 'unknown'

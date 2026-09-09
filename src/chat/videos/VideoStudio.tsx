@@ -1341,6 +1341,7 @@ export default function VideoStudio() {
                   {task?.output && (
                     <section className="vs-panel">
                       <h3>生成结果</h3>
+                      {task.media && <p className="vs-muted">{task.media.width}×{task.media.height} · {task.media.duration.toFixed(2)} 秒 · {task.media.hasAudio ? '有音轨' : '无音轨'}</p>}
                       {video && (
                         <video
                           className="vs-video"

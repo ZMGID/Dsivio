@@ -225,12 +225,78 @@ def client(route, snapshot=None):
     return cls(base, p['api_key'])
 
 
+def probe_video(path):
+    result = subprocess.run(['ffprobe', '-v', 'error', '-show_streams', '-show_format',
+                             '-of', 'json', str(path)], capture_output=True, text=True, timeout=30, check=True)
+    data = json.loads(result.stdout)
+    video = next(stream for stream in data['streams'] if stream.get('codec_type') == 'video'
+                 and not stream.get('disposition', {}).get('attached_pic'))
+    return {'width': video['width'], 'height': video['height'],
+            'duration': float(data.get('format', {}).get('duration') or video.get('duration') or 0),
+            'hasAudio': any(stream.get('codec_type') == 'audio' for stream in data['streams'])}
+
+
+def prepare_grok_frame(t):
+    """Fit a source image onto the requested canvas without stretching the product.
+
+    Some compatible image-to-video gateways use source dimensions even when an
+    aspect_ratio is supplied. Prepare the FIRST frame, never resize the output.
+    """
+    b = t['brief']
+    source = next(iter(b.get('images', [])), None)
+    if not source:
+        return None
+    x, y = map(int, b['ratio'].split(':'))
+    short = int(b['resolution'][:-1])
+    width, height = (round(short * x / y / 2) * 2, short) if x >= y else (short, round(short * y / x / 2) * 2)
+    dest = ROOT / 'outputs' / t['id'] / 'first-frame.png'
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', source, '-vf',
+                    f'scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=white,setsar=1',
+                    '-frames:v', '1', str(dest)], capture_output=True, text=True, timeout=30, check=True)
+    return str(dest)
+
+
+def output_mismatches(media, requested):
+    issues = []
+    if requested.get('aspect_ratio'):
+        x, y = map(int, requested['aspect_ratio'].split(':'))
+        if abs(media['width'] / media['height'] / (x / y) - 1) > .02:
+            issues.append(f"画幅不符：要求 {requested['aspect_ratio']}，实际 {media['width']}×{media['height']}")
+    if requested.get('resolution') and min(media['width'], media['height']) < int(requested['resolution'][:-1]) - 32:
+        issues.append(f"清晰度不足：要求 {requested['resolution']}，实际 {media['width']}×{media['height']}")
+    if requested.get('duration') and abs(media['duration'] - requested['duration']) > .25:
+        issues.append(f"时长不符：要求 {requested['duration']} 秒，实际 {media['duration']:.2f} 秒")
+    if requested.get('generate_audio') and not media['hasAudio']:
+        issues.append('要求有声视频，但成片没有音轨')
+    return issues
+
+
+def reference_spec(analysis):
+    for item in (analysis or {}).get('content', []):
+        if item.get('type') != 'text':
+            continue
+        try:
+            metadata = json.loads(item['text']).get('metadata', {})
+            width, height = int(metadata['width']), int(metadata['height'])
+            if width <= 0 or height <= 0:
+                continue
+            from math import gcd
+            divisor = gcd(width, height)
+            return {'aspect_ratio': f'{width // divisor}:{height // divisor}',
+                    'source_duration_seconds': metadata.get('duration'),
+                    'source_has_audio': metadata.get('hasAudio')}
+        except (ValueError, KeyError, TypeError):
+            continue
+    return {}
+
+
 def request(t):
     b, route = validate(t)
     args = dict(prompt=t['prompt'], duration=int(b['duration']), resolution=b['resolution'], ratio=b['ratio'])
     if route == 'grok':
         refs = b['effectiveMode'] == 'reference'
-        return grok.build_video_request(**args, image=next(iter(b.get('images', [])), None) if not refs else None,
+        return grok.build_video_request(**args, image=prepare_grok_frame(t) if not refs else None,
                                        reference_images=b.get('images', []) if refs else [], voice_ids=b.get('voiceIds', []) if refs else [],
                                        generate_audio=b.get('speechMode') != 'silent',
                                        model=get_provider(route).get('model') or grok.MODEL)
@@ -330,7 +396,7 @@ def handle(action, data):
         payload = request(t)
         if len(json.dumps(payload).encode('utf-8')) > 64 * 1024 * 1024:
             raise ValueError('请求超过 64 MB，请压缩或减少参考素材')
-        t['requested'] = {k: payload[k] for k in ('duration', 'resolution', 'model') if k in payload}
+        t['requested'] = {k: payload[k] for k in ('duration', 'resolution', 'model', 'aspect_ratio', 'generate_audio') if k in payload}
         t['status'] = 'submitting'
         t.pop('error', None)
         t.pop('submission', None)
@@ -401,7 +467,19 @@ def handle(action, data):
                 m.download_video(download_url, dest, api_key=c.api_key if same_origin else None)
             else:
                 m.download_video(download_url, dest)
-            t.update(status='succeeded', output=str(dest))
+            t.update(output=str(dest))
+            if r['route'] == 'grok':
+                try:
+                    t['media'] = probe_video(dest)
+                    requested = {**{'aspect_ratio': t['brief']['ratio'], 'resolution': t['brief']['resolution'],
+                                    'duration': t['brief']['duration'], 'generate_audio': t['brief'].get('speechMode') != 'silent'},
+                                 **t.get('requested', {})}
+                    issues = output_mismatches(t['media'], requested)
+                except (OSError, ValueError, KeyError, StopIteration, subprocess.SubprocessError):
+                    issues = ['无法检查成片规格，请检查内置 FFmpeg / ffprobe']
+                t.update(status='failed' if issues else 'succeeded', error='；'.join(issues))
+            else:
+                t.update(status='succeeded')
         elif status in ('failed', 'cancelled', 'expired', 'error'):
             t.update(status='failed', error='供应商任务失败：' + str(status))
         return persist(t)
@@ -421,7 +499,7 @@ def handle(action, data):
         if not t['script'].strip():
             raise ValueError('没有可保存的剧本')
         value = {'id': str(uuid.uuid4()), 'name': data['name'], 'kind': kind, 'script': t['script'],
-                 'spec': {'duration_seconds': t['brief']['duration'], 'aspect_ratio': t['brief']['ratio']} if kind == 'generation' else {}}
+                 'spec': {'duration_seconds': t['brief']['duration'], 'aspect_ratio': t['brief']['ratio']} if kind == 'generation' else reference_spec(t.get('analysis'))}
         write(ROOT / 'templates' / (value['id'] + '.json'), value)
         return value
     else:

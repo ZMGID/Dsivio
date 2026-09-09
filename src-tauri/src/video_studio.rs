@@ -232,7 +232,7 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
                 "plan_result",
             )
         } else {
-            (format!("{guide}\nFor a broad request without selectedConcept or template, return {{\"concepts\":[\"一句话拍法1\",\"一句话拍法2\",\"一句话拍法3\"]}} and no script. These must be genuinely different approaches. Otherwise return {{\"script\":\"完整中文剧本\"}}. Honor selectedConcept. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested. Respect speechMode: auto follows the user request or reference, without assuming narration; an explicitly requested dialogue language overrides the default language. dialogue preserves supplied dialogue verbatim in its language; ambient has no speech; silent has no audio. Follow music requirements. Reference video/audio paths are conditioning inputs, not observed evidence: never invent their contents."),
+            (format!("{guide}\nFor a broad request without selectedConcept or template, return {{\"concepts\":[\"一句话拍法1\",\"一句话拍法2\",\"一句话拍法3\"]}} and no script. These must be genuinely different approaches. Otherwise return {{\"script\":\"完整中文剧本\"}}. Honor selectedConcept. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested. Respect speechMode: auto designs a clearly audible soundtrack appropriate to the user request or reference, including presenter speech for a speaking/presenter advertisement. Never default to no speech, no music, barely audible ambience, or silence. Missing reference transcription means unknown speech, not evidence of no speech; an explicitly requested dialogue language overrides the default language. dialogue preserves supplied dialogue verbatim in its language; ambient has no speech; silent has no audio. Follow music requirements. Reference video/audio paths are conditioning inputs, not observed evidence: never invent their contents."),
                 b.clone(), "script", "plan_result")
         }
     } else if action == "analyze" {
@@ -268,7 +268,7 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
             return Err("请先确认当前剧本".into());
         }
         let guide = if b["route"] == "grok" {
-            "Convert the approved script into one English Grok video prompt; no H3-only section tags. Preserve verbatim dialogue and on-screen text in their original language. Respect speechMode and music. In reference mode use <IMAGE_0>, <IMAGE_1> in upload order and <AUDIO_0>, <AUDIO_1> for the selected voiceIds in order.".into()
+            "Convert the approved script into one English Grok video prompt; no H3-only section tags. Preserve verbatim dialogue and on-screen text in their original language. Respect speechMode and music. Keep the approved sound design and audible volume; never insert no dialogue, no narration, no music, or near-silence unless the approved script explicitly requires it. In reference mode use <IMAGE_0>, <IMAGE_1> in upload order and <AUDIO_0>, <AUDIO_1> for the selected voiceIds in order.".into()
         } else {
             let name = if b["inputMode"] == "frames"
                 || (images.is_empty()
