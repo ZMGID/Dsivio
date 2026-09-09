@@ -308,10 +308,10 @@ export function explodeInlineAgents(
       spawnedEdges.push(connectSlotEdge(child.id, node.id, slot))
     }
     const runtimeLabel = agent.runtimeKind === 'chat'
-      ? 'Dskivio Chat'
+      ? 'Dsivio Chat'
       : agent.runtimeKind === 'external'
         ? (agent.externalAgentId || 'CLI')
-        : 'Dskivio Agent'
+        : 'Dsivio Agent'
     spawn('runtime', toAgentData({
       prompt: '',
       runtimeKind: agent.runtimeKind,

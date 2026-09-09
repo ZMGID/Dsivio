@@ -389,10 +389,10 @@ describe('RuntimePicker（一 agent 一对话绑定锁）', () => {
     })
     expect(screen.getByText('已绑定，新建可切换')).toBeInTheDocument()
     // 非当前代理全部禁用：Kivio Agent / Chat 与 claude；当前 agent（cursor）保持可选。
-    expect(screen.getByRole('radio', { name: 'Dskivio Agent' })).toBeDisabled()
-    expect(screen.getByRole('radio', { name: 'Dskivio Chat' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Dsivio Agent' })).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Dsivio Chat' })).toBeDisabled()
     act(() => {
-      fireEvent.click(screen.getByRole('radio', { name: 'Dskivio Agent' }))
+      fireEvent.click(screen.getByRole('radio', { name: 'Dsivio Agent' }))
     })
     expect(onRuntimeChange).not.toHaveBeenCalled()
     expect(screen.getByRole('radio', { name: /Claude Code/ })).toBeDisabled()
@@ -474,9 +474,9 @@ describe('RuntimePicker（一 agent 一对话绑定锁）', () => {
       fireEvent.click(screen.getAllByRole('button')[0])
     })
     expect(screen.queryByText('已绑定，新建可切换')).not.toBeInTheDocument()
-    expect(screen.getByRole('radio', { name: 'Dskivio Agent' })).not.toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Dsivio Agent' })).not.toBeDisabled()
     act(() => {
-      fireEvent.click(screen.getByRole('radio', { name: 'Dskivio Agent' }))
+      fireEvent.click(screen.getByRole('radio', { name: 'Dsivio Agent' }))
     })
     expect(onRuntimeChange).toHaveBeenCalled()
   })

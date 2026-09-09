@@ -20,10 +20,10 @@ export function AppInfoGroup({
       <div className="kv-panel mb-2">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-[10px] overflow-hidden shrink-0">
-            <img src="/icon.png" alt="Dskivio" className="w-full h-full object-contain" />
+            <img src="/icon.png" alt="Dsivio" className="w-full h-full object-contain" />
           </div>
           <div className="min-w-0">
-            <div className="kv-page-title">Dskivio</div>
+            <div className="kv-page-title">Dsivio</div>
             <div className="kv-panel-body">{lang === 'zh' ? '屏幕级 AI 助手' : 'Screen-level AI Assistant'}</div>
           </div>
         </div>

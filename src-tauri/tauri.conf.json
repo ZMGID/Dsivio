@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Dskivio",
+  "productName": "Dsivio",
   "version": "2.9.8",
   "identifier": "com.zmair.kivio",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Dskivio",
+        "title": "Dsivio",
         "width": 392,
         "height": 152,
         "resizable": true,

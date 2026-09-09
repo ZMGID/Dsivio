@@ -1,8 +1,8 @@
-# Dskivio Rust 后端 Cargo 配置
+# Dsivio Rust 后端 Cargo 配置
 [package]
 name = "kivio"
 version = "2.9.8"
-description = "Dskivio - Screen-level AI assistant for macOS/Windows"
+description = "Dsivio - Screen-level AI assistant for macOS/Windows"
 authors = ["ZM"]
 license = "GPL-3.0-or-later"
 edition = "2021"

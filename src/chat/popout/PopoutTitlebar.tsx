@@ -35,7 +35,7 @@ function TitlebarPills({
     firstUser?.content ?? '',
     firstUser?.attachments?.map((attachment) => attachment.name) ?? [],
   )
-  const title = displayConversationTitle(conversation?.title, titleFallback) || 'Dskivio'
+  const title = displayConversationTitle(conversation?.title, titleFallback) || 'Dsivio'
   const providerId = conversation?.provider_id ?? ''
   const model = conversation?.model ?? ''
   const locked = Boolean(conversation && (conversation.messages?.length ?? 0) > 0)

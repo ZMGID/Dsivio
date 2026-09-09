@@ -1,6 +1,6 @@
 # Pack a Windows portable zip that mirrors the NSIS install layout:
 # exe + sidecar + bundled skills, unzip-and-run, no Start Menu / uninstaller.
-# Output: src-tauri/target/release/bundle/portable/Dskivio_${Version}_x64-portable.zip
+# Output: src-tauri/target/release/bundle/portable/Dsivio_${Version}_x64-portable.zip
 #
 # Requires a finished `tauri build --bundles nsis` (kivio.exe in target/release).
 
@@ -27,10 +27,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $skillsSrc 'pdf\SKILL.md'))) {
 }
 
 $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("kivio-portable-" + [guid]::NewGuid().ToString('n'))
-$appDir = Join-Path $stageRoot 'Dskivio'
+$appDir = Join-Path $stageRoot 'Dsivio'
 New-Item -ItemType Directory -Path $appDir | Out-Null
 
-Copy-Item -LiteralPath $exe -Destination (Join-Path $appDir 'Dskivio.exe')
+Copy-Item -LiteralPath $exe -Destination (Join-Path $appDir 'Dsivio.exe')
 Copy-Item -LiteralPath $skillsSrc -Destination (Join-Path $appDir 'skills') -Recurse
 
 if (Test-Path -LiteralPath $sidecarSrc) {
@@ -41,13 +41,13 @@ Get-ChildItem -LiteralPath $releaseDir -File -Filter '*.dll' -ErrorAction Silent
   ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $appDir $_.Name) }
 
 $readme = @"
-Dskivio 便携版 / Portable
+Dsivio 便携版 / Portable
 
-解压到任意目录，双击「Dskivio.exe」即可。不写注册表、不进开始菜单。
+解压到任意目录，双击「Dsivio.exe」即可。不写注册表、不进开始菜单。
 需要已安装 Microsoft Edge WebView2（Windows 10/11 通常已有）。
 设置和对话仍保存在本机用户目录，和安装版共用。
 
-Unzip anywhere and run Dskivio.exe. No installer, no Start Menu.
+Unzip anywhere and run Dsivio.exe. No installer, no Start Menu.
 Requires the Edge WebView2 runtime (already on most Windows 10/11 PCs).
 Settings and chats stay in your user folder and are shared with the installed app.
 "@
@@ -55,7 +55,7 @@ Set-Content -LiteralPath (Join-Path $appDir '使用说明.txt') -Value $readme -
 
 $outDir = Join-Path $repoRoot 'src-tauri\target\release\bundle\portable'
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-$zipName = "Dskivio_${Version}_x64-portable.zip"
+$zipName = "Dsivio_${Version}_x64-portable.zip"
 $zipPath = Join-Path $outDir $zipName
 if (Test-Path -LiteralPath $zipPath) {
   Remove-Item -LiteralPath $zipPath -Force
