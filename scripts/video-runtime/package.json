@@ -1,0 +1,9 @@
+{
+  "name": "dsivio-bundled-video-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "ffprobe-static": "3.1.0",
+    "mcp-video-analyzer": "0.10.0"
+  }
+}

@@ -13,7 +13,17 @@
 - `scripts/studio.py` 是聊天和 UI 共用的工作区服务。使用 JSON stdin/stdout、跨进程锁、原子写入和乐观版本检查。
 - 任务、素材、模板、结果：应用数据目录的 `video-studio`。API 配置仍使用原插件的 `dsvideo/providers.json`。
 - 导演和提示词转换复用应用 Agent loop，采用无外部工具的专门步骤；生成通过原 Python 客户端及现有 MCP 连接池执行。
-- ComfyUI 客户端依赖可从设置安装到应用专属虚拟环境；不会启动或安装 ComfyUI 服务端。
+- Comfy MCP、视频分析 MCP、独立 Python / Node、FFmpeg / ffprobe 和 yt-dlp 随应用打包，启动使用应用资源绝对路径，不运行 npx 或现场安装依赖。ComfyUI 服务端与 H3 工作流节点仍由用户部署。
+
+## 内置运行环境构建
+
+构建机需要 Node.js、Rust 和 uv（发布流水线自动准备）。`npm run build:video-runtime` 按 `scripts/video-runtime` 中的版本、npm lockfile 和带哈希的 Python 依赖锁文件生成 `src-tauri/resources/video-runtime`。生成目录不提交到 Git，Tauri 开发启动及打包前自动准备。
+
+支持 macOS Apple Silicon 和 Windows x64，须在目标平台构建。Node 下载校验固定 SHA-256；独立 Python 由 uv 下载。构建时安装依赖，用户机器只运行已打包文件。发行包保留各依赖的许可证和包元数据。
+
+`npm run verify:video-runtime` 在隔离的 PATH 和空 npm 缓存下检查 Python 工作区、Comfy CLI、yt-dlp、两个 MCP 的握手以及本地视频元数据读取。构建流程另会移动整个运行目录到带空格的新路径，验证可搬移性。生成或读取本地测试视频不调用付费 API 或 ComfyUI 服务端。
+
+应用启动时刷新内置 MCP 的启动路径，迁移旧 npx / 系统 Python 配置，并保留用户的服务启用开关和工具选择。MCP 所属包停用时仍由统一资格检查拦截。运行环境作为独立资源打包，不复制进通用插件导入目录。
 
 ## 生成与恢复
 

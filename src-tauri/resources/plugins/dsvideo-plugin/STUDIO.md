@@ -2,12 +2,16 @@
 
 Upstream: https://github.com/ZMGID/dsvideo-plugin
 Pinned source: `33af713d96d7d5d171080e23a618ed4fb37a6d8e` (MIT).
-Six original skills, two MCP servers and generation scripts are bundled here.
+Six original skills, two MCP definitions and generation scripts are bundled here.
+The executable MCP dependencies and standalone Python / Node live in the application's
+separate `video-runtime` resource directory. The host supplies `DSVIDEO_PYTHON`,
+`DSVIDEO_NODE`, `DSVIDEO_RUNTIME_ROOT`, and `DSVIDEO_RUNTIME_PATH`; do not install
+dependencies with npx, pip, or uv at runtime.
 Dsivio adaptation adds the shared workspace service and UI; never edit this cache.
 
 ## Chat and desktop interoperability
 
-Run `python -B -X utf8 "${PLUGIN_ROOT}/scripts/studio.py" ACTION` with a JSON object on stdin.
+Run `"${DSVIDEO_PYTHON}" -s -B -X utf8 "${PLUGIN_ROOT}/scripts/studio.py" ACTION` with a JSON object on stdin and the host's runtime environment (including `PYTHONPATH`).
 Use structured process arguments or a correctly quoted file for stdin; never interpolate user text into shell code.
 Start with `bootstrap` and `{}`: it returns the shared root, templates, task revisions and redacted provider configuration.
 On Windows the default root is `%APPDATA%/com.zmair.kivio/video-studio`.

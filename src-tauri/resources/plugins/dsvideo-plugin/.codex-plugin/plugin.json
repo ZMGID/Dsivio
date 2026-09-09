@@ -1,6 +1,6 @@
 {
   "name": "dsvideo-plugin",
-  "version": "0.1.3-dsivio.1",
+  "version": "0.1.3-dsivio.2",
   "description": "通用短视频导演与出片：先设计可执行分镜，再选择本地 ComfyUI、MiniMax API 或 Grok API。",
   "author": {
     "name": "ZMGID"

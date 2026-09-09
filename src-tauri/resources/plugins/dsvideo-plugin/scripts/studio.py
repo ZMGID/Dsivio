@@ -135,9 +135,7 @@ def bootstrap():
         return result
     return {'tasks': sorted(listing('tasks'), key=lambda t: t.get('updatedAt', 0), reverse=True),
             'templates': listing('templates'), 'config': settings(), 'root': str(ROOT),
-            'configPath': str(config_path()), 'dependencies': {
-                'python': sys.version.split()[0], 'comfy': bool(runtime.comfy_command()),
-                'node': bool(shutil.which('node')), 'ffmpeg': bool(shutil.which('ffmpeg'))}}
+            'configPath': str(config_path()), 'dependencies': runtime.status()}
 
 
 def validate(t):

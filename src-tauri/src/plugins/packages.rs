@@ -372,6 +372,9 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
         }
     }
     let mut env: BTreeMap<String, String> = std::env::vars().collect();
+    if package.id == crate::video_studio::PACKAGE_ID && package.source == "builtin:dsvideo" {
+        env.extend(crate::video_studio::runtime::environment()?);
+    }
     for key in ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"] {
         env.insert(key.into(), root.display().to_string());
     }

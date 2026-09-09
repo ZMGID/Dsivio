@@ -17,6 +17,8 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..')
 $releaseDir = Join-Path $repoRoot 'src-tauri\target\release'
 $exe = Join-Path $releaseDir 'kivio.exe'
 $skillsSrc = Join-Path $repoRoot 'src-tauri\resources\skills'
+$pluginsSrc = Join-Path $repoRoot 'src-tauri\resources\plugins'
+$runtimeSrc = Join-Path $repoRoot 'src-tauri\resources\video-runtime'
 $sidecarSrc = Join-Path $repoRoot 'src-tauri\binaries\kivio-ocr-helper-x86_64-pc-windows-msvc.exe'
 
 if (-not (Test-Path -LiteralPath $exe)) {
@@ -25,6 +27,9 @@ if (-not (Test-Path -LiteralPath $exe)) {
 if (-not (Test-Path -LiteralPath (Join-Path $skillsSrc 'pdf\SKILL.md'))) {
   throw "Bundled skills missing under $skillsSrc."
 }
+if (-not (Test-Path -LiteralPath (Join-Path $runtimeSrc 'runtime.json'))) {
+  throw 'Bundled video runtime missing. Run npm run build:video-runtime first.'
+}
 
 $stageRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("kivio-portable-" + [guid]::NewGuid().ToString('n'))
 $appDir = Join-Path $stageRoot 'Dsivio'
@@ -32,6 +37,10 @@ New-Item -ItemType Directory -Path $appDir | Out-Null
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $appDir 'Dsivio.exe')
 Copy-Item -LiteralPath $skillsSrc -Destination (Join-Path $appDir 'skills') -Recurse
+Copy-Item -LiteralPath $pluginsSrc -Destination (Join-Path $appDir 'plugins') -Recurse
+Copy-Item -LiteralPath $runtimeSrc -Destination (Join-Path $appDir 'video-runtime') -Recurse
+node (Join-Path $repoRoot 'scripts/verify-video-runtime.mjs') (Join-Path $appDir 'video-runtime')
+if ($LASTEXITCODE -ne 0) { throw 'Portable video runtime verification failed' }
 
 if (Test-Path -LiteralPath $sidecarSrc) {
   Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $appDir 'kivio-ocr-helper.exe')

@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install frontend dependencies
@@ -37,8 +37,16 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup build-time Python packager
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.7'
+
       - name: Build Swift sidecar
         run: npm run build:swift
+
+      - name: Build and verify bundled MCP runtimes
+        run: npm run build:video-runtime
 
       - name: Lint
         run: npm run lint

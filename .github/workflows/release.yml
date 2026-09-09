@@ -72,11 +72,16 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup build-time Python packager
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.10.7'
 
       - name: Install frontend dependencies
         run: npm ci
@@ -84,6 +89,9 @@ jobs:
       - name: Build Swift sidecar
         # macOS: real kivio-ocr-helper. Windows: empty stub for externalBin.
         run: npm run build:swift
+
+      - name: Prepare and verify bundled MCP runtimes
+        run: npm run build:video-runtime
 
       - name: Build and publish ${{ matrix.name }} installer
         uses: tauri-apps/tauri-action@v0
@@ -113,7 +121,10 @@ jobs:
           test -n "$dmg"
           hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$dmg"
           trap 'hdiutil detach "$mount_dir"; rmdir "$mount_dir"' EXIT
-          resources="$mount_dir/Kivio Desktop.app/Contents/Resources"
+          app_bundle=$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)
+          test -n "$app_bundle"
+          resources="$app_bundle/Contents/Resources"
+          node scripts/verify-video-runtime.mjs "$resources/video-runtime"
           for skill in pdf docx xlsx obsidian-markdown obsidian-bases json-canvas obsidian-cli; do
             test -s "$resources/skills/$skill/SKILL.md"
             echo "Verified: skills/$skill/SKILL.md"
@@ -133,6 +144,10 @@ jobs:
           & 'C:/Program Files/7-Zip/7z.exe' x $installer.FullName "-o$inspectDir" -y
           if ($LASTEXITCODE -ne 0) { throw 'Cannot extract NSIS installer' }
           $files = Get-ChildItem -LiteralPath $inspectDir -Recurse -File
+          $runtimeRecord = $files | Where-Object { $_.FullName -match '[\\/]video-runtime[\\/]runtime\.json$' } | Select-Object -First 1
+          if (-not $runtimeRecord) { throw 'Bundled video runtime missing from installer' }
+          node scripts/verify-video-runtime.mjs $runtimeRecord.DirectoryName
+          if ($LASTEXITCODE -ne 0) { throw 'Installed video runtime verification failed' }
           foreach ($skill in @('pdf','docx','xlsx','obsidian-markdown','obsidian-bases','json-canvas','obsidian-cli')) {
             $match = $files | Where-Object { $_.FullName -match "[\\/]skills[\\/]$skill[\\/]SKILL\.md$" -and $_.Length -gt 0 }
             if (-not $match) { throw "Missing bundled skill: $skill" }
@@ -147,6 +162,6 @@ jobs:
         run: |
           $ver = $env:RELEASE_TAG.TrimStart('v')
           & ./scripts/package-windows-portable.ps1 -Version $ver
-          $zip = "src-tauri/target/release/bundle/portable/Kivio.Desktop_${ver}_x64-portable.zip"
+          $zip = "src-tauri/target/release/bundle/portable/Dsivio_${ver}_x64-portable.zip"
           if (-not (Test-Path -LiteralPath $zip)) { throw "portable zip not found: $zip" }
           gh release upload $env:RELEASE_TAG $zip --clobber --repo $env:GITHUB_REPOSITORY

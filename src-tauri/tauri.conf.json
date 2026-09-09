@@ -4,8 +4,8 @@
   "version": "2.9.8",
   "identifier": "com.zmair.kivio",
   "build": {
-    "beforeDevCommand": "npm run dev:ui",
-    "beforeBuildCommand": "npm run build:ui",
+    "beforeDevCommand": "npm run build:video-runtime && npm run dev:ui",
+    "beforeBuildCommand": "npm run build:video-runtime && npm run build:ui",
     "devUrl": "http://localhost:5713",
     "frontendDist": "../dist"
   },
@@ -41,6 +41,7 @@
     "resources": {
       "resources/skills": "skills",
       "resources/plugins": "plugins",
+      "resources/video-runtime": "video-runtime",
       "../docs/licenses": "licenses"
     },
     "windows": {

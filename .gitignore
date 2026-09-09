@@ -28,6 +28,11 @@ release
 src-tauri/target
 # rust-analyzer 在 workspace 根生成的 cache,不是 cargo 用户产物
 /target
+/src-tauri/resources/video-runtime/*
+!/src-tauri/resources/video-runtime/.gitkeep
+/src-tauri/resources/.video-runtime-*/
+/src-tauri/resources/plugins/dsvideo-plugin/**/__pycache__/
+/tests/__pycache__/
 
 # Local build artifacts (OCR helper / leftover sandbox downloads)
 resources/ocr

@@ -49,7 +49,8 @@ describe('shared video workspace navigation', () => {
     expect(await screen.findByText('已选模板：聊天创建的参考模板')).toBeTruthy()
     expect(screen.getByRole('button', { name: '生成路线' }).textContent).toContain('请选择')
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
-    expect(await screen.findByRole('heading', { name: '运行环境' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: '内置运行环境' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '安装 / 修复 Comfy 依赖' })).toBeNull()
   })
 
   it('does not toast bootstrap failures when opening the page', async () => {

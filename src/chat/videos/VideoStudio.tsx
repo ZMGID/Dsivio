@@ -514,7 +514,7 @@ export default function VideoStudio() {
                   </div>
                 </section>
                 <section className="vs-panel">
-                  <h3>运行环境</h3>
+                  <h3>内置运行环境</h3>
                   <p className="vs-muted">
                     导演使用应用当前聊天模型，处理图片需模型支持视觉。
                   </p>
@@ -522,20 +522,21 @@ export default function VideoStudio() {
                     <dt>Python</dt>
                     <dd>{data.dependencies.python || '未检测'}</dd>
                     <dt>Comfy MCP</dt>
-                    <dd>{data.dependencies.comfy ? '已找到' : '未找到'}</dd>
+                    <dd>{data.dependencies.comfy ? '已就绪' : '内置文件缺失'}</dd>
+                    <dt>视频分析 MCP</dt>
+                    <dd>{data.dependencies.analyzer ? '已就绪' : '内置文件缺失'}</dd>
                     <dt>Node.js</dt>
                     <dd>
                       {data.dependencies.node
-                        ? '已找到（分析需 ≥ 22.12）'
-                        : '未找到'}
+                        ? '已就绪'
+                        : '内置文件缺失'}
                     </dd>
                     <dt>FFmpeg</dt>
-                    <dd>{data.dependencies.ffmpeg ? '已找到' : '未找到'}</dd>
+                    <dd>{data.dependencies.ffmpeg ? '已就绪' : '内置文件缺失'}</dd>
                   </dl>
                   <p className="vs-muted">
-                    ComfyUI 路线需要 comfy-mcp 0.10.0、comfy-cli ≥ 1.14 和服务端
-                    H3 工作流节点。参考视频分析首次运行由 npx 加载固定版本
-                    MCP；部分平台还需 yt-dlp。
+                    MCP 服务、Python、Node.js 和视频处理依赖随应用提供。
+                    ComfyUI 路线需连接已部署 H3 工作流节点的服务端。
                   </p>
                   <div className="vs-actions">
                     <Button
@@ -545,24 +546,9 @@ export default function VideoStudio() {
                     >
                       重新检查
                     </Button>
-                    <Button
-                      size="sm"
-                      disabled={!native || !!busy}
-                      onClick={() =>
-                        void guarded(
-                          '正在安装 ComfyUI 客户端依赖，可能需要几分钟…',
-                          async () => {
-                            await api.videoStudioInstallComfy()
-                            await refresh()
-                          },
-                        )
-                      }
-                    >
-                      安装 / 修复 Comfy 依赖
-                    </Button>
                   </div>
                   <p className="vs-muted">
-                    依赖安装到应用自己的运行目录，不修改系统 Python 包。
+                    若内置文件缺失，请重新安装 Dsivio。
                   </p>
                   <p className="vs-path">{data.configPath}</p>
                 </section>
