@@ -9,6 +9,7 @@ pub struct StudioConfig {
     pub protocol: String,
     pub agent_provider_id: String,
     pub agent_model: String,
+    pub output_root: String,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
@@ -125,6 +126,8 @@ pub struct Task {
     pub progress: String,
     pub error: Option<String>,
     pub templates: Vec<Template>,
+    #[serde(default)]
+    pub output_directory: Option<String>,
     #[serde(default)]
     pub workflow: Option<Workflow>,
 }

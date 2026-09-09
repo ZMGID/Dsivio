@@ -1531,6 +1531,9 @@ export default function ImageStudio() {
             <p className="is-muted">
               导出当前需求版本每页的最新成图。原图不会被覆盖，文件夹包含商品与图片清单。
             </p>
+            <Field label="交付保存位置">
+              <input className="kv-input" readOnly value={task?.outputDirectory ? `${task.outputDirectory}/deliveries` : '首次导出时，在图片保存位置为此任务创建文件夹'} />
+            </Field>
             <div className="is-two-cols">
               <Field label="交付宽度 px">
                 <input
@@ -1575,26 +1578,20 @@ export default function ImageStudio() {
                 onClick={() =>
                   void perform(async () => {
                     if (!task) return
-                    const dest = await open({
-                      directory: true,
-                      title: '选择交付图保存位置',
-                    })
-                    if (typeof dest === 'string') {
-                      const path = await api.imageStudioExport(
-                        task.id,
-                        dest,
-                        delivery.width,
-                        delivery.height,
-                        delivery.maxKb,
-                      )
-                      setExportOpen(false)
-                      setNotice(`已导出到 ${path}`)
-                    }
+                    const path = await api.imageStudioExport(
+                      task.id,
+                      '',
+                      delivery.width,
+                      delivery.height,
+                      delivery.maxKb,
+                    )
+                    setExportOpen(false)
+                    setNotice(`已导出到 ${path}`)
                   })
                 }
               >
                 <Download size={15} />
-                选择位置并导出
+                导出到任务文件夹
               </Button>
             </div>
           </section>

@@ -36,6 +36,10 @@ pub fn resolve(relative: &str) -> Result<PathBuf, String> {
     if p.components().any(|c| !matches!(c, Component::Normal(_))) || relative.is_empty() {
         return Err("素材路径必须在图片工作台中".into());
     }
+    let normalized = relative.replace('\\', "/");
+    if let Some(path) = normalized.strip_prefix("outputs/") {
+        return super::output::resolve(&path.split('/').collect::<Vec<_>>());
+    }
     let base = root()?.canonicalize().map_err(|e| e.to_string())?;
     let full = base.join(p).canonicalize().map_err(|e| e.to_string())?;
     if !full.starts_with(base) {

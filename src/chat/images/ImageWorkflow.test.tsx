@@ -22,6 +22,7 @@ vi.mock('../../api/tauri', () => ({
     imageStudioAction: vi.fn(),
     imageStudioPreview: vi.fn(),
     imageStudioImport: vi.fn(),
+    imageStudioExport: vi.fn(),
   },
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
@@ -161,6 +162,21 @@ beforeEach(() => {
 })
 
 describe('制作、试品、反馈和持续出图', () => {
+  it('preserves the existing feature entries and exports to the task folder without another picker', async () => {
+    const initial = task()
+    initial.outputDirectory = 'C:/Images/backpack'
+    load(initial)
+    vi.mocked(api.imageStudioExport).mockResolvedValue('C:/Images/backpack/deliveries/batch')
+    render(<ImageStudio />)
+    const nav = screen.getByRole('navigation', { name: '图片功能' })
+    expect(within(nav).getAllByRole('button')).toHaveLength(7)
+    fireEvent.click(await screen.findByRole('button', { name: '导出本版图片' }))
+    expect(screen.getByLabelText('交付保存位置')).toHaveValue('C:/Images/backpack/deliveries')
+    fireEvent.click(screen.getByRole('button', { name: '导出到任务文件夹' }))
+    await waitFor(() => expect(api.imageStudioExport).toHaveBeenCalledWith('workflow', '', 800, 800, 2048))
+    expect(open).not.toHaveBeenCalled()
+    expect(await screen.findByText('已导出到 C:/Images/backpack/deliveries/batch')).toBeInTheDocument()
+  })
   it('accepts source material separately from trial products and starts rule creation in one action', async () => {
     const made = task()
     made.brief.products = []
