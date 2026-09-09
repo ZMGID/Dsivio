@@ -41,6 +41,7 @@ import {
   latestResults,
   productGroup,
   sampleComplete,
+  suggestImageTaskName,
   type ImageAction,
   type ImageBrief,
   type ImageConfig,
@@ -238,9 +239,7 @@ export default function ImageStudio() {
     const saved = await api.imageStudioSave(
       {
         ...brief,
-        name:
-          brief.name.trim() ||
-          `${FEATURES.find((f) => f.id === brief.feature)?.label} · ${new Date().toLocaleDateString()}`,
+        name: brief.name.trim() || suggestImageTaskName(brief),
       },
       task?.id,
       task?.revision,
@@ -308,9 +307,11 @@ export default function ImageStudio() {
     }))
   const briefFeatureRef = useRef(brief.feature)
   briefFeatureRef.current = brief.feature
+  const briefRef = useRef(brief)
+  briefRef.current = brief
   const dropReadyRef = useRef({ accept: false, busy: false })
   dropReadyRef.current = {
-    accept: view !== 'templates' && view !== 'workflow' && stage === 'brief',
+    accept: view !== 'templates' && (view === 'workflow' || stage === 'brief'),
     busy,
   }
   const mergeImportedProducts = useCallback((asFolder: boolean, products: ImageProduct[]) => {
@@ -341,8 +342,27 @@ export default function ImageStudio() {
       )
       mergeImportedProducts(asFolder, products)
     })
+  const importWorkflowSources = (paths: string[]) =>
+    perform(async () => {
+      if (!paths.length) return
+      const input = briefRef.current.workflowInput || { mode: 'smart' as const, sources: [] }
+      const products = await api.imageStudioImport(paths, false)
+      const assets = products.flatMap((item) => item.assets)
+      if (input.sources.length + assets.length > 30) throw new Error('原始参考素材最多 30 张')
+      setBrief((b) => {
+        const current = b.workflowInput || { mode: 'smart' as const, sources: [] }
+        return {
+          ...b,
+          workflowInput: { ...current, sources: [...current.sources, ...assets] },
+        }
+      })
+    })
   const importDropped = (paths: string[]) => {
     if (dropReadyRef.current.busy || !paths.length) return
+    if (briefFeatureRef.current === 'workflow') {
+      void importWorkflowSources(paths)
+      return
+    }
     void importFromPaths(paths, dropAsProducts(paths, briefFeatureRef.current))
   }
   const importDroppedRef = useRef(importDropped)
@@ -568,6 +588,9 @@ export default function ImageStudio() {
                 setEditNote('')
               }}
               onExport={() => setExportOpen(true)}
+              dropActive={dropActive}
+              onDropSurface={keepOsDrop}
+              onError={report}
             />
           ) : (
             <>
@@ -919,7 +942,7 @@ export default function ImageStudio() {
                           disabled={busy}
                           value={brief.name}
                           onChange={(e) => patch({ name: e.target.value })}
-                          placeholder="例如：秋季背包 · 巴西主图"
+                          placeholder={suggestImageTaskName(brief)}
                         />
                       </Field>
                       {['replace', 'smart', 'client'].includes(brief.feature) && (

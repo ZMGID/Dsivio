@@ -8,37 +8,50 @@
   align-items: flex-start;
   justify-content: space-between;
 }
-.iw-steps {
+.iw-progress {
   display: flex;
   list-style: none;
   padding: 0;
   margin: 0 0 20px;
-  border-bottom: 1px solid var(--border);
+  gap: 4px;
 }
-.iw-steps li {
+.iw-progress li {
   flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 4px;
+  min-width: 0;
   color: var(--text-muted);
-  border-bottom: 2px solid transparent;
+  font-size: 11px;
 }
-.iw-steps li.active {
-  color: var(--accent);
+.iw-progress li.done,
+.iw-progress li[aria-current] {
+  color: var(--text);
 }
-.iw-steps li[aria-current] {
-  border-bottom-color: var(--accent);
+.iw-progress li[aria-current] {
   font-weight: 600;
 }
-.iw-steps li > span {
+.iw-progress li > span {
+  flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: 50%;
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
-  font-size: 11px;
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+}
+.iw-progress li.done > span,
+.iw-progress li[aria-current] > span {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.iw-progress li:not(:last-child)::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  min-width: 8px;
+  background: var(--border);
 }
 .iw-panel {
   border: 1px solid var(--border);
@@ -46,6 +59,7 @@
   padding: 20px;
   margin-bottom: 20px;
   min-width: 0;
+  background: var(--bg-input);
 }
 .iw-panel > summary {
   display: flex;
@@ -84,10 +98,82 @@
 .iw-panel h3 {
   font-size: 14px;
 }
-.iw-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 24px;
+.iw-source .is-spec-section {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.image-studio .iw-source .is-creation-footer {
+  bottom: 0;
+  background: var(--bg-input);
+}
+.iw-start {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.iw-start > label {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--bg);
+}
+.iw-start > label > svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.iw-start > label > strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+.iw-start > label > b {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.iw-start > label > input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.iw-start > label:has(input:disabled) {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.iw-start > label.selected {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.iw-start > label.selected > svg,
+.iw-start > label.selected > b {
+  color: var(--accent);
+}
+.iw-start > label:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.iw-source .is-upload-area--filled {
+  gap: 12px;
+}
+.iw-source .is-upload-area--filled .iw-assets {
+  width: 100%;
+  margin-bottom: 0;
+}
+.iw-source .is-upload-area--filled > .kv-btn {
+  margin-top: 0;
+  align-self: flex-start;
 }
 .iw-workflow .iw-hint {
   color: var(--text-muted);
@@ -107,15 +193,6 @@
 .iw-status > span {
   flex: 1;
   overflow-wrap: anywhere;
-}
-.iw-mode {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.iw-mode [aria-pressed='true'] {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 .iw-assets {
   display: grid;
@@ -149,8 +226,8 @@
   justify-content: space-between;
   margin-top: 4px;
 }
-.iw-source .is-field {
-  margin-top: 14px;
+.iw-source .is-editor-column > .is-field {
+  margin-top: 0;
 }
 .iw-specs {
   display: grid;
@@ -368,14 +445,14 @@
   padding: 8px 0;
 }
 @container studio (max-width: 760px) {
-  .iw-columns {
-    grid-template-columns: 1fr;
-  }
-  .iw-steps {
+  .iw-progress {
     flex-wrap: wrap;
   }
-  .iw-steps li {
-    flex-basis: 50%;
+  .iw-progress li {
+    flex-basis: calc(50% - 4px);
+  }
+  .iw-progress li:nth-child(2)::after {
+    display: none;
   }
   .iw-panel {
     padding: 16px;

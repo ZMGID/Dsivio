@@ -1,11 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type DragEvent } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   ArrowDown,
   ArrowUp,
   Check,
   Download,
+  FileImage,
   FolderOpen,
+  Image as ImageIcon,
+  Layers3,
   Loader2,
   Plus,
   Save,
@@ -15,9 +18,11 @@ import {
 } from 'lucide-react'
 import { api } from '../../api/tauri'
 import { Button, IconButton } from '../../components/Button'
+import { RequirementOptimize } from './RequirementOptimize'
 import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 import {
   latestResults,
+  suggestImageTaskName,
   workflowInputsChanged,
   workflowSamplesComplete,
   type ImageAction,
@@ -40,6 +45,9 @@ type Props = {
   onNew: () => void
   onOpenResult: (result: ImageResult) => void
   onExport: () => void
+  dropActive?: boolean
+  onDropSurface?: (event: DragEvent) => void
+  onError?: (message: string) => void
 }
 
 export function ImageWorkflow({
@@ -53,6 +61,9 @@ export function ImageWorkflow({
   onNew,
   onOpenResult,
   onExport,
+  dropActive = false,
+  onDropSurface,
+  onError,
 }: Props) {
   const input = brief.workflowInput || { mode: 'smart' as const, sources: [] }
   const workflow = task?.workflow
@@ -120,7 +131,9 @@ export function ImageWorkflow({
               multiple: true,
               title:
                 target === 'source'
-                  ? '选择原始商品图或成套样图'
+                  ? input.mode === 'replace'
+                    ? '按页序选择现成套图'
+                    : '选择商品照片'
                   : '选择同一款商品的正面、背面和细节图',
               filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
             },
@@ -156,34 +169,32 @@ export function ImageWorkflow({
     onChange({ workflowInput: { ...input, sources } })
   }
   const step = approved ? 3 : !current ? 0 : results.length ? 2 : 1
+  const fromSet = input.mode === 'replace'
 
   return (
     <div className="iw-workflow">
       <div className="is-work-heading">
         <div>
-          <span className="is-kicker">从第一次制作，到下一款商品</span>
           <h2>制作与试品</h2>
-          <p>给图和要求，制作一套可复用的规则。用其他商品试做，调整满意后持续出图。</p>
+          <p>先做出一套可复用的规则，换其他商品试效果，确认后再批量出图。</p>
         </div>
         <div className="is-actions">
-          <Button size="sm" disabled={busy} onClick={onNew}>
-            <Plus size={14} />
+          <Button size="sm" variant="ghost" disabled={busy} onClick={onNew}>
             新流程
           </Button>
-          <Button size="sm" disabled={busy || !dirty} onClick={() => void onSave()}>
-            <Save size={14} />
-            保存任务
+          <Button size="sm" variant="ghost" disabled={busy || !dirty} onClick={() => void onSave()}>
+            {task && !dirty ? '已保存' : '保存'}
           </Button>
         </div>
       </div>
-      <ol className="iw-steps" aria-label="制作与试品流程">
+      <ol className="iw-progress" aria-label="制作与试品进度">
         {['给图制作', '换品试做', '反馈修正', '持续出图'].map((label, index) => (
           <li
             key={label}
             aria-current={step === index ? 'step' : undefined}
-            className={step >= index ? 'active' : ''}
+            className={step >= index ? 'done' : ''}
           >
-            <span>{index < step ? <Check size={12} /> : index + 1}</span>
+            <span>{index < step ? <Check size={11} /> : index + 1}</span>
             {label}
           </li>
         ))}
@@ -212,161 +223,244 @@ export function ImageWorkflow({
 
       <details className="iw-panel iw-source" open={!template || !current}>
         <summary>
-          <strong>01 · 原始素材与制作要求</strong>
+          <strong>01 · 原始素材</strong>
           <span>
-            {input.sources.length} 张参考图 ·{' '}
-            {input.mode === 'replace' ? '沿用样图版式' : '按要求设计'}
+            {input.sources.length
+              ? `${input.sources.length} 张 · ${fromSet ? '按现成套图换品' : '从商品照片设计'}`
+              : fromSet
+                ? '按现成套图换品'
+                : '从商品照片设计'}
           </span>
         </summary>
         <div className="iw-panel-body">
-          <div className="iw-columns">
-            <div>
-              <div className="iw-mode" role="group" aria-label="制作起点">
-                <Button
-                  disabled={busy}
-                  aria-pressed={input.mode === 'smart'}
-                  onClick={() => onChange({ workflowInput: { ...input, mode: 'smart' } })}
-                >
-                  商品图起步
-                </Button>
-                <Button
-                  disabled={busy}
-                  aria-pressed={input.mode === 'replace'}
-                  onClick={() => onChange({ workflowInput: { ...input, mode: 'replace' } })}
-                >
-                  成套样图起步
-                </Button>
-              </div>
-              <p className="iw-hint">
-                {input.mode === 'smart'
-                  ? '从商品图和要求设计整套画面，后续换品沿用风格与页面规则。'
-                  : '按样图顺序逐页提取版式、文案和换品规则，后续保留版式替换商品。'}
-              </p>
-              <div className="iw-assets">
-                {input.sources.map((asset, i) => (
-                  <div className="iw-asset" key={asset.id}>
-                    <AssetImage path={asset.path} name={asset.name} />
-                    <span title={asset.name}>
-                      {i + 1}. {asset.name}
-                    </span>
-                    <div>
-                      <IconButton
-                        label={`前移参考图 ${i + 1}`}
-                        disabled={busy || i === 0}
-                        onClick={() => moveSource(i, -1)}
-                      >
-                        <ArrowUp size={12} />
-                      </IconButton>
-                      <IconButton
-                        label={`后移参考图 ${i + 1}`}
-                        disabled={busy || i === input.sources.length - 1}
-                        onClick={() => moveSource(i, 1)}
-                      >
-                        <ArrowDown size={12} />
-                      </IconButton>
-                      <IconButton
-                        label={`移除参考图 ${i + 1}`}
-                        disabled={busy}
-                        onClick={() =>
-                          onChange({
-                            workflowInput: {
-                              ...input,
-                              sources: input.sources.filter((a) => a.id !== asset.id),
-                            },
-                          })
-                        }
-                      >
-                        <X size={12} />
-                      </IconButton>
+          <div className="iw-start" role="radiogroup" aria-label="参考图类型">
+            <label className={input.mode === 'smart' ? 'selected' : ''}>
+              <input
+                type="radio"
+                name="workflow-start"
+                aria-label="商品照片"
+                checked={input.mode === 'smart'}
+                disabled={busy}
+                onChange={() => onChange({ workflowInput: { ...input, mode: 'smart' } })}
+              />
+              <ImageIcon size={16} strokeWidth={1.6} />
+              <strong>商品照片</strong>
+              <b>新做一套</b>
+            </label>
+            <label className={fromSet ? 'selected' : ''}>
+              <input
+                type="radio"
+                name="workflow-start"
+                aria-label="现成套图"
+                checked={fromSet}
+                disabled={busy}
+                onChange={() => onChange({ workflowInput: { ...input, mode: 'replace' } })}
+              />
+              <Layers3 size={16} strokeWidth={1.6} />
+              <strong>现成套图</strong>
+              <b>只换商品</b>
+            </label>
+          </div>
+          <div className="is-brief-layout">
+            <div className="is-editor-column">
+              <div
+                className={`is-upload-area${input.sources.length ? ' is-upload-area--filled' : ''}${dropActive ? ' is-drop-active' : ''}`}
+                aria-label="原始参考投放区"
+                onDragEnter={onDropSurface}
+                onDragOver={onDropSurface}
+                onDrop={onDropSurface}
+              >
+                {input.sources.length ? (
+                  <>
+                    <div className="iw-assets">
+                      {input.sources.map((asset, i) => (
+                        <div className="iw-asset" key={asset.id}>
+                          <AssetImage path={asset.path} name={asset.name} />
+                          <span title={asset.name}>
+                            {i + 1}. {asset.name}
+                          </span>
+                          <div>
+                            <IconButton
+                              label={`前移参考图 ${i + 1}`}
+                              disabled={busy || i === 0}
+                              onClick={() => moveSource(i, -1)}
+                            >
+                              <ArrowUp size={12} />
+                            </IconButton>
+                            <IconButton
+                              label={`后移参考图 ${i + 1}`}
+                              disabled={busy || i === input.sources.length - 1}
+                              onClick={() => moveSource(i, 1)}
+                            >
+                              <ArrowDown size={12} />
+                            </IconButton>
+                            <IconButton
+                              label={`移除参考图 ${i + 1}`}
+                              disabled={busy}
+                              onClick={() =>
+                                onChange({
+                                  workflowInput: {
+                                    ...input,
+                                    sources: input.sources.filter((a) => a.id !== asset.id),
+                                  },
+                                })
+                              }
+                            >
+                              <X size={12} />
+                            </IconButton>
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  </div>
-                ))}
+                    <p>{dropActive ? '松开即可继续导入' : '还可以把图片继续拖进来'}</p>
+                    <Button size="sm" disabled={busy} onClick={() => void importImages('source')}>
+                      <Plus size={14} />
+                      {fromSet ? '继续添加套图' : '继续添加照片'}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <div className="is-upload-illustration">
+                      <FileImage size={35} strokeWidth={1.1} />
+                      <span>
+                        <Plus size={14} />
+                      </span>
+                    </div>
+                    <h3>
+                      {dropActive
+                        ? '松开即可导入'
+                        : fromSet
+                          ? '按页序把套图拖到这里'
+                          : '把商品照片拖到这里'}
+                    </h3>
+                    <p>
+                      {fromSet
+                        ? '第一张是第 1 页，可调顺序'
+                        : 'PNG / JPG / WebP'}
+                    </p>
+                    <Button disabled={busy} onClick={() => void importImages('source')}>
+                      {fromSet ? '选择现成套图' : '选择商品照片'}
+                    </Button>
+                  </>
+                )}
               </div>
-              <Button disabled={busy} onClick={() => void importImages('source')}>
-                <Plus size={14} />
-                添加原始参考图
-              </Button>
-              <Field label="制作要求">
+              <div className="is-field">
+                <div className="is-field-toolbar">
+                  <span>制作要求</span>
+                  <RequirementOptimize
+                    value={brief.requirement}
+                    disabled={busy}
+                    preferredAssistantId="asst_builtin_ecom_visual"
+                    purpose="image_brief"
+                    mediaPaths={input.sources.map((source) => source.path)}
+                    onChange={(requirement) => onChange({ requirement })}
+                    onError={(message) => onError?.(message)}
+                  />
+                </div>
                 <textarea
                   className="kv-textarea custom-scrollbar"
                   rows={5}
+                  aria-label="制作要求"
                   disabled={busy}
                   value={brief.requirement}
                   onChange={(e) => onChange({ requirement: e.target.value })}
-                  placeholder="例如：参考这款背包制作巴西市场的 7 张商品图，统一白灰背景和蓝色标题，保留真实 Logo。以后换其他背包也要沿用这套版式。"
-                />
-              </Field>
-            </div>
-            <div>
-              <Field label="流程名称">
-                <input
-                  className="kv-input"
-                  disabled={busy}
-                  value={brief.name}
-                  onChange={(e) => onChange({ name: e.target.value })}
-                  placeholder="例如：背包系列 · 巴西市场"
-                />
-              </Field>
-              <Field label="使用平台">
-                <StudioSelect
-                  disabled={busy}
-                  value={brief.platform}
-                  onChange={(e) => onChange({ platform: e.target.value })}
-                >
-                  {['通用电商', 'Amazon', 'Mercado Livre', 'Shopee', 'TikTok Shop', '独立站'].map(
-                    (v) => (
-                      <option key={v}>{v}</option>
-                    ),
-                  )}
-                </StudioSelect>
-              </Field>
-              <Field label="图内语言">
-                <ImageLanguageSelect
-                  disabled={busy}
-                  value={brief.language}
-                  onChange={(language) => onChange({ language })}
-                />
-              </Field>
-              <div className="iw-specs">
-                <Field label="画幅">
-                  <StudioSelect
-                    disabled={busy}
-                    value={brief.ratio}
-                    onChange={(e) => onChange({ ratio: e.target.value })}
-                  >
-                    {['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9'].map((v) => (
-                      <option key={v}>{v}</option>
-                    ))}
-                  </StudioSelect>
-                </Field>
-                <Field label="清晰度">
-                  <StudioSelect
-                    disabled={busy}
-                    value={brief.resolution}
-                    onChange={(e) => onChange({ resolution: e.target.value })}
-                  >
-                    <option value="1k">标准 / 1K</option>
-                    <option value="2k">高清 / 2K</option>
-                    <option value="4k">超清 / 4K</option>
-                  </StudioSelect>
-                </Field>
-              </div>
-              <Field
-                label="每套页数"
-                hint={input.mode === 'replace' ? '一张样图对应一页，可在左侧调整顺序。' : undefined}
-              >
-                <input
-                  className="kv-input"
-                  type="number"
-                  min={1}
-                  max={30}
-                  disabled={busy || input.mode === 'replace'}
-                  value={input.mode === 'replace' ? input.sources.length : brief.count}
-                  onChange={(e) =>
-                    onChange({ count: Math.max(1, Math.min(30, Number(e.target.value) || 1)) })
+                  placeholder={
+                    fromSet
+                      ? '例如：完全照这套样图的版式。背景、构图和字的位置都不要动，只把商品换成后面要出的背包。'
+                      : '例如：用这款背包的照片，做巴西市场 7 张图。统一白灰背景和蓝色标题，保留真实 Logo。以后换其他背包也沿用这套设计。'
                   }
                 />
-              </Field>
+              </div>
+            </div>
+            <aside className="is-spec-column">
+              <section className="is-section is-spec-section">
+                <Field label="任务名称">
+                  <input
+                    className="kv-input"
+                    disabled={busy}
+                    value={brief.name}
+                    onChange={(e) => onChange({ name: e.target.value })}
+                    placeholder={suggestImageTaskName(brief)}
+                  />
+                </Field>
+                <Field label="使用平台">
+                  <StudioSelect
+                    disabled={busy}
+                    value={brief.platform}
+                    onChange={(e) => onChange({ platform: e.target.value })}
+                  >
+                    {['通用电商', 'Amazon', 'Mercado Livre', 'Shopee', 'TikTok Shop', '独立站'].map(
+                      (v) => (
+                        <option key={v}>{v}</option>
+                      ),
+                    )}
+                  </StudioSelect>
+                </Field>
+                <Field label="图内语言">
+                  <ImageLanguageSelect
+                    disabled={busy}
+                    value={brief.language}
+                    onChange={(language) => onChange({ language })}
+                  />
+                </Field>
+                <div className="iw-specs">
+                  <Field label="画幅">
+                    <StudioSelect
+                      disabled={busy}
+                      value={brief.ratio}
+                      onChange={(e) => onChange({ ratio: e.target.value })}
+                    >
+                      {['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9'].map(
+                        (v) => (
+                          <option key={v}>{v}</option>
+                        ),
+                      )}
+                    </StudioSelect>
+                  </Field>
+                  <Field label="清晰度">
+                    <StudioSelect
+                      disabled={busy}
+                      value={brief.resolution}
+                      onChange={(e) => onChange({ resolution: e.target.value })}
+                    >
+                      <option value="1k">标准 / 1K</option>
+                      <option value="2k">高清 / 2K</option>
+                      <option value="4k">超清 / 4K</option>
+                    </StudioSelect>
+                  </Field>
+                </div>
+                <Field
+                  label="每套页数"
+                  hint={fromSet ? '一张套图对应一页，可在投放区调整顺序。' : undefined}
+                >
+                  <input
+                    className="kv-input"
+                    type="number"
+                    min={1}
+                    max={30}
+                    disabled={busy || fromSet}
+                    value={fromSet ? input.sources.length : brief.count}
+                    onChange={(e) =>
+                      onChange({ count: Math.max(1, Math.min(30, Number(e.target.value) || 1)) })
+                    }
+                  />
+                </Field>
+              </section>
+            </aside>
+            <div className="is-creation-footer">
+              <div>
+                <small>
+                  {!input.sources.length
+                    ? fromSet
+                      ? '先把现成套图按页拖进来或点选'
+                      : '先把商品照片拖进来或点选'
+                    : !brief.requirement.trim()
+                      ? '写清这次要做成什么样'
+                      : template
+                        ? '素材或要求变了，会按新内容重做规则'
+                        : '开始后会生成一套可换品复用的规则'}
+                </small>
+              </div>
               <Button
                 variant="primary"
                 disabled={busy || !input.sources.length || !brief.requirement.trim() || unresolved}

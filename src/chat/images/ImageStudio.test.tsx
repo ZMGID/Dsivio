@@ -201,6 +201,7 @@ describe('Built-in image workflows', () => {
     expect(await screen.findByRole('listbox')).toHaveClass('kv-select-menu', 'custom-scrollbar')
     fireEvent.click(screen.getByRole('option', { name: 'Amazon' }))
     expect(screen.getByRole('button', { name: '使用平台' })).toHaveTextContent('Amazon')
+    expect(screen.getByLabelText('任务名称')).toHaveAttribute('placeholder', 'Amazon · 巴西市场')
     fireEvent.click(screen.getByRole('button', { name: '图片设置' }))
     expect(screen.getByRole('dialog', { name: '图片设置' })).toHaveClass('kv-modal', 'custom-scrollbar')
   })
