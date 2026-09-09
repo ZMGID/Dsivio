@@ -450,7 +450,7 @@ fn workflow_feedback_versions_rules_and_requires_fresh_trial_evidence() {
     assert!(task.plans.is_empty());
     assert_eq!(task.results.len(), 2);
     assert!(workflow::validate_action(&task, &workflow_action("workflow_approve")).is_err());
-    assert!(workflow::validate_action(&task, &workflow_action("workflow_produce")).is_err());
+    assert!(workflow::validate_action(&task, &workflow_action("workflow_produce")).is_ok());
     task.results.extend([
         result("a", task.revision, Some("a-v2.png")),
         result("b", task.revision, Some("b-v2.png")),

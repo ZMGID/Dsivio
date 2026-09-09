@@ -886,16 +886,17 @@ export default function ImageStudio() {
                             {approved ? `${group} · 样品已通过` : `${group} · 先检查样品`}
                           </strong>
                           <small>
-                            核对商品外观、文字拼写、版式与正反面，再确认这个分类继续批量。
+                            可以先查看样品，也可以直接生成剩余商品。
                           </small>
                         </span>
                       </div>
+                      {!approved && <Button disabled={busy || dirty || !complete} onClick={() => void act({ kind: 'approve' })}>确认样品效果</Button>}
                       <Button
                         variant="primary"
-                        disabled={busy || dirty || !complete}
-                        onClick={() => void act({ kind: approved ? 'bulk' : 'approve' })}
+                        disabled={busy || dirty}
+                        onClick={() => void act({ kind: 'bulk' })}
                       >
-                        {approved ? '生成剩余商品' : '确认样品效果'}
+                        生成剩余商品
                         <ArrowRight size={14} />
                       </Button>
                     </div>

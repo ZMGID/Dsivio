@@ -326,11 +326,6 @@ export default function VideoStudio() {
             ? await api.videoStudioTask('get', { id: task.id })
             : await saved(patch)
         if (action === 'poll' && (t.status === 'succeeded' || !t.remote?.id)) { accept(t); return }
-        if (action === 'submit' && (!t.quote || Date.now() / 1000 - t.quote.at > 600)) {
-          // Local catalog lookup: missing pricing is informational, never a dead end.
-          t = await api.videoStudioTask('quote', { id: t.id, revision: t.revision })
-          accept(t)
-        }
         if (action !== 'save' && action !== 'get') {
           t = await api.videoStudioTask(action, {
             id: t.id,
@@ -345,7 +340,11 @@ export default function VideoStudio() {
             })
             accept(t)
             setStep(2)
-            t = await api.videoStudioTask('quote', { id: t.id, revision: t.revision })
+            try {
+              t = await api.videoStudioTask('quote', { id: t.id, revision: t.revision })
+            } catch {
+              // Pricing is optional; the prepared prompt remains ready to submit.
+            }
           }
         }
         accept(t)

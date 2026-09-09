@@ -303,7 +303,7 @@ describe('video confirmation and monitoring', () => {
     expect(button).toBeEnabled()
     fireEvent.click(button)
     await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('submit', expect.objectContaining({ confirmSpend: true })))
-    expect(vi.mocked(api.videoStudioTask).mock.calls.map(c => c[0])).toEqual(['quote', 'submit'])
+    expect(vi.mocked(api.videoStudioTask).mock.calls.map(c => c[0])).toEqual(['submit'])
   })
   it('keeps a rejected request editable and offers retry without asking for an ID', async () => {
     const task: VideoTask = { ...readyTask(), approved: true, status: 'approved', prompt: 'Approved shot',

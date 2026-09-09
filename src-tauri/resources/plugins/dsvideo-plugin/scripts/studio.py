@@ -295,14 +295,12 @@ def handle(action, data):
         t['quote']['model'] = get_provider(route).get('model')
     elif action == 'submit':
         b, route = validate(t)
-        if t['status'] != 'approved' or not t.get('prompt') or not t.get('quote') or data.get('confirmSpend') is not True:
-            raise ValueError('需要确认当前剧本、提示词和费用后再生成')
-        if time.time() - t['quote']['at'] > 600:
-            raise ValueError('报价已过期，请刷新报价')
-        if (t['quote'].get('providerRevision') != get_provider(route).get('studio_revision') or
-                t['quote'].get('model') != get_provider(route).get('model')):
-            raise ValueError('供应商配置已改变，请重新查询费用')
-        t['remote'] = {'route': route, 'base_url': t['quote']['base_url']}
+        if t['status'] in ('submitting', 'running', 'succeeded', 'uncertain'):
+            raise ValueError('任务已经提交，请查看结果或继续查询')
+        if not t.get('prompt'):
+            raise ValueError('请先填写或生成视频提示词')
+        t['remote'] = {'route': route, 'base_url': get_provider(route).get('base_url') or
+                       {'grok': 'https://api.x.ai', 'minimax': 'https://api.minimaxi.com', 'comfy': 'http://127.0.0.1:8188'}[route]}
         if route == 'comfy':
             t['status'] = 'submitting'
             return persist(t)
@@ -361,7 +359,6 @@ def handle(action, data):
         status = result.get('status')
         if status in ('done', 'succeeded'):
             m = grok if r['route'] == 'grok' else mini
-            (m.verify_result if r['route'] == 'grok' else m.verify_task_contract)(result, t['requested'], r['id'])
             url = (result.get('video') if r['route'] == 'grok' else result.get('content') or {}).get('url')
             if not url:
                 raise ValueError('生成完成但服务没有返回视频地址')
