@@ -437,12 +437,6 @@ pub fn image_studio_action(
     {
         return Err("请填写图片要求或选择模板".into());
     }
-    if action.kind == "bulk" && !t.approved_groups.contains(&action.group) {
-        return Err("请先确认该分类样品通过".into());
-    }
-    if action.kind == "generate" && t.brief.feature != "gen" {
-        return Err("套图任务必须先走样品确认".into());
-    }
     if matches!(action.kind.as_str(), "sample" | "generate") && t.plans.is_empty() {
         return Err("请先生成并检查方案".into());
     }

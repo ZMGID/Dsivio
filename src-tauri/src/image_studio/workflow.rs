@@ -193,16 +193,13 @@ pub(super) fn validate_action(task: &Task, action: &Action) -> Result<(), String
             return Err("请添加商品图或成套参考图，并填写制作要求".into());
         }
     } else {
-        let w = task
+        task
             .workflow
             .as_ref()
             .filter(|w| w.rules_current)
             .ok_or("请先根据当前素材和要求制作规则")?;
         if action.kind == "workflow_approve" && !sample_complete(task) {
             return Err("请先完成本版全部试品页面，再确认继续使用".into());
-        }
-        if action.kind == "workflow_produce" && w.approved_version != Some(w.rule_version) {
-            return Err("请先确认当前版本的试品效果".into());
         }
         if action.kind == "workflow_refine" && action.note.trim().is_empty() {
             return Err("请说明哪些地方需要修改，以及后续商品应遵守的要求".into());

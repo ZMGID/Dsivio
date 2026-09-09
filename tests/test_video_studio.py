@@ -75,12 +75,11 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '其他窗口'):
             self.action(t, 'plan_result', script='stale')
 
-    def test_submit_requires_spend_confirmation(self):
+    def test_submit_needs_no_extra_confirmation(self):
         t = self.approved()
-        with patch.object(studio.grok.GrokVideoClient, 'create_video') as network:
-            with self.assertRaises(ValueError):
-                self.action(t, 'submit')
-            network.assert_not_called()
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='remote-new') as network:
+            self.assertEqual(self.action(t, 'submit')['status'], 'running')
+            network.assert_called_once()
 
     def test_lost_receipt_is_not_resubmitted(self):
         t = self.approved()
@@ -101,18 +100,18 @@ class WorkspaceTests(unittest.TestCase):
             self.action(reloaded, 'poll')
             query.assert_called_once_with('remote-123')
 
-    def test_changed_provider_invalidates_quote(self):
+    def test_changed_provider_does_not_require_another_quote(self):
         t = self.approved()
         studio.handle('config', {'name': 'grok', 'base_url': 'https://api.x.ai', 'api_key': 'other-secret'})
-        with self.assertRaisesRegex(ValueError, '配置已改变'):
-            self.action(t, 'submit', confirmSpend=True)
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='remote-new'):
+            self.assertEqual(self.action(t, 'submit')['status'], 'running')
 
-    def test_expired_quote_cannot_submit(self):
+    def test_expired_quote_does_not_block_submission(self):
         t = self.approved()
         t['quote']['at'] = 0
         studio.persist(t)
-        with self.assertRaisesRegex(ValueError, '已过期'):
-            self.action(t, 'submit', confirmSpend=True)
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='remote-new'):
+            self.assertEqual(self.action(t, 'submit')['status'], 'running')
 
     def test_chat_import_visible_and_unverified(self):
         p = self.root / 'chat-template.json'

@@ -772,10 +772,11 @@ export function ImageWorkflow({
             <p className="iw-hint">
               {approved
                 ? `继续在上方添加商品即可使用这版规则。待生成 ${productionPending} 页，已有页面会保留。`
-                : '本版所选试品的全部页面成功后，确认效果，再继续生成其他商品。'}
+                : '可以先检查试品，也可以直接用当前规则生成其他商品。'}
             </p>
           </div>
           <div className="is-actions">
+            {!approved && current && <Button disabled={busy || dirty || !brief.products.length || !productionPending} onClick={() => void onAction({ kind: 'workflow_produce' })}>直接生成新增商品</Button>}
             {approved ? (
               <Button
                 variant="primary"
