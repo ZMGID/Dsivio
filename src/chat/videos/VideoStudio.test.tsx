@@ -16,6 +16,7 @@ vi.mock('../../api/tauri', () => ({
     videoStudioImage: vi.fn(async () => ''),
     videoStudioTask: vi.fn(),
     videoStudioPreview: vi.fn(async () => ''),
+    videoStudioOpen: vi.fn(async () => {}),
   },
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
@@ -61,6 +62,42 @@ describe('shared video workspace navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开任务 历史视频 0' }))
     await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('get', { id: 'library-0' }))
     expect(await screen.findByText('stored prompt')).toBeTruthy()
+  })
+
+  it('opens a selected task without an implicit save or a layout-shifting busy notice', async () => {
+    const current: VideoTask = {
+      id: 'current-draft', revision: 2, updatedAt: 1700000000001,
+      brief: { ...newVideoBrief(), name: '当前任务', request: '未保存的本地修改' },
+      script: '本地剧本', prompt: '', approved: true, status: 'approved',
+    }
+    const target: VideoTask = {
+      id: 'completed-task', revision: 4, updatedAt: 1700000000002,
+      brief: { ...newVideoBrief(), name: '已完成任务', request: '打开我' },
+      script: '已完成剧本', prompt: 'target prompt', approved: true, status: 'succeeded', output: '/tmp/video.mp4',
+    }
+    localStorage.setItem('dsivio-video-drafts-v1', JSON.stringify({
+      creation: { brief: current.brief, task: current, script: current.script, step: 1, dirty: true },
+    }))
+    vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce({
+      tasks: [target, current], config: {}, templates: [], root: '', configPath: '',
+      dependencies: { python: '3.12', comfy: true, node: true, ffmpeg: true },
+    })
+    vi.mocked(api.videoStudioTask).mockReset()
+    vi.mocked(api.videoStudioTask).mockImplementation(async (action) => {
+      if (action === 'save') throw new Error('旧任务版本冲突')
+      return target
+    })
+
+    render(<VideoStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '任务 2' }))
+    fireEvent.click(screen.getByRole('button', { name: '打开任务 已完成任务' }))
+
+    expect(screen.queryByText('打开任务…')).toBeNull()
+    expect(await screen.findByText('target prompt')).toBeTruthy()
+    expect(api.videoStudioTask).toHaveBeenCalledWith('get', { id: 'completed-task' })
+    expect(api.videoStudioTask).not.toHaveBeenCalledWith('save', expect.anything())
+    fireEvent.click(screen.getByRole('button', { name: '在文件管理器中显示' }))
+    await waitFor(() => expect(api.videoStudioOpen).toHaveBeenCalledWith('completed-task', 'reveal'))
   })
 
   beforeEach(() => localStorage.clear())
@@ -139,7 +176,7 @@ describe('shared video workspace navigation', () => {
       await Promise.resolve()
     })
     const toast = screen.getByRole('alert')
-    expect(toast.className).toContain('vs-toast')
+    expect(toast.className).toContain('studio-toast')
     expect(toast.textContent).toContain('视频操作失败')
     expect(toast.closest('.is-main')).toBeNull()
     await act(async () => {
@@ -344,6 +381,44 @@ describe('video confirmation and monitoring', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(24000) })
     expect(api.videoStudioTask).not.toHaveBeenCalled()
   })
+
+  it('puts the finished video first and revises the shooting plan on the same task', async () => {
+    const task: VideoTask = {
+      ...readyTask(),
+      approved: true,
+      status: 'succeeded',
+      prompt: 'Approved shot',
+      output: '/tmp/video.mp4',
+      remote: { route: 'grok', id: 'remote-1', base_url: 'https://api.x.ai' },
+    }
+    seed(task, 2)
+    vi.mocked(api.videoStudioTask).mockImplementation(async (action) => {
+      if (action === 'revise') {
+        return {
+          ...task,
+          revision: task.revision + 1,
+          status: 'draft',
+          approved: false,
+          prompt: '',
+          script: '修订后的方案：书包完整入画',
+          remote: undefined,
+        }
+      }
+      return task
+    })
+    render(<VideoStudio />)
+    const result = await screen.findByRole('heading', { name: '生成结果' })
+    const spec = screen.getByRole('heading', { name: '生成规格' })
+    expect(result.compareDocumentPosition(spec) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '保存为成片验证模板' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('需要修改的地方'), { target: { value: '书包要完整入画' } })
+    fireEvent.click(screen.getByRole('button', { name: '按意见改写拍摄方案' }))
+    expect(await screen.findByText('修订后的方案：书包完整入画')).toBeTruthy()
+    expect(api.videoStudioTask).toHaveBeenCalledWith('revise', expect.objectContaining({
+      id: 'confirmed-task',
+      note: '书包要完整入画',
+    }))
+  })
 })
 
 it('shows the shared ComfyUI address and protects a local config edit from chat updates', async () => {
@@ -362,4 +437,35 @@ it('shows the shared ComfyUI address and protects a local config edit from chat 
   fireEvent.click(screen.getByRole('button', { name: '载入最新配置' }))
   expect(await screen.findByDisplayValue('http://chat-edit:8188')).toBeTruthy()
   expect(screen.getByRole('button', { name: '保存配置' })).toBeEnabled()
+})
+
+it('continues analysis across tasks and a new chat without overwriting another draft', async () => {
+  localStorage.clear()
+  const source: VideoTask = {
+    id: 'background-analysis', revision: 1, updatedAt: 1,
+    brief: { ...newVideoBrief('analysis'), name: '后台拆解', source: '/tmp/demo.mp4' },
+    script: '', prompt: '', approved: false, status: 'draft',
+  }
+  let finish!: (task: VideoTask) => void
+  const pending = new Promise<VideoTask>(resolve => { finish = resolve })
+  vi.mocked(api.videoStudioTask).mockImplementation(async action => action === 'analyze' ? pending : source)
+  const { ChatRouteKeepAlive } = await import('../ChatRouteKeepAlive')
+  const page = () => <ChatRouteKeepAlive activeKey="videos"><VideoStudio /></ChatRouteKeepAlive>
+  const { rerender } = render(page())
+  fireEvent.click(screen.getByRole('button', { name: '视频拆解' }))
+  fireEvent.change(screen.getByPlaceholderText('粘贴视频链接，或把视频拖到这里'), { target: { value: source.brief.source } })
+  fireEvent.click(screen.getByRole('button', { name: '开始拆解' }))
+  await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('analyze', expect.objectContaining({ id: source.id })))
+  fireEvent.click(screen.getByRole('button', { name: /任务 \d/ }))
+  expect(screen.getByRole('heading', { name: /视频任务/ })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '视频创作' }))
+  fireEvent.change(screen.getByLabelText('这次要拍什么'), { target: { value: '另一份创作草稿' } })
+  rerender(<ChatRouteKeepAlive activeKey="conversation"><main>新聊天</main></ChatRouteKeepAlive>)
+  await act(async () => { finish({ ...source, revision: 2, script: '后台拆解完成的镜头结构' }); await pending })
+  rerender(page())
+  expect(screen.getByLabelText('这次要拍什么')).toHaveValue('另一份创作草稿')
+  fireEvent.click(screen.getByRole('button', { name: '视频拆解' }))
+  expect(await screen.findByText('后台拆解完成的镜头结构')).toBeInTheDocument()
+  expect(vi.mocked(api.videoStudioTask).mock.calls.filter(([action]) => action === 'analyze')).toHaveLength(1)
+  localStorage.clear()
 })

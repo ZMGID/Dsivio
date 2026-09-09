@@ -98,12 +98,36 @@ fn paths_eq(path: &Path, other: Option<&Path>) -> bool {
     left == right
 }
 
-fn bundled_skills_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .resource_dir()
-        .ok()
-        .map(|dir| dir.join("skills"))
-        .filter(|dir| dir.is_dir())
+fn bundled_skills_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    resolve_bundled_skills_dir(
+        app.path().resource_dir().map_err(|err| err.to_string()),
+        cfg!(debug_assertions),
+    )
+}
+
+fn resolve_bundled_skills_dir(
+    resource_dir: Result<PathBuf, String>,
+    development: bool,
+) -> Result<PathBuf, String> {
+    let error = match resource_dir {
+        Ok(dir) => {
+            let skills = dir.join("skills");
+            if skills.is_dir() {
+                return Ok(skills);
+            }
+            format!("内置技能目录不存在：{}", skills.display())
+        }
+        Err(err) => format!("无法定位内置技能资源目录：{err}"),
+    };
+    // With a custom CARGO_TARGET_DIR, Tauri may not resolve resources for a dev binary.
+    // Packaged apps take priority; release builds must never depend on the checkout.
+    if development {
+        let skills = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/skills");
+        if skills.is_dir() {
+            return Ok(skills);
+        }
+    }
+    Err(error)
 }
 
 fn scan_root_entries(
@@ -112,9 +136,7 @@ fn scan_root_entries(
     project_cwd: Option<&Path>,
 ) -> Result<Vec<SkillScanRoot>, String> {
     let mut roots = Vec::new();
-    if let Some(path) = bundled_skills_dir(app) {
-        push_root(&mut roots, path, "builtin");
-    }
+    push_root(&mut roots, bundled_skills_dir(app)?, "builtin");
     // 项目优先于全局（同 id 近处覆盖远处）：`.kivio/skills` 再 `.agents/skills`，cwd → git 根。
     if let Some(cwd) = project_cwd {
         for path in project_skill_dirs(cwd) {
@@ -397,6 +419,59 @@ fn classify_file(relative_path: &str) -> SkillFileKind {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn dev_unknown_resource_path_discovers_builtin_dsimage() {
+        let path = resolve_bundled_skills_dir(Err("unknown path".into()), true).unwrap();
+        let registry = build_registry_from_roots(
+            vec![SkillScanRoot {
+                path,
+                source: "builtin",
+            }],
+            false,
+        );
+        assert!(registry.warnings.is_empty(), "{:?}", registry.warnings);
+        let dsimage = registry
+            .records
+            .iter()
+            .find(|record| record.meta.id == "dsimage")
+            .expect("bundled dsimage must be visible to the skill list and agent registry");
+        assert_eq!(dsimage.meta.source, "builtin");
+        assert!(!dsimage.body.is_empty());
+    }
+
+    #[test]
+    fn dev_missing_resource_skills_uses_checkout() {
+        let missing = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let path = resolve_bundled_skills_dir(Ok(missing), true).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/skills")
+        );
+    }
+
+    #[test]
+    fn packaged_skills_take_priority_in_debug_and_release() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let skills = root.join("skills");
+        fs::create_dir_all(&skills).unwrap();
+        for development in [true, false] {
+            assert_eq!(
+                resolve_bundled_skills_dir(Ok(root.clone()), development).unwrap(),
+                skills
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn release_reports_resource_errors_without_checkout_fallback() {
+        let error = resolve_bundled_skills_dir(Err("unknown path".into()), false).unwrap_err();
+        assert!(error.contains("unknown path"));
+        let missing = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let error = resolve_bundled_skills_dir(Ok(missing.clone()), false).unwrap_err();
+        assert!(error.contains(&missing.join("skills").display().to_string()));
+    }
 
     fn temp_skill_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("kivio-skill-test-{}", uuid::Uuid::new_v4()));

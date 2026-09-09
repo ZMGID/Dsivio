@@ -40,25 +40,23 @@ describe('shared page/chat draft', () => {
     await tick()
     expect(stored.revision).toBe(revision)
   })
-  it('preserves simultaneous edits until the user chooses a version', async () => {
+  it('automatically uses the shared version when edits overlap', async () => {
     const { result } = renderHook(() => useHarness())
     await tick()
     act(() => result.current.setValue(draft('local edit')))
     stored = { revision: 2, value: draft('chat edit') }
     await tick()
-    expect(result.current.hasConflict).toBe(true)
-    expect(result.current.value).toEqual(draft('local edit'))
+    expect(result.current.message).toBe('')
+    expect(result.current.value).toEqual(draft('chat edit'))
     expect(stored.value).toEqual(draft('chat edit'))
-    act(() => result.current.keep())
     await tick()
-    expect(stored.value).toEqual(draft('local edit'))
+    expect(stored.value).toEqual(draft('chat edit'))
   })
-  it('protects unsynced local recovery on mount and can load shared version', async () => {
+  it('loads the shared version on mount without asking to choose a version', async () => {
     stored = { revision: 4, value: draft('chat') }
     const { result } = renderHook(() => useHarness(draft('offline')))
     await tick()
-    expect(result.current.hasConflict).toBe(true)
-    act(() => result.current.reload())
+    expect(result.current.message).toBe('')
     expect(result.current.value).toEqual(draft('chat'))
     await tick()
     expect(stored.revision).toBe(4)
@@ -83,8 +81,8 @@ describe('shared page/chat draft', () => {
     await tick()
     await tick()
     expect(stored.value).toEqual(draft('chat'))
-    expect(result.current.value).toEqual(draft('local'))
-    expect(result.current.hasConflict).toBe(true)
+    expect(result.current.value).toEqual(draft('chat'))
+    expect(result.current.message).toBe('')
   })
 })
 
@@ -108,7 +106,7 @@ it('does not rewrite identical JSON whose keys were sorted by the backend', asyn
   const { result } = renderHook(() => useHarness(local))
   await tick()
   await tick()
-  expect(result.current.hasConflict).toBe(false)
+  expect(result.current.message).toBe('')
   expect(stored.revision).toBe(3)
 })
 
@@ -123,4 +121,28 @@ it('waits for the shared task to load before saving or leaving the draft', async
   await act(async () => { finish(); await applying })
   expect(stored.value).toEqual(draft('new chat task'))
   expect(stored.revision).toBe(6)
+})
+
+it('remembers the acknowledged revision when returning to an entry with newer local task state', async () => {
+  const store = new Map<string, typeof stored>()
+  vi.mocked(invoke).mockImplementation(async (_command, input) => {
+    const args = input as { entry: string; revision: number; value: Draft | null }
+    const current = store.get(args.entry) || { revision: 0, value: null }
+    if (args.value) {
+      if (args.revision !== current.revision) throw new Error('conflict')
+      store.set(args.entry, { revision: current.revision + 1, value: args.value })
+    }
+    return structuredClone(store.get(args.entry) || current) as never
+  })
+  const { result, rerender } = renderHook(({ entry, value }) =>
+    useSharedDraft('video', entry, true, value, () => {}), {
+    initialProps: { entry: 'analysis', value: draft('original task') },
+  })
+  await tick()
+  rerender({ entry: 'creation', value: draft('another task') })
+  await tick()
+  rerender({ entry: 'analysis', value: draft('completed task') })
+  await tick()
+  expect(result.current.message).toBe('')
+  expect(store.get('analysis')?.value).toEqual(draft('completed task'))
 })

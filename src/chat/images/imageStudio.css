@@ -664,6 +664,52 @@
   color: var(--danger);
   background: var(--danger-soft);
 }
+.image-studio .studio-toasts {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  width: min(360px, calc(100% - 40px));
+  pointer-events: none;
+}
+.image-studio .studio-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+.image-studio .studio-toast.is-error {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg));
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+.image-studio .studio-toast-body {
+  min-width: 0;
+  flex: 1;
+}
+.image-studio .studio-toast-body > span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.image-studio .studio-toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
 .is-progress {
   display: flex;
   align-items: center;

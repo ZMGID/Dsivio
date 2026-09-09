@@ -2,6 +2,7 @@ import modelDatabase from './modelDatabase.json'
 import type { ModelInfo, ModelProvider } from '../api/tauri'
 
 type DbEntry = {
+  mediaPricing?: ModelInfo["mediaPricing"]
   displayName: string
   contextWindow: number
   maxOutput: number
@@ -13,6 +14,7 @@ type DbEntry = {
     streaming?: boolean
     webSearch?: boolean
     imageGeneration?: boolean
+    videoGeneration?: boolean
     embedding?: boolean
   }
   dimensions?: number
@@ -175,8 +177,10 @@ export function resolveModelInfo(
       streaming: override.capabilities?.streaming ?? defaults.capabilities?.streaming,
       webSearch: override.capabilities?.webSearch ?? defaults.capabilities?.webSearch,
       imageGeneration: override.capabilities?.imageGeneration ?? defaults.capabilities?.imageGeneration,
+      videoGeneration: override.capabilities?.videoGeneration ?? defaults.capabilities?.videoGeneration,
       embedding: override.capabilities?.embedding ?? defaults.capabilities?.embedding,
     },
+    mediaPricing: override.mediaPricing ?? defaults.mediaPricing,
     dimensions: override.dimensions ?? defaults.dimensions,
     multilingual: override.multilingual ?? defaults.multilingual,
     pricing: {
@@ -203,8 +207,10 @@ function toModelInfo(entry: DbEntry): ModelInfo {
       streaming: entry.capabilities.streaming ?? false,
       webSearch: entry.capabilities.webSearch ?? false,
       imageGeneration: entry.capabilities.imageGeneration ?? false,
+      videoGeneration: entry.capabilities.videoGeneration ?? false,
       embedding: entry.capabilities.embedding ?? false,
     },
+    mediaPricing: entry.mediaPricing,
     dimensions: entry.dimensions,
     multilingual: entry.multilingual,
     reasoningEfforts: entry.reasoningEfforts,

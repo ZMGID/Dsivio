@@ -1741,3 +1741,11 @@ mod tests {
         );
     }
 }
+
+/// The same merged model catalog used by chat; no separate studio price database.
+pub(crate) fn media_pricing_catalog() -> Value {
+    let entries = model_database_entries().into_iter().flat_map(|m| m.iter())
+        .filter_map(|(id, entry)| entry.get("mediaPricing").map(|price| (id.clone(), price.clone())))
+        .collect::<serde_json::Map<String, Value>>();
+    Value::Object(entries)
+}

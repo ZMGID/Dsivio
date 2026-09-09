@@ -25,7 +25,8 @@ const WORKER_ACTIONS: &[&str] = &[
     "install_comfy", "recover",
 ];
 const HOST_ACTIONS: &[&str] = &[
-    "config", "image_preview", "open", "preview", "plan", "prepare", "analyze", "submit", "poll",
+    "config", "image_preview", "open", "preview", "plan", "prepare", "analyze", "revise", "submit",
+    "poll",
 ];
 
 pub(crate) fn public_actions() -> Vec<&'static str> {
@@ -218,8 +219,22 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     }
     let mut analysis = Value::Null;
     let (instruction, data, field, result_action) = if action == "plan" {
-        (format!("{}\nFor a broad request without selectedConcept or template, return {{\"concepts\":[\"一句话拍法1\",\"一句话拍法2\",\"一句话拍法3\"]}} and no script. These must be genuinely different approaches. Otherwise return {{\"script\":\"完整中文剧本\"}}. Honor selectedConcept. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested. Respect speechMode: auto follows the user request or reference, without assuming narration; an explicitly requested dialogue language overrides the default language. dialogue preserves supplied dialogue verbatim in its language; ambient has no speech; silent has no audio. Follow music requirements. Reference video/audio paths are conditioning inputs, not observed evidence: never invent their contents.",
-            std::fs::read_to_string(root.join("skills/video-director/SKILL.md")).map_err(|e|e.to_string())?), b.clone(), "script", "plan_result")
+        let guide = std::fs::read_to_string(root.join("skills/video-director/SKILL.md"))
+            .map_err(|e| e.to_string())?;
+        if let Some((note, previous)) = planning_revision(
+            input["note"].as_str(),
+            input["previousScript"].as_str().or_else(|| t["script"].as_str()),
+        ) {
+            (
+                format!("{guide}\nRevise the current shooting script using the user's notes. Return {{\"script\":\"完整中文剧本\"}} and no concepts. Preserve duration, product identity, shot count unless the notes require a change, verbatim dialogue, speechMode, music, and all facts the user did not mention. Apply only the requested changes."),
+                revise_context(previous, note, b),
+                "script",
+                "plan_result",
+            )
+        } else {
+            (format!("{guide}\nFor a broad request without selectedConcept or template, return {{\"concepts\":[\"一句话拍法1\",\"一句话拍法2\",\"一句话拍法3\"]}} and no script. These must be genuinely different approaches. Otherwise return {{\"script\":\"完整中文剧本\"}}. Honor selectedConcept. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested. Respect speechMode: auto follows the user request or reference, without assuming narration; an explicitly requested dialogue language overrides the default language. dialogue preserves supplied dialogue verbatim in its language; ambient has no speech; silent has no audio. Follow music requirements. Reference video/audio paths are conditioning inputs, not observed evidence: never invent their contents."),
+                b.clone(), "script", "plan_result")
+        }
     } else if action == "analyze" {
         analysis = mcp(
             app,
@@ -279,7 +294,7 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
         true,
     )
     .await?;
-    if action == "plan" {
+    if action == "plan" && planning_revision(input["note"].as_str(), Some("")).is_none() {
         if let Some(concepts) = result["concepts"].as_array() {
             if concepts.len() != 3 || concepts.iter().any(|v| v.as_str().is_none_or(|s| s.trim().is_empty())) {
                 return Err("拍法需要包含三个完整选项，请重试".into());
@@ -385,6 +400,7 @@ pub async fn video_studio(app: AppHandle, action: String, input: Value) -> Resul
             input["path"].as_str().ok_or("无图片路径")?
         )?)),
         "open" | "preview" => {
+            let reveal = input["mode"].as_str() == Some("reveal");
             let root = crate::app_data::app_data_dir()
                 .ok_or("无数据目录")?
                 .join("video-studio");
@@ -401,8 +417,12 @@ pub async fn video_studio(app: AppHandle, action: String, input: Value) -> Resul
                     .map_err(|e| e.to_string())?
                     .to_string_lossy()
                     .into();
-                crate::dock::fs::dock_fs_open_path(base.to_string_lossy().into(), relative, None)
-                    .await?;
+                crate::dock::fs::dock_fs_open_path(
+                    base.to_string_lossy().into(),
+                    relative,
+                    reveal.then(|| "reveal".into()),
+                )
+                .await?;
                 return Ok(Value::Null);
             }
             if std::fs::metadata(&canonical)
@@ -424,6 +444,32 @@ pub async fn video_studio(app: AppHandle, action: String, input: Value) -> Resul
             )))
         }
         "plan" | "prepare" | "analyze" => direct(&app, &action, input).await,
+        "revise" => {
+            let t = worker(&app, "get", input.clone()).await?;
+            let status = t["status"].as_str().unwrap_or("");
+            if matches!(status, "submitting" | "running" | "uncertain") {
+                return Err("生成尚未结束，请等待完成后再改拍摄方案".into());
+            }
+            let note = input["note"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or("请填写需要修改的地方")?
+                .to_string();
+            if t["script"]
+                .as_str()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+            {
+                return Err("没有可改写的拍摄方案".into());
+            }
+            let mut plan_input = input;
+            plan_input["note"] = json!(note);
+            plan_input["previousScript"] = t["script"].clone();
+            plan_input["revision"] = t["revision"].clone();
+            direct(&app, "plan", plan_input).await
+        }
         "submit" => {
             let t = worker(&app, "submit", input).await?;
             if t["remote"]["route"] == "comfy" {
@@ -496,6 +542,16 @@ fn analysis_context(evidence: Value, brief: &Value) -> Value {
     json!({"evidence": evidence, "request": brief["request"], "report_language": brief["language"]})
 }
 
+fn planning_revision<'a>(note: Option<&'a str>, previous_script: Option<&'a str>) -> Option<(&'a str, &'a str)> {
+    let note = note.map(str::trim).filter(|s| !s.is_empty())?;
+    let previous = previous_script.filter(|s| !s.trim().is_empty()).unwrap_or("");
+    Some((note, previous))
+}
+
+fn revise_context(script: &str, note: &str, brief: &Value) -> Value {
+    json!({"script": script, "note": note, "brief": brief})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,6 +597,19 @@ mod tests {
         assert_eq!(context["request"], "focus on opening");
         assert_eq!(context["report_language"], "zh-CN");
         assert_eq!(context["evidence"]["warnings"][0], "missing audio");
+    }
+
+    #[test]
+    fn revision_plan_keeps_current_script_and_user_notes() {
+        let brief = json!({"request": "宣传书包", "duration": 5});
+        assert!(planning_revision(None, Some("0–5秒：特写脸")).is_none());
+        let (note, script) = planning_revision(Some(" 书包要完整入画 "), Some("0–5秒：特写脸")).unwrap();
+        assert_eq!(note, "书包要完整入画");
+        assert_eq!(script, "0–5秒：特写脸");
+        let data = revise_context(script, note, &brief);
+        assert_eq!(data["note"], "书包要完整入画");
+        assert_eq!(data["script"], "0–5秒：特写脸");
+        assert_eq!(data["brief"]["request"], "宣传书包");
     }
     #[test]
     fn builtin_video_plugin_resolves_six_skills_and_two_mcps() {

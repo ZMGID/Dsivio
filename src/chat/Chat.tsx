@@ -5419,7 +5419,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         ) : null}
 
         <ChatRouteKeepAlive
-          activeKey={chatView === 'conversation' || chatView === 'settings' ? chatView : 'center'}
+          activeKey={['conversation', 'settings', 'videos', 'images'].includes(chatView) ? chatView : 'center'}
         >
         {chatView === 'onboarding' ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">

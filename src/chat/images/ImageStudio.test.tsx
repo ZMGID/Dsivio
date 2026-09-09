@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { api } from '../../api/tauri'
 import ImageStudio from './ImageStudio'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -254,7 +254,10 @@ describe('Built-in image workflows', () => {
     const storage = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota exceeded') })
     try {
       render(<ImageStudio />)
-      expect(await screen.findByText('本机草稿未能保存，请先保存任务。')).toBeInTheDocument()
+      const toast = await screen.findByRole('alert')
+      expect(toast).toHaveTextContent('本机草稿未能保存，请先保存任务。')
+      expect(toast.className).toContain('studio-toast')
+      expect(toast.closest('.is-main')).toBeNull()
       expect(screen.getByRole('button', { name: '保存任务' })).toBeEnabled()
       expect(screen.queryByText('草稿保存在本机')).not.toBeInTheDocument()
     } finally { storage.mockRestore() }
@@ -485,4 +488,29 @@ describe('Product material drag-drop', () => {
     fireEvent.click(screen.getByText('更多设置'))
     expect(screen.getByLabelText('商品信息（可选）')).toBeInTheDocument()
   })
+})
+
+it('keeps image work alive through chat navigation and does not replace a new brief', async () => {
+  const saved = { ...fixture(), brief: { ...emptyBrief('gen'), name: '后台图片', requirement: '原来的图片要求' } }
+  let finish!: (task: ImageTask) => void
+  const pending = new Promise<ImageTask>(resolve => { finish = resolve })
+  vi.mocked(api.imageStudioSave).mockResolvedValue(saved)
+  vi.mocked(api.imageStudioAction).mockReturnValue(pending)
+  const { ChatRouteKeepAlive } = await import('../ChatRouteKeepAlive')
+  const page = () => <ChatRouteKeepAlive activeKey="images"><ImageStudio /></ChatRouteKeepAlive>
+  const { rerender } = render(page())
+  await waitFor(() => expect(api.imageStudioBootstrap).toHaveBeenCalled())
+  fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: saved.brief.requirement } })
+  fireEvent.click(screen.getByRole('button', { name: '生成图片' }))
+  await waitFor(() => expect(api.imageStudioAction).toHaveBeenCalled())
+  fireEvent.click(screen.getByRole('button', { name: /任务 \d/ }))
+  expect(screen.getByRole('heading', { name: /图片任务/ })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '新建图片' }))
+  fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: '新的图片要求' } })
+  rerender(<ChatRouteKeepAlive activeKey="conversation"><main>新聊天</main></ChatRouteKeepAlive>)
+  const completed = { ...saved, status: 'completed', progress: '已完成' }
+  await act(async () => { finish(completed); await pending })
+  rerender(page())
+  expect(screen.getByLabelText('图片要求')).toHaveValue('新的图片要求')
+  expect(api.imageStudioAction).toHaveBeenCalledTimes(1)
 })
