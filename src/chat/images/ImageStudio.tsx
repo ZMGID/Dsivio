@@ -1,3 +1,4 @@
+import { useChatRouteActive } from '../chatRouteVisibility'
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -56,6 +57,8 @@ import './imageFlow.css'
 import { dropAsProducts, dropZoneFromPoint, type ImageDropZone } from './studioDrop'
 import { ImageWorkflow } from './ImageWorkflow'
 import { TaskPanel } from './TaskPanel'
+import { ExecutionStatus } from '../studio/ExecutionStatus'
+import { StudioToast } from '../studio/StudioToast'
 import { useSharedDraft } from '../studio/useSharedDraft'
 import { useTaskLibrary } from '../studio/useTaskLibrary'
 
@@ -100,8 +103,11 @@ export default function ImageStudio() {
   const [dropTarget, setDropTarget] = useState<ImageDropZone | null>(null)
   const [draftSaved, setDraftSaved] = useState(true)
   const running = task?.status === 'running'
-  const busy = pending || running
+  const [operations, setOperations] = useState<Record<string, boolean>>({})
+  const operationsRef = useRef(new Set<string>())
+  const busy = pending || running || !!(task && operations[task.id])
   const dirty = task ? JSON.stringify(brief) !== JSON.stringify(task.brief) : true
+  const routeActive = useChatRouteActive()
   const native = isTauriRuntime()
   const library = useTaskLibrary('image', native)
   const report = useCallback(
@@ -188,8 +194,7 @@ export default function ImageStudio() {
           const current = syncCurrent.current
           const updated = data.tasks.find(t => t.id === current.task?.id)
           if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy) {
-            if (!current.dirty && !current.editedPlans) adopt(updated)
-            else setNotice('此任务已在聊天中更新。本地编辑已保留，请从任务列表重新打开最新版本后继续。')
+            adopt(updated)
           }
         }
       } catch {
@@ -318,21 +323,31 @@ export default function ImageStudio() {
     }
     setBrief(b)
   }
-  const act = (action: ImageAction) =>
-    perform(async () => {
-      const saved = action.kind === 'cancel' ? task : await save()
-      if (!saved) return
-      const current = await api.imageStudioAction(saved.id, saved.revision, {
-        group,
-        ...action,
-      })
+  const act = async (action: ImageAction) => {
+    if (pending || (task && operationsRef.current.has(task.id))) return
+    let saved: ImageTask | null = null
+    await perform(async () => { saved = action.kind === 'cancel' ? task : await save() })
+    // Assignment happens inside perform, which catches save errors.
+    const source = saved as ImageTask | null
+    if (!source || operationsRef.current.has(source.id)) return
+    const id = source.id
+    operationsRef.current.add(id)
+    setOperations(all => ({ ...all, [id]: true }))
+    try {
+      const current = await api.imageStudioAction(id, source.revision, { group, ...action })
+      setTasks(all => [current, ...all.filter(t => t.id !== id)])
+      if (syncCurrent.current.task?.id !== id) return
       adopt(current)
       if (action.kind === 'plan') setStage('plan')
-      if (['start', 'sample', 'bulk', 'generate', 'retry', 'revise', 'resume'].includes(action.kind))
-        setStage('results')
-      if (action.kind === 'approve')
-        setNotice('样品已确认。现在可以为这个分类的剩余商品规划并出图。')
-    })
+      if (['start', 'sample', 'bulk', 'generate', 'retry', 'revise', 'resume'].includes(action.kind)) setStage('results')
+      if (action.kind === 'approve') setNotice('样品已确认。现在可以为这个分类的剩余商品规划并出图。')
+    } catch (e) {
+      report(e)
+    } finally {
+      operationsRef.current.delete(id)
+      setOperations(all => { const next = { ...all }; delete next[id]; return next })
+    }
+  }
   const patch = (p: Partial<ImageBrief>) => setBrief((b) => ({ ...b, ...p }))
   const briefFeatureRef = useRef(brief.feature)
   briefFeatureRef.current = brief.feature
@@ -340,7 +355,7 @@ export default function ImageStudio() {
   briefRef.current = brief
   const dropReadyRef = useRef({ accept: false, busy: false })
   dropReadyRef.current = {
-    accept: view !== 'templates' && view !== 'tasks' && (view === 'workflow' || stage === 'brief'),
+    accept: routeActive && view !== 'templates' && view !== 'tasks' && (view === 'workflow' || stage === 'brief'),
     busy,
   }
   const dropTargetRef = useRef<ImageDropZone | null>(null)
@@ -531,8 +546,8 @@ export default function ImageStudio() {
   const results = (task ? (showHistory ? task.results : latestResults(task)) : []).filter((result) =>
     brief.feature === 'gen' || productGroup(brief.products.find((product) => product.id === result.productId) || ({ category: '' } as ImageProduct)) === group,
   )
-  const complete = task ? sampleComplete(task, group) : false
   const approved = task?.approvedGroups.includes(group)
+  const complete = task ? sampleComplete(task, group) : false
   const hasConfig = !!config.providerId && !!config.model
   const successCount = task ? latestResults(task).filter((r) => r.path).length : 0
 
@@ -543,25 +558,31 @@ export default function ImageStudio() {
           界面预览模式 · 素材导入和生成需要在 Dsivio 桌面窗口中使用
         </div>
       )}
-      {!draftSaved && <div role="alert" className="is-alert is-error">本机草稿未能保存，请先保存任务。
-        <Button size="sm" disabled={busy} onClick={() => void perform(async () => { await save() })}>保存任务</Button>
-      </div>}
-      {error && (
-        <div role="alert" className="is-alert is-error">
-          <span>{error}</span>
-          <IconButton label="关闭错误" onClick={() => setError('')}>
-            <X size={16} />
-          </IconButton>
-        </div>
-      )}
-      {notice && (
-        <div role="status" className="is-alert">
-          <span>{notice}</span>
-          <IconButton label="关闭提示" onClick={() => setNotice('')}>
-            <X size={16} />
-          </IconButton>
-        </div>
-      )}
+      <div className="studio-toasts">
+        {!draftSaved && (
+          <StudioToast
+            tone="error"
+            actions={
+              <div className="studio-toast-actions">
+                <Button size="sm" disabled={busy} onClick={() => void perform(async () => { await save() })}>保存任务</Button>
+              </div>
+            }
+          >
+            本机草稿未能保存，请先保存任务。
+          </StudioToast>
+        )}
+        {error && (
+          <StudioToast tone="error" onClose={() => setError('')}>
+            {error}
+          </StudioToast>
+        )}
+        {notice && (
+          <StudioToast onClose={() => setNotice('')}>
+            {notice}
+          </StudioToast>
+        )}
+        {shared.message && <StudioToast>{shared.message}</StudioToast>}
+      </div>
       <div className="is-shell">
         <aside className="if-navigation custom-scrollbar">
           <span className="if-nav-label">开始创作</span>
@@ -596,16 +617,8 @@ export default function ImageStudio() {
               onClick={() => setSettingsOpen(true)}><Settings2 size={15} /><span>图片设置</span></Button>
           </nav>
         </aside>
+        <div className="studio-workspace">
         <main className="is-main custom-scrollbar">
-          {shared.message && (
-            <div role="status">
-              {shared.message}
-              {shared.hasConflict && <>
-                <Button onClick={shared.reload}>载入共享版本</Button>
-                <Button onClick={shared.keep}>保留本地版本</Button>
-              </>}
-            </div>
-          )}
           <div className="if-workspace">
           {view === 'templates' ? (
             <TemplatePanel
@@ -615,7 +628,7 @@ export default function ImageStudio() {
               report={report}
             />
           ) : view === 'tasks' ? (
-            <TaskPanel tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} library={library} disabled={pending}
+            <TaskPanel activeOperations={operations} tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} library={library} disabled={pending}
               onNew={() => void switchView('gen')}
               onRefresh={async () => { const next = await api.imageStudioBootstrap(); setTasks(next.tasks); setTemplates(next.templates) }} />
           ) : view === 'workflow' ? (
@@ -668,28 +681,6 @@ export default function ImageStudio() {
                   <span className="if-draft-status">{task && !dirty ? '已保存' : draftSaved ? '草稿保存在本机' : '草稿保存失败'}</span>
                 </div>
               </div>
-              {task && (
-                <div className={`is-progress ${running ? 'running' : ''}`} role="status">
-                  {running ? (
-                    <Loader2 size={15} className="is-spinning" />
-                  ) : task.error ? (
-                    <Square size={13} />
-                  ) : (
-                    <CheckCircle2 size={15} />
-                  )}
-                  <span>{task.error || task.progress}</span>
-                  {running && (
-                    <Button
-                      size="sm"
-                      disabled={pending}
-                      onClick={() => void act({ kind: 'cancel' })}
-                    >
-                      <Square size={12} />
-                      停止
-                    </Button>
-                  )}
-                </div>
-              )}
               {groups.length > 1 && (
                 <div className="is-group-tabs" aria-label="商品分类">
                   {groups.map((g) => (
@@ -715,7 +706,7 @@ export default function ImageStudio() {
                     if (!paths) return
                     mergeReplaceSources(await api.imageStudioImport(Array.isArray(paths) ? paths : [paths], false))
                   })}
-                  dropTarget={dropTarget}
+                  dropTarget={dropTarget === 'sources' ? null : dropTarget}
                   onDrop={keepOsDrop} onStart={() => void act({ kind: 'start' })} />
               )}
               {stage === 'plan' && (
@@ -1023,6 +1014,12 @@ export default function ImageStudio() {
           )}
           </div>
         </main>
+        {view !== 'tasks' && view !== 'templates' && <ExecutionStatus
+          active={busy}
+          title={task?.error ? '执行失败' : running ? 'AI 正在执行' : pending ? '正在处理操作' : '图片执行状态'}
+          detail={[task?.error || task?.progress || '添加素材和要求后开始，执行进度将在这里显示。', successCount ? `已保存 ${successCount} 张结果` : ''].filter(Boolean).join(' · ')}
+        >{running && <Button size="sm" disabled={pending} onClick={() => void act({ kind: 'cancel' })}><Square size={12} />停止</Button>}</ExecutionStatus>}
+        </div>
       </div>
       {settingsOpen && (
         <ConfigPanel

@@ -16,14 +16,37 @@ import subprocess
 import sys
 import time
 import uuid
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from dsvideo_config import get_provider, save_provider, normalize_base_url, config_path
 import runtime
+from model_catalog import video_quote
 
 PLUGIN = Path(__file__).resolve().parents[1]
 DATA_HOME = Path(os.environ.get('APPDATA') or (Path.home() / 'Library/Application Support' if sys.platform == 'darwin' else os.environ.get('XDG_DATA_HOME') or Path.home() / '.local/share'))
 ROOT = Path(os.environ.get('DSVIDEO_STUDIO_ROOT') or DATA_HOME / 'com.zmair.kivio' / 'video-studio')
+
+
+def submission_failure(error):
+    status = getattr(error, 'http_status', None)
+    reasons = {
+        400: '服务不接受当前请求，请检查模型、素材和生成规格。',
+        401: 'API Key 无效或已过期，请在视频设置中检查密钥。',
+        402: '服务拒绝计费，请检查供应商余额或套餐。',
+        403: '没有使用该模型的权限，请检查供应商授权。',
+        404: '生成接口或模型不存在，请检查服务地址和模型名称。',
+        405: '服务地址不支持此生成接口，请检查接口配置。',
+        413: '素材或请求过大，请压缩素材后重试。',
+        415: '服务不支持当前素材格式，请更换素材。',
+        422: '服务不接受当前参数，请检查素材、时长和清晰度。',
+        429: '服务正在限流，请稍后重试。',
+    }
+    rejected = status in reasons or bool(getattr(error, 'not_submitted', False))
+    reason = reasons.get(status, '连接未建立，请检查服务地址和网络后重试。') if rejected else (
+        '服务返回异常，尚不能确认是否已接单。暂不重复提交，避免重复生成。' if status else
+        '没有收到可识别的任务编号，可能是响应格式不兼容或连接中断。暂不重复提交，避免重复生成。')
+    return {'state': 'rejected' if rejected else 'uncertain', 'httpStatus': status,
+            'reason': reason, 'retryable': rejected}
 
 
 def module(name, folder):
@@ -254,12 +277,14 @@ def handle(action, data):
     if data.get('revision') != t['revision']:
         raise ValueError('任务已在其他窗口更新，请重新打开任务')
     if action in ('save', 'plan_result', 'approve', 'prompt_result', 'quote', 'analysis_result'):
-        if t['status'] in ('submitting', 'running', 'succeeded', 'uncertain'):
-            raise ValueError('已提交的任务不能修改，请新建任务')
+        if t['status'] in ('submitting', 'running', 'uncertain'):
+            raise ValueError('生成尚未结束，请等待完成后再改')
     if action == 'save':
         t.update(brief=import_brief(data['brief']), script=data.get('script', ''), concepts=[], approved=False, prompt='', quote=None, status='draft')
+        t.pop('remote', None)
     elif action in ('plan_result', 'analysis_result'):
         t.update(script=data['script'], concepts=data.get('concepts', []), approved=False, prompt='', quote=None, status='draft')
+        t.pop('remote', None)
         if action == 'analysis_result':
             t['analysis'] = data.get('analysis')
     elif action == 'approve':
@@ -278,24 +303,21 @@ def handle(action, data):
         if route == 'comfy':
             t['quote'] = {'note': '本地工作流；算力与工作流节点费用取决于你的 ComfyUI 配置。', 'base_url': get_provider('comfy').get('base_url') or 'http://127.0.0.1:8188'}
         else:
-            c = client(route)
-            q = grok.cost_quote(duration=int(b['duration']), image_count=len(b['images'])) if route == 'grok' else mini.cost_quote(duration=int(b['duration']), reference_image_count=len(b['images']), reference_video_seconds=b.get('referenceVideosSeconds', 0))
+            provider = get_provider(route)
+            model = (provider.get('model') or grok.MODEL) if route == 'grok' else 'MiniMax-H3'
+            q = video_quote(model, int(b['duration']), len(b['images']), b.get('referenceVideosSeconds', 0))
             if route == 'grok' and b['effectiveMode'] == 'reference':
-                q['estimated_cost'].pop('1080p', None)
-            if route == 'minimax' and normalize_base_url(c.base_url) != 'https://api.minimaxi.com':
-                raise ValueError('当前报价仅适用 MiniMax 国内官方地址；国际站或代理请在聊天中核实价格后使用')
-            if route == 'grok' and (normalize_base_url(c.base_url) != 'https://api.x.ai' or (get_provider(route).get('model') or grok.MODEL) != grok.MODEL):
-                raise ValueError('自定义网关或模型价格未知，请在聊天中核实价格后使用')
-            q['balance'] = c.get_balance().get('available_amount') if route == 'minimax' else None
-            q['base_url'] = c.base_url
-            q['note'] = '插件内置费率估算，最终以供应商账单为准。Grok 不提供余额查询接口。' if route == 'grok' else '插件内置费率估算，最终以供应商账单为准。'
+                q.get('estimated_cost', {}).pop('1080p', None)
+            q['base_url'] = provider.get('base_url') or ('https://api.x.ai' if route == 'grok' else 'https://api.minimaxi.com')
+            if b.get('referenceVideos') and not b.get('referenceVideosSeconds'):
+                q['note'] += ' 参考视频输入费用未计入。'
             t['quote'] = q
         t['quote']['at'] = time.time()
         t['quote']['providerRevision'] = get_provider(route).get('studio_revision')
         t['quote']['model'] = get_provider(route).get('model')
     elif action == 'submit':
         b, route = validate(t)
-        if t['status'] in ('submitting', 'running', 'succeeded', 'uncertain'):
+        if t['status'] in ('submitting', 'running', 'uncertain'):
             raise ValueError('任务已经提交，请查看结果或继续查询')
         if not t.get('prompt'):
             raise ValueError('请先填写或生成视频提示词')
@@ -310,13 +332,19 @@ def handle(action, data):
             raise ValueError('请求超过 64 MB，请压缩或减少参考素材')
         t['requested'] = {k: payload[k] for k in ('duration', 'resolution', 'model') if k in payload}
         t['status'] = 'submitting'
+        t.pop('error', None)
+        t.pop('submission', None)
         persist(t)
         try:
             t['remote']['id'] = c.create_video(payload)
             t['status'] = 'running'
-        except Exception:
-            t['status'] = 'uncertain'
-            t['error'] = '提交未获得可靠回执，请到供应商控制台核查，勿重复生成。'
+        except Exception as error:
+            failure = submission_failure(error)
+            t['submission'] = failure
+            t['error'] = failure['reason']
+            t['status'] = 'approved' if failure['retryable'] else 'uncertain'
+            if failure['retryable']:
+                t.pop('remote', None)
         return persist(t)
     elif action == 'comfy_workflow':
         if t['status'] != 'submitting' or t['remote']['route'] != 'comfy':
@@ -363,7 +391,12 @@ def handle(action, data):
             if not url:
                 raise ValueError('生成完成但服务没有返回视频地址')
             dest = ROOT / 'outputs' / t['id'] / 'video.mp4'
-            m.download_video(urljoin(c.base_url + '/', url), dest)
+            download_url = urljoin(c.base_url + '/', url)
+            if r['route'] == 'grok':
+                same_origin = urlsplit(download_url)[:2] == urlsplit(c.base_url)[:2]
+                m.download_video(download_url, dest, api_key=c.api_key if same_origin else None)
+            else:
+                m.download_video(download_url, dest)
             t.update(status='succeeded', output=str(dest))
         elif status in ('failed', 'cancelled', 'expired', 'error'):
             t.update(status='failed', error='供应商任务失败：' + str(status))

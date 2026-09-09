@@ -1,8 +1,10 @@
+import { useChatRouteActive } from '../chatRouteVisibility'
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   Clapperboard,
+  ExternalLink,
   FileImage,
   Film,
   FolderOpen,
@@ -35,6 +37,7 @@ import './VideoStudio.css'
 import { VideoMediaOptions } from './VideoMediaOptions'
 import { readVideoDrafts, writeVideoDraft, type VideoEntry } from './videoDrafts'
 import { ChatMarkdown } from '../ChatMarkdown'
+import { StudioToast } from '../studio/StudioToast'
 import { useSharedDraft } from '../studio/useSharedDraft'
 import {
   applyVideoStudioDrop,
@@ -43,6 +46,7 @@ import {
 } from './videoDrop'
 import { useTaskLibrary } from '../studio/useTaskLibrary'
 import { VideoTaskPanel } from './VideoTaskPanel'
+import { ExecutionStatus } from '../studio/ExecutionStatus'
 import { useVideoTaskProgress } from './useVideoTaskProgress'
 
 const preview: VideoBootstrap = {
@@ -77,6 +81,7 @@ function AssetImage({ path, name }: { path: string; name: string }) {
 }
 
 export default function VideoStudio() {
+  const routeActive = useChatRouteActive()
   const native = isTauriRuntime()
   const library = useTaskLibrary('video', native)
   const [initial] = useState(() => readVideoDrafts().creation)
@@ -95,10 +100,14 @@ export default function VideoStudio() {
   const [task, setTask] = useState<VideoTask | undefined>(initial?.task)
   const [script, setScript] = useState(initial?.script || '')
   const [dirty, setDirty] = useState(initial?.dirty || false)
-  const [busy, setBusy] = useState('')
+  const [foregroundBusy, setBusy] = useState('')
+  const [operations, setOperations] = useState<Record<string, string>>({})
+  const operationsRef = useRef(new Set<string>())
+  const busy = foregroundBusy || (task ? operations[task.id] || '' : '')
   const [error, setError] = useState('')
   const [step, setStep] = useState(initial?.step || 0)
   const [templateName, setTemplateName] = useState('')
+  const [reviseNote, setReviseNote] = useState('')
   const [provider, setProvider] = useState('comfy')
   const [base, setBase] = useState('http://127.0.0.1:8188')
   const [key, setKey] = useState('')
@@ -113,14 +122,14 @@ export default function VideoStudio() {
   const isAnalysis = view === 'analysis' || view === 'remake'
   const locked =
     !!task &&
-    ['submitting', 'running', 'succeeded', 'uncertain'].includes(task.status)
+    ['submitting', 'running', 'uncertain'].includes(task.status)
   const dropReadyRef = useRef({ accept: false, busy: false })
   const briefRef = useRef(brief)
   const viewRef = useRef(view)
   briefRef.current = brief
   viewRef.current = view
   dropReadyRef.current = {
-    accept: native && (view === 'creation' || isAnalysis) && step === 0,
+    accept: routeActive && native && (view === 'creation' || isAnalysis) && step === 0,
     busy: !!busy || locked,
   }
 
@@ -132,7 +141,7 @@ export default function VideoStudio() {
     }, !!busy)
   const syncCurrent = useRef({ task, dirty, busy })
   syncCurrent.current = { task, dirty, busy }
-  const progressError = useVideoTaskProgress(data.tasks, native && view === 'tasks' && !busy, updated => {
+  const progressError = useVideoTaskProgress(data.tasks.filter(t => t.id !== task?.id && !operations[t.id]), native, updated => {
     setData(d => ({ ...d, tasks: d.tasks.map(t => t.id === updated.id && t.revision <= updated.revision ? updated : t) }))
   })
 
@@ -146,10 +155,9 @@ export default function VideoStudio() {
       const current = syncCurrent.current
       const updated = next.tasks.find(t => t.id === current.task?.id)
       if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy) {
-        if (!current.dirty) {
-          setTask(updated); setBrief(updated.brief); setScript(updated.script)
-          setStep(updated.prompt ? 2 : updated.script || updated.concepts?.length ? 1 : 0)
-        } else setError('此任务已在聊天中更新。本地编辑已保留，请重新打开最新任务后继续。')
+        setTask(updated); setBrief(updated.brief); setScript(updated.script)
+        setDirty(false)
+        setStep(updated.prompt ? 2 : updated.script || updated.concepts?.length ? 1 : 0)
       }
       setRuntimeCheck('ready')
     } catch (e) {
@@ -179,7 +187,7 @@ export default function VideoStudio() {
     return () => {
       alive = false
     }
-  }, [native, task?.id, task?.output])
+  }, [native, task?.id, task?.output, task?.revision])
   // Refresh shared chat-created templates when returning to this window.
   useEffect(() => {
     const focus = () => {
@@ -253,8 +261,11 @@ export default function VideoStudio() {
     setDirty(true)
   }
   const openTask = (t: VideoTask) => void guarded('打开任务…', async () => {
-    if (dirty && (brief.request.trim() || brief.images.length || script.trim())) await saved()
-    const latest = await api.videoStudioTask('get', { id: t.id })
+    // Opening another task must not depend on saving the current server task.
+    // The local draft is the recovery copy; an implicit save can fail on a stale
+    // revision (or mutate an approved task) and make the clicked row appear inert.
+    writeVideoDraft(entry, { brief, task, script, step, dirty })
+    const latest = operationsRef.current.has(t.id) ? t : await api.videoStudioTask('get', { id: t.id })
     accept(latest)
     setEntry(latest.brief.mode)
     setView(latest.brief.mode)
@@ -281,9 +292,10 @@ export default function VideoStudio() {
     setStep(0)
     setError('')
     setTemplateName('')
+    setReviseNote('')
   }
   async function guarded(label: string, fn: () => Promise<void>) {
-    if (busy) return
+    if (foregroundBusy) return
     setBusy(label)
     setError('')
     try {
@@ -309,54 +321,73 @@ export default function VideoStudio() {
     return t
   }
   async function run(action: string, patch?: Partial<VideoBrief>) {
-    await guarded(
-      (
-        {
-          plan: '导演正在编写剧本…',
-          analyze: '正在拆解参考视频…',
-          approve: '正在转换已确认剧本…',
-          submit: '正在提交生成…',
-          quote: '正在查询报价…',
-          poll: '正在查询远程任务…',
-        } as Record<string, string>
-      )[action] || '保存中…',
-      async () => {
-        let t =
-          (action === 'get' || action === 'poll') && task
-            ? await api.videoStudioTask('get', { id: task.id })
-            : await saved(patch)
-        if (action === 'poll' && (t.status === 'succeeded' || !t.remote?.id)) { accept(t); return }
-        if (action !== 'save' && action !== 'get') {
-          t = await api.videoStudioTask(action, {
-            id: t.id,
-            revision: t.revision,
-            confirmSpend: action === 'submit',
-          })
-          accept(t)
-          if (action === 'approve') {
-            t = await api.videoStudioTask('prepare', {
-              id: t.id,
-              revision: t.revision,
-            })
-            accept(t)
-            setStep(2)
-            try {
-              t = await api.videoStudioTask('quote', { id: t.id, revision: t.revision })
-            } catch {
-              // Pricing is optional; the prepared prompt remains ready to submit.
-            }
-          }
+    if (busy) return
+    let t: VideoTask | undefined
+    await guarded('正在保存素材与要求…', async () => {
+      t = (action === 'get' || action === 'poll') && task
+        ? task : await saved(patch)
+    })
+    if (!t || operationsRef.current.has(t.id)) return
+    const id = t.id
+    const originEntry = entry
+    operationsRef.current.add(id)
+    const setBusy = (label: string) => setOperations(all => ({ ...all, [id]: label }))
+    const setStepIfCurrent = (next: number) => {
+      if (syncCurrent.current.task?.id === id) setStep(next)
+    }
+    const acceptResult = (result: VideoTask) => {
+      setData(d => ({ ...d, tasks: [result, ...d.tasks.filter(x => x.id !== id)] }))
+      const nextStep = result.prompt || result.output ? 2 : result.script || result.concepts?.length ? 1 : 0
+      // Persist only the draft that still belongs to this operation.
+      if (readVideoDrafts()[originEntry]?.task?.id === id) {
+        writeVideoDraft(originEntry, { brief: result.brief, task: result, script: result.script, step: nextStep, dirty: false })
+      }
+      if (syncCurrent.current.task?.id === id) accept(result)
+    }
+    try {
+      setBusy(({ plan: 'AI 正在编写拍摄方案…', analyze: '正在分析参考视频…', approve: '正在确认剧本…', submit: '正在提交视频生成…', quote: '正在查询报价…', poll: '正在查询生成状态…' } as Record<string, string>)[action] || '正在读取任务…')
+      if (action === 'get' || action === 'poll') t = await api.videoStudioTask('get', { id })
+      if (action === 'poll' && (t.status === 'succeeded' || !t.remote?.id)) { acceptResult(t); return }
+      if (action !== 'save' && action !== 'get') {
+        t = await api.videoStudioTask(action, { id, revision: t.revision, confirmSpend: action === 'submit' })
+        acceptResult(t)
+        if (action === 'approve') {
+          setBusy('AI 正在转换生成提示词…')
+          t = await api.videoStudioTask('prepare', { id, revision: t.revision })
+          acceptResult(t)
+          setStepIfCurrent(2)
+          setBusy('正在查询报价…')
+          try { t = await api.videoStudioTask('quote', { id, revision: t.revision }) } catch { /* Pricing is optional. */ }
         }
-        accept(t)
-        if (action === 'plan' || action === 'analyze') setStep(1)
-        if (action === 'approve' || action === 'submit') setStep(2)
-      },
-    )
+      }
+      acceptResult(t)
+      if (action === 'plan' || action === 'analyze') setStepIfCurrent(1)
+      if (action === 'approve' || action === 'submit') setStepIfCurrent(2)
+    } catch (e) {
+      setError(`${t.brief.name || '视频任务'}：${String(e)}`)
+    } finally {
+      operationsRef.current.delete(id)
+      setOperations(all => { const next = { ...all }; delete next[id]; return next })
+    }
+  }
+  async function revisePlan() {
+    if (!task || !reviseNote.trim() || busy) return
+    await guarded('正在按意见改写拍摄方案…', async () => {
+      const next = await api.videoStudioTask('revise', {
+        id: task.id,
+        revision: task.revision,
+        note: reviseNote.trim(),
+      })
+      accept(next)
+      setStep(1)
+      setReviseNote('')
+      setEditingScript(false)
+    })
   }
   const pollRef = useRef(() => { void run('poll') })
   pollRef.current = () => { void run('poll') }
   useEffect(() => {
-    if (!native || busy || view === 'tasks' || task?.status !== 'running' || !task.remote?.id) return
+    if (!native || busy || task?.status !== 'running' || !task.remote?.id) return
     const timer = window.setTimeout(() => pollRef.current(), 8000)
     return () => window.clearTimeout(timer)
   }, [native, busy, view, task?.id, task?.revision, task?.status, task?.remote?.id])
@@ -472,14 +503,14 @@ export default function VideoStudio() {
 
   return (
     <div className={`kv image-studio video-studio${isAnalysis ? " vs-analysis" : ""}${view === "remake" ? " vs-remake" : ""}`}>
-      {error && (
-        <div role="alert" className="vs-toast">
-          <span>{error}</span>
-          <IconButton label="关闭提示" onClick={() => setError('')}>
-            <X size={14} />
-          </IconButton>
-        </div>
-      )}
+      <div className="studio-toasts">
+        {error && (
+          <StudioToast tone="error" onClose={() => setError('')}>
+            {error}
+          </StudioToast>
+        )}
+        {shared.message && <StudioToast>{shared.message}</StudioToast>}
+      </div>
       {!native && (
         <div className="is-preview-note">
           浏览器布局预览 · 请在桌面应用中使用 Agent、素材和生成服务。
@@ -491,7 +522,7 @@ export default function VideoStudio() {
           <nav>
             <button
               className={view === 'creation' ? 'active' : ''}
-              disabled={!!busy}
+              disabled={!!foregroundBusy}
               onClick={() => {
                 navigate('creation')
               }}
@@ -499,12 +530,12 @@ export default function VideoStudio() {
               <Clapperboard size={17} />
               <span>视频创作</span>
             </button>
-            <button className={view === 'remake' ? 'active' : ''} disabled={!!busy} onClick={() => navigate('remake')}>
+            <button className={view === 'remake' ? 'active' : ''} disabled={!!foregroundBusy} onClick={() => navigate('remake')}>
               <Layers size={17} /><span>参考仿拍</span>
             </button>
             <button
               className={view === 'analysis' ? 'active' : ''}
-              disabled={!!busy}
+              disabled={!!foregroundBusy}
               onClick={() => {
                 navigate('analysis')
               }}
@@ -514,7 +545,7 @@ export default function VideoStudio() {
             </button>
             <button
               className={view === 'templates' ? 'active' : ''}
-              disabled={!!busy}
+              disabled={!!foregroundBusy}
               onClick={() => {
                 setView('templates')
                 void guarded('刷新模板…', refresh)
@@ -524,7 +555,7 @@ export default function VideoStudio() {
               <span>模板库</span>
               <small>{data.templates.length}</small>
             </button>
-            <button className={view === 'tasks' ? 'active' : ''} aria-current={view === 'tasks' ? 'page' : undefined} disabled={!!busy} onClick={() => setView('tasks')}>
+            <button className={view === 'tasks' ? 'active' : ''} aria-current={view === 'tasks' ? 'page' : undefined} disabled={!!foregroundBusy} onClick={() => setView('tasks')}>
               <History size={17} /><span>任务</span><small>{data.tasks.filter(t => ['running', 'submitting', 'uncertain'].includes(t.status) || !library.organization[t.id]?.archived).length}</small>
             </button>
           </nav>
@@ -536,12 +567,12 @@ export default function VideoStudio() {
             {data.tasks.filter(t => ['running', 'submitting', 'uncertain'].includes(t.status) || !library.organization[t.id]?.archived).sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 6).map((t) => (
               <button
                 key={t.id}
-                disabled={!!busy}
+                disabled={!!foregroundBusy}
                 className={t.id === task?.id ? 'active' : ''}
                 onClick={() => openTask(t)}
               >
-                <span className={`is-history-dot ${t.status}`} />
-                <span>{t.brief.name || '未命名视频'}</span>
+                <span className={`is-history-dot ${operations[t.id] ? 'running' : t.status}`} />
+                <span>{t.brief.name || '未命名视频'}{operations[t.id] ? ' · 处理中' : ''}</span>
               </button>
             ))}
           </div>
@@ -549,7 +580,7 @@ export default function VideoStudio() {
             <Button
               size="sm"
               variant="ghost"
-              disabled={!!busy}
+              disabled={!!foregroundBusy}
               onClick={() => setView('settings')}
             >
               <Settings2 size={15} />
@@ -557,27 +588,13 @@ export default function VideoStudio() {
             </Button>
           </div>
         </aside>
+        <div className="studio-workspace">
         <main className="is-main custom-scrollbar">
-          {shared.message && (
-            <div role="status">
-              {shared.message}
-              {shared.hasConflict && <>
-                <Button onClick={shared.reload}>载入共享版本</Button>
-                <Button onClick={shared.keep}>保留本地版本</Button>
-              </>}
-            </div>
-          )}
-          {busy && (
-            <div role="status" className="vs-notice">
-              <RefreshCw size={14} className="vs-spin" />
-              {busy}
-            </div>
-          )}
           {view === 'tasks' ? (
             <>
             {progressError && <p role="status" className="tl-message">{progressError}</p>}
             {runtimeCheck === 'failed' && <p role="alert" className="tl-message tl-error">任务读取失败：{runtimeError}。请刷新任务重试。</p>}
-            <VideoTaskPanel tasks={data.tasks} library={library} loading={runtimeCheck === 'checking' || runtimeCheck === 'pending'} disabled={!!busy}
+            <VideoTaskPanel activeOperations={operations} tasks={data.tasks} library={library} loading={runtimeCheck === 'checking' || runtimeCheck === 'pending'} disabled={!!foregroundBusy}
               currentId={task?.id} onOpen={openTask} onRefresh={() => refresh(true)} onNew={() => void guarded('新建视频…', async () => {
                 if (dirty && (brief.request.trim() || brief.images.length || script.trim())) await saved()
                 fresh('creation')
@@ -844,7 +861,7 @@ export default function VideoStudio() {
                   </span>
                   <Button
                     size="sm"
-                    disabled={!!busy}
+                    disabled={!!foregroundBusy}
                     onClick={() => fresh(entry)}
                   >
                     <Plus size={14} />
@@ -1323,6 +1340,97 @@ export default function VideoStudio() {
                 </>
               ) : (
                 <>
+                  {task?.output && (
+                    <section className="vs-panel">
+                      <h3>生成结果</h3>
+                      {video && (
+                        <video
+                          className="vs-video"
+                          src={video}
+                          controls
+                          preload="metadata"
+                        />
+                      )}
+                      <div className="vs-actions">
+                        <Button
+                          onClick={() =>
+                            void guarded('打开成片…', async () => {
+                              await api.videoStudioOpen(task.id)
+                            })
+                          }
+                        >
+                          <FolderOpen size={14} />
+                          打开本地成片
+                        </Button>
+                        <Button
+                          onClick={() =>
+                            void guarded('在文件管理器中显示…', async () => {
+                              await api.videoStudioOpen(task.id, 'reveal')
+                            })
+                          }
+                        >
+                          <ExternalLink size={14} />
+                          在文件管理器中显示
+                        </Button>
+                      </div>
+                    </section>
+                  )}
+                  {task?.output && (
+                    <section className="vs-panel">
+                      <h3>需要修改</h3>
+                      <p className="vs-muted">
+                        写下要改的地方，会按你的意见改写拍摄方案。确认后再生成，新成片覆盖这一条。
+                      </p>
+                      <Field label="需要修改的地方">
+                        <textarea
+                          className="kv-textarea custom-scrollbar"
+                          rows={4}
+                          disabled={!!busy}
+                          value={reviseNote}
+                          onChange={(e) => setReviseNote(e.target.value)}
+                          placeholder="例如：人物脸部特写太多，书包要完整入画；动作再自然一点。"
+                        />
+                      </Field>
+                      <Button
+                        variant="primary"
+                        disabled={!native || !!busy || !reviseNote.trim()}
+                        onClick={() => void revisePlan()}
+                      >
+                        <WandSparkles size={15} />
+                        按意见改写拍摄方案
+                      </Button>
+                    </section>
+                  )}
+                  {task?.output && (
+                    <section className="vs-panel">
+                      <h3>保存为成片验证模板</h3>
+                      <Field label="模板名称">
+                        <input
+                          className="kv-input"
+                          placeholder="确认成片效果后，填写模板名称"
+                          value={templateName}
+                          onChange={(e) => setTemplateName(e.target.value)}
+                        />
+                      </Field>
+                      <Button
+                        disabled={!!busy || !templateName.trim()}
+                        onClick={() =>
+                          void guarded('保存成片模板…', async () => {
+                            await api.videoStudioTemplate('template_save', {
+                              id: task.id,
+                              revision: task.revision,
+                              name: templateName,
+                              approvedOutput: true,
+                            })
+                            await refresh()
+                            setView('templates')
+                          })
+                        }
+                      >
+                        确认成片并保存模板
+                      </Button>
+                    </section>
+                  )}
                   <section className="vs-panel">
                     <h3>生成规格</h3>
                     <p>
@@ -1442,59 +1550,21 @@ export default function VideoStudio() {
                         </Button>
                       </details>
                     )}
-                  {task?.output && (
-                    <section className="vs-panel">
-                      <h3>生成结果</h3>
-                      {video && (
-                        <video
-                          className="vs-video"
-                          src={video}
-                          controls
-                          preload="metadata"
-                        />
-                      )}
-                      <Button
-                        onClick={() =>
-                          void guarded('打开成片…', async () => {
-                            await api.videoStudioOpen(task.id)
-                          })
-                        }
-                      >
-                        <FolderOpen size={14} />
-                        打开本地成片
-                      </Button>
-                      <Field label="保存为成片验证模板">
-                        <input
-                          className="kv-input"
-                          placeholder="确认成片效果后，填写模板名称"
-                          value={templateName}
-                          onChange={(e) => setTemplateName(e.target.value)}
-                        />
-                      </Field>
-                      <Button
-                        disabled={!!busy || !templateName.trim()}
-                        onClick={() =>
-                          void guarded('保存成片模板…', async () => {
-                            await api.videoStudioTemplate('template_save', {
-                              id: task.id,
-                              revision: task.revision,
-                              name: templateName,
-                              approvedOutput: true,
-                            })
-                            await refresh()
-                            setView('templates')
-                          })
-                        }
-                      >
-                        确认成片并保存模板
-                      </Button>
-                    </section>
-                  )}
                 </>
               )}
             </>
           )}
         </main>
+        {(view === 'creation' || view === 'analysis' || view === 'remake') && <ExecutionStatus
+          active={!!busy || task?.status === 'running' || task?.status === 'submitting'}
+          title={busy || (task ? videoStatus[task.status] || task.status : 'AI 执行状态')}
+          detail={error || task?.error || (busy
+            ? '操作完成后会显示结果；等待时间不代表完成比例。'
+            : task?.status === 'running' ? `视频服务正在生成${task.remote?.id ? ` · 任务编号 ${task.remote.id}` : ''}`
+            : task?.output ? '成片已保存，可在生成与成片中查看。'
+            : '当前步骤的执行状态将在这里显示。')}
+        />}
+        </div>
       </div>
     </div>
   )

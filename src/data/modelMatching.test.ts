@@ -488,3 +488,15 @@ describe('embedding models', () => {
     expect(info.multilingual).toBe(true)
   })
 })
+
+
+it('resolves image and video rates from the shared model catalog', () => {
+  const video = matchModel('grok-imagine-video-1.5')
+  expect(video?.capabilities?.videoGeneration).toBe(true)
+  expect(video?.mediaPricing?.output['720p']).toBe(0.14)
+  expect(video?.mediaPricing?.unit).toBe('second')
+  expect(matchModel('MiniMax-H3')?.mediaPricing?.output['2K']).toBe(0.8)
+  const image = matchModel('grok-imagine-image-2.0')
+  expect(image?.mediaPricing?.output['1k:low']).toBe(0.04)
+  expect(image?.pricing?.input).toBeUndefined()
+})

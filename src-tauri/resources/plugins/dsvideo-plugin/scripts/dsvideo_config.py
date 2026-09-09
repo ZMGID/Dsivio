@@ -103,7 +103,7 @@ def fetch_models(
 ) -> list[str]:
     request = Request(
         normalize_base_url(base_url) + "/v1/models",
-        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
+        headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json", "User-Agent": "dsvideo-plugin/0.1"},
     )
     try:
         with opener(request, timeout=60) as response:

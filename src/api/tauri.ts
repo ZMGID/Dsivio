@@ -863,7 +863,19 @@ export type LensWindowInfo = {
 }
 
 // 模型能力与定价信息（来自内置数据库或用户自定义）
+export type MediaPricing = {
+  unit: 'image' | 'second'
+  currency: string
+  output: Record<string, number>
+  inputImage?: number
+  freeInputImages?: number
+  inputVideoSecond?: number
+  inputVideoAtOutputRate?: boolean
+  source?: string
+  verifiedAt?: string
+}
 export type ModelInfo = {
+  mediaPricing?: MediaPricing
   displayName?: string
   contextWindow?: number
   maxOutput?: number
@@ -878,6 +890,7 @@ export type ModelInfo = {
     streaming?: boolean
     webSearch?: boolean
     imageGeneration?: boolean
+    videoGeneration?: boolean
     embedding?: boolean
   }
   /** 嵌入模型的向量维度（默认/原生）。 */
@@ -1935,7 +1948,8 @@ export const api = {
   videoStudioTask: (action: string, input: Record<string, unknown>) => invoke<VideoTask>('video_studio', { action, input }),
   videoStudioConfig: (input: Record<string, unknown>) => invoke<Record<string, VideoProvider>>('video_studio', { action: 'config', input }),
   videoStudioTemplate: (action: 'template_save' | 'template_import', input: Record<string, unknown>) => invoke<VideoTemplate>('video_studio', { action, input }),
-  videoStudioOpen: (id?: string) => invoke<void>('video_studio', { action: 'open', input: { id } }),
+  videoStudioOpen: (id?: string, mode: 'open' | 'reveal' = 'open') =>
+    invoke<void>('video_studio', { action: 'open', input: { id, mode } }),
   videoStudioPreview: (id: string) => invoke<string>('video_studio', { action: 'preview', input: { id } }),
   videoStudioImage: (path: string) => invoke<string>('video_studio', { action: 'image_preview', input: { path } }),
   videoStudioInstallComfy: () => invoke<{ installed: boolean }>('video_studio', { action: 'install_comfy', input: {} }),

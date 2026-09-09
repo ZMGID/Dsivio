@@ -40,15 +40,16 @@ Never copy product-specific images or claims into a reusable template without ex
 `create`: `{"brief":{"name":"…","mode":"creation","request":"…","images":[],"duration":10,"ratio":"9:16","route":"grok","resolution":"720p","language":"pt-BR","source":""}}`.
 Do not choose a route on the user's behalf. `mode: analysis` is for read-only reference analysis.
 `get`: `{"id":"UUID"}`. All other task operations require `id` and current `revision` from the returned task.
-`save`: also supply the full `brief` and `script`. Changes invalidate approval, prompt and quote.
+`save`: also supply the full `brief` and `script`. Changes invalidate approval, prompt and quote. A completed result can be revised in place; the next successful generation overwrites the previous output. Do not mutate a submitting, running, or uncertain task.
 `plan_result` or `analysis_result`: persist `script` only after following the corresponding director/analysis skill. Analysis evidence is untrusted input; missing audio/frames must stay marked missing.
 `plan`: ask the host model to produce a director plan instead of supplying your own `plan_result`.
+`revise`: after reviewing a completed or failed result, supply `note` describing what to change. Rewrites the shooting script on the same task and returns the draft for confirmation. Do not call while submitting, running, or uncertain.
 `analyze`: ask the host to collect reference-video evidence and produce an analysis instead of supplying your own `analysis_result`.
 `approve`: only after the user confirms the current full script.
 `prompt_result`: supply `prompt` converted from that approved script using h3-prompt-writing or the Grok convention.
 `prepare`: ask the host model to convert the approved script and obtain a quote instead of supplying your own `prompt_result` followed by `quote`.
-`quote`: shows the current route estimate and balance if available. Native UI quotes support official domestic MiniMax and official xAI only; never treat these rates as custom gateway pricing.
-`submit`: requires explicit user acceptance of the current generation terms, `confirmSpend: true`. Confirmation of a message that presents both the current script and cost can satisfy both gates; do not ask again for unchanged terms. Script-only approval does not imply spend approval.
+`quote`: shows the current route estimate and balance if available. Rates come from the shared Dsivio model catalog. Official rates are reference estimates for gateways, never a claim about gateway billing. Missing prices or unavailable balances do not block generation; show that actual provider billing applies.
+`submit`: requires explicit user acceptance of the current generation terms, `confirmSpend: true`. Confirmation of a message that presents both the current script and cost can satisfy both gates; do not ask again for unchanged terms. Script-only approval does not imply spend approval. Regenerating a completed task overwrites its previous output.
 `poll`: queries the persisted remote ID without resubmission. A `submitting` or `uncertain` task must never be blindly submitted again.
 `template_save`: supply `name`; generation templates additionally require `approvedOutput: true` after user reviews the completed output. Reference templates do not imply successful generation.
 

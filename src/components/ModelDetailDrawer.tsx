@@ -326,6 +326,14 @@ export function ModelDetailDrawer({
             </p>
           </div>
 
+          {form.mediaPricing && (
+            <div className="kv-drawer-section">
+              <label className="kv-drawer-label">媒体生成价格 · {form.mediaPricing.currency}/{form.mediaPricing.unit === 'second' ? '秒' : '张'}</label>
+              {Object.entries(form.mediaPricing.output).map(([spec, price]) => <p key={spec}>{spec}：{price}</p>)}
+              {!!form.mediaPricing.inputImage && <p>参考图片：{form.mediaPricing.inputImage} {form.mediaPricing.currency}/张{form.mediaPricing.freeInputImages ? `，前 ${form.mediaPricing.freeInputImages} 张免费` : ''}</p>}
+              <small>官方参考价，实际以供应商计费为准。{form.mediaPricing.verifiedAt}</small>
+            </div>
+          )}
           <div className="kv-drawer-section">
             <label className="kv-drawer-label">{t.pricing}</label>
             <div className="kv-drawer-row">

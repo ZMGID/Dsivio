@@ -60,6 +60,98 @@ class WorkspaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '选择生成路线'):
             self.action(t, 'approve')
 
+    def test_proxy_uses_catalog_reference_without_blocking(self):
+        t = self.approved()
+        studio.handle('config', {'name': 'grok', 'base_url': 'https://proxy.example', 'api_key': 'test'})
+        with patch.object(studio, 'client', side_effect=AssertionError('quote must stay local')):
+            t = self.action(t, 'quote')
+        self.assertEqual(t['quote']['estimated_cost']['720p'], '1.40')
+        self.assertEqual(t['quote']['pricingStatus'], 'reference')
+        self.assertEqual(t['quote']['base_url'], 'https://proxy.example')
+
+    def test_unknown_price_can_submit_after_normal_generate_click(self):
+        t = self.approved()
+        studio.handle('config', {'name': 'grok', 'base_url': 'https://proxy.example', 'api_key': 'test', 'model': 'custom-video'})
+        t = self.action(t, 'quote')
+        self.assertEqual(t['quote']['pricingStatus'], 'unknown')
+        self.assertNotIn('estimated_cost', t['quote'])
+        fake = Mock()
+        fake.create_video.return_value = 'remote-custom'
+        with patch.object(studio, 'client', return_value=fake):
+            t = self.action(t, 'submit')
+        self.assertEqual(t['status'], 'running')
+        fake.create_video.assert_called_once()
+
+    def test_host_model_catalog_is_the_price_source(self):
+        t = self.approved()
+        catalog = {'grok-imagine-video-1.5': {'unit': 'second', 'currency': 'USD', 'output': {'720p': 0.123}}}
+        with patch.dict('os.environ', {'DSIVIO_MEDIA_PRICING': json.dumps(catalog)}):
+            t = self.action(t, 'quote')
+        self.assertEqual(t['quote']['estimated_cost']['720p'], '1.23')
+
+    def test_actual_http_rejection_and_compatible_job_receipt(self):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+        response = {'status': 401, 'body': {'error': {'message': 'invalid credentials'}}}
+        request_headers = []
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                request_headers.append(dict(self.headers))
+                self.rfile.read(int(self.headers.get('Content-Length', 0)))
+                self.send_response(response['status']); self.send_header('Content-Type', 'application/json'); self.end_headers()
+                self.wfile.write(json.dumps(response['body']).encode())
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            for code in (400, 401, 402, 403, 404, 422, 429, 500):
+                with self.subTest(code=code):
+                    response['status'] = code
+                    t = self.approved()
+                    studio.handle('config', {'name': 'grok', 'base_url': f'http://127.0.0.1:{server.server_port}', 'api_key': 'test'})
+                    t = self.action(t, 'quote')
+                    t = self.action(t, 'submit', confirmSpend=True)
+                    self.assertEqual(t['submission']['httpStatus'], code)
+                    self.assertEqual(t['status'], 'uncertain' if code == 500 else 'approved')
+                    self.assertEqual(t['submission']['retryable'], code != 500)
+                    if code != 500: self.assertNotIn('remote', t)
+            response.update(status=401)
+            t = self.approved()
+            studio.handle('config', {'name': 'grok', 'base_url': f'http://127.0.0.1:{server.server_port}', 'api_key': 'test'})
+            t = self.action(t, 'quote'); t = self.action(t, 'submit', confirmSpend=True)
+            response.update(status=200, body={'data': {'id': 'compatible-job-123'}})
+            t = self.action(t, 'submit', confirmSpend=True)
+            self.assertEqual(t['status'], 'running')
+            self.assertEqual(t['remote']['id'], 'compatible-job-123')
+            self.assertNotIn('error', t)
+            self.assertNotIn('submission', t)
+            self.assertTrue(request_headers)
+            self.assertTrue(all(h.get('User-Agent') == 'dsvideo-plugin/0.1' for h in request_headers))
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
+    def test_poll_authenticates_provider_download_but_not_external_media(self):
+        for url, expected_key in [('/v1/videos/job/content', 'test-secret'),
+                                  ('https://cdn.example/video.mp4', None),
+                                  ('//cdn.example/video.mp4', None)]:
+            with self.subTest(url=url):
+                t = self.approved()
+                with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job'):
+                    t = self.action(t, 'submit', confirmSpend=True)
+                result = {'status': 'done', 'video': {'duration': 10, 'url': url}}
+                with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video') as download:
+                    t = self.action(t, 'poll')
+                self.assertEqual(t['status'], 'succeeded')
+                self.assertEqual(download.call_args.kwargs['api_key'], expected_key)
+
+    def test_missing_receipt_stays_uncertain_without_automatic_retry(self):
+        t = self.approved()
+        with patch.object(studio.grok.GrokVideoClient, '_request', return_value={'ok': True}) as request:
+            t = self.action(t, 'submit', confirmSpend=True)
+        self.assertEqual(t['status'], 'uncertain')
+        self.assertFalse(t['submission']['retryable'])
+        request.assert_called_once()
+
     def test_edit_invalidates_approval_prompt_and_quote(self):
         t = self.approved()
         t = self.action(t, 'save', brief=self.brief, script='new script')
@@ -157,6 +249,40 @@ class WorkspaceTests(unittest.TestCase):
              'referenceVideos': ['https://example.test/ref.mp4'], 'referenceAudios': ['https://example.test/ref.wav']}
         payload = studio.request({'brief': b, 'prompt': 'confirmed'})
         self.assertEqual([v.get('role') for v in payload['content'][1:]], ['reference_video', 'reference_audio'])
+
+    def test_completed_task_can_be_revised_and_overwritten(self):
+        t = self.approved()
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job-1'):
+            t = self.action(t, 'submit')
+        result = {'status': 'done', 'video': {'duration': 10, 'url': '/v1/videos/job/content'}}
+        with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video'):
+            t = self.action(t, 'poll')
+        self.assertEqual(t['status'], 'succeeded')
+        task_id = t['id']
+        old_output = t['output']
+        t = self.action(t, 'plan_result', script='书包完整入画')
+        self.assertEqual(t['id'], task_id)
+        self.assertEqual(t['status'], 'draft')
+        self.assertEqual(t.get('output'), old_output)
+        self.assertNotIn('remote', t)
+        t = self.action(t, 'approve')
+        t = self.action(t, 'prompt_result', prompt='bag fills the frame')
+        t = self.action(t, 'quote')
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job-2') as create:
+            t = self.action(t, 'submit')
+        self.assertEqual(t['remote']['id'], 'job-2')
+        create.assert_called_once()
+        with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video'):
+            t = self.action(t, 'poll')
+        self.assertEqual(t['status'], 'succeeded')
+        self.assertEqual(t['output'], old_output)
+
+    def test_in_flight_task_still_cannot_be_rewritten(self):
+        t = self.approved()
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job-1'):
+            t = self.action(t, 'submit')
+        with self.assertRaisesRegex(ValueError, '尚未结束'):
+            self.action(t, 'plan_result', script='改掉进行中的任务')
 
     def test_route_specific_ratios(self):
         for route, ratios in [('grok', studio.grok.RATIOS), ('minimax', studio.mini.RATIOS)]:

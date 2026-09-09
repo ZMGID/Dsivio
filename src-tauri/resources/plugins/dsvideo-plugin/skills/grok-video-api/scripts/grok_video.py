@@ -8,6 +8,8 @@ import base64
 import json
 import os
 import sys
+import socket
+import ssl
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -27,13 +29,6 @@ MODEL = "grok-imagine-video-1.5"
 DEFAULT_BASE_URL = "https://api.x.ai"
 RESOLUTIONS = ("480p", "720p", "1080p")
 RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3")
-OUTPUT_PRICE_USD_PER_SECOND = {
-    "480p": Decimal("0.08"),
-    "720p": Decimal("0.14"),
-    "1080p": Decimal("0.25"),
-}
-IMAGE_INPUT_PRICE_USD = Decimal("0.01")
-PRICING_URL = "https://docs.x.ai/developers/pricing"
 IMAGE_MIME = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -128,19 +123,8 @@ def cost_quote(*, duration: int, image_count: int = 0) -> dict[str, Any]:
         raise ValueError("Grok video duration must be an integer from 1 to 15 seconds.")
     if not 0 <= image_count <= 7:
         raise ValueError("Supports at most 7 reference images.")
-    estimates = {
-        resolution: format(rate * duration + IMAGE_INPUT_PRICE_USD * image_count, ".2f")
-        for resolution, rate in OUTPUT_PRICE_USD_PER_SECOND.items()
-    }
-    return {
-        "model": MODEL,
-        "currency": "USD",
-        "duration_seconds": duration,
-        "image_count": image_count,
-        "estimated_cost": estimates,
-        "pricing_url": PRICING_URL,
-        "note": "Estimate from the current official rate card; final billing is determined by xAI.",
-    }
+    from model_catalog import video_quote
+    return video_quote(MODEL, duration, image_count)
 
 
 def paid_request_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -164,7 +148,11 @@ class GrokVideoClient:
 
     def create_video(self, payload: dict[str, Any]) -> str:
         response = self._request("POST", "/v1/videos/generations", payload)
-        request_id = str(response.get("request_id", "")).strip()
+        # Common compatible gateways wrap the job under data or use id/task_id.
+        containers = [response] + ([response['data']] if isinstance(response.get('data'), dict) else [])
+        request_id = next((value.strip() for container in containers
+            for key in ('request_id', 'task_id', 'id')
+            if isinstance(value := container.get(key), str) and value.strip()), '')
         if not request_id:
             raise ApiError("xAI accepted the request but returned no request_id.")
         return request_id
@@ -179,7 +167,7 @@ class GrokVideoClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         data = None
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = {"Authorization": f"Bearer {self.api_key}", "User-Agent": "dsvideo-plugin/0.1", "Accept": "application/json"}
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -188,9 +176,15 @@ class GrokVideoClient:
             with urlopen(request, timeout=self.request_timeout) as response:
                 return _decode_json(response.read())
         except HTTPError as error:
-            raise _api_error(error.read(), error.code) from None
+            try:
+                body = error.read()
+            finally:
+                error.close()
+            raise _api_error(body, error.code) from None
         except URLError as error:
-            raise ApiError(f"Network error: {error.reason}") from None
+            failure = ApiError("Network connection failed.")
+            failure.not_submitted = isinstance(error.reason, (ConnectionRefusedError, socket.gaierror, ssl.SSLCertVerificationError))
+            raise failure from None
 
 
 def wait_for_video(

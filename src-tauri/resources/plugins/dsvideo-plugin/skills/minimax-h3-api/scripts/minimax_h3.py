@@ -8,6 +8,8 @@ import base64
 import json
 import os
 import sys
+import socket
+import ssl
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -32,12 +34,6 @@ REGION_BASE_URLS = {
     "global": "https://api.minimax.io",
     "cn": "https://api.minimaxi.com",
 }
-OUTPUT_PRICE_CNY_PER_SECOND = {
-    "768P": Decimal("0.50"),
-    "2K": Decimal("0.80"),
-}
-EXTRA_IMAGE_PRICE_CNY = Decimal("0.20")
-PRICING_URL = "https://platform.minimaxi.com/docs/guides/pricing-paygo#%E8%A7%86%E9%A2%91"
 MEDIA = {
     "image": {
         "extensions": {
@@ -230,7 +226,11 @@ class MiniMaxClient:
 
     def create_video(self, payload: dict[str, Any]) -> str:
         response = self._request("POST", "/v2/video_generation", payload)
-        task_id = str(response.get("task_id", "")).strip()
+        # Common compatible gateways wrap the job under data or use id/task_id.
+        containers = [response] + ([response['data']] if isinstance(response.get('data'), dict) else [])
+        task_id = next((value.strip() for container in containers
+            for key in ('task_id', 'task_id', 'id')
+            if isinstance(value := container.get(key), str) and value.strip()), '')
         if not task_id:
             raise ApiError("MiniMax accepted the request but returned no task_id.")
         return task_id
@@ -276,7 +276,7 @@ class MiniMaxClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         data = None
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = {"Authorization": f"Bearer {self.api_key}", "User-Agent": "dsvideo-plugin/0.1", "Accept": "application/json"}
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -288,7 +288,9 @@ class MiniMaxClient:
             body = error.read()
             raise _api_error(body, error.code) from None
         except URLError as error:
-            raise ApiError(f"Network error: {error.reason}") from None
+            failure = ApiError("Network connection failed.")
+            failure.not_submitted = isinstance(error.reason, (ConnectionRefusedError, socket.gaierror, ssl.SSLCertVerificationError))
+            raise failure from None
 
 
 def wait_for_task(
@@ -360,33 +362,16 @@ def estimate_cost_cny(
     if not video_seconds.is_finite() or not 0 <= video_seconds <= 15:
         raise ValueError("Reference video seconds must be from 0 to 15.")
 
-    rate = OUTPUT_PRICE_CNY_PER_SECOND[resolution]
-    extra_images = max(0, reference_image_count - 5)
-    return (
-        rate * Decimal(duration)
-        + rate * video_seconds
-        + EXTRA_IMAGE_PRICE_CNY * Decimal(extra_images)
-    )
+    from model_catalog import video_quote
+    quote = video_quote('MiniMax-H3', duration, reference_image_count, video_seconds)
+    if not quote.get('estimated_cost'):
+        raise ValueError('模型库暂无此模型价格')
+    return Decimal(quote['estimated_cost'][resolution])
 
 
-def cost_quote(
-    *,
-    duration: int,
-    reference_image_count: int = 0,
-    reference_video_seconds: Decimal | int | str = 0,
-) -> dict[str, Any]:
-    estimates = {
-        resolution: f"{estimate_cost_cny(resolution=resolution, duration=duration, reference_image_count=reference_image_count, reference_video_seconds=reference_video_seconds):.2f}"
-        for resolution in RESOLUTIONS
-    }
-    return {
-        "currency": "CNY",
-        "duration_seconds": duration,
-        "reference_image_count": reference_image_count,
-        "reference_video_seconds": str(Decimal(str(reference_video_seconds))),
-        "estimated_cost": estimates,
-        "pricing_url": PRICING_URL,
-    }
+def cost_quote(*, duration: int, reference_image_count: int = 0, reference_video_seconds=0) -> dict[str, Any]:
+    from model_catalog import video_quote
+    return video_quote('MiniMax-H3', duration, reference_image_count, reference_video_seconds)
 
 
 def verify_task_contract(

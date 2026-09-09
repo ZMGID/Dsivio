@@ -1837,15 +1837,51 @@
     "displayName": "Grok Imagine Image 2.0",
     "contextWindow": 0,
     "maxOutput": 0,
-    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
-    "pricing": { "input": 0.00, "output": 0.00 }
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "webSearch": false,
+      "imageGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "image",
+      "currency": "USD",
+      "output": {
+        "1k:low": 0.04,
+        "2k:low": 0.06,
+        "1k:medium": 0.06,
+        "2k:medium": 0.08
+      },
+      "source": "https://docs.x.ai/developers/pricing",
+      "verifiedAt": "2026-09-09",
+      "inputImage": 0.01
+    }
   },
   "grok-imagine-image-quality": {
     "displayName": "Grok Imagine Image Quality",
     "contextWindow": 0,
     "maxOutput": 0,
-    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
-    "pricing": { "input": 0.00, "output": 0.00 }
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "webSearch": false,
+      "imageGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "image",
+      "currency": "USD",
+      "output": {
+        "1k": 0.05,
+        "2k": 0.07
+      },
+      "source": "https://docs.x.ai/developers/pricing",
+      "verifiedAt": "2026-09-09",
+      "inputImage": 0.01
+    }
   },
   "grok-imagine-image-pro": {
     "displayName": "Grok Imagine Image Pro (deprecated)",
@@ -1858,22 +1894,75 @@
     "displayName": "Grok Imagine Image",
     "contextWindow": 0,
     "maxOutput": 0,
-    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": false, "webSearch": false, "imageGeneration": true },
-    "pricing": { "input": 0.00, "output": 0.00 }
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "webSearch": false,
+      "imageGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "image",
+      "currency": "USD",
+      "output": {
+        "1k": 0.02,
+        "2k": 0.02
+      },
+      "source": "https://docs.x.ai/developers/pricing",
+      "verifiedAt": "2026-09-09",
+      "inputImage": 0.002
+    }
   },
   "x-ai/grok-imagine-image-2.0": {
     "displayName": "Grok Imagine Image 2.0",
     "contextWindow": 65536,
     "maxOutput": 0,
-    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
-    "pricing": { "input": 0.00, "output": 0.00 }
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": true,
+      "webSearch": false,
+      "imageGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "image",
+      "currency": "USD",
+      "output": {
+        "1k:low": 0.04,
+        "2k:low": 0.06,
+        "1k:medium": 0.06,
+        "2k:medium": 0.08
+      },
+      "source": "https://docs.x.ai/developers/pricing",
+      "verifiedAt": "2026-09-09",
+      "inputImage": 0.01
+    }
   },
   "x-ai/grok-imagine-image-quality": {
     "displayName": "Grok Imagine Image Quality",
     "contextWindow": 65536,
     "maxOutput": 0,
-    "capabilities": { "vision": true, "functionCalling": false, "reasoning": false, "streaming": true, "webSearch": false, "imageGeneration": true },
-    "pricing": { "input": 0.00, "output": 0.00 }
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": true,
+      "webSearch": false,
+      "imageGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "image",
+      "currency": "USD",
+      "output": {
+        "1k": 0.05,
+        "2k": 0.07
+      },
+      "source": "https://docs.x.ai/developers/pricing",
+      "verifiedAt": "2026-09-09",
+      "inputImage": 0.01
+    }
   },
 
   "llama-4-scout": {
@@ -2633,6 +2722,149 @@
       "input": 0,
       "output": 0,
       "cachedInput": 0
+    }
+  },
+  "grok-imagine-video-1.5": {
+    "displayName": "Grok Imagine Video 1.5",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "imageGeneration": false,
+      "videoGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "second",
+      "currency": "USD",
+      "output": {
+        "480p": 0.08,
+        "720p": 0.14,
+        "1080p": 0.25
+      },
+      "source": "https://docs.x.ai/developers/pricing",
+      "verifiedAt": "2026-09-09",
+      "inputImage": 0.01
+    }
+  },
+  "grok-imagine-video": {
+    "displayName": "Grok Imagine Video",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "imageGeneration": false,
+      "videoGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "second",
+      "currency": "USD",
+      "output": {
+        "480p": 0.05,
+        "720p": 0.07
+      },
+      "source": "https://docs.x.ai/developers/pricing",
+      "verifiedAt": "2026-09-09",
+      "inputImage": 0.002,
+      "inputVideoSecond": 0.01
+    }
+  },
+  "minimax-h3": {
+    "displayName": "MiniMax H3",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "imageGeneration": false,
+      "videoGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "second",
+      "currency": "CNY",
+      "output": {
+        "768P": 0.5,
+        "2K": 0.8
+      },
+      "source": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "verifiedAt": "2026-09-09",
+      "inputImage": 0.2,
+      "freeInputImages": 5,
+      "inputVideoAtOutputRate": true
+    }
+  },
+  "minimax-h3-max": {
+    "displayName": "MiniMax H3 Max",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "imageGeneration": false,
+      "videoGeneration": true
+    },
+    "mediaPricing": {
+      "unit": "second",
+      "currency": "CNY",
+      "output": {
+        "480P": 0.33,
+        "768P": 0.5
+      },
+      "source": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "verifiedAt": "2026-09-09"
+    }
+  },
+  "image-01": {
+    "displayName": "MiniMax Image 01",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "imageGeneration": true,
+      "videoGeneration": false
+    },
+    "mediaPricing": {
+      "unit": "image",
+      "currency": "CNY",
+      "output": {
+        "default": 0.025
+      },
+      "source": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "verifiedAt": "2026-09-09"
+    }
+  },
+  "image-01-live": {
+    "displayName": "MiniMax Image 01 Live",
+    "contextWindow": 0,
+    "maxOutput": 0,
+    "capabilities": {
+      "vision": true,
+      "functionCalling": false,
+      "reasoning": false,
+      "streaming": false,
+      "imageGeneration": true,
+      "videoGeneration": false
+    },
+    "mediaPricing": {
+      "unit": "image",
+      "currency": "CNY",
+      "output": {
+        "default": 0.025
+      },
+      "source": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "verifiedAt": "2026-09-09"
     }
   }
 }

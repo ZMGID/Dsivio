@@ -14,7 +14,6 @@ import {
   Plus,
   Save,
   Sparkles,
-  Square,
   X,
 } from 'lucide-react'
 import { api } from '../../api/tauri'
@@ -195,21 +194,6 @@ export function ImageWorkflow({
           </li>
         ))}
       </ol>
-      {task && (
-        <div className="iw-status" role="status">
-          {busy ? <Loader2 size={16} className="is-spinning" /> : <Check size={16} />}
-          <span>
-            {task.progress || '任务已保存'}
-            {workflow?.ruleVersion ? ` · 共用规则 v${workflow.ruleVersion}` : ''}
-          </span>
-          {task.status === 'running' && (
-            <Button size="sm" onClick={() => void onAction({ kind: 'cancel' })}>
-              <Square size={12} />
-              停止
-            </Button>
-          )}
-        </div>
-      )}
       {task?.error && (
         <p role="alert" className="is-alert is-error">
           {task.error}
