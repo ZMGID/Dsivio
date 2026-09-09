@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react'
 import { open } from '@tauri-apps/plugin-dialog'
-import { Check, FolderOpen, Image as ImageIcon, Plus, Save, Settings2, X } from 'lucide-react'
+import { Check, FolderOpen, Image as ImageIcon, Layers3, Plus, Save, Settings2, X } from 'lucide-react'
 import { api, isTauriRuntime, type ModelProvider } from '../../api/tauri'
 import { getSettingsCached } from '../../api/settingsCache'
 import { Button, IconButton } from '../../components/Button'
@@ -509,16 +509,17 @@ export function TemplatePanel({
         </div>
       </div>
       <p className="is-muted">
-        预览前 3 张，有参考图时显示参考图，否则显示内容概要。点击预览可查看整套内容。
+        选择一套模板开始创作，点开页面可查看详情。
       </p>
       <div className="is-template-grid">
         {templates.map((t) => (
           <article className="is-template-card" key={t.id}>
-            <div className="is-template-cover">
+            <div className={`is-template-cover${t.data.slots.slice(0, 3).some((slot) => slot.example && t.directory) ? '' : ' if-template-outline'}`}>
               <div className="is-template-cover-heading">
                 <span>{t.data.mode === 'replace' ? '样图换货' : '风格规则'}</span>
                 <span>共 {t.data.slots.length} 张</span>
               </div>
+              {!t.data.slots.slice(0, 3).some((slot) => slot.example && t.directory) && <div className="if-template-outline-heading"><Layers3 size={20} strokeWidth={1.5} /><span>页面安排</span></div>}
               <div className="is-template-pages">
                 {t.data.slots.slice(0, 3).map((slot, index) => {
                   const purpose = slot.purpose || `第 ${index + 1} 张`

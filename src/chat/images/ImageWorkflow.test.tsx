@@ -181,7 +181,8 @@ describe('制作、试品、反馈和持续出图', () => {
     vi.mocked(api.imageStudioExport).mockResolvedValue('C:/Images/backpack/deliveries/batch')
     render(<ImageStudio />)
     const nav = screen.getByRole('navigation', { name: '图片功能' })
-    expect(within(nav).getAllByRole('button')).toHaveLength(8)
+    expect(within(nav).getAllByRole('button')).toHaveLength(5)
+    expect(within(screen.getByRole('navigation', { name: '模板与记录' })).getAllByRole('button')).toHaveLength(4)
     fireEvent.click(await screen.findByRole('button', { name: '导出本版图片' }))
     expect(screen.getByLabelText('交付保存位置')).toHaveValue('C:/Images/backpack/deliveries')
     fireEvent.click(screen.getByRole('button', { name: '导出到任务文件夹' }))
@@ -203,7 +204,7 @@ describe('制作、试品、反馈和持续出图', () => {
     }))
     vi.mocked(api.imageStudioAction).mockResolvedValue(made)
     render(<ImageStudio />)
-    fireEvent.click(await within(screen.getByRole('navigation', { name: '图片功能' })).findByRole('button', { name: '制作模板' }))
+    fireEvent.click(await within(screen.getByRole('navigation', { name: '模板与记录' })).findByRole('button', { name: '制作模板' }))
     expect(screen.getByRole('radio', { name: '商品照片' })).toBeChecked()
     expect(screen.getByText('新做一套')).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: '现成套图' })).toBeInTheDocument()
@@ -402,7 +403,7 @@ describe('制作、试品、反馈和持续出图', () => {
 
   it('keeps the requirement field as a plain writing box', async () => {
     render(<ImageStudio />)
-    fireEvent.click(await within(screen.getByRole('navigation', { name: '图片功能' })).findByRole('button', { name: '制作模板' }))
+    fireEvent.click(await within(screen.getByRole('navigation', { name: '模板与记录' })).findByRole('button', { name: '制作模板' }))
     const field = screen.getByLabelText('制作要求')
     expect(field).toHaveClass('kv-textarea')
     expect(screen.queryByRole('button', { name: '选择助手' })).not.toBeInTheDocument()
@@ -412,7 +413,7 @@ describe('制作、试品、反馈和持续出图', () => {
 
   it('switches the drop zone copy when starting from a finished set', async () => {
     render(<ImageStudio />)
-    fireEvent.click(await within(screen.getByRole('navigation', { name: '图片功能' })).findByRole('button', { name: '制作模板' }))
+    fireEvent.click(await within(screen.getByRole('navigation', { name: '模板与记录' })).findByRole('button', { name: '制作模板' }))
     fireEvent.click(screen.getByRole('radio', { name: '现成套图' }))
     expect(screen.getByRole('button', { name: '选择现成套图' })).toBeInTheDocument()
     expect(screen.getByText('按页序把套图拖到这里')).toBeInTheDocument()
@@ -423,7 +424,7 @@ describe('制作、试品、反馈和持续出图', () => {
   it('imports dropped files as original references instead of trial products', async () => {
     vi.mocked(api.imageStudioImport).mockResolvedValue([{ ...product('source'), assets: [source] }])
     render(<ImageStudio />)
-    fireEvent.click(await within(screen.getByRole('navigation', { name: '图片功能' })).findByRole('button', { name: '制作模板' }))
+    fireEvent.click(await within(screen.getByRole('navigation', { name: '模板与记录' })).findByRole('button', { name: '制作模板' }))
     const zone = screen.getByLabelText('原始参考投放区')
     await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
     dropHandler?.({ payload: { type: 'enter' } })

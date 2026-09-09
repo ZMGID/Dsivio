@@ -196,7 +196,7 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     }
     let mut analysis = Value::Null;
     let (instruction, data, field, result_action) = if action == "plan" {
-        (format!("{}\nReturn {{\"script\":\"完整中文剧本\"}}. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested. Respect speechMode: dialogue preserves supplied dialogue verbatim in its language; ambient has no speech; silent has no audio. Follow music requirements. Reference video/audio paths are conditioning inputs, not observed evidence: never invent their contents.",
+        (format!("{}\nFor a broad request without selectedConcept or template, return {{\"concepts\":[\"一句话拍法1\",\"一句话拍法2\",\"一句话拍法3\"]}} and no script. These must be genuinely different approaches. Otherwise return {{\"script\":\"完整中文剧本\"}}. Honor selectedConcept. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested. Respect speechMode: auto follows the user request or reference, without assuming narration; an explicitly requested dialogue language overrides the default language. dialogue preserves supplied dialogue verbatim in its language; ambient has no speech; silent has no audio. Follow music requirements. Reference video/audio paths are conditioning inputs, not observed evidence: never invent their contents.",
             std::fs::read_to_string(root.join("skills/video-director/SKILL.md")).map_err(|e|e.to_string())?), b.clone(), "script", "plan_result")
     } else if action == "analyze" {
         analysis = mcp(
@@ -224,8 +224,8 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
             content.retain(|v| v["type"] != "image");
         }
         analysis = evidence.clone();
-        (format!("{}\nReturn {{\"script\":\"中文逐镜头拆解\"}}. Clearly preserve warnings and missing evidence. Separate visible text, product logos, and audible dialogue. Never invent observations. Include reusable shot directions.",
-            std::fs::read_to_string(root.join("skills/video-reference-analysis/SKILL.md")).map_err(|e|e.to_string())?), evidence, "script", "analysis_result")
+        (format!("{}\nReturn {{\"script\":\"逐镜头拆解\"}} in the requested report_language (default Chinese). Follow the user request as the analysis focus. Clearly preserve warnings and missing evidence. Separate visible text, product logos, and audible dialogue. Never invent observations. Include reusable shot directions.",
+            std::fs::read_to_string(root.join("skills/video-reference-analysis/SKILL.md")).map_err(|e|e.to_string())?), analysis_context(evidence, b), "script", "analysis_result")
     } else {
         if t["approved"] != true {
             return Err("请先确认当前剧本".into());
@@ -257,6 +257,17 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
         true,
     )
     .await?;
+    if action == "plan" {
+        if let Some(concepts) = result["concepts"].as_array() {
+            if concepts.len() != 3 || concepts.iter().any(|v| v.as_str().is_none_or(|s| s.trim().is_empty())) {
+                return Err("拍法需要包含三个完整选项，请重试".into());
+            }
+            let mut save = input;
+            save["script"] = json!("");
+            save["concepts"] = json!(concepts);
+            return worker(app, "plan_result", save).await;
+        }
+    }
     let text = result[field]
         .as_str()
         .filter(|s| !s.trim().is_empty())
@@ -460,9 +471,20 @@ pub async fn video_studio(app: AppHandle, action: String, input: Value) -> Resul
     }
 }
 
+fn analysis_context(evidence: Value, brief: &Value) -> Value {
+    json!({"evidence": evidence, "request": brief["request"], "report_language": brief["language"]})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reference_analysis_preserves_user_focus_and_report_language() {
+        let context = analysis_context(json!({"warnings":["missing audio"]}), &json!({"request":"focus on opening", "language":"zh-CN"}));
+        assert_eq!(context["request"], "focus on opening");
+        assert_eq!(context["report_language"], "zh-CN");
+        assert_eq!(context["evidence"]["warnings"][0], "missing audio");
+    }
     #[test]
     fn builtin_video_plugin_resolves_six_skills_and_two_mcps() {
         let root =
