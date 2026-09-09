@@ -14,6 +14,7 @@ pub mod fonts;
 pub mod lens;
 pub mod lens_commands;
 pub mod image_studio;
+pub mod studio;
 pub mod video_studio;
 #[cfg(target_os = "macos")]
 pub mod macos_ocr;
@@ -849,6 +850,7 @@ pub fn run() {
             plugins::plugins_set_enabled,
             plugins::plugins_uninstall,
             notes::notes_list,
+            studio::studio_draft,
             video_studio::video_studio,
             image_studio::image_studio_bootstrap,
             image_studio::image_studio_get,

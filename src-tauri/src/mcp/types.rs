@@ -1529,3 +1529,14 @@ mod tests {
         assert_eq!(wires.len(), names.len());
     }
 }
+
+/// One task service for conversation and visual pages.
+pub fn native_studio_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__studio".into(), name: "studio".into(),
+        description: "Use dsimage/dsvideo directly in conversation with the SAME tasks, models, templates and results as the image/video pages. Read the bundled skill studio guide first. bootstrap lists shared tasks/templates/config; get retrieves a task. Use current id/revision for mutations, never write task JSON directly. Image: import, save, save_plans, action, config, template_import, template_save. Video: existing studio actions including create/save/plan/approve/prepare/quote/submit/poll. draft_get/draft_save share page drafts (image entry main; video creation/analysis/remake); draft_save requires current revision and value. Follow existing task sample/approval gates; video generation requires current script approval and paid submit requires explicit cost confirmation. Do not use standalone generation scripts when this tool is available.".into(),
+        source: "native".into(), server_id: None, server_name: Some("Kivio".into()),
+        input_schema: serde_json::json!({"type":"object","properties":{"domain":{"type":"string","enum":["image","video"]},"action":{"type":"string"},"input":{"type":"object"}},"required":["domain","action","input"]}),
+        sensitive: true, annotations: None, output_schema: None,
+    }
+}

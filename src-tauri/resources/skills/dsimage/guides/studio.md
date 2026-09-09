@@ -1,5 +1,21 @@
 # 聊天与图片页面共用
 
+## 内置聊天的任务入口（优先于后续脚本说明）
+
+有 `studio` 工具时，所有任务操作使用 `{domain:"image", action, input}`，与页面同一执行服务；不要直接写 tasks JSON 或执行原脚本 gen/run。原来的流程选择和质量要求继续适用。
+
+1. `bootstrap`，input `{}`：获得同一套模板、配置、任务。用户指定已有任务时 `get`，input `{id}`，沿用其 id/revision，不创建副本。
+2. 接续页面未保存内容：`draft_get`，input `{entry:"main"}`。返回 `{revision,value}`；value 包含 brief、taskId、revision、plans。草稿 revision 与任务 revision 是独立版本号。先读取最新任务，再合并用户明确要求的修改，不能拿旧草稿覆盖新任务。
+3. 素材导入：`import`，input `{paths:[绝对路径],asProducts:true}`，返回 products。无需让用户标正反面。没有商品图时 products 可为空。
+4. `save`，input `{brief, id?, revision?}`。brief 必须完整：`{feature:"gen",name:"任务名",requirement:"用户要求",language:"zh-CN",platform:"",ratio:"1:1",resolution:"1k",count:1,style:"",templateId:null,products:[]}`。feature 还可用 replace/smart/design/client/workflow；套图从 bootstrap 选择 templateId。工作流额外参数按现有任务的 brief 保留。
+5. 普通出图与页面一致，用 `action`，input `{id,revision,action:{kind:"start"}}` 自动整理素材、规划并开始单张或样张生成；用户已明确要求出图时，不额外增加方案确认。用户只要求规划时用 kind plan，等待完成后展示 plans。`save_plans` input `{id,revision,plans}` 可修改现有方案；单张后续生成用 kind generate，套图先 sample，验收后 approve/bulk（group 取商品分组）。重复 `get` 查看真实状态，沿用页面的样张关卡，不跳过。
+6. 成图和错误均从 `get` 返回的 results/status 读取，保留同一任务 id。不要从聊天记录推测完成。
+7. `draft_save` input `{entry:"main",revision:草稿版本,value:{brief,taskId:任务id,revision:任务版本,plans:null}}` 可以把当前任务交给页面。版本冲突时重新读取并合并，不自动覆盖。
+8. 模型配置使用 `config`，input `{config:完整配置对象}`，先从 bootstrap 读取后修改；图片凭据仍由应用供应商设置管理。模板使用 template_import `{path}` / template_save `{template}` 或下面的共享标准目录。禁止新建第二套配置。
+
+旧脚本生成的 `_dsimage/batch.json` 是历史批次，不能假装是页面任务。新内置聊天全部走以上服务；历史批次仍可在原脚本中继续，模板可以复用。
+
+
 命令在本 Skill 目录运行。Windows 使用 `python`，macOS / Linux 使用 `python3`。保留原 dsimage 的 gen、replace、smart、design 流程；这里说明内置版的数据位置差异。
 
 ## 模板

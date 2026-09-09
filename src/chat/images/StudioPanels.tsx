@@ -199,6 +199,17 @@ export function ConfigPanel({
   onClose: () => void
 }) {
   const [draft, setDraft] = useState(config)
+  const configVersion = useRef(config)
+  const [configConflict, setConfigConflict] = useState(false)
+  useEffect(() => {
+    if (JSON.stringify(config) === JSON.stringify(configVersion.current)) return
+    if (JSON.stringify(draft) !== JSON.stringify(configVersion.current)) {
+      setConfigConflict(true)
+      return
+    }
+    configVersion.current = config
+    setDraft(config)
+  }, [config, draft])
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const [providers, setProviders] = useState<ModelProvider[]>([])
@@ -233,13 +244,14 @@ export function ConfigPanel({
             <X size={18} />
           </IconButton>
         </div>
+        {configConflict && <p role="status">配置已在聊天中更新，请先载入最新配置。<Button onClick={() => { configVersion.current = config; setDraft(config); setConfigConflict(false) }}>载入最新配置</Button></p>}
         <p className="is-muted">
           配置一次，所有图片功能共用。只列出已标记生图能力的模型；密钥和适配器沿用「设置 → 模型」。
         </p>
         <Field label="图片保存位置">
           <div className="is-actions">
             <input className="kv-input" readOnly value={draft.outputRoot || '系统图片目录 / Dsivio / Images'} />
-            <IconButton label="选择图片保存位置" disabled={pending} onClick={() => {
+            <IconButton label="选择图片保存位置" disabled={pending || configConflict} onClick={() => {
               void open({ directory: true, title: '选择新任务的图片保存位置' }).then((path) => {
                 if (typeof path === 'string') setDraft((d) => ({ ...d, outputRoot: path }))
               }).catch((e) => setError(String(e)))
@@ -297,7 +309,7 @@ export function ConfigPanel({
           <Button onClick={onClose}>取消</Button>
           <Button
             variant="primary"
-            disabled={pending}
+            disabled={pending || configConflict}
             onClick={() => {
               setPending(true)
               const next = {
