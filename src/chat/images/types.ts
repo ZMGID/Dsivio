@@ -195,6 +195,40 @@ export const SHOTS = [
   '运动/健身广告',
   '箱包功能证据图',
 ]
+const LANGUAGE_MARKET: Record<string, string> = {
+  'pt-BR': '巴西市场',
+  'en-US': '美国市场',
+  'en-GB': '英国市场',
+  es: '西语市场',
+  'zh-CN': '中国市场',
+  'zh-TW': '台湾市场',
+  ja: '日本市场',
+  ko: '韩国市场',
+  fr: '法国市场',
+  de: '德国市场',
+  it: '意大利市场',
+  ar: '阿语市场',
+  id: '印尼市场',
+  th: '泰国市场',
+  vi: '越南市场',
+}
+
+/** Empty names become `{platform or product} · {market}` on save, matching the field example. */
+export function suggestImageTaskName(brief: ImageBrief): string {
+  const named = brief.products
+    .map((product) => product.name.trim())
+    .find((name) => name && name !== '商品素材')
+  const head =
+    named ||
+    brief.platform.trim() ||
+    FEATURES.find((feature) => feature.id === brief.feature)?.label ||
+    '图片任务'
+  const language = brief.language.trim()
+  const market =
+    LANGUAGE_MARKET[language] || (language && language !== '无文字' ? language : '')
+  return market ? `${head} · ${market}` : head
+}
+
 export const emptyBrief = (feature: ImageFeature): ImageBrief => ({
   feature,
   name: '',

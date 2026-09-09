@@ -26,13 +26,25 @@ vi.mock('../../api/tauri', () => ({
   },
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
+let dropHandler:
+  | ((event: { payload: { type: string; paths?: string[] } }) => void)
+  | undefined
 vi.mock('@tauri-apps/api/webview', () => ({
-  getCurrentWebview: () => ({ onDragDropEvent: () => Promise.resolve(() => {}) }),
+  getCurrentWebview: () => ({
+    onDragDropEvent: (fn: (event: { payload: { type: string; paths?: string[] } }) => void) => {
+      dropHandler = fn
+      return Promise.resolve(() => {
+        if (dropHandler === fn) dropHandler = undefined
+      })
+    },
+  }),
 }))
 vi.mock('../../api/settingsCache', () => ({
   getSettingsCached: vi.fn().mockResolvedValue({ providers: [] }),
 }))
-vi.mock('../api', () => ({ chatApi: { getAssistants: vi.fn().mockResolvedValue([]) } }))
+vi.mock('../api', () => ({
+  chatApi: { getAssistants: vi.fn().mockResolvedValue([]), optimizePrompt: vi.fn() },
+}))
 
 const config = {
   providerId: 'image',
@@ -192,7 +204,13 @@ describe('制作、试品、反馈和持续出图', () => {
     vi.mocked(api.imageStudioAction).mockResolvedValue(made)
     render(<ImageStudio />)
     fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
-    fireEvent.click(screen.getByRole('button', { name: '添加原始参考图' }))
+    expect(screen.getByRole('radio', { name: '商品照片' })).toBeChecked()
+    expect(screen.getByText('新做一套')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: '现成套图' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '商品图起步' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '成套样图起步' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('任务名称')).toHaveAttribute('placeholder', '通用电商 · 巴西市场')
+    fireEvent.click(screen.getByRole('button', { name: '选择商品照片' }))
     await waitFor(() => expect(screen.getByText('1. 原始商品.png')).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('制作要求'), {
       target: { value: made.brief.requirement },
@@ -207,6 +225,7 @@ describe('制作、试品、反馈和持续出图', () => {
     expect(api.imageStudioSave).toHaveBeenCalledWith(
       expect.objectContaining({
         feature: 'workflow',
+        name: '通用电商 · 巴西市场',
         products: [],
         workflowInput: { mode: 'smart', sources: [source] },
       }),
@@ -374,11 +393,37 @@ describe('制作、试品、反馈和持续出图', () => {
   it('invalidates the visible gate when source requirements change', async () => {
     load(task())
     render(<ImageStudio />)
-    fireEvent.click(await screen.findByText('01 · 原始素材与制作要求'))
+    fireEvent.click(await screen.findByText('01 · 原始素材'))
     fireEvent.change(screen.getByLabelText('制作要求'), { target: { value: '换个全新的版式' } })
     expect(screen.getByRole('button', { name: '生成所选试品' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '试品满意，确认这版' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '更新制作' })).toBeEnabled()
+  })
+
+  it('switches the drop zone copy when starting from a finished set', async () => {
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
+    fireEvent.click(screen.getByRole('radio', { name: '现成套图' }))
+    expect(screen.getByRole('button', { name: '选择现成套图' })).toBeInTheDocument()
+    expect(screen.getByText('按页序把套图拖到这里')).toBeInTheDocument()
+    expect(screen.getByText('只换商品')).toBeInTheDocument()
+    expect(screen.getByLabelText('原始参考投放区')).toBeInTheDocument()
+  })
+
+  it('imports dropped files as original references instead of trial products', async () => {
+    vi.mocked(api.imageStudioImport).mockResolvedValue([{ ...product('source'), assets: [source] }])
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '制作与试品' }))
+    const zone = screen.getByLabelText('原始参考投放区')
+    await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+    dropHandler?.({ payload: { type: 'enter' } })
+    await waitFor(() => expect(zone).toHaveClass('is-drop-active'))
+    dropHandler?.({ payload: { type: 'drop', paths: ['C:\\source.png'] } })
+    await waitFor(() =>
+      expect(api.imageStudioImport).toHaveBeenCalledWith(['C:\\source.png'], false),
+    )
+    expect(await screen.findByText('1. 原始商品.png')).toBeInTheDocument()
+    expect(screen.queryByLabelText('商品名称')).not.toBeInTheDocument()
   })
 })
 
