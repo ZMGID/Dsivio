@@ -51,6 +51,8 @@ Do not choose a route on the user's behalf. `mode: analysis` is for read-only re
 `prepare`: copies the approved script verbatim for every route, without calling a model. Call `quote` separately.
 `quote`: shows the current route estimate and balance if available. Rates come from the shared Dsivio model catalog. Official rates are reference estimates for gateways, never a claim about gateway billing. Missing prices or unavailable balances do not block generation; show that actual provider billing applies.
 `submit`: requires explicit user acceptance of the current generation terms, `confirmSpend: true`. Confirmation of a message that presents both the current script and cost can satisfy both gates; do not ask again for unchanged terms. Script-only approval does not imply spend approval. Regenerating a completed task overwrites its previous output.
+`wait`: input `{id,timeoutMs:60000}`; wait for completion/failure and return the actual task plus `wait.state`. Call after submit returns running/submitting. Completion returns immediately after download/validation. Timeout means still running: call wait again without sleep or resubmission. Uncertain/failed tasks return immediately for attention. The host performs polling; the Agent must not run sleep or repeatedly get/poll to measure time. Stopping the chat stops waiting, not the submitted job.
+
 `poll`: queries the persisted remote ID without resubmission. A `submitting` or `uncertain` task must never be blindly submitted again.
 `template_save`: supply `name`; generation templates additionally require `approvedOutput: true` after user reviews the completed output. Reference templates do not imply successful generation.
 

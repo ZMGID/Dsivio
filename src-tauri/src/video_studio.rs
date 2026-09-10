@@ -27,7 +27,7 @@ const WORKER_ACTIONS: &[&str] = &[
 ];
 const HOST_ACTIONS: &[&str] = &[
     "config", "image_preview", "open", "preview", "plan", "prepare", "analyze", "revise", "submit",
-    "poll",
+    "poll", "wait",
 ];
 
 pub(crate) fn public_actions() -> Vec<&'static str> {
@@ -154,7 +154,13 @@ async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     .await
     .map_err(|_| "视频步骤超时；如已提交请恢复查询，勿重复生成")?
     .map_err(|e| e.to_string())?;
-    worker_result(&output.stdout)
+    let result = worker_result(&output.stdout)?;
+    if !matches!(action, "get" | "preflight") {
+        if let Some(id) = result["id"].as_str() {
+            crate::studio::wait::changed("video", id);
+        }
+    }
+    Ok(result)
 }
 
 fn worker_result(stdout: &[u8]) -> Result<Value, String> {
@@ -506,68 +512,8 @@ pub async fn video_studio(app: AppHandle, action: String, input: Value) -> Resul
                 Ok(t)
             }
         }
-        "poll" => {
-            let t = worker(&app, "poll", input.clone()).await?;
-            if t["remote"]["route"] != "comfy" {
-                return Ok(t);
-            }
-            let id = t["id"].as_str().ok_or("无任务编号")?;
-            let remote_id = t["remote"]["id"].as_str().ok_or("无远程任务编号")?;
-            if remote_id.is_empty() || !remote_id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) {
-                return Err("远程任务编号无效".into());
-            }
-            let dir = crate::app_data::app_data_dir()
-                .ok_or("无数据目录")?
-                .join("video-studio/outputs")
-                .join(id)
-                // Every remote job gets its own directory; a remake must never
-                // pick a previous render while fetching the new one.
-                .join(remote_id);
-            let status = mcp(
-                &app,
-                "comfy-mcp",
-                "job",
-                json!({"prompt_id":t["remote"]["id"],"action":"status"}),
-                t["remote"]["base_url"].as_str(),
-            )
-            .await?;
-            let status = find_string(&status, "status").unwrap_or_default();
-            if matches!(status.as_str(), "error" | "cancelled") {
-                return worker(
-                    &app,
-                    "comfy_failed",
-                    json!({"id":id,"revision":t["revision"]}),
-                )
-                .await;
-            }
-            if status != "completed" {
-                return Ok(t);
-            }
-            mcp(
-                &app,
-                "comfy-mcp",
-                "fetch_outputs",
-                json!({"prompt_id":t["remote"]["id"],"out_dir":dir}),
-                t["remote"]["base_url"].as_str(),
-            )
-            .await?;
-            let video = std::fs::read_dir(&dir)
-                .map_err(|e| e.to_string())?
-                .flatten()
-                .map(|e| e.path())
-                .find(|p| {
-                    p.extension()
-                        .and_then(|e| e.to_str())
-                        .is_some_and(|e| matches!(e, "mp4" | "webm" | "mov"))
-                })
-                .ok_or("视频尚未完成，请稍后继续查询")?;
-            worker(
-                &app,
-                "comfy_complete",
-                json!({"id":id,"revision":t["revision"],"output":video}),
-            )
-            .await
-        }
+        "poll" => poll_task(app, input["id"].as_str().ok_or("需要任务 id")?).await,
+        "wait" => crate::studio::wait::task(app, "video", &input).await,
         _ if WORKER_ACTIONS.contains(&action.as_str()) => worker(&app, &action, input).await,
         _ => Err(unknown_action(&action)),
     }
@@ -747,5 +693,128 @@ mod tests {
             Some("remote-123")
         );
         assert!(find_string(&json!({"error":"no receipt"}), "prompt_id").is_none());
+    }
+}
+
+
+pub(crate) const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+type PollGate = tokio::sync::Mutex<Option<tokio::time::Instant>>;
+fn poll_gate(id: &str) -> std::sync::Arc<PollGate> {
+    use std::sync::{Mutex, OnceLock};
+    type Entry = (std::sync::Arc<PollGate>, std::time::Instant);
+    static GATES: OnceLock<Mutex<std::collections::HashMap<String, Entry>>> = OnceLock::new();
+    let mut gates = GATES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    // Retain recent gates after the last caller exits so a page/chat caller
+    // arriving just afterwards still observes the shared three-second backoff.
+    gates.retain(|_, (gate, used)| std::sync::Arc::strong_count(gate) > 1 || used.elapsed().as_secs() < 60);
+    let (gate, used) = gates.entry(id.into()).or_insert_with(||
+        (std::sync::Arc::new(PollGate::new(None)), std::time::Instant::now()));
+    *used = std::time::Instant::now();
+    gate.clone()
+}
+
+pub(crate) fn task_snapshot(id: &str) -> Result<Value, String> {
+    uuid::Uuid::parse_str(id).map_err(|_| "无效任务编号")?;
+    let path = crate::app_data::app_data_dir().ok_or("无数据目录")?
+        .join("video-studio/tasks").join(format!("{id}.json"));
+    let bytes = std::fs::read(path).map_err(|_| "视频任务不存在或无法读取")?;
+    let task: Value = serde_json::from_slice(&bytes).map_err(|_| "视频任务记录无效")?;
+    if task["id"] != id { return Err("视频任务编号不匹配".into()); }
+    Ok(task)
+}
+
+pub(crate) async fn poll_task(app: AppHandle, id: &str) -> Result<Value, String> {
+    plugin()?;
+    let gate = poll_gate(id);
+    let mut last = gate.lock().await;
+    let current = task_snapshot(id)?;
+    if current["status"] != "running" { return Ok(current); }
+    if last.is_some_and(|at| at.elapsed() < POLL_INTERVAL) { return Ok(current); }
+    let result = poll_unlocked(app, json!({"id":id,"revision":current["revision"]})).await;
+    *last = Some(tokio::time::Instant::now());
+    result
+}
+
+async fn poll_unlocked(app: AppHandle, input: Value) -> Result<Value, String> {
+    let t = worker(&app, "poll", input.clone()).await?;
+    if t["status"] != "running" || t["remote"]["route"] != "comfy" {
+        return Ok(t);
+    }
+    let id = t["id"].as_str().ok_or("无任务编号")?;
+    let remote_id = t["remote"]["id"].as_str().ok_or("无远程任务编号")?;
+    if remote_id.is_empty() || !remote_id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) {
+        return Err("远程任务编号无效".into());
+    }
+    let dir = crate::app_data::app_data_dir()
+        .ok_or("无数据目录")?
+        .join("video-studio/outputs")
+        .join(id)
+        // Every remote job gets its own directory; a remake must never
+        // pick a previous render while fetching the new one.
+        .join(remote_id);
+    let status = mcp(
+        &app,
+        "comfy-mcp",
+        "job",
+        json!({"prompt_id":t["remote"]["id"],"action":"status"}),
+        t["remote"]["base_url"].as_str(),
+    )
+    .await?;
+    let status = find_string(&status, "status").unwrap_or_default();
+    if matches!(status.as_str(), "error" | "cancelled") {
+        return worker(
+            &app,
+            "comfy_failed",
+            json!({"id":id,"revision":t["revision"]}),
+        )
+        .await;
+    }
+    if status != "completed" {
+        return Ok(t);
+    }
+    mcp(
+        &app,
+        "comfy-mcp",
+        "fetch_outputs",
+        json!({"prompt_id":t["remote"]["id"],"out_dir":dir}),
+        t["remote"]["base_url"].as_str(),
+    )
+    .await?;
+    let video = std::fs::read_dir(&dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e, "mp4" | "webm" | "mov"))
+        })
+        .ok_or("视频尚未完成，请稍后继续查询")?;
+    worker(
+        &app,
+        "comfy_complete",
+        json!({"id":id,"revision":t["revision"],"output":video}),
+    )
+    .await
+}
+
+
+#[cfg(test)]
+mod poll_gate_tests {
+    use super::*;
+    #[tokio::test]
+    async fn page_and_chat_share_poll_lock_and_recent_backoff() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let first = poll_gate(&id);
+        let mut guard = first.lock().await;
+        *guard = Some(tokio::time::Instant::now());
+        let second = poll_gate(&id);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(second.try_lock().is_err());
+        drop(guard);
+        drop(first);
+        drop(second);
+        let later = poll_gate(&id);
+        assert!(later.lock().await.is_some_and(|at| at.elapsed() < POLL_INTERVAL));
     }
 }

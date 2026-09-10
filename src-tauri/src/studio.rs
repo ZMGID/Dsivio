@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::sync::Mutex;
 use tauri::AppHandle;
 pub mod library;
+pub(crate) mod wait;
 static DRAFT_LOCK: Mutex<()> = Mutex::new(());
 fn field<T: serde::de::DeserializeOwned>(v: &Value, key: &str) -> Result<T, String> {
     serde_json::from_value(v.get(key).cloned().unwrap_or(Value::Null))
@@ -100,6 +101,9 @@ pub async fn call(
     action: String,
     input: Value,
 ) -> Result<Value, String> {
+    if action == "wait" {
+        return wait::task(app, &domain, &input).await;
+    }
     if action == "draft_get" || action == "draft_save" {
         return studio_draft(
             domain,

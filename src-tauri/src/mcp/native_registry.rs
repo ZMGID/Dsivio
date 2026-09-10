@@ -664,7 +664,8 @@ fn call_studio(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
     Box::pin(async move {
         let domain = ctx.arguments["domain"].as_str().ok_or("需要 domain")?.to_string();
         let action = ctx.arguments["action"].as_str().ok_or("需要 action")?.to_string();
-        let result = crate::studio::call(ctx.app.clone(), domain, action, ctx.arguments["input"].clone()).await?;
+        let result = crate::studio::call(ctx.app.clone(), domain.clone(), action, ctx.arguments["input"].clone()).await?;
+        let result = crate::studio::wait::with_next_action(result, &domain);
         Ok(text_tool_result(result.to_string()))
     })
 }
