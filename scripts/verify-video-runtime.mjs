@@ -20,6 +20,7 @@ const ffmpeg = join(root, `analyzer/node_modules/ffmpeg-static/ffmpeg${win ? '.e
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !['path', 'pythonpath', 'pythonhome', 'node_options', 'node_path'].includes(k.toLowerCase())))
 Object.assign(env, { PATH: [join(root, 'bin'), dirname(python), dirname(node), dirname(ffmpeg)].join(win ? ';' : ':'),
   DSVIDEO_RUNTIME_ROOT: root, PYTHONPATH: join(root, 'python-packages'), PYTHONNOUSERSITE: '1',
+  PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8',
   GIT_PYTHON_REFRESH: 'quiet', DSVIDEO_CONFIG_PATH: join(scratch, 'providers.json'), DSVIDEO_STUDIO_ROOT: join(scratch, 'studio'),
   npm_config_cache: join(scratch, 'empty-npm-cache'), UV_OFFLINE: '1', PIP_NO_INDEX: '1' })
 

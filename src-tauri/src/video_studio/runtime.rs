@@ -118,6 +118,8 @@ fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
             root.join("python-packages").display().to_string(),
         ),
         ("PYTHONNOUSERSITE", "1".into()),
+        ("PYTHONUTF8", "1".into()),
+        ("PYTHONIOENCODING", "utf-8".into()),
         ("PYTHONHOME", String::new()),
     ]
     .into_iter()
@@ -177,5 +179,7 @@ mod tests {
             moved.join("bin")
         );
         assert_eq!(env["PYTHONNOUSERSITE"], "1");
+        assert_eq!(env["PYTHONUTF8"], "1");
+        assert_eq!(env["PYTHONIOENCODING"], "utf-8");
     }
 }

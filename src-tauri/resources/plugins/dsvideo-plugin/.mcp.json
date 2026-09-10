@@ -11,6 +11,8 @@
         "DSVIDEO_RUNTIME_ROOT": "${DSVIDEO_RUNTIME_ROOT}",
         "PYTHONPATH": "${DSVIDEO_RUNTIME_ROOT}/python-packages",
         "PYTHONNOUSERSITE": "1",
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
         "PYTHONHOME": "",
         "PATH": "${DSVIDEO_RUNTIME_PATH}"
       }
@@ -25,6 +27,8 @@
         "PATH": "${DSVIDEO_RUNTIME_PATH}",
         "PYTHONPATH": "${DSVIDEO_RUNTIME_ROOT}/python-packages",
         "PYTHONNOUSERSITE": "1",
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
         "PYTHONHOME": ""
       }
     }
