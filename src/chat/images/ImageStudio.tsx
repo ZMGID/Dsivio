@@ -32,7 +32,6 @@ import {
   TemplatePanel,
 } from './StudioPanels'
 import {
-  emptyBrief,
   FEATURES,
   latestResults,
   productGroup,
@@ -51,7 +50,8 @@ import {
 import { builtinTemplates as initialTemplates } from './builtinTemplates'
 import './imageStudio.css'
 import './studioLayout.css'
-import { DRAFT_KEY, readStudioDraft, storeStudioDraft } from './draft'
+import { imageConfigIssue } from './imageValidation'
+import { DRAFT_KEY, readStudioDraft, storeStudioDraft, rememberImageSettings, newImageDraftBrief } from './draft'
 import { ImageBriefForm } from './ImageBriefForm'
 import './imageFlow.css'
 import { dropAsProducts, dropZoneFromPoint, type ImageDropZone } from './studioDrop'
@@ -76,11 +76,12 @@ export default function ImageStudio() {
   const [view, setView] = useState<View>('gen')
   const [stage, setStage] = useState<Stage>('brief')
   const [brief, setBrief] = useState<ImageBrief>(
-    () => readStudioDraft()?.brief || emptyBrief('gen'),
+    () => readStudioDraft()?.brief || newImageDraftBrief('gen'),
   )
   const [task, setTask] = useState<ImageTask | null>(null)
   const [tasks, setTasks] = useState<ImageTask[]>([])
   const [templates, setTemplates] = useState<ImageTemplate[]>(initialTemplates)
+  const [providers, setProviders] = useState<{ id: string; ready: boolean }[]>([])
   const [config, setConfig] = useState<ImageConfig>(DEFAULT_CONFIG)
   const [group, setGroup] = useState('未分类')
   const [pending, setPending] = useState(false)
@@ -102,6 +103,7 @@ export default function ImageStudio() {
   const [dropActive, setDropActive] = useState(false)
   const [dropTarget, setDropTarget] = useState<ImageDropZone | null>(null)
   const [draftSaved, setDraftSaved] = useState(true)
+  const configurationIssue = imageConfigIssue(config, brief) || (providers.find(p => p.id === config.providerId)?.ready === false ? '请先在供应商设置中配置图片 API Key' : '')
   const running = task?.status === 'running'
   const [operations, setOperations] = useState<Record<string, boolean>>({})
   const operationsRef = useRef(new Set<string>())
@@ -151,6 +153,7 @@ export default function ImageStudio() {
           setTasks(data.tasks)
           setTemplates(data.templates)
           setConfig(data.config)
+          setProviders(data.providers)
           const draft = readStudioDraft()
           const saved = draft?.taskId ? data.tasks.find((t) => t.id === draft.taskId) : null
           if (saved) {
@@ -191,6 +194,7 @@ export default function ImageStudio() {
           setTemplates(data.templates)
           setTasks(data.tasks)
           setConfig(data.config)
+          setProviders(data.providers)
           const current = syncCurrent.current
           const updated = data.tasks.find(t => t.id === current.task?.id)
           if (updated && JSON.stringify(updated) !== JSON.stringify(current.task) && !current.busy && !current.dirty && !current.editedPlans) {
@@ -261,7 +265,12 @@ export default function ImageStudio() {
     }
   }
   const save = async () => {
-    if (task && !dirty) return task
+    if (task && !dirty) {
+      if (!editedPlans) return task
+      const saved = await api.imageStudioSavePlans(task.id, task.revision, editedPlans)
+      adopt(saved)
+      return saved
+    }
     const saved = await api.imageStudioSave(
       {
         ...brief,
@@ -277,8 +286,8 @@ export default function ImageStudio() {
   const openTask = (item: ImageTask) =>
     void perform(async () => {
       if (
-        dirty &&
-        (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length)
+        editedPlans || (dirty &&
+        (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length))
       )
         await save()
       const latest = await api.imageStudioGet(item.id)
@@ -291,8 +300,8 @@ export default function ImageStudio() {
     if (pending) return
     if (
       native &&
-      dirty &&
-      (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length)
+      (editedPlans || (dirty &&
+      (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length)))
     ) {
       try {
         await save()
@@ -313,7 +322,8 @@ export default function ImageStudio() {
     setSelected(null)
     setNotice('')
     setError('')
-    const b = emptyBrief(next)
+    rememberImageSettings(brief)
+    const b = newImageDraftBrief(next)
     if (template) {
       b.templateId = template.id
       b.language = template.data.language || b.language
@@ -325,6 +335,10 @@ export default function ImageStudio() {
   }
   const act = async (action: ImageAction) => {
     if (pending || (task && operationsRef.current.has(task.id))) return
+    if (['start', 'sample', 'bulk', 'generate', 'retry', 'revise', 'plan', 'workflow_build', 'workflow_trial', 'workflow_refine', 'workflow_produce'].includes(action.kind)) {
+      const issue = configurationIssue
+      if (issue) { setError(issue); return }
+    }
     let saved: ImageTask | null = null
     await perform(async () => { saved = action.kind === 'cancel' ? task : await save() })
     // Assignment happens inside perform, which catches save errors.
@@ -348,7 +362,11 @@ export default function ImageStudio() {
       setOperations(all => { const next = { ...all }; delete next[id]; return next })
     }
   }
-  const patch = (p: Partial<ImageBrief>) => setBrief((b) => ({ ...b, ...p }))
+  const patch = (p: Partial<ImageBrief>) => {
+    const next = { ...brief, ...p }
+    if (p.ratio !== undefined || p.resolution !== undefined) rememberImageSettings(next)
+    setBrief(next)
+  }
   const briefFeatureRef = useRef(brief.feature)
   briefFeatureRef.current = brief.feature
   const briefRef = useRef(brief)
@@ -628,7 +646,7 @@ export default function ImageStudio() {
               report={report}
             />
           ) : view === 'tasks' ? (
-            <TaskPanel activeOperations={operations} tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} library={library} disabled={pending}
+            <TaskPanel onDeleted={id => { setTasks(current => current.filter(t => t.id !== id)); if (task?.id === id) setTask(null) }} activeOperations={operations} tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} library={library} disabled={pending}
               onNew={() => void switchView('gen')}
               onRefresh={async () => { const next = await api.imageStudioBootstrap(); setTasks(next.tasks); setTemplates(next.templates) }} />
           ) : view === 'workflow' ? (
@@ -637,6 +655,7 @@ export default function ImageStudio() {
               brief={brief}
               task={task}
               busy={busy || loading}
+              configurationIssue={configurationIssue}
               draftSaved={draftSaved}
               onChange={patch}
               onAction={act}
@@ -669,6 +688,7 @@ export default function ImageStudio() {
                       role="tab"
                       aria-selected={stage === s}
                       key={s}
+                      disabled={s === 'results' && !task?.results.length}
                       onClick={() => setStage(s)}
                     >
                       <span>{i + 1}</span>
@@ -698,7 +718,7 @@ export default function ImageStudio() {
                 </div>
               )}
               {stage === 'brief' && (
-                <ImageBriefForm brief={brief} templates={templates} busy={busy || loading}
+                <ImageBriefForm configurationIssue={configurationIssue} brief={brief} templates={templates} busy={busy || loading}
                   dropActive={dropActive} onChange={patch}
                   onImport={(folder) => void importImages(folder)}
                   onImportExamples={() => void perform(async () => {

@@ -1,0 +1,32 @@
+{
+  "model": "deepseek-v4-flash-vision-exp",
+  "endpoint": "https://api.deepseek.com/responses",
+  "scope": "Planning-only API check; no generated image/video and no task mutation",
+  "request": {
+    "mode": "creation",
+    "request": "15秒，9:16，固定机位展示参考图中的小夜灯由未点亮到单一暖白光亮起。只展示商品，不出现人物、手或字幕，不增加道具；图案全程保持与参考图一致。",
+    "selectedConcept": "固定机位拍摄商品从未点亮到暖白光亮起",
+    "images": [
+      "/Users/zmair/Library/Application Support/com.zmair.kivio/video-studio/assets/b471cc0e2406280fb486e5292149dc2c632a1230ef9709a263394de2fcab63a9.jpg"
+    ],
+    "duration": 15,
+    "ratio": "9:16",
+    "route": "grok",
+    "resolution": "720p",
+    "inputMode": "auto",
+    "speechMode": "ambient",
+    "language": "zh-CN"
+  },
+  "output": "{\"script\":\"【画面规格】竖屏 9:16，15 秒，三脚架固定机位，全程一镜不切、不推不摇。商品外观与图案以参考图为准，保持一致：发光板上的拱形轮廓与内部线条纹样全程保持不变，不改变形状、不改图案。\\n\\n【构图与环境】商品位于画面中央，发光板完整入镜，底座下缘留出少量台面。背景为干净柔和的中性浅色墙面或布面，只有商品本体，不出现人物、手、旁置摆件、书籍、字幕或任何叠加文字。光线与参考图接近的暖调环境氛围。\\n\\n【动作时间线】\\n0–5 秒：商品处于未点亮状态，仅靠环境光可见发光板的轮廓与线条纹样，画面静止。\\n5–8 秒：暖白光开始亮起，亮度缓慢上升，发光板线条随之被照亮，纹样逐处显现但形状不变；底座保持白色圆形外观。\\n8–15 秒：亮度稳定在单一暖白光，全片只有这一种光色，不再变化、不闪烁、不变色、不循环明暗。画面保持静止，结束时不切黑、不变焦，商品继续以稳定暖白光停留在画面中央。\\n\\n【声音】无对白、无旁白、无人声。铺一层很轻的室内环境底噪与温暖柔和的氛围音乐，音量低而清晰可闻，节奏平稳，与亮起的那一刻自然衔接，之后延续到结束，不做音效强调。\"}",
+  "usage": {
+    "input_tokens": 2195,
+    "input_tokens_details": {
+      "cached_tokens": 640
+    },
+    "output_tokens": 830,
+    "output_tokens_details": {
+      "reasoning_tokens": 489
+    },
+    "total_tokens": 3025
+  }
+}

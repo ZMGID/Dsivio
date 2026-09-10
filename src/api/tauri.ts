@@ -1942,6 +1942,8 @@ async function onChatProtocol(
 // ========== API 导出 ==========
 
 export const api = {
+  studioTaskFileAction: (domain: 'image' | 'video', id: string, action: 'reveal' | 'delete') =>
+    invoke<void>('studio_task_file_action', { domain, id, action }),
   studioTaskLibrary: (domain: 'image' | 'video', ids?: string[], patch?: TaskOrganizationPatch) =>
     invoke<TaskOrganizations>('studio_task_library', { domain, ids: ids ?? null, patch: patch ?? null }),
   videoStudioBootstrap: () => invoke<VideoBootstrap>('video_studio', { action: 'bootstrap', input: {} }),

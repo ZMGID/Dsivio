@@ -13,7 +13,7 @@ export function imageLibraryTask(task: ImageTask): LibraryTask {
     kind: task.brief.feature, kindLabel: FEATURES.find(f => f.id === task.brief.feature)?.label || '图片创作',
     status: labels[task.status] || task.status, group, updatedAt: Date.parse(task.updatedAt) || 0,
     detail: [results ? `${results} 张结果` : '', task.progress].filter(Boolean).join(' · '),
-    error: task.error || undefined, canArchive: task.status !== 'running',
+    error: task.error || undefined, canDelete: task.status !== 'running',
   }
 }
 export function videoLibraryTask(task: VideoTask): LibraryTask {
@@ -30,6 +30,6 @@ export function videoLibraryTask(task: VideoTask): LibraryTask {
     group, updatedAt: Number(task.updatedAt) || 0,
     detail: analysis ? '参考分析' : [task.brief.duration ? `${task.brief.duration} 秒` : '', task.brief.ratio, task.brief.resolution, task.output ? '成片已保存' : ''].filter(Boolean).join(' · '),
     error: task.error || task.submission?.reason,
-    canArchive: !['running', 'submitting', 'uncertain'].includes(task.status),
+    canDelete: !['running', 'submitting', 'uncertain'].includes(task.status),
   }
 }

@@ -34,6 +34,45 @@ class WorkspaceTests(unittest.TestCase):
     def draft(self):
         return studio.handle('create', {'brief': self.brief})
 
+    def test_user_prompt_is_preserved_through_approval_and_request_without_conversion(self):
+        original = '  固定机位，保持商品外观。\nSay exactly: "Hello".  '
+        for route, resolution in [('grok', '720p'), ('minimax', '768P')]:
+            with self.subTest(route=route):
+                task = studio.handle('create', {'brief': {**self.brief, 'route': route, 'resolution': resolution, 'request': original}})
+                task = self.action(task, 'save', brief=task['brief'], script=original)
+                task = self.action(task, 'approve')
+                if route != 'grok':
+                    task = self.action(task, 'prompt_result', prompt=original)
+                payload = studio.request(task)
+                submitted = payload['prompt'] if route == 'grok' else payload['content'][0]['text']
+                self.assertEqual(submitted, original)
+                self.assertEqual(task['script'], original)
+
+    def test_preflight_blocks_missing_generation_options_before_planning(self):
+        for field, value in [('route', ''), ('resolution', ''), ('duration', 2.5)]:
+            with self.subTest(field=field):
+                t = studio.handle('create', {'brief': {**self.brief, field: value}})
+                with self.assertRaises(ValueError):
+                    self.action(t, 'preflight', operation='plan')
+                self.assertEqual(studio.read(studio.task_path(t['id']))['revision'], t['revision'])
+
+    def test_analysis_preflight_requires_source_but_not_generation_settings(self):
+        t = studio.handle('create', {'brief': {**self.brief, 'mode': 'analysis', 'route': '', 'resolution': '', 'source': ''}})
+        with self.assertRaisesRegex(ValueError, '参考视频'):
+            self.action(t, 'preflight', operation='analyze')
+        t['brief']['source'] = '/reference.mp4'
+        studio.persist(t)
+        self.assertEqual(self.action(t, 'preflight', operation='analyze')['revision'], t['revision'])
+
+    def test_preflight_blocks_missing_credentials_and_unapproved_conversion(self):
+        t = self.draft()
+        with self.assertRaisesRegex(ValueError, 'API Key'):
+            self.action(t, 'preflight', operation='plan')
+        studio.handle('config', {'name': 'grok', 'base_url': 'https://api.x.ai', 'api_key': 'test'})
+        self.assertEqual(self.action(t, 'preflight', operation='plan')['revision'], t['revision'])
+        with self.assertRaisesRegex(ValueError, '确认当前剧本'):
+            self.action(t, 'preflight', operation='prepare')
+
     def approved(self):
         t = self.action(self.draft(), 'plan_result', script='0–10 seconds: product on table')
         t = self.action(t, 'approve')
@@ -78,6 +117,63 @@ class WorkspaceTests(unittest.TestCase):
         t = self.action(t, 'plan_result', script='0–10秒：场景展示')
         self.assertEqual(t['concepts'], [])
         self.assertTrue(self.action(t, 'approve')['approved'])
+
+    def test_grok_approval_uses_script_without_conversion(self):
+        script = '0–10秒：展示商品。对白：Olá!'
+        t = self.action(self.draft(), 'plan_result', script=script)
+        t = self.action(t, 'approve')
+        self.assertEqual(t['prompt'], script)
+
+    def test_h3_approval_still_requires_conversion(self):
+        self.brief.update(route='minimax', resolution='768P')
+        t = self.action(self.draft(), 'plan_result', script='商品展示')
+        t = self.action(t, 'approve')
+        self.assertEqual(t['prompt'], '')
+
+    def test_grok_does_not_impose_an_unverified_byte_limit(self):
+        script = '灯光展示' * 500
+        t = self.action(self.draft(), 'plan_result', script=script)
+        t = self.action(t, 'approve')
+        self.assertGreater(len(script.encode('utf-8')), 4096)
+        self.assertEqual(t['prompt'], script)
+        self.assertEqual(studio.request(t)['prompt'], script)
+
+    def test_grok_retry_replaces_legacy_converted_prompt(self):
+        t = self.approved()
+        t = self.action(t, 'prompt_result', prompt='x' * 6137)
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job') as create:
+            t = self.action(t, 'submit')
+        self.assertEqual(create.call_args.args[0]['prompt'], t['script'])
+        self.assertEqual(t['prompt'], t['script'])
+
+    def test_deleted_task_reports_missing_record_not_network_failure(self):
+        t = self.draft()
+        studio.task_path(t['id']).unlink()
+        for action in ('get', 'save', 'submit'):
+            with self.subTest(action=action), self.assertRaisesRegex(ValueError, 'VIDEO_TASK_NOT_FOUND'):
+                self.action(t, action, brief=self.brief)
+        self.assertFalse(studio.task_path(t['id']).exists())
+
+    def test_supplier_prompt_limit_is_not_hidden_by_generic_400(self):
+        failure = studio.submission_failure(studio.grok.ApiError(
+            'Prompt length exceeds the maximum allowed length of 4096', http_status=400))
+        self.assertIn('Prompt length exceeds the maximum allowed length of 4096', failure['reason'])
+        self.assertTrue(failure['retryable'])
+
+    def test_length_rejection_preserves_script_and_records_encoding_counts(self):
+        t = self.approved()
+        script = '灯' * 1827
+        t = self.action(t, 'plan_result', script=script)
+        t = self.action(t, 'approve')
+        error = studio.grok.ApiError('Prompt length exceeds the maximum allowed length of 4096', http_status=400)
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', side_effect=error):
+            t = self.action(t, 'submit')
+        self.assertEqual(t['script'], script)
+        self.assertEqual(t['prompt'], script)
+        self.assertEqual(t['submission']['promptCharacters'], 1827)
+        self.assertEqual(t['submission']['promptUtf8Bytes'], 5481)
+        self.assertIn('UTF-8', t['error'])
+        self.assertEqual(t['status'], 'approved')
 
     def test_no_implicit_route(self):
         self.brief['route'] = ''
@@ -256,6 +352,16 @@ class WorkspaceTests(unittest.TestCase):
         for changes in ({'resolution': '1080p'}, {'images': b['images'] + ['https://example.test/8.png']}, {'inputMode': 'image'}):
             with self.assertRaises(ValueError):
                 studio.request({'brief': {**b, **changes}, 'prompt': 'confirmed'})
+
+    def test_grok_single_product_image_defaults_to_appearance_reference(self):
+        b = {**self.brief, 'images': ['https://example.test/product.png'], 'inputMode': 'auto'}
+        with patch.object(studio, 'prepare_grok_frame') as frame:
+            payload = studio.request({'brief': b, 'prompt': 'product scene'})
+        frame.assert_not_called()
+        self.assertEqual(payload['reference_images'], [{'url': b['images'][0]}])
+        self.assertNotIn('image', payload)
+        with self.assertRaisesRegex(ValueError, '720p'):
+            studio.request({'brief': {**b, 'resolution': '1080p'}, 'prompt': 'product scene'})
 
     def test_grok_single_frame_and_silent_requests(self):
         with patch.object(studio, 'prepare_grok_frame', return_value='https://example.test/prepared.png'):

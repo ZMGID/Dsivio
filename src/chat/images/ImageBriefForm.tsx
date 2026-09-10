@@ -70,6 +70,7 @@ function TemplateSearchList({
 function imageStartIssue(brief: ImageBrief): string {
   if (brief.feature === 'gen') return brief.requirement.trim() ? '' : '先写下你想生成或修改的内容'
   if (!brief.products.length) return '先添加商品图片或商品文件夹'
+  if (brief.products.some(product => !product.assets.length)) return '每款商品至少需要一张图片，请补全素材或移除空商品'
   if (brief.feature === 'smart' && !brief.templateId) return '选择要使用的模板'
   if (brief.feature === 'replace' && !brief.templateId && !brief.workflowInput?.sources.length)
     return '添加要沿用的样图，或选择已有模板'
@@ -84,6 +85,7 @@ const START_LABELS = {
 }
 
 type Props = {
+  configurationIssue?: string
   brief: ImageBrief
   templates: ImageTemplate[]
   busy: boolean
@@ -96,14 +98,14 @@ type Props = {
   onStart: () => void
 }
 
-export function ImageBriefForm({ brief, templates, busy, dropActive, dropTarget, onChange, onImport, onImportExamples, onDrop, onStart }: Props) {
+export function ImageBriefForm({ configurationIssue, brief, templates, busy, dropActive, dropTarget, onChange, onImport, onImportExamples, onDrop, onStart }: Props) {
   const quick = brief.feature === 'gen'
   const replace = brief.feature === 'replace'
   const batch = brief.feature === 'client'
   const template = templates.find((item) => item.id === brief.templateId)
   const sources = brief.workflowInput?.sources || []
   const choices = templates.filter((item) => item.data.mode === (replace ? 'replace' : 'smart'))
-  const issue = imageStartIssue(brief)
+  const issue = configurationIssue || imageStartIssue(brief) || (brief.templateId && !template ? '所选模板已不存在，请重新选择模板' : '')
   const pages = template?.data.slots.length || (replace && sources.length) || brief.count
   const nextStep = quick ? '生成后，可以直接说出你想修改的地方'
     : batch ? '每类先试做最多 2 款，满意后再生成剩余商品'

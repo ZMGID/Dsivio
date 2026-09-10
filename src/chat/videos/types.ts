@@ -2,6 +2,7 @@ export type VideoRoute = '' | 'comfy' | 'minimax' | 'grok'
 export interface VideoBrief {
   name: string
   selectedConcept?: string
+  assistantId?: string
   mode: 'creation' | 'analysis'
   request: string
   images: string[]

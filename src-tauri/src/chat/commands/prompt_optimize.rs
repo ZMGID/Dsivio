@@ -234,17 +234,17 @@ pub(super) fn image_brief_system_prompt(language: &str) -> &'static str {
 规则：\n\
 - 只输出优化后的图片要求，不要解释、不要前缀、不要用引号或代码块包起来\n\
 - 保留用户的意图、商品、市场和语言；不要作答，也不要编造用户没给的卖点或规格\n\
-- 补全含糊处（构图、光线、背景、必须保留的商品特征、文字语言），但不要发明事实\n\
+- 仅澄清用户已有要求，不自行增加人物、道具、卖点或文字；选择文字语言不代表要求加字。局部改图只修改点名部分\n\
 - 已经写得足够清楚时只做轻微润色\n\
-- 用户给了产品图时，按附图真实外观写，不要编看不见的细节，也不要说看不见图"
+- 用户给了产品图时，简短说明以附图为准，不逐项复述复杂纹样或猜测身份；保留参考图的指定用途，不把旁边道具当要求，不要说看不见图"
     } else {
         "You rewrite image-generation briefs so a model can follow them accurately.\n\
 Rules:\n\
 - Output only the rewritten brief: no explanation, prefix, quotes, or code fences\n\
 - Keep the user's intent, product, market, and language; do not answer or invent specs\n\
-- Fill in vagueness (composition, lighting, background, required product traits) without inventing facts\n\
+- Clarify existing requirements only. Do not add people, props, claims or text. A language choice is not a request for copy. For local edits change only the named part\n\
 - If the draft is already clear, only lightly polish it\n\
-- When product images are attached, follow their visible appearance and do not claim you cannot see them"
+- Refer briefly to the attached product image instead of transcribing patterns or guessing identity. Preserve each reference role; incidental props are not requirements. Do not claim you cannot see attached images"
     }
 }
 
@@ -254,17 +254,17 @@ pub(super) fn video_brief_system_prompt(language: &str) -> &'static str {
 规则：\n\
 - 只输出优化后的视频要求，不要解释、不要前缀、不要用引号或代码块包起来\n\
 - 保留用户的意图、商品、场景和语言；不要作答，也不要编造没给的动作或配件\n\
-- 补全含糊处（开场到结尾、镜头、主体动作、声音/口播、结尾定格），时长和画幅没写就标待定\n\
+- 仅澄清已有动作与拍法，不主动补剧情、人物、道具、口播或定格；不强制分镜数量，时长和画幅没写就标待定\n\
 - 已经写得足够清楚时只做轻微润色\n\
-- 用户给了产品图或视频时，按真实外观写，不要编看不见的细节；输出可以是完整分镜脚本"
+- 产品图默认是外观参考，不是首帧；用“外观以参考图为准”简短指代，不重写纹样或猜测身份。只在用户明确需要完整分镜时展开"
     } else {
         "You rewrite video-generation briefs so a model can follow them accurately.\n\
 Rules:\n\
 - Output only the rewritten brief: no explanation, prefix, quotes, or code fences\n\
 - Keep the user's intent, product, scene, and language; do not answer or invent actions\n\
-- Fill in vagueness (opening to ending, camera, subject action, sound, final hold); mark duration and aspect as pending if missing\n\
+- Clarify existing actions and camera requirements without adding story beats, people, props, speech or a final hold. Do not impose a shot count; mark duration and aspect as pending if missing\n\
 - If the draft is already clear, only lightly polish it\n\
-- When product images or videos are attached, follow their visible appearance and a full shot script is allowed"
+- Product images are appearance references, not first frames by default. Refer to them briefly without transcribing patterns or guessing identity. Expand a full shot script only when requested"
     }
 }
 

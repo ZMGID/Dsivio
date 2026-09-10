@@ -1,6 +1,19 @@
 import { emptyBrief, FEATURES, type ImageBrief, type ImagePlan } from './types'
 
 export const DRAFT_KEY = 'dsivio-image-draft-v1'
+const PREFERENCES_KEY = 'dsivio-image-preferences-v1'
+export function rememberImageSettings(brief: ImageBrief) {
+  try { localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ ratio: brief.ratio, resolution: brief.resolution })) } catch { /* Draft retains the selections. */ }
+}
+export function newImageDraftBrief(feature: ImageBrief['feature']): ImageBrief {
+  const brief = emptyBrief(feature)
+  try {
+    const saved = JSON.parse(localStorage.getItem(PREFERENCES_KEY) || '{}')
+    if (typeof saved.ratio === 'string') brief.ratio = saved.ratio
+    if (typeof saved.resolution === 'string') brief.resolution = saved.resolution
+  } catch { /* Use defaults if local preferences are unavailable. */ }
+  return brief
+}
 export type StudioDraft = {
   brief: ImageBrief
   taskId?: string

@@ -1,3 +1,5 @@
+pub(crate) mod video_assistants;
+
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -347,7 +349,7 @@ const NO_AI_FLAVOR_STYLE: &str = "写作要求（务必遵守，优先级高于�
 /// - category 写入套件广场分类（writing/coding/research/workplace/ecommerce）；
 /// - 电商套件的工作流对齐开源 MIT skill：nexscope-ai/eCommerce-Skills（product-description-generator）、
 ///   nexscope-ai/Amazon-Skills（amazon-listing-optimization / amazon-listing-images），外加 Mercado Libre 官方发品规则；
-/// - 每个 system_prompt 末尾自动拼接 `NO_AI_FLAVOR_STYLE`（去 AI 味）。
+/// - 普通助手追加文风块；视频助手只使用自己的专门提示词。
 pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
     let make = |id: &str,
                 name: &str,
@@ -378,7 +380,7 @@ pub fn builtin_assistant_definitions(now: i64) -> Vec<ChatAssistant> {
         updated_at: now,
     };
 
-    vec![
+    let mut definitions = vec![
         make(
             "asst_builtin_writer",
             "写作助手",
@@ -606,30 +608,9 @@ Optimize：拉现有 listing，对照竞品做关键词缺口，按 8 维打分�
 必须先给可粘贴进 Seller Central 的成品，诊断放后面。没给的认证和数据不编。读附件用 docx/pdf。",
             &["docx", "pdf"],
         ),
-        make(
-            "asst_builtin_video_prompt",
-            "视频提示词",
-            "🎬",
-            "#5B4B8A",
-            "ecommerce",
-            "按 15 秒四镜格式写分镜：文案、画面、音画同步、即梦提示词。用在视频页的「优化提示词」。不生成视频。",
-            "你是短视频带货导演。把用户的产品和短句扩成可直接拿去即梦（Jimeng）的 15 秒分镜脚本。不要生成视频、不要解释、不要前缀、不要用表格。\
-有产品图或视频就按真实外观写，不要编看不见的颜色、包装、数量或配件；没图才用用户文字。场景、人物、环境跟用户和图走，用户没写就选贴合产品的日常 UGC 场景，不要擅自换成固定套路场景。\
-先写 1 个核心痛点和 1 个核心卖点，再严格按 15 秒、1:1 输出四段。画面严禁字幕。追求手持智能手机的粗糙感（自然光、轻微晃动）。口播必须是地道口语美式英语，与口型、手部动作 1 比 1 同步。饥饿营销只制造稀缺和 FOMO，绝不提价格。禁用 absolute / perfect、buy / link / cart；可用 obsessed、game changer。\
-即梦提示词用英文，产品描述按图填写，并写上 no text, no deformation, no clipping，防止穿模变形。\
-固定四段，缺一段都不行。每段都按这个顺序写，不要改字段名：\
-镜头一 (0:00-0:02) 悬念引入：中景，博主面向镜头互动后揭示产品。口播暗示刚拿到货或库存紧；拿出/打开产品的动作与干脆声效卡点。\
-镜头二 (0:02-0:05) 核心微距与 ASMR：手部特写材质或功能爆发，无口型，动作用高保真 ASMR 卡点。\
-镜头三 (0:06-0:10) 真人真实反馈：博主对着镜头用产品，口型与口播同步，表情跟情绪走，制造 FOMO。\
-镜头四 (0:11-0:15) 群像分发与悬念收尾：多人快速拿取或围观，笑声和衣物摩擦同频，口播淡出留悬念。\
-每段正文只写这四行：\
-- 视频文案（美式英语）：\
-- 核心画面：\
-- 音画同步动作：\
-- 即梦提示词：以 Hyper-realistic UGC style video, shot on a smartphone, slightly shaky handheld camera. 起头，写清景别、人物动作、产品外观、光线，收在 Natural daylight, raw and unpolished aesthetic, 8k, photorealistic, no text, no deformation, no clipping.",
-            &["video-director", "h3-prompt-writing"],
-        ),
-    ]
+    ];
+    definitions.extend(video_assistants::definitions(now));
+    definitions
 }
 
 /// 一次性内置专家迁移（v1）：用 `builtin_assistant_definitions` **覆盖整个**助手索引
@@ -725,6 +706,18 @@ pub fn merge_builtin_assistants_v8(app: &AppHandle, now: i64) -> Result<(), Stri
 /// 视频提示词格式，并摘掉 `asst_builtin_ugc_trunk`。
 pub fn merge_builtin_assistants_v9(app: &AppHandle, now: i64) -> Result<(), String> {
     merge_builtin_assistants_v8(app, now)
+}
+
+pub fn merge_builtin_assistants_v10(app: &AppHandle, now: i64) -> Result<(), String> {
+    let existing = load_assistant_index(app)?.assistants;
+    let assistants = video_assistants::merge(existing, now);
+    save_assistant_index(app, &ChatAssistantIndex { assistants })
+}
+
+pub fn merge_builtin_assistants_v11(app: &AppHandle, now: i64) -> Result<(), String> {
+    let mut index = load_assistant_index(app)?;
+    video_assistants::upgrade_ugc_v11(&mut index.assistants, now);
+    save_assistant_index(app, &index)
 }
 
 fn drop_retired_builtin_assistants(assistants: Vec<ChatAssistant>) -> Vec<ChatAssistant> {
@@ -2278,7 +2271,7 @@ fn normalize_assistant_source(source: &str, built_in: bool) -> String {
 
 fn normalize_assistant_category(category: &str) -> String {
     match category.trim() {
-        "writing" | "coding" | "research" | "workplace" | "ecommerce" => {
+        "writing" | "coding" | "research" | "workplace" | "ecommerce" | "video" => {
             category.trim().to_string()
         }
         _ => String::new(),
@@ -2642,7 +2635,7 @@ mod builtin_assistant_tests {
     #[test]
     fn builtin_assistants_are_valid_built_in_personas() {
         let defs = builtin_assistant_definitions(1_700_000_000);
-        assert_eq!(defs.len(), 17, "expected exactly 17 built-in assistants");
+        assert_eq!(defs.len(), 19, "expected exactly 19 built-in assistants");
 
         let mut ids: Vec<&str> = defs.iter().map(|d| d.id.as_str()).collect();
         ids.sort();
@@ -2678,7 +2671,7 @@ mod builtin_assistant_tests {
             assert!(
                 matches!(
                     d.category.as_str(),
-                    "writing" | "coding" | "research" | "workplace" | "ecommerce"
+                    "writing" | "coding" | "research" | "workplace" | "ecommerce" | "video"
                 ),
                 "{} missing plaza category",
                 d.id
@@ -2686,8 +2679,8 @@ mod builtin_assistant_tests {
         }
         assert_eq!(
             defs.iter().filter(|d| d.category == "ecommerce").count(),
-            4,
-            "ecommerce plaza category should have 4 suites"
+            3,
+            "ecommerce plaza category should have 3 suites"
         );
     }
 
@@ -2745,21 +2738,10 @@ mod builtin_assistant_tests {
             .iter()
             .find(|d| d.id == "asst_builtin_video_prompt")
             .unwrap();
-        assert_eq!(video.category, "ecommerce");
-        for skill in ["video-director", "h3-prompt-writing"] {
-            assert!(
-                video.skill_ids.iter().any(|s| s == skill),
-                "missing skill {skill}"
-            );
-        }
-        assert!(
-            video.system_prompt.contains("即梦")
-                && video.system_prompt.contains("视频文案")
-                && video.system_prompt.contains("音画同步")
-                && video.system_prompt.contains("不要生成视频")
-                && !video.system_prompt.contains("后备箱"),
-            "video expert must write the 15s four-shot Jimeng format, not a trunk scene"
-        );
+        assert_eq!(video.category, "video");
+        assert!(video.skill_ids.is_empty());
+        assert!(video.system_prompt.contains("普通参考图不等于首帧"));
+        assert_eq!(defs.iter().filter(|a| a.category == "video").count(), 3);
         let global = defs
             .iter()
             .find(|d| d.id == "asst_builtin_ecom_global")
@@ -2769,8 +2751,8 @@ mod builtin_assistant_tests {
                 && global.system_prompt.contains("Seller Central"),
             "cross-border prompt must follow amazon-listing-optimization"
         );
-        // 每个专家都拼接了去 AI 味文风块。
-        for d in &defs {
+        // 视频助手不叠加通用写作风格，其他专家保留文风块。
+        for d in defs.iter().filter(|d| d.category != "video") {
             assert!(
                 d.system_prompt.contains("像具体的人写的"),
                 "{} missing no-AI-flavor style block",
@@ -2832,9 +2814,9 @@ mod builtin_assistant_tests {
         assert!(merged.iter().any(|a| a.id == "asst_builtin_pm"));
         assert!(merged.iter().any(|a| a.id == "asst_builtin_ecom"));
         assert!(merged.iter().any(|a| a.id == "asst_builtin_video_prompt"));
-        // 17 内置 + 1 用户，无重复。
-        assert_eq!(merged.len(), 18);
-        assert_eq!(merged.iter().filter(|a| a.built_in).count(), 17);
+        // 19 内置 + 1 用户，无重复。
+        assert_eq!(merged.len(), 20);
+        assert_eq!(merged.iter().filter(|a| a.built_in).count(), 19);
     }
 
     #[test]

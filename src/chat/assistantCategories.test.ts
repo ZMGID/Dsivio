@@ -7,6 +7,7 @@ import {
 
 describe('assistant plaza categories', () => {
   it('accepts known plaza categories and drops unknown ones', () => {
+    expect(assistantPlazaCategory({ category: 'video' })).toBe('video')
     expect(assistantPlazaCategory({ category: 'ecommerce' })).toBe('ecommerce')
     expect(assistantPlazaCategory({ category: ' writing ' })).toBe('writing')
     expect(assistantPlazaCategory({ category: 'other' })).toBe('')

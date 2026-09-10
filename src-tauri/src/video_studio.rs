@@ -1,4 +1,5 @@
 //! Video UI and bundled chat plugin share the same Python workspace service.
+mod planning;
 use crate::{
     image_studio::{agent, types::StudioConfig},
     plugins::packages,
@@ -153,10 +154,18 @@ async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     .await
     .map_err(|_| "视频步骤超时；如已提交请恢复查询，勿重复生成")?
     .map_err(|e| e.to_string())?;
-    let result: Value = serde_json::from_slice(&output.stdout)
+    worker_result(&output.stdout)
+}
+
+fn worker_result(stdout: &[u8]) -> Result<Value, String> {
+    let result: Value = serde_json::from_slice(stdout)
         .map_err(|_| "视频服务未返回有效结果，请检查 Python 版本")?;
-    if let Some(error) = result.get("error").and_then(Value::as_str) {
-        return Err(error.into());
+    // Task records carry their own error field (including an empty string on
+    // success). Only the worker's standalone error envelope is an IPC failure.
+    if result.get("id").is_none() {
+        if let Some(error) = result.get("error").and_then(Value::as_str) {
+            return Err(if error.trim().is_empty() { "视频服务返回了空错误".into() } else { error.into() });
+        }
     }
     Ok(result)
 }
@@ -203,38 +212,64 @@ fn find_string(value: &Value, key: &str) -> Option<String> {
 }
 
 async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, String> {
-    let t = worker(app, "get", input.clone()).await?;
+    let mut preflight = input.clone();
+    preflight["operation"] = json!(action);
+    let t = worker(app, "preflight", preflight).await?;
     let id = t["id"].as_str().ok_or("无任务编号")?;
     let b = &t["brief"];
+    if action == "prepare" {
+        if t["approved"] != true {
+            return Err("请先确认当前剧本".into());
+        }
+        let mut save = input;
+        save["prompt"] = t["script"].clone();
+        return worker(app, "prompt_result", save).await;
+    }
+    let planner = if action == "plan" {
+        Some(planning::select(crate::chat::storage::load_assistant_index(app)?.assistants, b["assistantId"].as_str())?)
+    } else {
+        None
+    };
+    let config = planner.as_ref().map(|assistant| {
+        let settings = app.state::<crate::state::AppState>();
+        let (default_provider, default_model) = settings.settings_read().effective_chat_model();
+        StudioConfig {
+            agent_provider_id: if assistant.provider_id.is_empty() { default_provider } else { assistant.provider_id.clone() },
+            agent_model: if assistant.model.is_empty() { default_model } else { assistant.model.clone() },
+            ..StudioConfig::default()
+        }
+    }).unwrap_or_default();
     let root = source(app)?;
     let mut images: Vec<(String, String)> = b["images"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)
-        .map(|p| ("商品参考".into(), p.into()))
+        .enumerate()
+        .map(|(index, path)| {
+            let mode = b["inputMode"].as_str().unwrap_or("auto");
+            let role = if (mode == "image" && index == 0) || (mode == "frames" && b["firstFrame"] == path) {
+                "用户指定首帧"
+            } else if mode == "frames" && b["lastFrame"] == path {
+                "用户指定尾帧"
+            } else {
+                "用途以用户要求为准，不默认用作首帧"
+            };
+            (format!("参考图片 {}（{role}）", index + 1), path.into())
+        })
         .collect();
     for (_, path) in &mut images {
         *path = image_url(path)?;
     }
     let mut analysis = Value::Null;
     let (instruction, data, field, result_action) = if action == "plan" {
-        let guide = std::fs::read_to_string(root.join("skills/video-director/SKILL.md"))
-            .map_err(|e| e.to_string())?;
-        if let Some((note, previous)) = planning_revision(
+        let revision = planning_revision(
             input["note"].as_str(),
             input["previousScript"].as_str().or_else(|| t["script"].as_str()),
-        ) {
-            (
-                format!("{guide}\nRevise the current shooting script using the user's notes. Return {{\"script\":\"完整中文剧本\"}} and no concepts. Preserve duration, product identity, shot count unless the notes require a change, verbatim dialogue, speechMode, music, and all facts the user did not mention. Apply only the requested changes."),
-                revise_context(previous, note, b),
-                "script",
-                "plan_result",
-            )
-        } else {
-            (format!("{guide}\nFor a broad request without selectedConcept or template, return {{\"concepts\":[\"一句话拍法1\",\"一句话拍法2\",\"一句话拍法3\"]}} and no script. These must be genuinely different approaches. Otherwise return {{\"script\":\"完整中文剧本\"}}. Honor selectedConcept. Include 3–6 contiguous shots covering the requested duration, action, camera, sound/dialogue, continuity and ending. Honor the selected template, do not add CTA unless requested. Respect speechMode: auto designs a clearly audible soundtrack appropriate to the user request or reference, including presenter speech for a speaking/presenter advertisement. Never default to no speech, no music, barely audible ambience, or silence. Missing reference transcription means unknown speech, not evidence of no speech; an explicitly requested dialogue language overrides the default language. dialogue preserves supplied dialogue verbatim in its language; ambient has no speech; silent has no audio. Follow music requirements. Reference video/audio paths are conditioning inputs, not observed evidence: never invent their contents."),
-                b.clone(), "script", "plan_result")
-        }
+        );
+        let instruction = planning::instruction(planner.as_ref().ok_or("无视频助手")?, b, revision.is_some());
+        let context = revision.map(|(note, previous)| revise_context(previous, note, b)).unwrap_or_else(|| b.clone());
+        (instruction, context, "script", "plan_result")
     } else if action == "analyze" {
         analysis = mcp(
             app,
@@ -264,29 +299,12 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
         (format!("{}\nReturn {{\"script\":\"逐镜头拆解\"}} in the requested report_language (default Chinese). Follow the user request as the analysis focus. Clearly preserve warnings and missing evidence. Separate visible text, product logos, and audible dialogue. Never invent observations. Include reusable shot directions.",
             std::fs::read_to_string(root.join("skills/video-reference-analysis/SKILL.md")).map_err(|e|e.to_string())?), analysis_context(evidence, b), "script", "analysis_result")
     } else {
-        if t["approved"] != true {
-            return Err("请先确认当前剧本".into());
-        }
-        let guide = if b["route"] == "grok" {
-            "Convert the approved script into one English Grok video prompt; no H3-only section tags. Preserve verbatim dialogue and on-screen text in their original language. Respect speechMode and music. Keep the approved sound design and audible volume; never insert no dialogue, no narration, no music, or near-silence unless the approved script explicitly requires it. In reference mode use <IMAGE_0>, <IMAGE_1> in upload order and <AUDIO_0>, <AUDIO_1> for the selected voiceIds in order.".into()
-        } else {
-            let name = if b["inputMode"] == "frames"
-                || (images.is_empty()
-                    && b["referenceVideos"].as_array().is_none_or(|v| v.is_empty()))
-            {
-                "base-en.txt"
-            } else {
-                "ref-en.txt"
-            };
-            std::fs::read_to_string(root.join("skills/h3-prompt-writing/references").join(name))
-                .map_err(|e| e.to_string())?
-        };
-        (format!("{guide}\nReturn {{\"prompt\":\"complete prompt\"}}. Convert ONLY this approved script. Do not add or remove shots or facts."),json!({"script":t["script"],"brief":b}),"prompt","prompt_result")
+        return Err("不支持的视频规划操作".into());
     };
     let result = agent::run_specialized(
         app,
         id,
-        &StudioConfig::default(),
+        &config,
         &instruction,
         data,
         images,
@@ -572,6 +590,16 @@ fn revise_context(script: &str, note: &str, brief: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn worker_task_errors_are_data_not_transport_errors() {
+        for (status, error) in [("succeeded", ""), ("failed", "供应商拒绝请求"), ("uncertain", "提交结果未知")] {
+            let record = json!({"id":"task", "status":status, "error":error});
+            assert_eq!(worker_result(&serde_json::to_vec(&record).unwrap()).unwrap(), record);
+        }
+        assert_eq!(worker_result(br#"{"error":"worker failed"}"#).unwrap_err(), "worker failed");
+        assert!(worker_result(br#"{"error":""}"#).is_err());
+        assert!(worker_result(b"invalid JSON").is_err());
+    }
     #[test]
     fn documented_chat_task_actions_reach_the_public_video_service() {
         let guide = include_str!("../resources/plugins/dsvideo-plugin/STUDIO.md");

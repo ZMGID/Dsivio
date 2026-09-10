@@ -1,10 +1,10 @@
 # Release Packaging
 
-This document is the required release checklist for Kivio Desktop installers. Do not publish a new release only from memory; follow this file.
+This document is the release checklist for Dsivio installers (historical releases used Kivio Desktop). Do not publish a new release only from memory; follow this file.
 
 ## Current Packaging Flow
 
-Kivio Desktop is packaged by Tauri.
+Dsivio is packaged by Tauri. Current product name is `Dsivio`; the application identifier and Rust binary retain `com.zmair.kivio` and `kivio`. Historical asset names and README layout examples below must be checked against current configuration before a release.
 
 Local packaging (debug / inspect only — published installers come from GitHub Actions):
 
@@ -21,8 +21,11 @@ npm run build
 1. `npm run build:swift`
    - Builds the macOS Swift sidecars.
    - On non-macOS platforms, creates stub binaries so Tauri `externalBin` validation passes.
-2. `tauri build`
-   - Runs `beforeBuildCommand` from `src-tauri/tauri.conf.json`, currently `npm run build:ui`.
+2. `npm run protocol:check`
+   - Verifies generated TypeScript and JSON Schemas against the Rust protocol.
+3. `tauri build`
+   - Runs `beforeBuildCommand` from `src-tauri/tauri.conf.json`: `npm run build:video-runtime && npm run build:ui`.
+   - Prepares bundled Python / Node / media tools and MCP dependencies; see [video runtime build and verification](video-studio.md#内置运行环境构建).
    - Vite writes the production frontend to `dist/`.
    - Tauri packages `dist/`, configured `externalBin` files, configured `resources`, and platform icons into DMG / MSI / NSIS bundles.
 
@@ -117,6 +120,8 @@ gh release view vX.Y.Z --repo ZMGID/kivio --json url,assets
 The release is not complete until the final installer contains loose `Contents/Resources/skills/pdf|docx|xlsx` Skill files.
 
 ## README format
+
+Historical layout reference: as of 2026-09-10, the root README is a placeholder and the English/Chinese companion files below are absent. These examples apply if the bilingual release pages are restored; they do not describe the current checkout. Developer navigation is in [the documentation index](README.md).
 
 GitHub's default landing page is **Chinese-first**, in the CC Switch README shape. Agents and humans updating the README for a release **must keep this layout**. Do not revert to the old short bilingual page (English-first header, inline “What's New” bullets, LINUX DO footer, no sponsor block, no star history).
 

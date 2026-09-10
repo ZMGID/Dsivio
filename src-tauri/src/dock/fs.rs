@@ -694,10 +694,11 @@ fn spawn_open_command(target: &Path, kind: &str, mode: &str) -> Result<(), Strin
         command.arg("-R");
     }
     command.arg(target);
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("系统打开失败（macOS open）：{e}"))
+    let output = command.output().map_err(|e| format!("系统打开失败（macOS open）：{e}"))?;
+    if !output.status.success() {
+        return Err(format!("系统打开失败（macOS open）：{}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]

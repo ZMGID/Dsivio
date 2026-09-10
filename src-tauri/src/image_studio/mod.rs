@@ -54,7 +54,7 @@ pub fn initialize_skill_workspace(app: &AppHandle) -> Result<(), String> {
 fn active() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
     ACTIVE.get_or_init(Default::default)
 }
-fn lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+pub(crate) fn lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
     storage::STORE_LOCK
         .get_or_init(Default::default)
         .lock()
@@ -444,12 +444,13 @@ pub fn image_studio_action(
     output::prepare(&mut t, &cfg)?;
     if matches!(
         action.kind.as_str(),
-        "start" | "sample" | "bulk" | "generate" | "retry" | "revise"
+        "start" | "sample" | "bulk" | "generate" | "retry" | "revise" | "plan"
     ) || matches!(
         action.kind.as_str(),
-        "workflow_trial" | "workflow_refine" | "workflow_edit" | "workflow_produce"
+        "workflow_trial" | "workflow_refine" | "workflow_edit" | "workflow_produce" | "workflow_build"
     ) {
         engine::validate(&cfg, &t.brief)?;
+        engine::provider(&app, &cfg)?;
     }
     let cancelled = Arc::new(AtomicBool::new(false));
     active()
@@ -691,7 +692,7 @@ async fn execute_step(
             if t.plans.iter().any(|plan| plan.product_id == p.id) {
                 continue;
             }
-            t.progress = format!("Agent 正在规划 {} 的每页画面…", p.name);
+            t.progress = if t.brief.feature == "gen" { "正在使用原始出图要求…".into() } else { format!("Agent 正在规划 {} 的每页画面…", p.name) };
             persist(t)?;
             let plans = agent::plan(app, t, &p, cfg, flag.clone()).await?;
             t.plans.extend(plans);
@@ -810,7 +811,7 @@ async fn execute_step(
                 .ok_or("该页没有可修改的图片")?;
             plan.refs
                 .insert(0, previous.path.clone().unwrap_or_default());
-            plan.prompt=format!("Edit the FIRST image. Preserve everything except the requested change. Remaining images are ground-truth product references. Requested change: {}\nOriginal plan: {}",a.note,plan.prompt);
+            plan.prompt=format!("Edit the FIRST image. Preserve everything except the requested change. Remaining images retain their original product/layout/style roles. The requested change takes priority over conflicting details in the original plan. Do not restore elements removed in the first image. Requested change: {}\nOriginal plan (context only): {}",a.note,plan.prompt);
         }
     }
     let task_id = t.id.clone();

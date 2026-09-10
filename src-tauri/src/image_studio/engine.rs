@@ -71,7 +71,7 @@ pub fn validate(cfg: &StudioConfig, brief: &Brief) -> Result<(), String> {
     Ok(())
 }
 
-fn provider(app: &AppHandle, cfg: &StudioConfig) -> Result<ModelProvider, String> {
+pub(super) fn provider(app: &AppHandle, cfg: &StudioConfig) -> Result<ModelProvider, String> {
     app.state::<AppState>()
         .settings_read()
         .get_provider(&cfg.provider_id)

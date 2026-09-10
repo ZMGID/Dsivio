@@ -1,0 +1,42 @@
+{
+  "task": "0a4a3cd5-387d-46ec-b436-42d0dbd59a10",
+  "status": "succeeded",
+  "error": "",
+  "outputExists": true,
+  "media": {
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+      {
+        "codec_type": "video",
+        "width": 720,
+        "height": 1280
+      },
+      {
+        "codec_type": "audio"
+      },
+      {
+        "codec_type": "video",
+        "width": 720,
+        "height": 1280
+      }
+    ],
+    "format": {
+      "duration": "15.041667"
+    }
+  },
+  "systemActions": [
+    {
+      "action": "open",
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "action": "reveal",
+      "exitCode": 0,
+      "stderr": ""
+    }
+  ],
+  "taskMutated": false,
+  "workerCheck": "Bundled source runtime passed; copied target/debug Python receives SIGKILL. Development resolver now uses source runtime."
+}

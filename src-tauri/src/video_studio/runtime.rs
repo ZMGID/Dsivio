@@ -27,6 +27,12 @@ fn resolve_resource_directory(
 ) -> Result<PathBuf, String> {
     // Packaged debug apps must also work away from the developer checkout.
     if let Ok(path) = &bundled {
+        // `tauri dev` recopies executables into target/debug during rebuilds.
+        // Use the stable checkout runtime in this case; the copied Python can
+        // become unlaunchable while the original runtime still works.
+        if development && path == &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug") {
+            return Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources"));
+        }
         if path.join("video-runtime/runtime.json").is_file() || !development {
             return Ok(path.clone());
         }
@@ -121,6 +127,16 @@ mod tests {
             resolve_resource_directory(Err("unknown path".into()), true).unwrap(),
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")
         );
+    }
+
+    #[test]
+    fn ordinary_dev_uses_stable_source_instead_of_recopied_executables() {
+        let target = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug");
+        assert_eq!(
+            resolve_resource_directory(Ok(target.clone()), true).unwrap(),
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")
+        );
+        assert_eq!(resolve_resource_directory(Ok(target.clone()), false).unwrap(), target);
     }
 
     #[test]

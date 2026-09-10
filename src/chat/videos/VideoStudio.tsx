@@ -21,7 +21,6 @@ import { api, isTauriRuntime } from '../../api/tauri'
 import { Button, IconButton } from '../../components/Button'
 import { Field, StudioSelect } from '../images/StudioPanels'
 import {
-  newVideoBrief,
   videoStatus,
   videoRatios,
   languages,
@@ -34,8 +33,9 @@ import builtin from '../../../src-tauri/resources/plugins/dsvideo-plugin/skills/
 import '../images/imageStudio.css'
 import '../images/studioLayout.css'
 import './VideoStudio.css'
+import { VideoAssistantSelect } from './VideoAssistantSelect'
 import { VideoMediaOptions } from './VideoMediaOptions'
-import { readVideoDrafts, writeVideoDraft, type VideoEntry } from './videoDrafts'
+import { readVideoDrafts, readVideoTaskDraft, removeVideoTaskDraft, writeVideoDraft, newVideoDraftBrief, rememberVideoAssistant, rememberVideoSettings, preferredVideoResolution, videoResolutions, type VideoEntry } from './videoDrafts'
 import { ChatMarkdown } from '../ChatMarkdown'
 import { StudioToast } from '../studio/StudioToast'
 import { useSharedDraft } from '../studio/useSharedDraft'
@@ -47,6 +47,7 @@ import {
 import { useTaskLibrary } from '../studio/useTaskLibrary'
 import { VideoTaskPanel } from './VideoTaskPanel'
 import { ExecutionStatus } from '../studio/ExecutionStatus'
+import { videoInputIssue, videoSetupIssue } from './videoValidation'
 import { useVideoTaskProgress } from './useVideoTaskProgress'
 
 const preview: VideoBootstrap = {
@@ -96,7 +97,7 @@ export default function VideoStudio() {
   const [view, setView] = useState<
     VideoEntry | 'templates' | 'settings' | 'tasks'
   >('creation')
-  const [brief, setBrief] = useState<VideoBrief>(() => initial?.brief || newVideoBrief())
+  const [brief, setBrief] = useState<VideoBrief>(() => initial?.brief || newVideoDraftBrief())
   const [task, setTask] = useState<VideoTask | undefined>(initial?.task)
   const [script, setScript] = useState(initial?.script || '')
   const [dirty, setDirty] = useState(initial?.dirty || false)
@@ -116,6 +117,7 @@ export default function VideoStudio() {
   const configVersion = useRef('')
   const [model, setModel] = useState('grok-imagine-video-1.5')
   const [video, setVideo] = useState('')
+  const [previewError, setPreviewError] = useState('')
   const [recoveryId, setRecoveryId] = useState('')
   const [dropActive, setDropActive] = useState(false)
   const [dropTarget, setDropTarget] = useState<VideoDropZone | null>(null)
@@ -182,6 +184,7 @@ export default function VideoStudio() {
   }, [error])
   useEffect(() => {
     setVideo('')
+    setPreviewError('')
     let alive = true
     if (native && task?.output)
       void api
@@ -189,11 +192,11 @@ export default function VideoStudio() {
         .then((url) => {
           if (alive) setVideo(url)
         })
-        .catch(() => {})
+        .catch(e => { if (alive) setPreviewError(String(e) || '预览加载失败，请打开本地成片。') })
     return () => {
       alive = false
     }
-  }, [native, task?.id, task?.output, task?.revision])
+  }, [native, task?.id, task?.output, task?.status])
   // Refresh shared chat-created templates when returning to this window.
   useEffect(() => {
     const focus = () => {
@@ -236,7 +239,7 @@ export default function VideoStudio() {
     const draft = readVideoDrafts()[next]
     setEntry(next)
     setView(next)
-    setBrief(draft?.brief || newVideoBrief(next === 'creation' ? 'creation' : 'analysis'))
+    setBrief(draft?.brief || newVideoDraftBrief(next === 'creation' ? 'creation' : 'analysis'))
     setTask(draft?.task)
     setScript(draft?.script || '')
     setDirty(draft?.dirty || false)
@@ -263,25 +266,42 @@ export default function VideoStudio() {
     }))
   }
   function change(values: Partial<VideoBrief>) {
-    setBrief((b) => ({ ...b, ...values }))
+    const next = { ...brief, ...values }
+    if (values.assistantId !== undefined) rememberVideoAssistant(values.assistantId)
+    if (values.route !== undefined) {
+      rememberVideoSettings(brief)
+      next.resolution = preferredVideoResolution(next)
+    }
+    if (values.route !== undefined || values.resolution !== undefined) rememberVideoSettings(next)
+    setBrief(next)
     setDirty(true)
   }
   const openTask = (t: VideoTask) => void guarded('打开任务…', async () => {
     // Opening another task must not depend on saving the current server task.
     // The local draft is the recovery copy; an implicit save can fail on a stale
     // revision (or mutate an approved task) and make the clicked row appear inert.
-    writeVideoDraft(entry, { brief, task, script, step, dirty })
+    if (!writeVideoDraft(entry, { brief, task, script, step, dirty })) {
+      throw new Error('本地草稿保存失败，请先保存当前任务后再切换。')
+    }
     const latest = operationsRef.current.has(t.id) ? t : await api.videoStudioTask('get', { id: t.id })
+    const draft = readVideoTaskDraft(latest.id)
     accept(latest)
     setEntry(latest.brief.mode)
     setView(latest.brief.mode)
     setEditingScript(false)
     setStep(latest.prompt || latest.output ? 2 : latest.script || latest.concepts?.length ? 1 : 0)
+    if (draft?.dirty && draft.task?.revision === latest.revision && !['submitting', 'running', 'uncertain'].includes(latest.status)) {
+      setBrief(draft.brief)
+      setScript(draft.script)
+      setDirty(true)
+      setStep(draft.step)
+    }
   })
   function fresh(mode: VideoEntry, template?: VideoTemplate) {
+    if (brief.mode === 'creation') rememberVideoSettings(brief)
     setTask(undefined)
     setBrief({
-      ...newVideoBrief(mode === 'creation' ? 'creation' : 'analysis'),
+      ...newVideoDraftBrief(mode === 'creation' ? 'creation' : 'analysis'),
       template,
       ...(template?.spec?.duration_seconds
         ? { duration: template.spec.duration_seconds }
@@ -312,26 +332,42 @@ export default function VideoStudio() {
       setBusy('')
     }
   }
-  async function saved(patch?: Partial<VideoBrief>) {
+  async function saved(patch?: Partial<VideoBrief>, scriptOverride?: string) {
+    const nextScript = scriptOverride ?? script
     const nextBrief = { ...brief, ...patch, name: brief.name || brief.request.trim().slice(0, 24) || (brief.mode === 'analysis' ? '视频拆解' : '视频创作') }
     let t = task
+    if (t) {
+      try {
+        await api.videoStudioTask('get', { id: t.id })
+      } catch (error) {
+        if (!String(error).includes('VIDEO_TASK_NOT_FOUND') || ['submitting', 'running', 'uncertain'].includes(t.status)) throw error
+        t = undefined
+      }
+    }
+    const creating = !t
     if (!t) t = await api.videoStudioTask('create', { brief: nextBrief })
-    if (dirty || patch)
+    if (dirty || patch || scriptOverride !== undefined || (creating && nextScript.trim()))
       t = await api.videoStudioTask('save', {
         id: t.id,
         revision: t.revision,
         brief: nextBrief,
-        script,
+        script: nextScript,
       })
     accept(t)
     return t
   }
   async function run(action: string, patch?: Partial<VideoBrief>) {
     if (busy) return
+    if (action === 'use_prompt' && !brief.request.trim()) { setError('请先填写已有的视频提示词'); return }
+    if (['plan', 'use_prompt', 'analyze', 'approve', 'prepare', 'quote', 'submit'].includes(action)) {
+      const issue = videoInputIssue({ ...brief, ...patch }, action === 'analyze', view === 'remake', script) || (action === 'analyze' ? '' : videoSetupIssue(brief, data))
+      if (issue) { setError(issue); return }
+      if (action === 'submit' && (!task?.approved || dirty || !task.prompt)) { setError('请先确认当前版本的拍摄方案'); return }
+    }
     let t: VideoTask | undefined
     await guarded('正在保存素材与要求…', async () => {
       t = (action === 'get' || action === 'poll') && task
-        ? task : await saved(patch)
+        ? task : await saved(patch, action === 'use_prompt' ? brief.request : undefined)
     })
     if (!t || operationsRef.current.has(t.id)) return
     const id = t.id
@@ -351,16 +387,21 @@ export default function VideoStudio() {
       if (syncCurrent.current.task?.id === id) accept(result)
     }
     try {
-      setBusy(({ plan: 'AI 正在编写拍摄方案…', analyze: '正在分析参考视频…', approve: '正在确认剧本…', submit: '正在提交视频生成…', quote: '正在查询报价…', poll: '正在查询生成状态…' } as Record<string, string>)[action] || '正在读取任务…')
+      setBusy(({ plan: 'AI 正在编写拍摄方案…', use_prompt: '正在使用原提示词…', analyze: '正在分析参考视频…', approve: '正在确认剧本…', submit: '正在提交视频生成…', quote: '正在查询报价…', poll: '正在查询生成状态…' } as Record<string, string>)[action] || '正在读取任务…')
       if (action === 'get' || action === 'poll') t = await api.videoStudioTask('get', { id })
       if (action === 'poll' && (t.status === 'succeeded' || !t.remote?.id)) { acceptResult(t); return }
       if (action !== 'save' && action !== 'get') {
-        t = await api.videoStudioTask(action, { id, revision: t.revision, confirmSpend: action === 'submit' })
+        t = await api.videoStudioTask(action === 'use_prompt' ? 'approve' : action, { id, revision: t.revision, confirmSpend: action === 'submit' })
         acceptResult(t)
-        if (action === 'approve') {
-          setBusy('AI 正在转换生成提示词…')
-          t = await api.videoStudioTask('prepare', { id, revision: t.revision })
-          acceptResult(t)
+        if (action === 'approve' || action === 'use_prompt') {
+          if (action === 'use_prompt' && t.brief.route !== 'grok') {
+            t = await api.videoStudioTask('prompt_result', { id, revision: t.revision, prompt: t.script })
+            acceptResult(t)
+          } else if (t.brief.route !== 'grok') {
+            setBusy('正在准备生成提示词…')
+            t = await api.videoStudioTask('prepare', { id, revision: t.revision })
+            acceptResult(t)
+          }
           setStepIfCurrent(2)
           setBusy('正在查询报价…')
           try { t = await api.videoStudioTask('quote', { id, revision: t.revision }) } catch { /* Pricing is optional. */ }
@@ -368,7 +409,7 @@ export default function VideoStudio() {
       }
       acceptResult(t)
       if (action === 'plan' || action === 'analyze') setStepIfCurrent(1)
-      if (action === 'approve' || action === 'submit') setStepIfCurrent(2)
+      if (action === 'approve' || action === 'use_prompt' || action === 'submit') setStepIfCurrent(2)
     } catch (e) {
       setError(`${t.brief.name || '视频任务'}：${String(e)}`)
     } finally {
@@ -377,11 +418,12 @@ export default function VideoStudio() {
     }
   }
   async function revisePlan() {
-    if (!task || !reviseNote.trim() || busy) return
+    if (!script.trim() || !reviseNote.trim() || controlsDisabled || inputIssue) return
     await guarded('正在按意见改写拍摄方案…', async () => {
+      const current = dirty || !task ? await saved() : task
       const next = await api.videoStudioTask('revise', {
-        id: task.id,
-        revision: task.revision,
+        id: current.id,
+        revision: current.revision,
         note: reviseNote.trim(),
       })
       accept(next)
@@ -484,20 +526,10 @@ export default function VideoStudio() {
     event.stopPropagation()
     if (zone) markDropTarget(zone)
   }
+  const inputIssue = videoInputIssue(brief, isAnalysis, view === 'remake', script) || (isAnalysis ? '' : videoSetupIssue(brief, data))
   const controlsDisabled = !!busy || locked
   const route = brief.route
-  const resolutions =
-    route === 'grok'
-      ? brief.inputMode === 'reference' ||
-        (brief.inputMode !== 'image' &&
-          (brief.images.length > 1 || !!brief.voiceIds?.length))
-        ? ['480p', '720p']
-        : ['480p', '720p', '1080p']
-      : route === 'minimax'
-        ? ['768P', '2K']
-        : route === 'comfy'
-          ? ['0.5', '1']
-          : []
+  const resolutions = videoResolutions(brief)
 
   return (
     <div className={`kv image-studio video-studio${isAnalysis ? " vs-analysis" : ""}${view === "remake" ? " vs-remake" : ""}`}>
@@ -592,7 +624,14 @@ export default function VideoStudio() {
             <>
             {progressError && <p role="status" className="tl-message">{progressError}</p>}
             {runtimeCheck === 'failed' && <p role="alert" className="tl-message tl-error">任务读取失败：{runtimeError}。请刷新任务重试。</p>}
-            <VideoTaskPanel activeOperations={operations} tasks={data.tasks} library={library} loading={runtimeCheck === 'checking' || runtimeCheck === 'pending'} disabled={!!foregroundBusy}
+            <VideoTaskPanel onDeleted={id => {
+                removeVideoTaskDraft(id)
+                setData(current => ({ ...current, tasks: current.tasks.filter(t => t.id !== id) }))
+                for (const [key, draft] of Object.entries(readVideoDrafts())) {
+                  if (draft?.task?.id === id) writeVideoDraft(key as VideoEntry, { ...draft, task: undefined, dirty: false })
+                }
+                if (task?.id === id) { setTask(undefined); setDirty(false) }
+              }} activeOperations={operations} tasks={data.tasks} library={library} loading={runtimeCheck === 'checking' || runtimeCheck === 'pending'} disabled={!!foregroundBusy}
               currentId={task?.id} onOpen={openTask} onRefresh={() => refresh(true)} onNew={() => void guarded('新建视频…', async () => {
                 if (dirty && (brief.request.trim() || brief.images.length || script.trim())) await saved()
                 fresh('creation')
@@ -696,7 +735,7 @@ export default function VideoStudio() {
                 <section className="vs-panel">
                   <h3>内置运行环境</h3>
                   <p className="vs-muted">
-                    导演使用应用当前聊天模型，处理图片需模型支持视觉。
+                    提示词使用所选助手的模型，未指定时使用当前聊天模型；处理图片需模型支持视觉。
                   </p>
                   <dl className="vs-specs">
                     <dt>Python</dt>
@@ -831,6 +870,7 @@ export default function VideoStudio() {
               <div className="vs-heading">
                 <h2>{view === 'remake' ? '参考仿拍' : isAnalysis ? '视频拆解' : '视频创作'}</h2>
               </div>
+              {step > 0 && inputIssue && <p role="status">{inputIssue} <Button size="sm" onClick={() => setStep(0)}>补全素材与设置</Button></p>}
               <div className="is-work-toolbar">
                 <div
                   className="is-stage-tabs"
@@ -845,6 +885,7 @@ export default function VideoStudio() {
                       role="tab"
                       aria-selected={step === i}
                       key={name}
+                      disabled={i > step && (controlsDisabled || !!inputIssue || dirty || (i === 1 ? !script.trim() && !task?.concepts?.length : !task?.approved || !task?.prompt))}
                       onClick={() => setStep(i)}
                     >
                       <span>{i + 1}</span>
@@ -1085,6 +1126,8 @@ export default function VideoStudio() {
                           placeholder={isAnalysis ? '例如：重点看开场、商品展示和镜头节奏。留空则完整拆解。' : '例如：让背包在自然光下缓慢转动，展示正面细节，不要口播。'}
                           onChange={e => change({ request: e.target.value, selectedConcept: undefined })} />
                       </Field>
+                      {!isAnalysis && <VideoAssistantSelect value={brief.assistantId} disabled={controlsDisabled}
+                        onChange={assistantId => change({ assistantId, selectedConcept: undefined })} />}
                       {brief.template && (
                         <div className="vs-notice">
                           已选模板：{brief.template.name}
@@ -1184,7 +1227,7 @@ export default function VideoStudio() {
                         </Field>
                         <Field
                           label="生成服务"
-                          hint="请选择本次使用的服务，费用会在生成前显示。"
+                          hint="记住上次选择的服务和清晰度，费用会在生成前显示。"
                         >
                           <StudioSelect
                             disabled={controlsDisabled}
@@ -1192,7 +1235,6 @@ export default function VideoStudio() {
                             onChange={(e) =>
                               change({
                                 route: e.target.value as VideoBrief['route'],
-                                resolution: '',
                                 inputMode: 'auto',
                                 ratio: '9:16',
                               })
@@ -1229,12 +1271,20 @@ export default function VideoStudio() {
                       </>
                     )}
                   </section>
+                  {inputIssue && <p className="vs-muted" role="status">{inputIssue} <Button size="sm" onClick={() => setView('settings')}>配置生成服务</Button></p>}
                   <div className="vs-actions studio-primary-actions">
+                    {!isAnalysis && <Button
+                      disabled={!native || controlsDisabled || !!inputIssue || !brief.request.trim()}
+                      onClick={() => void run('use_prompt')}
+                      title="原文作为生成提示词，跳过方案设计和改写，进入生成页"
+                    >
+                      <Clapperboard size={15} />使用原提示词生成
+                    </Button>}
                     <Button
                       variant="primary"
                       disabled={
                         !native ||
-                        controlsDisabled ||
+                        controlsDisabled || !!inputIssue ||
                         (isAnalysis
                           ? !brief.source.trim() || (view === 'remake' && !brief.images.length)
                           : !brief.request.trim() && !brief.template)
@@ -1253,19 +1303,45 @@ export default function VideoStudio() {
                 <>
                   {!!task?.concepts?.length && !script && <section className="vs-panel vs-concepts">
                     <h3>选一个拍法</h3><p className="vs-muted">选好后，为你展开完整方案。</p>
-                    {task.concepts.map((concept, index) => <Button key={concept} disabled={!native || controlsDisabled} onClick={() => void run('plan', { selectedConcept: concept })}><b>0{index + 1}</b><span>{concept}</span><span>选择此拍法 →</span></Button>)}
+                    {task.concepts.map((concept, index) => <Button key={concept} disabled={!native || controlsDisabled || !!inputIssue} onClick={() => void run('plan', { selectedConcept: concept })}><b>0{index + 1}</b><span>{concept}</span><span>选择此拍法 →</span></Button>)}
                   </section>}
-                  {(!task?.concepts?.length || script) && <section className="vs-panel">
-                    <div className="vs-heading">
-                      <h3>{isAnalysis ? '逐镜头拆解' : '拍摄方案'}</h3>
-                      <small className="vs-muted">
-                        {task?.approved && !dirty
-                          ? '已确认此版本'
-                          : '可编辑 · 修改后需重新确认'}
-                      </small>
+                  {(!task?.concepts?.length || script) && <section className="vs-panel vs-plan-panel">
+                    <div className="vs-plan-controls">
+                      <div className="vs-plan-toolbar">
+                        <div className="vs-plan-title">
+                          <h3>{isAnalysis ? '逐镜头拆解' : '拍摄方案'}</h3>
+                          <small className="vs-muted">{task?.approved && !dirty ? '已确认此版本' : '修改后需重新确认'}</small>
+                        </div>
+                        <div className="vs-plan-buttons">
+                          <Button variant="ghost" size="sm" disabled={controlsDisabled} onClick={() => setEditingScript(!editingScript)}>{editingScript ? '完成编辑' : '编辑全文'}</Button>
+                          {view === 'creation' && <Button
+                          variant="primary" size="sm"
+                          disabled={!native || controlsDisabled || !!inputIssue || !script.trim()}
+                          onClick={() => void run('approve')}
+                        >确认方案</Button>}
+                        </div>
+                      </div>
+                      {view === 'creation' && !!script.trim() && <div className="vs-plan-revision">
+                        <textarea
+                          aria-label="修改要求"
+                          className="kv-textarea custom-scrollbar"
+                          rows={2}
+                          disabled={controlsDisabled}
+                          value={reviseNote}
+                          onChange={e => setReviseNote(e.target.value)}
+                          placeholder="想调整哪里？例如：开头改成鞋子特写，结尾不要字幕。"
+                        />
+                        <div className="vs-plan-revision-footer">
+                          <span>说明要改的地方，AI 帮你调整方案</span>
+                          <Button size="sm"
+                            disabled={!native || controlsDisabled || !!inputIssue || !reviseNote.trim()}
+                            onClick={() => void revisePlan()}
+                          ><WandSparkles size={15} />让 AI 修改</Button>
+                        </div>
+                      </div>}
+                      {view === 'creation' && (!route || !brief.resolution) && <p className="vs-muted vs-plan-hint">请先在「素材与要求」中选择生成服务和清晰度。</p>}
                     </div>
                     {script && !editingScript && <div className="vs-script-preview"><ChatMarkdown content={script} /></div>}
-                    <Button variant="ghost" size="sm" onClick={() => setEditingScript(!editingScript)}>{editingScript ? '完成编辑' : '编辑全文'}</Button>
                     {(editingScript || !script) && <textarea
                       aria-label="视频方案"
                       className="kv-textarea vs-script custom-scrollbar"
@@ -1277,28 +1353,6 @@ export default function VideoStudio() {
                       }}
                       placeholder="先回到素材与要求设计方案，也可以在这里填写已有剧本。"
                     />}
-                    <div className="vs-actions">
-                      {view === 'creation' && (
-                        <Button
-                          variant="primary"
-                          disabled={
-                            !native ||
-                            controlsDisabled ||
-                            !script.trim() ||
-                            !route ||
-                            !brief.resolution
-                          }
-                          onClick={() => void run('approve')}
-                        >
-                          确认方案
-                        </Button>
-                      )}
-                    </div>
-                    {view === 'creation' && (!route || !brief.resolution) && (
-                      <p className="vs-muted">
-                        请先在「素材与要求」中选择生成服务和清晰度。
-                      </p>
-                    )}
                   </section>}
                   {isAnalysis && (
                     <section className="vs-panel">
@@ -1342,6 +1396,7 @@ export default function VideoStudio() {
                     <section className="vs-panel">
                       <h3>生成结果</h3>
                       {task.media && <p className="vs-muted">{task.media.width}×{task.media.height} · {task.media.duration.toFixed(2)} 秒 · {task.media.hasAudio ? '有音轨' : '无音轨'}</p>}
+                      {previewError && <p role="status" className="vs-muted">{previewError}</p>}
                       {video && (
                         <video
                           className="vs-video"
@@ -1412,7 +1467,7 @@ export default function VideoStudio() {
                         />
                       </Field>
                       <Button
-                        disabled={!!busy || !templateName.trim()}
+                        disabled={!!busy || dirty || task?.status !== 'succeeded' || !templateName.trim()}
                         onClick={() =>
                           void guarded('保存成片模板…', async () => {
                             await api.videoStudioTemplate('template_save', {
@@ -1438,7 +1493,7 @@ export default function VideoStudio() {
                       {brief.resolution || '未选清晰度'}
                     </p>
                     <details className="vs-generation-prompt">
-                      <summary>查看转换后的提示词</summary>
+                      <summary>查看生成提示词</summary>
                       <pre className="custom-scrollbar">
                         {dirty
                           ? '内容已修改，请重新确认剧本。'
@@ -1482,7 +1537,7 @@ export default function VideoStudio() {
                             !native ||
                             !!busy ||
                             dirty ||
-                            !task?.prompt
+                            !task?.prompt || !task?.approved || !!inputIssue
                           }
                           onClick={() => void run('submit')}
                         >

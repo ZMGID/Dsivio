@@ -45,6 +45,8 @@ def submission_failure(error):
     reason = reasons.get(status, '连接未建立，请检查服务地址和网络后重试。') if rejected else (
         '服务返回异常，尚不能确认是否已接单。暂不重复提交，避免重复生成。' if status else
         '没有收到可识别的任务编号，可能是响应格式不兼容或连接中断。暂不重复提交，避免重复生成。')
+    if status and 'prompt length exceeds the maximum allowed length' in str(error).lower():
+        reason = '供应商返回提示词长度错误：Prompt length exceeds the maximum allowed length of 4096。服务未说明按字符还是字节计数。'
     return {'state': 'rejected' if rejected else 'uncertain', 'httpStatus': status,
             'reason': reason, 'retryable': rejected}
 
@@ -169,7 +171,7 @@ def validate(t):
     count = len(b.get('images', []))
     mode = b.get('inputMode', 'auto')
     if mode == 'auto':
-        mode = 'reference' if route == 'grok' and (count > 1 or b.get('voiceIds')) else 'image' if route == 'grok' and count else 'reference' if count or b.get('referenceVideos') else 'text'
+        mode = 'reference' if count or b.get('referenceVideos') or (route == 'grok' and b.get('voiceIds')) else 'text'
     if mode not in ('text', 'image', 'reference', 'frames'):
         raise ValueError('未知生成模式')
     if mode == 'text' and (count or b.get('referenceVideos') or b.get('referenceAudios') or b.get('voiceIds')):
@@ -206,7 +208,8 @@ def validate(t):
         raise ValueError('参考音频需要同时提供图片或视频')
     b = {**b, 'effectiveMode': mode}
     low = {'grok': 1, 'minimax': 4, 'comfy': 2}[route]
-    if not low <= int(b['duration']) <= 15:
+    duration = b.get('duration')
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not float(duration).is_integer() or not low <= duration <= 15:
         raise ValueError(f'当前路线支持 {low}–15 秒')
     allowed = {'grok': grok.RESOLUTIONS, 'minimax': mini.RESOLUTIONS, 'comfy': ['0.5', '1']}[route]
     if b.get('resolution') not in allowed:
@@ -337,8 +340,28 @@ def handle(action, data):
         bootstrap()
         return persist({'id': str(uuid.uuid4()), 'brief': import_brief(data['brief']), 'script': '', 'prompt': '',
                         'status': 'draft', 'approved': False})
-    t = read(task_path(data['id']))
+    try:
+        t = read(task_path(data['id']))
+    except FileNotFoundError:
+        raise ValueError('VIDEO_TASK_NOT_FOUND: 视频任务不存在或已删除，请从保留的素材重新创建任务。') from None
     if action == 'get':
+        return t
+    if action == 'preflight':
+        if data.get('revision') != t['revision']:
+            raise ValueError('任务已在其他窗口更新，请重新打开任务')
+        if t['status'] in ('submitting', 'running', 'uncertain'):
+            raise ValueError('生成尚未结束，请等待完成后再改')
+        if data.get('operation') == 'analyze':
+            if not t['brief'].get('source', '').strip():
+                raise ValueError('请先添加参考视频')
+        else:
+            _, route = validate(t)
+            if route != 'comfy' and not get_provider(route).get('api_key'):
+                raise ValueError('请先在视频设置中配置当前服务的 API Key')
+            if data.get('operation') == 'prepare' and (not t.get('approved') or not t.get('script', '').strip()):
+                raise ValueError('请先确认当前剧本')
+            if not t['brief'].get('request', '').strip() and not t['brief'].get('template') and not t.get('script', '').strip():
+                raise ValueError('请填写拍摄要求或选择模板')
         return t
     if data.get('revision') != t['revision']:
         raise ValueError('任务已在其他窗口更新，请重新打开任务')
@@ -357,13 +380,16 @@ def handle(action, data):
         if not t['script'].strip():
             raise ValueError('请先完成剧本')
         validate(t)
-        t.update(approved=True, status='approved', prompt='', quote=None)
+        prompt = t['script'] if t['brief']['route'] == 'grok' else ''
+        t.update(approved=True, status='approved', prompt=prompt, quote=None)
     elif action == 'prompt_result':
         if not t['approved']:
             raise ValueError('需要先确认当前剧本')
         t['prompt'] = data['prompt']
     elif action == 'quote':
         b, route = validate(t)
+        if route == 'grok' and t['approved']:
+            t['prompt'] = t['script']
         if not t.get('prompt') or not t['approved']:
             raise ValueError('请先确认剧本并转换提示词')
         if route == 'comfy':
@@ -385,8 +411,10 @@ def handle(action, data):
         b, route = validate(t)
         if t['status'] in ('submitting', 'running', 'uncertain'):
             raise ValueError('任务已经提交，请查看结果或继续查询')
-        if not t.get('prompt'):
-            raise ValueError('请先填写或生成视频提示词')
+        if route == 'grok' and t['approved']:
+            t['prompt'] = t['script']
+        if not t.get('prompt') or not t.get('approved'):
+            raise ValueError('请先确认当前剧本和生成提示词')
         t['remote'] = {'route': route, 'base_url': get_provider(route).get('base_url') or
                        {'grok': 'https://api.x.ai', 'minimax': 'https://api.minimaxi.com', 'comfy': 'http://127.0.0.1:8188'}[route]}
         if route == 'comfy':
@@ -397,6 +425,7 @@ def handle(action, data):
         if len(json.dumps(payload).encode('utf-8')) > 64 * 1024 * 1024:
             raise ValueError('请求超过 64 MB，请压缩或减少参考素材')
         t['requested'] = {k: payload[k] for k in ('duration', 'resolution', 'model', 'aspect_ratio', 'generate_audio') if k in payload}
+        t['requested'].update(input_mode=b['effectiveMode'], image_count=len(b.get('images', [])))
         t['status'] = 'submitting'
         t.pop('error', None)
         t.pop('submission', None)
@@ -406,6 +435,11 @@ def handle(action, data):
             t['status'] = 'running'
         except Exception as error:
             failure = submission_failure(error)
+            if 'prompt length exceeds the maximum allowed length' in str(error).lower():
+                prompt = payload.get('prompt', '')
+                failure['promptCharacters'] = len(prompt)
+                failure['promptUtf8Bytes'] = len(prompt.encode('utf-8'))
+                failure['reason'] += f" 当前请求：{len(prompt)} 个字符 / {len(prompt.encode('utf-8'))} UTF-8 字节；服务：{urlsplit(c.base_url).hostname}。"
             t['submission'] = failure
             t['error'] = failure['reason']
             t['status'] = 'approved' if failure['retryable'] else 'uncertain'
