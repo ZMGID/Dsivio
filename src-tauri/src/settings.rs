@@ -1696,6 +1696,11 @@ pub struct Settings {
     /// 已 seed 旧 v8 的用户靠它纠偏；置 true 后不再跑。
     #[serde(default)]
     pub builtin_assistants_seeded_v9: bool,
+    /// Video prompt assistants: default, product showcase, UGC.
+    #[serde(default)]
+    pub builtin_assistants_seeded_v10: bool,
+    #[serde(default)]
+    pub builtin_assistants_seeded_v11: bool,
     /// 一次性迁移标记：把 pre-green-light 安装（原生工具默认全关 + 旧 approval_policy）
     /// 带到新默认——原生文件/命令工具置 true，且仅当 approval_policy 仍是旧默认时改 "auto"。
     /// 幂等：置 true 后不再翻转，尊重用户此后手动关闭某工具或改 policy 的选择。
@@ -1880,6 +1885,8 @@ impl Default for Settings {
             builtin_assistants_seeded_v7: false,
             builtin_assistants_seeded_v8: false,
             builtin_assistants_seeded_v9: false,
+            builtin_assistants_seeded_v10: false,
+            builtin_assistants_seeded_v11: false,
             chat_tools_greenlit_v1: false,
             onboarding_status: default_onboarding_status(),
             auto_check_update: true,

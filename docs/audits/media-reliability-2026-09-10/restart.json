@@ -1,0 +1,8 @@
+{
+  "previousPid": 66117,
+  "pid": 78468,
+  "binary": "/Users/zmair/ZM database/dsivio/src-tauri/target/debug/kivio",
+  "running": true,
+  "log": "/tmp/dsivio-media-reliability-startup.log",
+  "readinessHandshake": true
+}

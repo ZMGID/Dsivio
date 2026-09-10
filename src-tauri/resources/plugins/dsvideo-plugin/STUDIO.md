@@ -6,7 +6,8 @@
 `draft_get` 的 input 为 `{entry:"creation"}`（也支持 analysis/remake），返回 `{revision,value}`。value 为 `{brief,task?,script,step,dirty}`。草稿 revision 与 task.revision 独立；接续前先 get 最新任务。`draft_save` 使用 `{entry,revision,value}`，把当前方案交回页面；冲突时重读并合并。
 页面与聊天的模板、模型、供应商地址共用 bootstrap/config；不能在对话中另建配置。用工具 config 更新后连接会重新建立，避免继续使用旧 ComfyUI 地址。
 
-聊天中已经写好剧本或提示词时，分别使用 `plan_result` / `analysis_result` / `prompt_result` 保存自己的结果。`plan` / `analyze` / `prepare` 会让宿主模型重新处理，只在需要宿主代做时使用；不要重复生成已有结果。
+聊天中已经写好剧本或提示词时，分别使用 `plan_result` / `analysis_result` / `prompt_result` 保存自己的结果。`plan` / `analyze` 会让宿主模型重新处理，只在需要宿主代做时使用；不要重复生成已有结果。
+剧本写用户要发生的动作和拍法，商品外观简短写“以参考图为准”。不要逐项重述复杂纹样、猜测宗教人物身份、搬入商品图旁边的道具，或靠禁止元素长清单代替画面说明。简单要求保持简短；局部反馈只改点名部分，不能借机重写整条剧情。
 沿用本次任务中已经明确的路线、规格、剧本和费用确认。用户已对展示的剧本及生成费用明确同意、内容和计费条件未改变时，继续执行，不为相同内容重复确认。只有修改内容、切换计费条件或缺少必要同意时才再次询问。
 若工具返回“未知视频操作”，核对返回的可用操作名；文档中的同名操作仍不可用时，简短报告接口版本不一致并停止。不要反复搜索安装目录、读取实现来猜操作名、改写任务 JSON，或绕过工具提交。失败前保存的任务继续用原 id 接续；不能通过新建任务重试状态不确定的提交。
 
@@ -37,7 +38,7 @@ Never copy product-specific images or claims into a reusable template without ex
 
 ## Shared tasks
 
-`create`: `{"brief":{"name":"…","mode":"creation","request":"…","images":[],"duration":10,"ratio":"9:16","route":"grok","resolution":"720p","language":"pt-BR","source":""}}`.
+`create`: optional `brief.assistantId` selects a saved assistant in the `video` group for host planning/revision; omitted means 通用视频. `{"brief":{"name":"…","mode":"creation","request":"…","images":[],"duration":10,"ratio":"9:16","route":"grok","resolution":"720p","language":"pt-BR","source":""}}`.
 Do not choose a route on the user's behalf. `mode: analysis` is for read-only reference analysis.
 `get`: `{"id":"UUID"}`. All other task operations require `id` and current `revision` from the returned task.
 `save`: also supply the full `brief` and `script`. Changes invalidate approval, prompt and quote. A completed result can be revised in place; the next successful generation overwrites the previous output. Do not mutate a submitting, running, or uncertain task.
@@ -45,9 +46,9 @@ Do not choose a route on the user's behalf. `mode: analysis` is for read-only re
 `plan`: ask the host model to produce a director plan instead of supplying your own `plan_result`.
 `revise`: after reviewing a completed or failed result, supply `note` describing what to change. Rewrites the shooting script on the same task and returns the draft for confirmation. Do not call while submitting, running, or uncertain.
 `analyze`: ask the host to collect reference-video evidence and produce an analysis instead of supplying your own `analysis_result`.
-`approve`: only after the user confirms the current full script.
-`prompt_result`: supply `prompt` converted from that approved script using h3-prompt-writing or the Grok convention.
-`prepare`: ask the host model to convert the approved script and obtain a quote instead of supplying your own `prompt_result` followed by `quote`.
+`approve`: only after the user confirms the current full script. Grok uses this script verbatim as its prompt; no translation or model conversion is needed.
+`prompt_result`: save a user-approved generation prompt. Do not rewrite an already complete prompt.
+`prepare`: copies the approved script verbatim for every route, without calling a model. Call `quote` separately.
 `quote`: shows the current route estimate and balance if available. Rates come from the shared Dsivio model catalog. Official rates are reference estimates for gateways, never a claim about gateway billing. Missing prices or unavailable balances do not block generation; show that actual provider billing applies.
 `submit`: requires explicit user acceptance of the current generation terms, `confirmSpend: true`. Confirmation of a message that presents both the current script and cost can satisfy both gates; do not ask again for unchanged terms. Script-only approval does not imply spend approval. Regenerating a completed task overwrites its previous output.
 `poll`: queries the persisted remote ID without resubmission. A `submitting` or `uncertain` task must never be blindly submitted again.
@@ -56,9 +57,14 @@ Do not choose a route on the user's behalf. `mode: analysis` is for read-only re
 With the host `studio` tool, ComfyUI uses the same `submit` and `poll` actions as the API routes. The host handles uploading, workflow preparation, MCP calls and recording results. `comfy_workflow`, `comfy_submitted` and `comfy_complete` are internal bookkeeping operations, not public tool actions. Only external hosts without `studio` use the Python/MCP sequence from the original skill. Retain the original task endpoint on recovery. Only free models when the server queue is empty.
 The desktop uses the same script actions and MCP servers. Never introduce a parallel template registry or provider configuration.
 
+### Grok 剧本写作
+
+Grok 剧本将原文提交。当前接口实测按 UTF-8 字节限制提示词为 4096 字节；请尽量在此范围内完整表达用户要求，避免无意义的重复。不额外限制剧本结构、风格、镜头数量或语言，不擅自删改用户指定的情节、对白与声音要求。
+
 ### Grok 的画幅与声音
 
 - 请求必须明确 `ratio`、`resolution`、`duration`，与用户和参考模板一致；不要只在提示词里写尺寸。参考分析的转录缺失不代表原视频没有对白。
 - `speechMode: auto` 是自动设计可听见的声音，不是默认无对白、无音乐或近乎静音。带人物讲解的广告应在剧本中设计具体口播；转换提示词时保留已确认的声音设计。用户选择 `silent` 才关闭音频生成。
+- Grok 自动模式下，有商品图片（包括单张）优先使用 `reference_images` 作为外观参考，不把商品图固定成视频首帧。只有明确选择 `inputMode: image` 时才使用首帧；参考生成最高 720p。
 - 单图首帧由工作区等比缩放并补足所选画布，防止兼容网关沿用商品图的正方形比例；参考图模式不作这种处理。
 - 下载后以 `media` 中的实测尺寸、时长、音轨为准。`failed` 且保留 `output` 表示成片可检查但未通过规格检查，不能当作成功交付，也不要自动重新付费生成。

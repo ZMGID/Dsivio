@@ -28,7 +28,7 @@ export function VideoMediaOptions({
   const mode = b.inputMode || 'auto'
   const reference =
     mode === 'reference' ||
-    (mode === 'auto' && (b.images.length > 1 || !!b.voiceIds?.length))
+    (mode === 'auto' && (b.images.length > 0 || !!b.voiceIds?.length))
   async function pick(field: 'referenceVideos' | 'referenceAudios') {
     try {
       const result = await open({
@@ -66,7 +66,6 @@ export function VideoMediaOptions({
           onChange={(e) =>
             change({
               inputMode: e.target.value as VideoBrief['inputMode'],
-              resolution: '',
             })
           }
         >
@@ -81,8 +80,8 @@ export function VideoMediaOptions({
       </Field>
       {b.route === 'grok' && (
         <p className="vs-muted">
-          单图驱动：1 张，可选 1080p。参考生成：最多 7 张，最高
-          720p，不锁定首帧。
+          自动模式将商品图作为外观参考，不锁定首帧。参考生成：最多 7 张，最高
+          720p。仅需让原图动起来时选择“单图驱动首帧”，可选 1080p。
         </p>
       )}
       {b.route === 'minimax' && mode === 'frames' && (

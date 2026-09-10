@@ -1,0 +1,32 @@
+{
+  "model": "deepseek-v4-flash-vision-exp",
+  "endpoint": "https://api.deepseek.com/responses",
+  "scope": "Planning-only API check; no generated image/video and no task mutation",
+  "request": {
+    "mode": "creation",
+    "request": "15秒，9:16，固定机位展示参考图中的小夜灯由未点亮到单一暖白光亮起。只展示商品，不出现人物、手或字幕，不增加道具；图案全程保持与参考图一致。",
+    "selectedConcept": "固定机位拍摄商品从未点亮到暖白光亮起",
+    "images": [
+      "/Users/zmair/Library/Application Support/com.zmair.kivio/video-studio/assets/b471cc0e2406280fb486e5292149dc2c632a1230ef9709a263394de2fcab63a9.jpg"
+    ],
+    "duration": 15,
+    "ratio": "9:16",
+    "route": "grok",
+    "resolution": "720p",
+    "inputMode": "auto",
+    "speechMode": "ambient",
+    "language": "zh-CN"
+  },
+  "output": "{\"script\":\"9:16 竖幅，720p，固定机位单镜头拍满 15 秒，全程不切换、不移动、不推拉。画面中只有这件小夜灯：亚克力灯板连着白色圆柱底座，居中摆放，背景干净简洁，商品外观与图案以参考图为准并全程保持一致。0–5 秒灯处于未点亮状态，图案线条清晰静止；约第 5 秒起暖白光从底座向灯板均匀亮起，亮度平稳上升，图案随透光显现；约第 8 秒后保持同一暖白光常亮不变，直到画面结束，无闪烁、无分区逐段变化。画面中不出现人物、手、字幕，不添加任何道具，摄影机全程静止，构图始终如一。声音为安静的室内环境音底噪，无对白、无旁白、无解说。\"}",
+  "usage": {
+    "input_tokens": 2195,
+    "input_tokens_details": {
+      "cached_tokens": 2048
+    },
+    "output_tokens": 872,
+    "output_tokens_details": {
+      "reasoning_tokens": 681
+    },
+    "total_tokens": 3067
+  }
+}

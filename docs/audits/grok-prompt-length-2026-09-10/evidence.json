@@ -1,0 +1,68 @@
+{
+  "endpoint": "https://ybw-ai.com/v1/videos/generations",
+  "model": "grok-imagine-video-1.5",
+  "original_prompt": {
+    "characters": 1827,
+    "utf8_bytes": 5072,
+    "sha256": "e0b7eb80884b8a441d51d690a98f135c494ef80a11a1cb95d09f8e0d2ee271c9"
+  },
+  "escaped_json_control": {
+    "status": 400,
+    "body": "{\"error\":{\"message\":\"Prompt length exceeds the maximum allowed length of 4096\",\"type\":\"invalid_request_error\"}}",
+    "headers": {
+      "Content-Type": "application/json; charset=utf-8",
+      "Server": "cloudflare",
+      "x-request-id": "7b3cca18-0f0b-47a1-a12b-7f3d98ee7e97"
+    },
+    "prompt_chars": 1827,
+    "prompt_utf8_bytes": 5072,
+    "ensure_ascii": true
+  },
+  "boundary_cases": [
+    {
+      "case": "ascii_4096",
+      "chars": 4096,
+      "bytes": 4096,
+      "receipt": {
+        "request_id": "718560db-9706-903c-a3a9-740fb01c6440"
+      },
+      "final": {
+        "status": "failed",
+        "error": {
+          "code": "invalid_argument",
+          "message": "Downloaded response does not contain a valid JPG, PNG, WebP, or ICO image. [WKE=invalid_image]"
+        }
+      }
+    },
+    {
+      "case": "ascii_4097",
+      "chars": 4097,
+      "bytes": 4097,
+      "status": 400,
+      "message": "Prompt length exceeds the maximum allowed length of 4096"
+    },
+    {
+      "case": "chinese_1365",
+      "chars": 1365,
+      "bytes": 4095,
+      "receipt": {
+        "request_id": "b547edd3-ab6b-9127-9fda-8bb6e97600af"
+      },
+      "final": {
+        "status": "failed",
+        "error": {
+          "code": "invalid_argument",
+          "message": "Downloaded response does not contain a valid JPG, PNG, WebP, or ICO image. [WKE=invalid_image]"
+        }
+      }
+    },
+    {
+      "case": "chinese_1366",
+      "chars": 1366,
+      "bytes": 4098,
+      "status": 400,
+      "message": "Prompt length exceeds the maximum allowed length of 4096"
+    }
+  ],
+  "public_gateway_source_commit": "98d86915becae9fe9491a91ffc6defd5235c8d2b"
+}

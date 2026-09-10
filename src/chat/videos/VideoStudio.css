@@ -362,7 +362,7 @@
 .image-studio.video-studio .vs-advanced { color: var(--text-muted); font-size: 12px; }
 .image-studio.video-studio .vs-advanced summary { cursor: pointer; }
 .image-studio.video-studio .vs-advanced[open] summary { margin-bottom: 20px; color: var(--text); }
-.image-studio.video-studio .studio-primary-actions { position: static; grid-column: 1 / -1; padding: 16px 0 0; border-top: 1px solid var(--vs-line); background: transparent; justify-content: flex-end; }
+.image-studio.video-studio .studio-primary-actions { position: static; bottom: auto; z-index: auto; grid-column: 1 / -1; padding: 16px 0 0; border-top: 1px solid var(--vs-line); background: transparent; justify-content: flex-end; }
 .image-studio.video-studio .studio-primary-actions .kv-btn { min-height: 42px; border-radius: 9px; padding: 10px 20px; }
 .image-studio.video-studio .vs-script-preview { font-size: 14px; line-height: 1.85; margin: 16px 0; overflow-wrap: anywhere; }
 .image-studio.video-studio .vs-script-preview h3 { padding-top: 16px; border-top: 1px solid var(--vs-line); }
@@ -397,7 +397,6 @@
 .image-studio.video-studio .vs-editor-column .is-field { margin-bottom: 0; }
 .image-studio.video-studio .vs-layout .vs-advanced { padding: 12px 16px; }
 .image-studio.video-studio .vs-drop { min-height: 96px; }
-.image-studio.video-studio .studio-primary-actions { position: sticky; bottom: -24px; padding: 14px 0; background: var(--vs-soft); z-index: 2; }
 .image-studio.video-studio.vs-analysis .vs-layout { grid-template-columns: 180px minmax(0, 1fr); }
 .image-studio.video-studio.vs-analysis .vs-editor-column { grid-column: 1 / -1; }
 .image-studio.video-studio.vs-analysis .vs-options { grid-row: 2; grid-column: 1; width: 100%; padding: 0; align-self: center; }
@@ -417,4 +416,92 @@
   margin: 12px 0;
   font-size: 13px;
   line-height: 1.65;
+}
+
+/* Keep plan actions within reach while reading long scripts. */
+.image-studio.video-studio .vs-plan-controls {
+  position: sticky;
+  top: -24px;
+  z-index: 3;
+  margin: -20px -20px 20px;
+  padding: 16px 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--vs-line);
+  border-radius: 12px 12px 0 0;
+}
+.image-studio.video-studio .vs-plan-toolbar,
+.image-studio.video-studio .vs-plan-buttons {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.image-studio.video-studio .vs-plan-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.image-studio.video-studio .vs-plan-title h3 { margin: 0; font-size: 14px; white-space: nowrap; }
+.image-studio.video-studio .vs-plan-buttons { flex-shrink: 0; gap: 8px; }
+.image-studio.video-studio .vs-plan-revision {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: 124px;
+  min-height: 124px;
+  max-height: 124px;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--vs-line);
+  border-radius: 10px;
+  background: var(--vs-soft);
+  overflow: hidden;
+}
+.image-studio.video-studio .vs-plan-revision:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+.image-studio.video-studio .vs-plan-revision textarea {
+  flex: 1 1 0;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 56px;
+  max-height: 56px;
+  field-sizing: fixed;
+  resize: none;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  font-size: 13px;
+  line-height: 1.6;
+  background: transparent;
+  box-shadow: none;
+}
+.image-studio.video-studio .vs-plan-revision-footer {
+  display: flex;
+  flex: 0 0 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.image-studio.video-studio .vs-plan-revision-footer span {
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-studio.video-studio .vs-plan-revision button { flex-shrink: 0; height: 34px; }
+.image-studio.video-studio .vs-plan-hint { margin: 10px 0 0; }
+@container studio (max-width: 640px) {
+  .image-studio.video-studio .vs-plan-title { flex-direction: column; gap: 2px; }
+  .image-studio.video-studio .vs-plan-title small { font-size: 10px; }
+  .image-studio.video-studio .vs-plan-toolbar { gap: 8px; flex-wrap: wrap; }
+  .image-studio.video-studio .vs-plan-revision { gap: 8px; }
+}
+@media (max-height: 500px) {
+  .image-studio.video-studio .vs-plan-controls { position: static; }
 }

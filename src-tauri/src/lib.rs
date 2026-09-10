@@ -447,6 +447,32 @@ pub fn run() {
                     Err(err) => eprintln!("Failed to merge built-in assistants v9: {err}"),
                 }
             }
+            if !settings.builtin_assistants_seeded_v10 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v10(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v10 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!("Failed to persist video assistants migration: {err}");
+                            settings.builtin_assistants_seeded_v10 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to merge video assistants: {err}"),
+                }
+            }
+            if !settings.builtin_assistants_seeded_v11 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v11(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v11 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!("Failed to persist video assistants migration: {err}");
+                            settings.builtin_assistants_seeded_v11 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to merge video assistants: {err}"),
+                }
+            }
             if let Err(err) = apply_launch_at_startup(&app.handle(), settings.launch_at_startup) {
                 eprintln!("Failed to apply launch-at-startup setting: {err}");
             }
@@ -852,6 +878,7 @@ pub fn run() {
             notes::notes_list,
             studio::studio_draft,
             studio::library::studio_task_library,
+            studio::library::studio_task_file_action,
             video_studio::video_studio,
             image_studio::image_studio_bootstrap,
             image_studio::image_studio_get,

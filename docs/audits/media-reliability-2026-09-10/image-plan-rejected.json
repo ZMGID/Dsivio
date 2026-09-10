@@ -1,0 +1,47 @@
+{
+  "model": "deepseek-v4-flash-vision-exp",
+  "endpoint": "https://api.deepseek.com/responses",
+  "scope": "Planning-only API check; no generated image/video and no task mutation",
+  "request": {
+    "requirement": "只把参考图的背景换成纯白，保留小夜灯本身的外观、图案、视角和位置。不添加文字、人物或道具。",
+    "platform": "",
+    "language": "zh-CN",
+    "ratio": "1:1",
+    "styleOverride": "",
+    "product": {
+      "id": "diagnostic-product",
+      "name": "小夜灯",
+      "facts": "",
+      "kind": "",
+      "assets": [
+        {
+          "id": "front",
+          "name": "商品参考",
+          "path": "/Users/zmair/Library/Application Support/com.zmair.kivio/video-studio/assets/b471cc0e2406280fb486e5292149dc2c632a1230ef9709a263394de2fcab63a9.jpg"
+        }
+      ],
+      "front": "front",
+      "back": null
+    },
+    "template": null,
+    "slots": [
+      {
+        "id": "h1"
+      }
+    ],
+    "shootingGuide": "Follow only the user request. No text by default. For edits, preserve the input image except for the requested change. Reference images retain their user-assigned roles and upload order.",
+    "guidePolicy": "Shooting guide examples are optional techniques, not instructions to add their props, models, claims, typography or prices. Use only the section relevant to the user request."
+  },
+  "output": "{\"plans\":[{\"slotId\":\"h1\",\"purpose\":\"纯白背景抠图\",\"copy\":\"\",\"prompt\":\"图像编辑任务：以提供的商品参考图为唯一基准，只更换背景，其余部分严格保持不变。\\n\\n保留（必须与原图完全一致）：\\n- 亚克力小夜灯本体的外形轮廓、比例和大小：圆形光环、戴冠人物（圣母）线描图案、祈手、披风上的藤蔓花卉与方框纹样、底部十字，全部线刻图案细节不得改动、增删或重绘。\\n- 暖白/淡黄的发光效果、线条的亮度与光晕，白色圆柱形底座的形状、比例、磨砂质感与暖光透出效果。\\n- 原有的拍摄视角与构图位置：正面略微平视、灯具居中，亚克力板与底座的位置关系不变。\\n\\n更换：将原图环境（布纹背景、桌面、以及原图左前方的宇航员摆件、右侧的书本等一切非商品元素）整体替换为干净的纯白无缝背景（#FFFFFF）。不添加任何文字、人物、道具、阴影以外的装饰或促销元素。清除原图上的水印/店铺标识痕迹。\\n\\n光影：保留灯具自身的暖光发光与亚克力板在底座上的微弱反光；使用柔和均匀的中性布光，仅在底座下方保留自然、柔和的接触阴影，使产品自然落在纯白背景上，不产生额外投影或色偏。\\n\\n输出：1:1 正方形，高清，产品主体锐利清晰，边缘干净，无可见抠图残留，画面中不出现任何文字或水印。\"}]}",
+  "usage": {
+    "input_tokens": 1291,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 1142,
+    "output_tokens_details": {
+      "reasoning_tokens": 779
+    },
+    "total_tokens": 2433
+  }
+}

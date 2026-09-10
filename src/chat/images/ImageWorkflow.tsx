@@ -34,6 +34,7 @@ import {
 import './imageWorkflow.css'
 
 type Props = {
+  configurationIssue?: string
   brief: ImageBrief
   task: ImageTask | null
   busy: boolean
@@ -50,6 +51,7 @@ type Props = {
 }
 
 export function ImageWorkflow({
+  configurationIssue,
   brief,
   task,
   busy,
@@ -170,6 +172,7 @@ export function ImageWorkflow({
 
   return (
     <div className="iw-workflow">
+      {configurationIssue && <p role="status">{configurationIssue}</p>}
       <div className="is-work-heading">
         <div>
           <h2>制作模板</h2>
@@ -427,7 +430,7 @@ export function ImageWorkflow({
               </div>
               <Button
                 variant="primary"
-                disabled={busy || !input.sources.length || !brief.requirement.trim() || unresolved}
+                disabled={busy || !!configurationIssue || !input.sources.length || !brief.requirement.trim() || unresolved}
                 onClick={() => void onAction({ kind: 'workflow_build' })}
               >
                 <Sparkles size={15} />
@@ -607,7 +610,7 @@ export function ImageWorkflow({
           </span>
           <Button
             variant="primary"
-            disabled={busy || !current || !sampleIds.length}
+            disabled={busy || !!configurationIssue || !current || !sampleIds.length}
             onClick={() => void onAction({ kind: 'workflow_trial', sampleIds })}
           >
             <Sparkles size={14} />
@@ -734,7 +737,7 @@ export function ImageWorkflow({
           </Field>
           <Button
             variant="primary"
-            disabled={busy || !current || !feedback.trim() || unresolved}
+            disabled={busy || !!configurationIssue || !current || !feedback.trim() || unresolved}
             onClick={() => void onAction({ kind: 'workflow_refine', note: feedback })}
           >
             <Sparkles size={14} />
@@ -760,11 +763,11 @@ export function ImageWorkflow({
             </p>
           </div>
           <div className="is-actions">
-            {!approved && current && <Button disabled={busy || dirty || !brief.products.length || !productionPending} onClick={() => void onAction({ kind: 'workflow_produce' })}>直接生成新增商品</Button>}
+            {!approved && current && <Button disabled={busy || !!configurationIssue || dirty || !brief.products.length || !productionPending} onClick={() => void onAction({ kind: 'workflow_produce' })}>直接生成新增商品</Button>}
             {approved ? (
               <Button
                 variant="primary"
-                disabled={busy || !brief.products.length || !productionPending}
+                disabled={busy || !!configurationIssue || !brief.products.length || !productionPending}
                 onClick={() => void onAction({ kind: 'workflow_produce' })}
               >
                 <Sparkles size={14} />

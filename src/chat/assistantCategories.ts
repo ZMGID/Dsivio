@@ -4,6 +4,7 @@ export const ASSISTANT_PLAZA_CATEGORIES = [
   'research',
   'workplace',
   'ecommerce',
+  'video',
 ] as const
 
 export type AssistantPlazaCategory = (typeof ASSISTANT_PLAZA_CATEGORIES)[number]

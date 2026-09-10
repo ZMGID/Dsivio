@@ -1018,3 +1018,25 @@ fn async_download_accepts_dsimage_url_arrays_and_sync_urls() {
     }
     assert_eq!(engine::image_download_url(&json!({"data":{"result":{"images":[]}}})), None);
 }
+
+#[test]
+fn single_image_plans_preserve_request_and_reference_order_without_ai_rewriting() {
+    let mut task = fixture();
+    task.brief.feature = "gen".into();
+    task.brief.requirement = "只把背景换成纯白。\n保留图案和角度，不要字。".into();
+    task.brief.count = 2;
+    task.brief.products[0].assets = vec![
+        Asset { id: "one".into(), name: "原图".into(), path: "assets/one.png".into() },
+        Asset { id: "two".into(), name: "商品".into(), path: "assets/two.png".into() },
+    ];
+    let plans = agent::gen_plans(&task.brief, &task.brief.products[0]);
+    assert_eq!(plans.len(), 2);
+    for (index, plan) in plans.iter().enumerate() {
+        assert!(plan.prompt.starts_with(&task.brief.requirement));
+        assert_eq!(plan.refs, vec!["assets/one.png", "assets/two.png"]);
+        assert_eq!(plan.slot_id, format!("h{}", index + 1));
+        assert!(plan.copy.is_empty());
+        assert!(!plan.prompt.contains("圣母"));
+        assert!(!plan.prompt.contains("王冠"));
+    }
+}

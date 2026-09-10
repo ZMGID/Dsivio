@@ -1,0 +1,21 @@
+{
+  "videoAssistants": [
+    {
+      "id": "asst_builtin_video_prompt",
+      "name": "通用视频",
+      "category": "video"
+    },
+    {
+      "id": "asst_builtin_video_product",
+      "name": "电商产品展示",
+      "category": "video"
+    },
+    {
+      "id": "asst_builtin_video_ugc",
+      "name": "电商 UGC 口播",
+      "category": "video"
+    }
+  ],
+  "unrelatedAssistantsPreserved": 17,
+  "migrationComplete": true
+}

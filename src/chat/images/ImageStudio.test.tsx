@@ -150,6 +150,30 @@ beforeEach(() => {
 })
 
 describe('Image workspace state gates', () => {
+  it.each([false, true])('saves edited plans before switching tasks (failure=%s)', async (fails) => {
+    const current = fixture()
+    const target = { ...fixture(), id: 'second', brief: { ...fixture().brief, name: '另一个任务' } }
+    const plans = current.plans.map(p => ({ ...p, prompt: '尚未保存的方案修改' }))
+    localStorage.setItem('dsivio-image-draft-v1', JSON.stringify({
+      brief: current.brief, taskId: current.id, revision: current.revision, plans,
+    }))
+    vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([current, target]))
+    vi.mocked(api.imageStudioGet).mockResolvedValue(target)
+    if (fails) vi.mocked(api.imageStudioSavePlans).mockRejectedValueOnce(new Error('保存方案失败'))
+    else vi.mocked(api.imageStudioSavePlans).mockResolvedValueOnce({ ...current, plans })
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: /^任务 / }))
+    await waitFor(() => expect(api.imageStudioSavePlans).toHaveBeenCalledWith(current.id, current.revision, plans))
+    if (fails) {
+      expect(await screen.findByText('保存方案失败')).toBeTruthy()
+      expect(JSON.parse(localStorage.getItem('dsivio-image-draft-v1')!).plans).toEqual(plans)
+      expect(api.imageStudioGet).not.toHaveBeenCalled()
+    } else {
+      fireEvent.click(await screen.findByRole('button', { name: '打开任务 另一个任务' }))
+      await waitFor(() => expect(api.imageStudioGet).toHaveBeenCalledWith(target.id))
+      expect(api.imageStudioSave).not.toHaveBeenCalled()
+    }
+  })
   it('requires both complete samples, and rejects stale images or a failed latest edit', () => {
     const t = fixture()
     t.results = [result('a'), result('b', 1)]

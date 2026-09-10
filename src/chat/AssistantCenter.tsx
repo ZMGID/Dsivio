@@ -56,6 +56,8 @@ function plazaCategoryLabel(category: PlazaCategoryFilter, t: I18n): string {
       return t.chatAssistantCategoryResearch
     case 'workplace':
       return t.chatAssistantCategoryWorkplace
+    case 'video':
+      return t.chatAssistantCategoryVideo
     case 'ecommerce':
       return t.chatAssistantCategoryEcommerce
     default:
@@ -842,6 +844,13 @@ export function AssistantCenter({
                 onChange={(event) => updateDraft('description', event.target.value)}
                 className="h-10 w-full rounded-md border border-neutral-200 bg-white px-3 text-[13px] outline-none focus:border-neutral-300 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
               />
+            </label>
+            <label className="block">
+              <span className="mb-1.5 block text-[12px] font-medium text-neutral-600 dark:text-neutral-300">{t.chatAssistantCategoryLabel}</span>
+              <Select value={draft.category || ''} onChange={value => updateDraft('category', value)}
+                ariaLabel={t.chatAssistantCategoryLabel}
+                options={[{ value: '', label: t.chatAssistantCategoryNone }, ...ASSISTANT_PLAZA_CATEGORIES.map(value => ({ value, label: plazaCategoryLabel(value, t) }))]} />
+              {draft.category === 'video' && <p className="mt-1.5 text-xs text-neutral-500">{t.chatAssistantCategoryVideoHint}</p>}
             </label>
             <label className="block">
               <span className="mb-1.5 block text-[12px] font-medium text-neutral-600 dark:text-neutral-300">{t.chatSystemPrompt}</span>

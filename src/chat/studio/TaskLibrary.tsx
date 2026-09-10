@@ -1,12 +1,14 @@
-import { useMemo, useState } from 'react'
-import { Archive, ArchiveRestore, ChevronLeft, ChevronRight, FolderOpen, Pin, RefreshCw, Search, X } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { ChevronLeft, ChevronRight, FolderOpen, Pin, RefreshCw, Search, Trash2, X } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
-import { selectLibraryTasks, taskFilters, taskIsArchived, type LibraryTask, type TaskFilter, type TaskSort } from './taskLibraryModel'
+import { selectLibraryTasks, taskFilters, type LibraryTask, type TaskFilter, type TaskSort } from './taskLibraryModel'
 import type { TaskLibraryState } from './useTaskLibrary'
+import { TaskDeleteDialog } from './TaskDeleteDialog'
 import './taskLibrary.css'
 
 const PAGE_SIZE = 24
-export function TaskLibrary({ tasks, library, loading, disabled, currentId, onOpen, onRefresh, onNew, noun }: {
+export function TaskLibrary({ tasks, library, loading, disabled, currentId, onOpen, onRefresh, onNew, noun, onReveal, onDelete }: {
+  onReveal: (id: string) => Promise<void>; onDelete: (id: string) => Promise<void>
   tasks: LibraryTask[]; library: TaskLibraryState; loading: boolean; disabled?: boolean; currentId?: string
   onOpen: (id: string) => void; onRefresh: () => Promise<void>; onNew: () => void; noun: '图片' | '视频'
 }) {
@@ -18,25 +20,50 @@ export function TaskLibrary({ tasks, library, loading, disabled, currentId, onOp
   const [selection, setSelection] = useState<string[]>([])
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState('')
+  const [acting, setActing] = useState(false)
+  const [actionError, setActionError] = useState('')
+  const [deleteTarget, setDeleteTarget] = useState<LibraryTask[]>([])
   const [notice, setNotice] = useState('')
+  useEffect(() => {
+    if (!notice) return
+    const timer = window.setTimeout(() => setNotice(''), 3500)
+    return () => window.clearTimeout(timer)
+  }, [notice])
+  const requestDelete = (targets: LibraryTask[]) => {
+    setNotice(''); setActionError(''); setDeleteTarget(targets)
+  }
   const kinds = useMemo(() => [...new Map(tasks.map(t => [t.kind, t.kindLabel])).entries()], [tasks])
   const visible = useMemo(() => selectLibraryTasks(tasks, library.organization, filter, query, kind, sort), [tasks, library.organization, filter, query, kind, sort])
   const pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE))
   const currentPage = Math.min(page, pages - 1)
   const rows = visible.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
   const selected = rows.filter(t => selection.includes(t.id))
-  const busy = disabled || library.pending
-  const editable = !busy && library.ready
-  const counts = useMemo(() => Object.fromEntries(taskFilters.map(f => [f.id, tasks.filter(t => {
-    const archived = taskIsArchived(t, library.organization)
-    return f.id === 'archived' ? archived : !archived && (f.id === 'all' || t.group === f.id)
-  }).length])), [tasks, library.organization])
+  const busy = disabled || library.pending || acting
+  const editable = !busy
+  const counts = useMemo(() => Object.fromEntries(taskFilters.map(f => [f.id, tasks.filter(t => f.id === 'all' || t.group === f.id).length])), [tasks])
   const reset = () => { setPage(0); setSelection([]); setNotice('') }
-  const organize = async (ids: string[], archived: boolean) => {
-    if (await library.update(ids, { archived })) {
-      setSelection([])
-      setNotice(archived ? `已归档 ${ids.length} 个任务，可在“已归档”中恢复。` : `已恢复 ${ids.length} 个任务。`)
+  const deleteTasks = async () => {
+    if (busy || deleteTarget.some(t => !t.canDelete)) return
+    setActing(true); setActionError(''); setNotice('')
+    let removed = 0
+    try {
+      for (const task of deleteTarget) {
+        await onDelete(task.id)
+        removed++
+        setSelection(ids => ids.filter(id => id !== task.id))
+        setDeleteTarget(tasks => tasks.filter(t => t.id !== task.id))
+      }
+    } catch (e) { setActionError(`${removed ? `已删除 ${removed} 个任务，剩余任务` : '删除'}未完成：${String(e)}`) }
+    finally {
+      if (removed === deleteTarget.length) setNotice(`已删除 ${removed} 个任务及其专属素材和生成文件。`)
+      setActing(false)
     }
+  }
+  const rowAction = async (id: string) => {
+    setActing(true); setActionError('')
+    try { await onReveal(id) }
+    catch (e) { setActionError(String(e)) }
+    finally { setActing(false) }
   }
   const refresh = async () => {
     setRefreshing(true); setRefreshError('')
@@ -61,8 +88,10 @@ export function TaskLibrary({ tasks, library, loading, disabled, currentId, onOp
       <select aria-label="任务排序" value={sort} onChange={e => { setSort(e.target.value as TaskSort); reset() }}><option value="newest">最近更新</option><option value="oldest">最早更新</option><option value="name">名称排序</option></select>
     </div>
     {(library.error || refreshError) && <div className="tl-message tl-error" role="alert">{library.error || refreshError}<Button size="sm" onClick={() => void refresh()} disabled={refreshing}>重试</Button></div>}
-    {notice && <p className="tl-message" role="status">{notice}</p>}
-    {selected.length > 0 && <div className="tl-bulk"><span>已选 {selected.length} 项</span><Button size="sm" disabled={!editable || (filter !== 'archived' && selected.some(t => !t.canArchive))} onClick={() => void organize(selected.map(t => t.id), filter !== 'archived')}>{filter === 'archived' ? <ArchiveRestore size={14} /> : <Archive size={14} />}{filter === 'archived' ? '恢复任务' : '归档任务'}</Button><Button size="sm" variant="ghost" onClick={() => setSelection([])}>取消选择</Button>{selected.some(t => !t.canArchive) && filter !== 'archived' && <small>进行中或待核查任务需先处理</small>}</div>}
+    {actionError && !deleteTarget.length && <p className="tl-message tl-error" role="alert">{actionError}</p>}
+    {deleteTarget.length > 0 && <TaskDeleteDialog count={deleteTarget.length} name={deleteTarget.length === 1 ? deleteTarget[0].name : undefined} busy={!!busy} error={actionError} onCancel={() => { setDeleteTarget([]); setActionError('') }} onConfirm={() => void deleteTasks()} />}
+    {notice && <div className="tl-feedback" role="status"><span>{notice}</span><IconButton label="关闭提示" size="xs" onClick={() => setNotice('')}><X size={12} /></IconButton></div>}
+    {selected.length > 0 && <div className="tl-bulk"><span>已选 {selected.length} 项</span><Button size="sm" variant="danger" disabled={!editable || selected.some(t => !t.canDelete)} onClick={() => { requestDelete(selected) }}><Trash2 size={14} />删除任务</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => setSelection([])}>取消选择</Button>{selected.some(t => !t.canDelete) && <small>进行中或待核查任务需先处理</small>}</div>}
     {loading && !tasks.length ? <p className="tl-empty" role="status">正在加载任务…</p> : !rows.length ? <div className="tl-empty"><FolderOpen size={30} /><h3>{tasks.length ? '没有符合条件的任务' : `还没有${noun}任务`}</h3><p>{tasks.length ? '试试其他状态，或清空搜索条件。' : `开始一次${noun}创作，保存后的任务会出现在这里。`}</p>{tasks.length > 0 && <Button size="sm" onClick={() => { setFilter('all'); setKind(''); setQuery(''); reset() }}>清空筛选</Button>}</div> : <>
       <div className="tl-list-head"><label><input type="checkbox" aria-label="选择本页任务" checked={rows.length > 0 && selected.length === rows.length} disabled={!editable} onChange={e => setSelection(e.target.checked ? rows.map(t => t.id) : [])} /><span>任务 · {visible.length} 项</span></label><span>状态 / 更新时间</span></div>
       <ul className="tl-list">{rows.map(t => <li key={t.id} className={`${t.id === currentId ? 'tl-current' : ''} ${selection.includes(t.id) ? 'tl-selected' : ''}`}>
@@ -71,10 +100,9 @@ export function TaskLibrary({ tasks, library, loading, disabled, currentId, onOp
           <span className="tl-task-main"><strong>{library.organization[t.id]?.pinned && <Pin size={12} />}{t.name}</strong><span className="tl-description">{t.description || t.kindLabel}</span><small>{t.kindLabel}{t.detail && ` · ${t.detail}`}</small>{t.error && <span className="tl-task-error">{t.error}</span>}</span>
           <span className="tl-task-state"><span className={`tl-status tl-${t.group}`}><i />{t.status}</span><time dateTime={t.updatedAt ? new Date(t.updatedAt).toISOString() : undefined}>{t.updatedAt ? new Date(t.updatedAt).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '时间未知'}</time></span>
         </button>
-        <div className="tl-row-actions"><IconButton label={`${library.organization[t.id]?.pinned ? '取消置顶' : '置顶'} ${t.name}`} disabled={!editable} onClick={() => void library.update([t.id], { pinned: !library.organization[t.id]?.pinned })}><Pin size={14} /></IconButton><IconButton label={`${filter === 'archived' ? '恢复' : '归档'} ${t.name}`} disabled={!editable || (filter !== 'archived' && !t.canArchive)} onClick={() => void organize([t.id], filter !== 'archived')}>{filter === 'archived' ? <ArchiveRestore size={14} /> : <Archive size={14} />}</IconButton></div>
+        <div className="tl-row-actions"><IconButton label={`打开所在文件夹 ${t.name}`} disabled={busy} onClick={() => void rowAction(t.id)}><FolderOpen size={14} /></IconButton><IconButton variant="danger" label={`删除 ${t.name}`} disabled={busy || !t.canDelete} onClick={() => { requestDelete([t]) }}><Trash2 size={14} /></IconButton></div>
       </li>)}</ul>
       <footer className="tl-pagination"><span>第 {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, visible.length)} 项，共 {visible.length} 项</span><div><IconButton label="上一页" disabled={currentPage === 0} onClick={() => { setPage(currentPage - 1); setSelection([]) }}><ChevronLeft size={16} /></IconButton><span>{currentPage + 1} / {pages}</span><IconButton label="下一页" disabled={currentPage + 1 >= pages} onClick={() => { setPage(currentPage + 1); setSelection([]) }}><ChevronRight size={16} /></IconButton></div></footer>
     </>}
-    <p className="tl-footnote">归档只整理列表，素材、结果和任务记录都会保留。</p>
   </section>
 }
