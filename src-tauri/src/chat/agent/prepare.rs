@@ -921,6 +921,9 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     let has_host_side_effects = has_write || has_edit || has_bash;
 
     let mut bullets: Vec<String> = Vec::new();
+    if has("studio") {
+        bullets.push("For studio image/video tasks that return running or submitting, immediately call studio with the same domain, action=wait, and input={id}. It returns as soon as the current step finishes or fails; timeoutMs is a maximum, not a fixed delay. On wait.state=timeout, wait again. Never use bash sleep or repeated get/poll calls to time media generation, and never resubmit because waiting timed out. Inspect the returned status/results before proceeding.".to_string());
+    }
     if has_file_cwd {
         bullets.push(
             "Relative file paths and omitted command cwd resolve from the current default workbench (the bound project root for project conversations, or the per-conversation workbench otherwise). Explicit absolute or ~/ paths remain unrestricted and always take precedence.".to_string(),
@@ -1613,6 +1616,16 @@ mod tests {
         let alias_feedback = disabled_builtin_tool_feedback("search_web")
             .expect("wire alias resolves to the builtin tool");
         assert!(alias_feedback.contains("not enabled"));
+    }
+
+    #[test]
+    fn studio_prompt_uses_completion_wait_instead_of_sleep() {
+        let prompt = native_tools_prompt(&["studio".to_string()], false).expect("prompt");
+        assert!(prompt.contains("action=wait"));
+        assert!(prompt.contains("Never use bash sleep"));
+        assert!(prompt.contains("never resubmit"));
+        let other = native_tools_prompt(&["read".to_string()], false).expect("prompt");
+        assert!(!other.contains("action=wait"));
     }
 
     #[test]

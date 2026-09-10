@@ -929,6 +929,9 @@ fn effective_tool_timeout_ms(
     if tool.source == "native" && tool.name == "bash" {
         return NO_OUTER_TOOL_TIMEOUT;
     }
+    if tool.source == "native" && tool.name == "studio" && arguments["action"] == "wait" {
+        return default_timeout_ms.max(crate::studio::wait::MAX_WAIT_MS + 5_000);
+    }
     if tool.source == "native" && tool.name == "bash_output" {
         let wait_ms = arguments
             .get("wait_ms")
@@ -1107,6 +1110,15 @@ fn format_tool_result_preview(content: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn studio_wait_has_time_to_report_its_own_deadline() {
+        let mut settings = crate::settings::Settings::default();
+        settings.chat_tools.tool_timeout_ms = 1000;
+        let tool = crate::mcp::types::native_studio_tool();
+        assert!(super::effective_tool_timeout_ms(&settings, &tool, &serde_json::json!({"action":"wait"})) > crate::studio::wait::MAX_WAIT_MS);
+        assert_eq!(super::effective_tool_timeout_ms(&settings, &tool, &serde_json::json!({"action":"get"})), 1000);
+    }
+
     use super::*;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},

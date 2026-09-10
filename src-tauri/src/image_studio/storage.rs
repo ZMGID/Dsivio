@@ -73,7 +73,9 @@ pub fn save_task(task: &mut Task) -> Result<(), String> {
             .join("tasks")
             .join(format!("{}.json", safe_id(&task.id)?)),
         task,
-    )
+    )?;
+    crate::studio::wait::changed("image", &task.id);
+    Ok(())
 }
 pub fn config() -> Result<StudioConfig, String> {
     let p = root()?.join("config.json");
