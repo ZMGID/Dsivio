@@ -1,3 +1,4 @@
+import { useStudioNavigation } from '../studio/useStudioNavigation'
 import { useChatRouteActive } from '../chatRouteVisibility'
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -85,6 +86,7 @@ export default function ImageStudio() {
   const [config, setConfig] = useState<ImageConfig>(DEFAULT_CONFIG)
   const [group, setGroup] = useState('未分类')
   const [pending, setPending] = useState(false)
+  const navigation = useStudioNavigation()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -253,6 +255,7 @@ export default function ImageStudio() {
       setNotice('这是浏览器界面预览。请在 Dsivio 桌面窗口中导入素材、配置模型和生成图片。')
       return
     }
+    navigation.cancel()
     setPending(true)
     setError('')
     setNotice('')
@@ -283,21 +286,28 @@ export default function ImageStudio() {
     try { localStorage.removeItem(DRAFT_KEY) } catch { /* Native task has already been saved. */ }
     return saved
   }
-  const openTask = (item: ImageTask) =>
-    void perform(async () => {
+  const openTask = (item: ImageTask) => {
+    if (!native || pending) return
+    void navigation.open(item.id, async current => {
       if (
         editedPlans || (dirty &&
         (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length))
-      )
-        await save()
+      ) {
+        setPending(true)
+        try { await save() } finally { setPending(false) }
+      }
+      if (!current()) return
       const latest = await api.imageStudioGet(item.id)
+      if (!current()) return
       adopt(latest)
       setView(latest.brief.feature)
       setStage(latest.results.length ? 'results' : latest.plans.length ? 'plan' : 'brief')
       setGroup(productGroup(latest.brief.products[0] || ({ category: '' } as ImageProduct)))
-    })
+    }, report)
+  }
   const switchView = async (next: View, template?: ImageTemplate) => {
     if (pending) return
+    navigation.cancel()
     if (
       native &&
       (editedPlans || (dirty &&
@@ -363,6 +373,7 @@ export default function ImageStudio() {
     }
   }
   const patch = (p: Partial<ImageBrief>) => {
+    navigation.cancel()
     const next = { ...brief, ...p }
     if (p.ratio !== undefined || p.resolution !== undefined) rememberImageSettings(next)
     setBrief(next)
@@ -632,7 +643,7 @@ export default function ImageStudio() {
             </button>
             <Button variant="ghost" aria-label="图片设置"
               title={hasConfig ? `图片设置 · ${config.model}` : '图片设置 · 待配置图片模型'}
-              onClick={() => setSettingsOpen(true)}><Settings2 size={15} /><span>图片设置</span></Button>
+              onClick={() => { navigation.cancel(); setSettingsOpen(true) }}><Settings2 size={15} /><span>图片设置</span></Button>
           </nav>
         </aside>
         <div className="studio-workspace">

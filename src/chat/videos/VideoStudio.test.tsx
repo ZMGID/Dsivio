@@ -44,6 +44,39 @@ vi.mock('../api', () => ({
 }))
 
 describe('shared video workspace navigation', () => {
+  it('keeps navigation and header controls enabled while templates refresh', async () => {
+    render(<VideoStudio />)
+    const templates = await screen.findByRole('button', { name: '模板库 1' })
+    let finish!: (value: Awaited<ReturnType<typeof api.videoStudioBootstrap>>) => void
+    vi.mocked(api.videoStudioBootstrap).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    fireEvent.click(templates)
+    expect(screen.getByRole('button', { name: '视频设置' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '刷新共享模板' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '导入参考模板' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '视频拆解' }))
+    await act(async () => finish({ tasks: [], templates: [], config: {}, root: '', configPath: '', dependencies: { python: '3.12', comfy: true, node: true, ffmpeg: true } }))
+    expect(screen.getByRole('heading', { name: '视频拆解' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '视频设置' })).toBeEnabled()
+  })
+
+  it('does not dim unrelated controls or reopen a task after navigating away', async () => {
+    const target: VideoTask = { id: 'slow-task', revision: 1, updatedAt: 1,
+      brief: { ...newVideoBrief(), name: '慢任务' }, script: '旧任务剧本', prompt: '', approved: false, status: 'draft' }
+    vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce({ tasks: [target], templates: [], config: {}, root: '', configPath: '', dependencies: { python: '3.12', comfy: true, node: true, ffmpeg: true } })
+    let finish!: (value: VideoTask) => void
+    vi.mocked(api.videoStudioTask).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    render(<VideoStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '任务 1' }))
+    const row = screen.getByRole('button', { name: '打开任务 慢任务' })
+    fireEvent.click(row)
+    expect(screen.getByRole('button', { name: '刷新任务' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '视频设置' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '视频拆解' }))
+    await act(async () => finish(target))
+    expect(screen.getByRole('heading', { name: '视频拆解' })).toBeTruthy()
+    expect(screen.queryByText('旧任务剧本')).toBeNull()
+  })
+
   it.each([
     { route: '', resolution: '', reason: '请选择生成服务' },
     { route: 'grok', resolution: '', reason: '请选择当前服务支持的生成清晰度' },
