@@ -79,7 +79,8 @@ try {
   assert.equal(JSON.parse(readFileSync(join(root, 'runtime.json'))).platform, `${process.platform}-${process.arch}`)
   const bundledScripts = join(dirname(root), 'plugins/dsvideo-plugin/scripts')
   const scripts = existsSync(bundledScripts) ? bundledScripts : join(repo, 'src-tauri/resources/plugins/dsvideo-plugin/scripts')
-  const directPython = spawnSync(python, ['-s', '-B', '-c', 'import comfy_mcp, comfy_cli, yt_dlp'], { cwd: scratch, env: { ...env, PYTHONPATH: '' }, encoding: 'utf8', timeout: 45000 })
+  const directImports = `import comfy_mcp, comfy_cli, yt_dlp${win ? ', pywintypes' : ''}`
+  const directPython = spawnSync(python, ['-s', '-B', '-c', directImports], { cwd: scratch, env: { ...env, PYTHONPATH: '' }, encoding: 'utf8', timeout: 45000 })
   assert.equal(directPython.status, 0, `bundled Python must work without PYTHONPATH: ${directPython.stderr}`)
   const state = JSON.parse(run(python, ['-s', '-B', join(scripts, 'studio.py'), 'bootstrap'], '{}'))
   assert.ok(state.dependencies.comfy && state.dependencies.node && state.dependencies.ffmpeg && state.dependencies.analyzer)
