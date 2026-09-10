@@ -131,8 +131,16 @@ pub async fn run_external_cli_reply(
     entry: AgentRunEntry,
 ) -> Result<(), String> {
     run_external_cli_reply_in(
-        app, state, conversation, title_from_first_user, latest_user_message,
-        image_paths, file_paths, active_skill_id, entry, None,
+        app,
+        state,
+        conversation,
+        title_from_first_user,
+        latest_user_message,
+        image_paths,
+        file_paths,
+        active_skill_id,
+        entry,
+        None,
     )
     .await
 }
@@ -904,6 +912,10 @@ where
     use crate::external_agents::session::live::LiveSession;
     use crate::external_agents::session::{load_live_handle, save_live_handle, LiveSessionHandle};
 
+    let launch_config = &launch_config_with_connection(
+        launch_config,
+        crate::external_agents::overrides::agent_config(agent_id).as_ref(),
+    );
     let cwd_str = cwd.to_string_lossy().to_string();
     let protocol_tag = persistent_protocol_tag(protocol);
 
@@ -1300,6 +1312,26 @@ fn dsh_provider_fingerprint_for(
 fn dsh_provider_fingerprint() -> String {
     let config = crate::external_agents::overrides::agent_config("dsh");
     dsh_provider_fingerprint_for(config.as_ref())
+}
+
+// Process-bound routing must change the reuse key, even when the model stays the same.
+fn launch_config_with_connection(
+    base: &LaunchConfig,
+    config: Option<&crate::settings::ExternalCliAgentConfig>,
+) -> LaunchConfig {
+    let mut result = base.clone();
+    let routing = config
+        .map(|c| {
+            let provider = c
+                .providers
+                .iter()
+                .find(|p| p.id == c.current_provider && !p.disabled);
+            serde_json::json!([c.path, c.env, provider])
+        })
+        .unwrap_or(serde_json::Value::Null);
+    let fingerprint = crate::external_agents::session::stable_prompt_hash(&routing.to_string());
+    result.flags.push_str(&format!("|connection:{fingerprint}"));
+    result
 }
 
 fn launch_config_for_turn(
@@ -4537,9 +4569,17 @@ mod tests {
     /// model/reasoning/sandbox/provider; Codex fingerprints sandbox only; ACP stays default.
     #[test]
     fn launch_config_fingerprints_process_bound_protocols() {
-        let grok = |sandbox| launch_config_for_turn(
-            StreamFormat::AcpJsonRpc, None, None, sandbox, None, None, "",
-        );
+        let grok = |sandbox| {
+            launch_config_for_turn(
+                StreamFormat::AcpJsonRpc,
+                None,
+                None,
+                sandbox,
+                None,
+                None,
+                "",
+            )
+        };
         assert_eq!(grok(None), grok(Some("full")));
         assert!(!grok(None).accepts(&grok(Some("ask"))));
         assert!(!grok(Some("ask")).accepts(&grok(Some("full"))));
@@ -4797,5 +4837,41 @@ mod tests {
     fn the_nonzero_exit_rule_does_not_apply_to_persistent_sessions() {
         assert!(!nonzero_exit_is_a_failure(None, false));
         assert!(!nonzero_exit_is_a_failure(None, true));
+    }
+}
+
+#[cfg(test)]
+mod connection_reuse_tests {
+    use super::*;
+    #[test]
+    fn connection_changes_restart_but_inactive_provider_edits_do_not() {
+        let base = LaunchConfig {
+            flags: "high|plan".into(),
+            instructions: Some("prompt".into()),
+        };
+        let mut config: crate::settings::ExternalCliAgentConfig = serde_json::from_value(
+            serde_json::json!({"currentProvider":"a", "providers":[
+                {"id":"a","name":"A","env":[{"key":"ANTHROPIC_BASE_URL","value":"https://a.example"}]},
+                {"id":"b","name":"B","env":[{"key":"ANTHROPIC_BASE_URL","value":"https://b.example"}]}
+            ]})
+        ).unwrap();
+        let initial = launch_config_with_connection(&base, Some(&config));
+        assert!(initial.accepts(&launch_config_with_connection(&base, Some(&config))));
+        config.providers[1].name = "renamed inactive provider".into();
+        assert!(initial.accepts(&launch_config_with_connection(&base, Some(&config))));
+        config.env.push(crate::settings::CliEnvVar {
+            key: "API_KEY".into(),
+            value: "changed-key".into(),
+        });
+        assert!(!initial.accepts(&launch_config_with_connection(&base, Some(&config))));
+        config.env.clear();
+        config.current_provider = "b".into();
+        assert!(!initial.accepts(&launch_config_with_connection(&base, Some(&config))));
+        config.current_provider = "a".into();
+        config.path = "/another/claude".into();
+        assert!(!initial.accepts(&launch_config_with_connection(&base, Some(&config))));
+        assert!(!initial.accepts(&launch_config_with_connection(&base, None)));
+        assert_eq!(initial.instructions, base.instructions);
+        assert!(!initial.flags.contains("https://"));
     }
 }

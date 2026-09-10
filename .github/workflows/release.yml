@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish to (e.g. v2.9.0)'
+        description: 'Release tag to publish to (e.g. v1.0.0)'
         required: true
-        default: 'v2.9.4'
+        default: 'v1.0.0'
       ref:
         description: 'Git ref to build from (branch/tag/commit)'
         required: true
@@ -43,25 +43,14 @@ jobs:
           esac
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Kivio Desktop $RELEASE_TAG" \
-            --notes "Automated macOS (Apple Silicon) + Windows (x64 installer and portable zip) build for ${RELEASE_TAG}. Built from: ${BUILD_REF}." \
+            --title "dsivio $RELEASE_TAG" \
+            --notes "Automated Windows x64 NSIS installer build for ${RELEASE_TAG}. Built from: ${BUILD_REF}." \
             --verify-tag \
             "${extra[@]}"
 
   tauri-release:
     needs: create-release
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macos-latest is Apple Silicon; the DMG name stays *_aarch64.dmg.
-          - platform: macos-latest
-            name: macOS
-            args: --bundles dmg
-          - platform: windows-latest
-            name: Windows
-            args: --bundles nsis
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -86,55 +75,30 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Swift sidecar
-        # macOS: real kivio-ocr-helper. Windows: empty stub for externalBin.
+      - name: Build Windows sidecar stub
         run: npm run build:swift
 
       - name: Prepare and verify bundled MCP runtimes
         run: npm run build:video-runtime
 
-      - name: Build and publish ${{ matrix.name }} installer
+      - name: Build and publish Windows installer
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: Kivio Desktop ${{ env.RELEASE_TAG }}
+          releaseName: dsivio ${{ env.RELEASE_TAG }}
           releaseBody: |
-            Automated macOS (Apple Silicon / aarch64, unsigned) + Windows (x64) build for ${{ env.RELEASE_TAG }}.
+            Automated Windows x64 build for ${{ env.RELEASE_TAG }}.
             Built from: ${{ env.BUILD_REF }}
-            - macOS: DMG (unsigned — first launch: right-click → Open, or `xattr -cr "/Applications/Kivio Desktop.app"`)
-            - Windows: NSIS installer (.exe) and portable zip (unzip and run)
+            - Windows: NSIS installer (.exe)
           releaseDraft: false
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
           includeUpdaterJson: false
           tauriScript: npx tauri
-          args: ${{ matrix.args }}
-
-      - name: Verify bundled skills in macOS DMG
-        if: matrix.platform == 'macos-latest'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mount_dir=$(mktemp -d)
-          dmg=$(find src-tauri/target/release/bundle/dmg -name '*.dmg' -print -quit)
-          test -n "$dmg"
-          hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$dmg"
-          trap 'hdiutil detach "$mount_dir"; rmdir "$mount_dir"' EXIT
-          app_bundle=$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)
-          test -n "$app_bundle"
-          resources="$app_bundle/Contents/Resources"
-          node scripts/verify-video-runtime.mjs "$resources/video-runtime"
-          for skill in pdf docx xlsx obsidian-markdown obsidian-bases json-canvas obsidian-cli; do
-            test -s "$resources/skills/$skill/SKILL.md"
-            echo "Verified: skills/$skill/SKILL.md"
-          done
-          for skill in obsidian-markdown obsidian-bases json-canvas; do
-            test -d "$resources/skills/$skill/references"
-          done
+          args: --bundles nsis
 
       - name: Verify bundled skills in Windows installer
-        if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -153,15 +117,3 @@ jobs:
             if (-not $match) { throw "Missing bundled skill: $skill" }
             Write-Host "Verified: skills/$skill/SKILL.md"
           }
-
-      - name: Package and upload Windows portable zip
-        if: matrix.platform == 'windows-latest'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: |
-          $ver = $env:RELEASE_TAG.TrimStart('v')
-          & ./scripts/package-windows-portable.ps1 -Version $ver
-          $zip = "src-tauri/target/release/bundle/portable/Dsivio_${ver}_x64-portable.zip"
-          if (-not (Test-Path -LiteralPath $zip)) { throw "portable zip not found: $zip" }
-          gh release upload $env:RELEASE_TAG $zip --clobber --repo $env:GITHUB_REPOSITORY

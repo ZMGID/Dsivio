@@ -178,7 +178,9 @@ impl ModelProvider {
     }
 
     pub fn has_credentials(&self) -> bool {
-        if self.is_opencode_free() { return true; }
+        if self.is_opencode_free() {
+            return true;
+        }
         if let Some(auth) = &self.request.oauth {
             return auth.credential_id.is_some();
         }
@@ -2850,9 +2852,7 @@ fn onboarding_status_is_set(raw: &str) -> bool {
 }
 
 fn provider_has_usable_config(provider: &ModelProvider) -> bool {
-    provider.enabled
-        && provider.has_credentials()
-        && !provider.enabled_models.is_empty()
+    provider.enabled && provider.has_credentials() && !provider.enabled_models.is_empty()
 }
 
 fn settings_has_usable_provider_config(settings: &Settings) -> bool {
@@ -3074,9 +3074,9 @@ pub fn default_lens_system_prompt(language: &str, has_image: bool) -> String {
 /// Chat 客户端默认系统提示：允许正常 Markdown（含表格），不强制「不要空行」。
 pub fn default_chat_system_prompt(has_image: bool) -> String {
     if has_image {
-        "You are the AI assistant inside Dsivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. You can use images the user provides. Answer clearly and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
+        "You are the AI assistant inside dsivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. You can use images the user provides. Answer clearly and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
     } else {
-        "You are the AI assistant inside Dsivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. Answer clearly, directly, and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
+        "You are the AI assistant inside dsivio. You can help users write, analyze documents/data, search the web, run code for calculations, edit files, and answer questions. Answer clearly, directly, and concisely; Markdown is welcome (tables, lists, code blocks—each table row on its own line). Use LaTeX ($...$ or $$...$$) for math. Think briefly.".to_string()
     }
 }
 
@@ -3270,7 +3270,8 @@ mod tests {
         for enabled in [false, true] {
             let settings: Settings = serde_json::from_value(serde_json::json!({
                 "chatCompletionNotifications": enabled
-            })).unwrap();
+            }))
+            .unwrap();
             let saved = serde_json::to_value(&settings).unwrap();
             assert_eq!(saved["chatCompletionNotifications"], enabled);
             let reloaded: Settings = serde_json::from_value(saved).unwrap();

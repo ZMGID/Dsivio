@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager};
 pub enum Submission {
     Image(Vec<u8>),
     Pending(String),
+    Download(String),
 }
 
 pub(super) struct NativeBackend<'a> {
@@ -32,6 +33,10 @@ impl super::generation::Backend for NativeBackend<'_> {
         remote: &'a str,
     ) -> BoxFuture<'a, Result<Option<Vec<u8>>, String>> {
         poll(self.app, cfg, self.task_id, remote).boxed()
+    }
+
+    fn download<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Vec<u8>, String>> {
+        download(self.app, url).boxed()
     }
 
     fn store(&self, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
@@ -283,6 +288,9 @@ pub async fn submit(
     if let Some(id) = v.pointer("/data/0/task_id").and_then(Value::as_str) {
         return Ok(Submission::Pending(id.into()));
     }
+    if let Some(url) = image_download_url(&v) {
+        return Ok(Submission::Download(url.into()));
+    }
     Ok(Submission::Image(extract(app, &v).await?))
 }
 fn openai_size(ratio: &str) -> &'static str {
@@ -397,8 +405,11 @@ async fn extract(app: &AppHandle, v: &Value) -> Result<Vec<u8>, String> {
                 .map_err(|_| "Gemini Chat 图片编码无效".into());
         }
     }
-    let u = image_download_url(v)
-        .ok_or("接口没有返回图片；请核对所选模型是否支持图片生成")?;
+    let u = image_download_url(v).ok_or("接口没有返回图片；请核对所选模型是否支持图片生成")?;
+    download(app, u).await
+}
+
+pub(super) async fn download(app: &AppHandle, u: &str) -> Result<Vec<u8>, String> {
     let url = reqwest::Url::parse(u).map_err(|_| "图片下载 URL 无效")?;
     if !matches!(url.scheme(), "https" | "http")
         || !url.username().is_empty()
@@ -421,8 +432,7 @@ async fn extract(app: &AppHandle, v: &Value) -> Result<Vec<u8>, String> {
 }
 
 pub(super) fn image_download_url(v: &Value) -> Option<&str> {
-    v
-        .pointer("/data/0/url")
+    v.pointer("/data/0/url")
         // dsimage async returns images[].url as an array, not a string.
         .or_else(|| v.pointer("/data/result/images/0/url/0"))
         .or_else(|| v.pointer("/data/result/images/0/url"))

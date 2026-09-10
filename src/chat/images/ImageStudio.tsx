@@ -252,7 +252,7 @@ export default function ImageStudio() {
 
   const perform = async (fn: () => Promise<void>) => {
     if (!native) {
-      setNotice('这是浏览器界面预览。请在 Dsivio 桌面窗口中导入素材、配置模型和生成图片。')
+      setNotice('这是浏览器界面预览。请在 dsivio 桌面窗口中导入素材、配置模型和生成图片。')
       return
     }
     navigation.cancel()
@@ -584,7 +584,7 @@ export default function ImageStudio() {
     <section className="kv image-studio image-studio--polished" aria-label="图片工作台">
       {!native && (
         <div className="is-preview-note">
-          界面预览模式 · 素材导入和生成需要在 Dsivio 桌面窗口中使用
+          界面预览模式 · 素材导入和生成需要在 dsivio 桌面窗口中使用
         </div>
       )}
       <div className="studio-toasts">
@@ -1010,7 +1010,7 @@ export default function ImageStudio() {
                                     disabled={busy || dirty || r.revision !== task?.revision}
                                     onClick={() =>
                                       void act(
-                                        r.remoteId && !r.error?.startsWith('远程图片任务失败')
+                                        (r.remoteId || r.downloadUrl) && !r.error?.startsWith('远程图片任务失败')
                                           ? { kind: 'resume', resultId: r.id }
                                           : {
                                               kind: 'retry',
@@ -1021,8 +1021,8 @@ export default function ImageStudio() {
                                     }
                                   >
                                     <RefreshCw size={13} />
-                                    {r.remoteId && !r.error?.startsWith('远程图片任务失败')
-                                      ? '恢复查询'
+                                    {(r.remoteId || r.downloadUrl) && !r.error?.startsWith('远程图片任务失败')
+                                      ? (r.downloadUrl ? '恢复下载' : '恢复查询')
                                       : '单页重试'}
                                   </Button>
                                 )}
@@ -1057,7 +1057,7 @@ export default function ImageStudio() {
           config={config}
           onClose={() => setSettingsOpen(false)}
           onSave={async (c) => {
-            if (!native) throw new Error('请在 Dsivio 桌面窗口中保存配置')
+            if (!native) throw new Error('请在 dsivio 桌面窗口中保存配置')
             await api.imageStudioConfig(c)
             setConfig(c)
             setSettingsOpen(false)

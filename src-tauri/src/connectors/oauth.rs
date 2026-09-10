@@ -685,7 +685,7 @@ async fn register_client(
     scopes: &[String],
 ) -> Result<String, String> {
     let mut body = serde_json::json!({
-        "client_name": "Kivio",
+        "client_name": "dsivio",
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],

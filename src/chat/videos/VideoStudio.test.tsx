@@ -205,7 +205,7 @@ describe('shared video workspace navigation', () => {
     expect(await screen.findAllByText('检测失败')).toHaveLength(5)
     expect(screen.getByText(/无法读取内置运行环境状态/)).toHaveTextContent('unknown path')
     expect(screen.queryByText('内置文件缺失')).toBeNull()
-    expect(screen.queryByText(/重新安装 Dsivio/)).toBeNull()
+    expect(screen.queryByText(/重新安装 dsivio/)).toBeNull()
 
     vi.mocked(api.videoStudioBootstrap).mockResolvedValueOnce({
       tasks: [], templates: [], config: {}, root: '', configPath: '',
@@ -215,7 +215,7 @@ describe('shared video workspace navigation', () => {
     expect(await screen.findByText('3.12.12')).toBeTruthy()
     expect(screen.getAllByText('已就绪')).toHaveLength(4)
     expect(screen.queryByText(/无法读取内置运行环境状态/)).toBeNull()
-    expect(screen.queryByText(/重新安装 Dsivio/)).toBeNull()
+    expect(screen.queryByText(/重新安装 dsivio/)).toBeNull()
   })
 
   it('reports missing files only after a successful runtime check', async () => {
@@ -223,7 +223,7 @@ describe('shared video workspace navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
     expect(await screen.findByText('3.14')).toBeTruthy()
     expect(screen.getAllByText('内置文件缺失')).toHaveLength(1)
-    expect(screen.getByText('内置运行环境不完整，请重新安装 Dsivio。')).toBeTruthy()
+    expect(screen.getByText('内置运行环境不完整，请重新安装 dsivio。')).toBeTruthy()
   })
 
   it('shows a floating error toast for a user action, then auto-dismisses', async () => {

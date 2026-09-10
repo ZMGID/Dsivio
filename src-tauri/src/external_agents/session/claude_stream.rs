@@ -164,7 +164,7 @@ enum InboundFrame {
 /// `apply_flag_settings` / `get_settings` / `submit_feedback`），全都是「问我们、等我们答」。
 ///
 /// 我们只实现了 `can_use_tool`（工具审批），其余一律回一条 error —— 沉默的代价是整轮永久挂死。
-const UNSUPPORTED_CONTROL_REQUEST: &str = "Kivio 尚不支持这个控制请求";
+const UNSUPPORTED_CONTROL_REQUEST: &str = "dsivio 尚不支持这个控制请求";
 
 /// 用户点「拒绝」时回给 CLI 的话。它会原样变成那次工具调用的 `tool_result`（实测），
 /// 所以要写成模型看得懂、且能据此改变计划的一句中文。
@@ -188,7 +188,7 @@ const APPROVAL_ABORTED_MESSAGE: &str = "用户中止了本轮，这次操作未�
 /// **MCP 工具**；`AskUserQuestion` / `ExitPlanMode` 是内置工具，不在其中 —— 所以放开之后
 /// 不会撞上那条。
 const APPROVAL_INTERACTIVE_UNSUPPORTED: &str =
-    "Kivio 暂不支持这个需要在卡片上直接作答的工具，请改用普通回复继续。";
+    "dsivio 暂不支持这个需要在卡片上直接作答的工具，请改用普通回复继续。";
 
 /// 一条已经送去问用户、还在等答复的询问。
 ///

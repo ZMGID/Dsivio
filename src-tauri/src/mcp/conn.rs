@@ -127,7 +127,7 @@ impl ClientHandler for KivioClientHandler {
     fn get_info(&self) -> ClientInfo {
         ClientInfo::new(
             ClientCapabilities::default(),
-            Implementation::new("Kivio", env!("CARGO_PKG_VERSION")),
+            Implementation::new("dsivio", env!("CARGO_PKG_VERSION")),
         )
         .with_protocol_version(LEGACY_PROTOCOL_VERSION)
     }

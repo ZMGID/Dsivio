@@ -137,7 +137,7 @@ mod tests {
             description: String::new(),
             source: "native".to_string(),
             server_id: None,
-            server_name: Some("Kivio".to_string()),
+            server_name: Some("dsivio".to_string()),
             input_schema: serde_json::json!({}),
             sensitive: false,
             annotations: None,

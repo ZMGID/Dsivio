@@ -1,4 +1,5 @@
 //! Video UI and bundled chat plugin share the same Python workspace service.
+pub(crate) mod config;
 mod planning;
 use crate::{
     image_studio::{agent, types::StudioConfig},
@@ -21,13 +22,32 @@ pub(crate) const PACKAGE_ID: &str = "42df724b-34e1-47b8-aa2c-6c738b09d280";
 // Public worker operations shared by the chat tool and the video page.
 // Submission bookkeeping (comfy_submitted, uncertain, etc.) stays host-only.
 const WORKER_ACTIONS: &[&str] = &[
-    "bootstrap", "get", "create", "save", "plan_result", "analysis_result",
-    "approve", "prompt_result", "quote", "template_save", "template_import",
-    "install_comfy", "recover",
+    "bootstrap",
+    "get",
+    "create",
+    "save",
+    "plan_result",
+    "analysis_result",
+    "approve",
+    "prompt_result",
+    "quote",
+    "template_save",
+    "template_import",
+    "install_comfy",
+    "recover",
 ];
 const HOST_ACTIONS: &[&str] = &[
-    "config", "image_preview", "open", "preview", "plan", "prepare", "analyze", "revise", "submit",
-    "poll", "wait",
+    "config",
+    "image_preview",
+    "open",
+    "preview",
+    "plan",
+    "prepare",
+    "analyze",
+    "revise",
+    "submit",
+    "poll",
+    "wait",
 ];
 
 pub(crate) fn public_actions() -> Vec<&'static str> {
@@ -139,7 +159,7 @@ async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     command.creation_flags(0x08000000);
     let mut child = command
         .spawn()
-        .map_err(|e| format!("内置视频运行环境无法启动，请重新安装 Dsivio：{e}"))?;
+        .map_err(|e| format!("内置视频运行环境无法启动，请重新安装 dsivio：{e}"))?;
     child
         .stdin
         .take()
@@ -164,13 +184,17 @@ async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
 }
 
 fn worker_result(stdout: &[u8]) -> Result<Value, String> {
-    let result: Value = serde_json::from_slice(stdout)
-        .map_err(|_| "视频服务未返回有效结果，请检查 Python 版本")?;
+    let result: Value =
+        serde_json::from_slice(stdout).map_err(|_| "视频服务未返回有效结果，请检查 Python 版本")?;
     // Task records carry their own error field (including an empty string on
     // success). Only the worker's standalone error envelope is an IPC failure.
     if result.get("id").is_none() {
         if let Some(error) = result.get("error").and_then(Value::as_str) {
-            return Err(if error.trim().is_empty() { "视频服务返回了空错误".into() } else { error.into() });
+            return Err(if error.trim().is_empty() {
+                "视频服务返回了空错误".into()
+            } else {
+                error.into()
+            });
         }
     }
     Ok(result)
@@ -232,19 +256,33 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
         return worker(app, "prompt_result", save).await;
     }
     let planner = if action == "plan" {
-        Some(planning::select(crate::chat::storage::load_assistant_index(app)?.assistants, b["assistantId"].as_str())?)
+        Some(planning::select(
+            crate::chat::storage::load_assistant_index(app)?.assistants,
+            b["assistantId"].as_str(),
+        )?)
     } else {
         None
     };
-    let config = planner.as_ref().map(|assistant| {
-        let settings = app.state::<crate::state::AppState>();
-        let (default_provider, default_model) = settings.settings_read().effective_chat_model();
-        StudioConfig {
-            agent_provider_id: if assistant.provider_id.is_empty() { default_provider } else { assistant.provider_id.clone() },
-            agent_model: if assistant.model.is_empty() { default_model } else { assistant.model.clone() },
-            ..StudioConfig::default()
-        }
-    }).unwrap_or_default();
+    let config = planner
+        .as_ref()
+        .map(|assistant| {
+            let settings = app.state::<crate::state::AppState>();
+            let (default_provider, default_model) = settings.settings_read().effective_chat_model();
+            StudioConfig {
+                agent_provider_id: if assistant.provider_id.is_empty() {
+                    default_provider
+                } else {
+                    assistant.provider_id.clone()
+                },
+                agent_model: if assistant.model.is_empty() {
+                    default_model
+                } else {
+                    assistant.model.clone()
+                },
+                ..StudioConfig::default()
+            }
+        })
+        .unwrap_or_default();
     let root = source(app)?;
     let mut images: Vec<(String, String)> = b["images"]
         .as_array()
@@ -254,7 +292,9 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
         .enumerate()
         .map(|(index, path)| {
             let mode = b["inputMode"].as_str().unwrap_or("auto");
-            let role = if (mode == "image" && index == 0) || (mode == "frames" && b["firstFrame"] == path) {
+            let role = if (mode == "image" && index == 0)
+                || (mode == "frames" && b["firstFrame"] == path)
+            {
                 "用户指定首帧"
             } else if mode == "frames" && b["lastFrame"] == path {
                 "用户指定尾帧"
@@ -271,10 +311,15 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     let (instruction, data, field, result_action) = if action == "plan" {
         let revision = planning_revision(
             input["note"].as_str(),
-            input["previousScript"].as_str().or_else(|| t["script"].as_str()),
+            input["previousScript"]
+                .as_str()
+                .or_else(|| t["script"].as_str()),
         );
-        let instruction = planning::instruction(planner.as_ref().ok_or("无视频助手")?, b, revision.is_some());
-        let context = revision.map(|(note, previous)| revise_context(previous, note, b)).unwrap_or_else(|| b.clone());
+        let instruction =
+            planning::instruction(planner.as_ref().ok_or("无视频助手")?, b, revision.is_some());
+        let context = revision
+            .map(|(note, previous)| revise_context(previous, note, b))
+            .unwrap_or_else(|| b.clone());
         (instruction, context, "script", "plan_result")
     } else if action == "analyze" {
         analysis = mcp(
@@ -320,7 +365,11 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     .await?;
     if action == "plan" && planning_revision(input["note"].as_str(), Some("")).is_none() {
         if let Some(concepts) = result["concepts"].as_array() {
-            if concepts.len() != 3 || concepts.iter().any(|v| v.as_str().is_none_or(|s| s.trim().is_empty())) {
+            if concepts.len() != 3
+                || concepts
+                    .iter()
+                    .any(|v| v.as_str().is_none_or(|s| s.trim().is_empty()))
+            {
                 return Err("拍法需要包含三个完整选项，请重试".into());
             }
             let mut save = input;
@@ -490,12 +539,7 @@ pub async fn video_studio(app: AppHandle, action: String, input: Value) -> Resul
                 .filter(|s| !s.is_empty())
                 .ok_or("请填写需要修改的地方")?
                 .to_string();
-            if t["script"]
-                .as_str()
-                .map(str::trim)
-                .unwrap_or("")
-                .is_empty()
-            {
+            if t["script"].as_str().map(str::trim).unwrap_or("").is_empty() {
                 return Err("没有可改写的拍摄方案".into());
             }
             let mut plan_input = input;
@@ -523,9 +567,14 @@ fn analysis_context(evidence: Value, brief: &Value) -> Value {
     json!({"evidence": evidence, "request": brief["request"], "report_language": brief["language"]})
 }
 
-fn planning_revision<'a>(note: Option<&'a str>, previous_script: Option<&'a str>) -> Option<(&'a str, &'a str)> {
+fn planning_revision<'a>(
+    note: Option<&'a str>,
+    previous_script: Option<&'a str>,
+) -> Option<(&'a str, &'a str)> {
     let note = note.map(str::trim).filter(|s| !s.is_empty())?;
-    let previous = previous_script.filter(|s| !s.trim().is_empty()).unwrap_or("");
+    let previous = previous_script
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("");
     Some((note, previous))
 }
 
@@ -538,11 +587,21 @@ mod tests {
     use super::*;
     #[test]
     fn worker_task_errors_are_data_not_transport_errors() {
-        for (status, error) in [("succeeded", ""), ("failed", "供应商拒绝请求"), ("uncertain", "提交结果未知")] {
+        for (status, error) in [
+            ("succeeded", ""),
+            ("failed", "供应商拒绝请求"),
+            ("uncertain", "提交结果未知"),
+        ] {
             let record = json!({"id":"task", "status":status, "error":error});
-            assert_eq!(worker_result(&serde_json::to_vec(&record).unwrap()).unwrap(), record);
+            assert_eq!(
+                worker_result(&serde_json::to_vec(&record).unwrap()).unwrap(),
+                record
+            );
         }
-        assert_eq!(worker_result(br#"{"error":"worker failed"}"#).unwrap_err(), "worker failed");
+        assert_eq!(
+            worker_result(br#"{"error":"worker failed"}"#).unwrap_err(),
+            "worker failed"
+        );
         assert!(worker_result(br#"{"error":""}"#).is_err());
         assert!(worker_result(b"invalid JSON").is_err());
     }
@@ -552,16 +611,32 @@ mod tests {
         let shared_tasks = guide.split("## Shared tasks").nth(1).unwrap();
         let supported = public_actions();
         for line in shared_tasks.lines().filter(|line| line.starts_with('`')) {
-            let (heading, _) = line.split_once(':').expect("documented action must have a description");
+            let (heading, _) = line
+                .split_once(':')
+                .expect("documented action must have a description");
             for action in heading.split('`').skip(1).step_by(2) {
-                assert!(supported.contains(&action), "documented action {action} is not exposed");
+                assert!(
+                    supported.contains(&action),
+                    "documented action {action} is not exposed"
+                );
             }
         }
         for action in ["plan_result", "analysis_result", "prompt_result"] {
-            assert!(WORKER_ACTIONS.contains(&action), "chat-authored results must reach the worker");
+            assert!(
+                WORKER_ACTIONS.contains(&action),
+                "chat-authored results must reach the worker"
+            );
         }
-        for internal in ["comfy_workflow", "comfy_submitted", "comfy_complete", "uncertain"] {
-            assert!(!supported.contains(&internal), "internal bookkeeping must stay host-owned");
+        for internal in [
+            "comfy_workflow",
+            "comfy_submitted",
+            "comfy_complete",
+            "uncertain",
+        ] {
+            assert!(
+                !supported.contains(&internal),
+                "internal bookkeeping must stay host-owned"
+            );
         }
     }
 
@@ -578,13 +653,19 @@ mod tests {
     fn studio_tool_advertises_all_public_video_operations() {
         let tool = crate::mcp::types::native_studio_tool();
         for action in public_actions() {
-            assert!(tool.description.contains(action), "tool does not advertise {action}");
+            assert!(
+                tool.description.contains(action),
+                "tool does not advertise {action}"
+            );
         }
     }
 
     #[test]
     fn reference_analysis_preserves_user_focus_and_report_language() {
-        let context = analysis_context(json!({"warnings":["missing audio"]}), &json!({"request":"focus on opening", "language":"zh-CN"}));
+        let context = analysis_context(
+            json!({"warnings":["missing audio"]}),
+            &json!({"request":"focus on opening", "language":"zh-CN"}),
+        );
         assert_eq!(context["request"], "focus on opening");
         assert_eq!(context["report_language"], "zh-CN");
         assert_eq!(context["evidence"]["warnings"][0], "missing audio");
@@ -594,7 +675,8 @@ mod tests {
     fn revision_plan_keeps_current_script_and_user_notes() {
         let brief = json!({"request": "宣传书包", "duration": 5});
         assert!(planning_revision(None, Some("0–5秒：特写脸")).is_none());
-        let (note, script) = planning_revision(Some(" 书包要完整入画 "), Some("0–5秒：特写脸")).unwrap();
+        let (note, script) =
+            planning_revision(Some(" 书包要完整入画 "), Some("0–5秒：特写脸")).unwrap();
         assert_eq!(note, "书包要完整入画");
         assert_eq!(script, "0–5秒：特写脸");
         let data = revise_context(script, note, &brief);
@@ -696,30 +778,42 @@ mod tests {
     }
 }
 
-
 pub(crate) const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
 type PollGate = tokio::sync::Mutex<Option<tokio::time::Instant>>;
 fn poll_gate(id: &str) -> std::sync::Arc<PollGate> {
     use std::sync::{Mutex, OnceLock};
     type Entry = (std::sync::Arc<PollGate>, std::time::Instant);
     static GATES: OnceLock<Mutex<std::collections::HashMap<String, Entry>>> = OnceLock::new();
-    let mut gates = GATES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut gates = GATES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     // Retain recent gates after the last caller exits so a page/chat caller
     // arriving just afterwards still observes the shared three-second backoff.
-    gates.retain(|_, (gate, used)| std::sync::Arc::strong_count(gate) > 1 || used.elapsed().as_secs() < 60);
-    let (gate, used) = gates.entry(id.into()).or_insert_with(||
-        (std::sync::Arc::new(PollGate::new(None)), std::time::Instant::now()));
+    gates.retain(|_, (gate, used)| {
+        std::sync::Arc::strong_count(gate) > 1 || used.elapsed().as_secs() < 60
+    });
+    let (gate, used) = gates.entry(id.into()).or_insert_with(|| {
+        (
+            std::sync::Arc::new(PollGate::new(None)),
+            std::time::Instant::now(),
+        )
+    });
     *used = std::time::Instant::now();
     gate.clone()
 }
 
 pub(crate) fn task_snapshot(id: &str) -> Result<Value, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "无效任务编号")?;
-    let path = crate::app_data::app_data_dir().ok_or("无数据目录")?
-        .join("video-studio/tasks").join(format!("{id}.json"));
+    let path = crate::app_data::app_data_dir()
+        .ok_or("无数据目录")?
+        .join("video-studio/tasks")
+        .join(format!("{id}.json"));
     let bytes = std::fs::read(path).map_err(|_| "视频任务不存在或无法读取")?;
     let task: Value = serde_json::from_slice(&bytes).map_err(|_| "视频任务记录无效")?;
-    if task["id"] != id { return Err("视频任务编号不匹配".into()); }
+    if task["id"] != id {
+        return Err("视频任务编号不匹配".into());
+    }
     Ok(task)
 }
 
@@ -728,8 +822,12 @@ pub(crate) async fn poll_task(app: AppHandle, id: &str) -> Result<Value, String>
     let gate = poll_gate(id);
     let mut last = gate.lock().await;
     let current = task_snapshot(id)?;
-    if current["status"] != "running" { return Ok(current); }
-    if last.is_some_and(|at| at.elapsed() < POLL_INTERVAL) { return Ok(current); }
+    if current["status"] != "running" {
+        return Ok(current);
+    }
+    if last.is_some_and(|at| at.elapsed() < POLL_INTERVAL) {
+        return Ok(current);
+    }
     let result = poll_unlocked(app, json!({"id":id,"revision":current["revision"]})).await;
     *last = Some(tokio::time::Instant::now());
     result
@@ -742,7 +840,11 @@ async fn poll_unlocked(app: AppHandle, input: Value) -> Result<Value, String> {
     }
     let id = t["id"].as_str().ok_or("无任务编号")?;
     let remote_id = t["remote"]["id"].as_str().ok_or("无远程任务编号")?;
-    if remote_id.is_empty() || !remote_id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) {
+    if remote_id.is_empty()
+        || !remote_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
         return Err("远程任务编号无效".into());
     }
     let dir = crate::app_data::app_data_dir()
@@ -798,7 +900,6 @@ async fn poll_unlocked(app: AppHandle, input: Value) -> Result<Value, String> {
     .await
 }
 
-
 #[cfg(test)]
 mod poll_gate_tests {
     use super::*;
@@ -815,6 +916,9 @@ mod poll_gate_tests {
         drop(first);
         drop(second);
         let later = poll_gate(&id);
-        assert!(later.lock().await.is_some_and(|at| at.elapsed() < POLL_INTERVAL));
+        assert!(later
+            .lock()
+            .await
+            .is_some_and(|at| at.elapsed() < POLL_INTERVAL));
     }
 }

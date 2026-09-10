@@ -835,9 +835,13 @@ pub(crate) fn register_hotkeys(app: &AppHandle) -> Result<(), String> {
                     let app = app.clone();
                     let id = automation_id.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Err(err) =
-                            crate::automation::enqueue(app, id, crate::automation::RunOrigin::Hotkey, None, None)
-                        {
+                        if let Err(err) = crate::automation::enqueue(
+                            app,
+                            id,
+                            crate::automation::RunOrigin::Hotkey,
+                            None,
+                            None,
+                        ) {
                             eprintln!("automation hotkey: {err}");
                         }
                     });
@@ -1436,7 +1440,7 @@ pub(crate) fn setup_tray(app: &AppHandle) -> Result<(), String> {
         .build(app)
         .map_err(|e| e.to_string())?;
 
-    tray.set_tooltip(Some("Dsivio".to_string()))
+    tray.set_tooltip(Some("dsivio".to_string()))
         .map_err(|e| e.to_string())?;
     Ok(())
 }

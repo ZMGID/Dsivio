@@ -153,8 +153,8 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
 
   const label = useMemo(() => {
     if (usesExternal) return currentAgent?.name ?? agentRuntime.externalAgentId ?? t.chatRuntimeLocalCli
-    if (usesChat) return 'Dsivio Chat'
-    return 'Dsivio Agent'
+    if (usesChat) return 'dsivio Chat'
+    return 'dsivio Agent'
   }, [agentRuntime.externalAgentId, currentAgent?.name, t, usesChat, usesExternal])
 
   const selectBuiltin = () => {
@@ -244,7 +244,7 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                   className={`kv-runtime-picker__agent${usesBuiltinAgent ? ' is-active' : ''}`}
                 >
                   <KivioMark size={20} variant="agent" />
-                  <span className="kv-runtime-picker__agent-name">Dsivio Agent</span>
+                  <span className="kv-runtime-picker__agent-name">dsivio Agent</span>
                 </button>
                 <button
                   type="button"
@@ -255,7 +255,7 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                   className={`kv-runtime-picker__agent${usesChat ? ' is-active' : ''}`}
                 >
                   <KivioMark size={20} variant="chat" />
-                  <span className="kv-runtime-picker__agent-name">Dsivio Chat</span>
+                  <span className="kv-runtime-picker__agent-name">dsivio Chat</span>
                 </button>
                 {availableAgents.map((agent) => {
                   const active = usesExternal && agentRuntime.externalAgentId === agent.id

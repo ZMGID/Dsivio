@@ -129,7 +129,22 @@ describe('settingsCache', () => {
 
     importSettingsMock.mockResolvedValueOnce(settingsB)
     await expect(importSettingsCached('/tmp/x.json')).resolves.toBe(settingsB)
+    expect(importSettingsMock).toHaveBeenCalledWith('/tmp/x.json', false)
     expect(peekSettings()).toBe(settingsB)
+  })
+
+  it('onboarding import completes setup with the imported snapshot and leaves the cache intact on failure', async () => {
+    getSettingsMock.mockResolvedValue(settingsA)
+    await getSettingsCached()
+    importSettingsMock.mockRejectedValueOnce(new Error('invalid config'))
+    await expect(importSettingsCached('/tmp/broken.json', true)).rejects.toThrow('invalid config')
+    expect(peekSettings()).toBe(settingsA)
+    const imported = { ...settingsB, onboardingStatus: 'completed' as const }
+    importSettingsMock.mockResolvedValueOnce(imported)
+    await expect(importSettingsCached('/tmp/company.json', true)).resolves.toBe(imported)
+    expect(importSettingsMock).toHaveBeenLastCalledWith('/tmp/company.json', true)
+    expect(peekSettings()).toBe(imported)
+    expect(saveSettingsMock).not.toHaveBeenCalled()
   })
 
   it('setFavoriteModelsCached 成功把新收藏（去重后）补进缓存；失败不动缓存', async () => {

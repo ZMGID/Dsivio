@@ -278,8 +278,8 @@ export function ChatTab({
         </SettingRow>
         <p className="kv-row-desc px-0 pb-1 pt-1">
           {lang === 'zh'
-            ? '以上开关仅影响 Dsivio Chat。写文件 / Shell / Subagent 始终只在 Dsivio Agent 中可用。'
-            : 'These toggles only affect Dsivio Chat. Write / shell / sub-agents stay Agent-only.'}
+            ? '以上开关仅影响 dsivio Chat。写文件 / Shell / Subagent 始终只在 dsivio Agent 中可用。'
+            : 'These toggles only affect dsivio Chat. Write / shell / sub-agents stay Agent-only.'}
         </p>
       </SettingsGroup>
     </>

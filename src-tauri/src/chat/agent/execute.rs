@@ -1115,8 +1115,21 @@ mod tests {
         let mut settings = crate::settings::Settings::default();
         settings.chat_tools.tool_timeout_ms = 1000;
         let tool = crate::mcp::types::native_studio_tool();
-        assert!(super::effective_tool_timeout_ms(&settings, &tool, &serde_json::json!({"action":"wait"})) > crate::studio::wait::MAX_WAIT_MS);
-        assert_eq!(super::effective_tool_timeout_ms(&settings, &tool, &serde_json::json!({"action":"get"})), 1000);
+        assert!(
+            super::effective_tool_timeout_ms(
+                &settings,
+                &tool,
+                &serde_json::json!({"action":"wait"})
+            ) > crate::studio::wait::MAX_WAIT_MS
+        );
+        assert_eq!(
+            super::effective_tool_timeout_ms(
+                &settings,
+                &tool,
+                &serde_json::json!({"action":"get"})
+            ),
+            1000
+        );
     }
 
     use super::*;
@@ -1267,7 +1280,7 @@ mod tests {
             description: "Write file".to_string(),
             source: "native".to_string(),
             server_id: None,
-            server_name: Some("Kivio".to_string()),
+            server_name: Some("dsivio".to_string()),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1289,7 +1302,7 @@ mod tests {
             description: String::new(),
             source: "native".to_string(),
             server_id: None,
-            server_name: Some("Kivio".to_string()),
+            server_name: Some("dsivio".to_string()),
             input_schema: serde_json::json!({ "type": "object" }),
             sensitive: false,
             annotations: None,

@@ -38,10 +38,10 @@ pub(super) fn unresolved(task: &Task) -> bool {
 // A recorded failure can be retried by the next explicit action. An unfinished remote
 // request (or a crash before its response was saved) must not silently be submitted again.
 fn retryable(attempt: &ImageResult) -> bool {
-    attempt
-        .error
-        .as_deref()
-        .is_some_and(|error| attempt.remote_id.is_none() || error.starts_with("远程图片任务失败"))
+    attempt.error.as_deref().is_some_and(|error| {
+        (attempt.remote_id.is_none() && attempt.download_url.is_none())
+            || error.starts_with("远程图片任务失败")
+    })
 }
 
 /// IDs returned by the vision model must refer to this product, never arbitrary paths.
@@ -200,7 +200,7 @@ async fn derive(
         let derive_spec = template.map(|template| &template.data["derive"][side]);
         let mut result = ImageResult {
             id: storage::id(), product_id: product.id.clone(), slot_id: format!("_material_{side}"),
-            revision: task.revision, path: None, error: None, remote_id: None,
+            revision: task.revision, path: None, error: None, remote_id: None, download_url: None,
             prompt: format!("Generate one clean {side} reference view of exactly the supplied product on a plain white background. Preserve the same product identity, color, material, silhouette, scale, branding and construction. Use every supplied view as evidence. Reconstruct missing geometry conservatively; no added features, labels, copy, accessories or measurements. Show the complete product, evenly lit, without a collage. This is an internally generated reference, not documentary evidence of unseen specifications."),
             width: 0, height: 0, review: None, config: cfg.clone(),
         };
@@ -253,6 +253,7 @@ async fn derive(
                 }
             }
             Ok(engine::Submission::Pending(id)) => result.remote_id = Some(id),
+            Ok(engine::Submission::Download(url)) => result.download_url = Some(url),
             Err(error) => result.error = Some(error),
         }
         *task
@@ -269,14 +270,25 @@ async fn derive(
         result
     };
     if result.path.is_none() {
-        if let Some(remote) = &result.remote_id {
+        if result.remote_id.is_some() || result.download_url.is_some() {
             let backend = engine::NativeBackend {
                 app,
                 cfg: &result.config,
                 task_id: &task.id,
                 brief: &task.brief,
             };
-            let bytes = match generation::resume(&backend, &result.config, remote, flag).await {
+            let fetched = if let Some(url) = &result.download_url {
+                engine::download(app, url).await
+            } else {
+                generation::resume(
+                    &backend,
+                    &result.config,
+                    result.remote_id.as_deref().unwrap(),
+                    flag,
+                )
+                .await
+            };
+            let bytes = match fetched {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     result.error = Some(error.clone());

@@ -225,7 +225,7 @@ pub fn native_web_search_tool() -> ChatToolDefinition {
         description: "Search the web for current facts and return source snippets.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -277,7 +277,7 @@ pub fn native_read_file_tool() -> ChatToolDefinition {
         description: "Read a local file or directory. For a file: text is line-numbered as `N<TAB>line` for easy reference; the numbers are display-only and are NOT part of the file — never include them in edit old_string. Output is capped at 2000 lines or 50KB, whichever is hit first, so a single read can never flood the context; when the cap or your own limit stops the read early the result says so and reports total_lines and next_offset — continue with offset until you have what you need. Optional offset/limit select a 1-based line window (the cap still applies on top). For a directory path: returns its entries (folded in the former `ls` tool); offset/limit are ignored. Image files (png/jpg/webp/…) are also supported: the image is shown to you directly when your model has vision, otherwise it is described or OCR'd to text. To inspect several images at once, pass `paths` (up to 12). Images are read individually by default — always do that for analysis, QA, spelling, logos, or any per-image detail. A numbered contact sheet is used only for a first-pass overview of 6–12 similar images when the user asked to skim the set, or when you set overview=true for that skim; never for analysis. Re-read a single path for fine text. For PDF/Word/Excel, use the matching skill instead.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -313,7 +313,7 @@ pub fn native_list_dir_tool() -> ChatToolDefinition {
         description: "List files and directories in a directory. Omit path (or pass \".\") to list the current working directory; relative paths resolve from it. Do not guess or invent an absolute path, and never translate/\"correct\" directory names — pass an absolute or ~/ path only when the user gave one or an earlier tool returned it.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -335,7 +335,7 @@ pub fn native_search_files_tool() -> ChatToolDefinition {
         description: "Search text in a file or under a directory. By default `query` is a literal substring; set regex=true to treat it as a regular expression. If you already know the exact file, pass that file path directly; for broader searches, pass a directory and use `glob` to narrow the scope. Relative paths resolve from the project root; respects .gitignore and skips common dependency/build folders (node_modules, target, dist, …).".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -365,7 +365,7 @@ pub fn native_glob_files_tool() -> ChatToolDefinition {
         description: "Find files/directories under a directory by glob pattern such as \"src/**/*.tsx\". Relative paths resolve from the project root; respects .gitignore.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -389,7 +389,7 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
         description: "Write a full text file: create it if missing, overwrite it if it exists. Use this when the user explicitly asks to save/write/create a local file or gives a target path; for small changes to an existing file prefer edit. Do not call it just because the user asked for a code block or inline code — answer directly instead. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -411,7 +411,7 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
         description: "Edit a file with one or more exact text replacements in a single call. Each edit's old_string must match a unique, contiguous region of the current file (copy it from read output WITHOUT the leading line-number prefix); if a snippet appears more than once, extend it with surrounding context. Edits apply in order. Prefer this over write for changes to existing files. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -449,7 +449,7 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
         description: format!("Run a host shell command (build, test, etc.).{shell_hint} In a project conversation, the command starts from the bound project root by default; any explicit cwd is only a startup directory and is validated as workspace-local. Do not use `cd path && command` when the path contains spaces—pass `cwd` and run only the remaining command. Do not combine `cwd` with a leading `cd ... &&` prefix. Foreground commands wait until they exit — omit timeout_ms unless you want the process killed at a deadline. Do not background finite jobs (builds, tests, image-generation batches); put parallel work inside one command. Long-running never-ending servers such as `npm run dev`, `npm run tauri dev`, and `vite` are started in the background automatically and return immediately with a job_id. This is a sensitive host-shell capability, not the same boundary as the file tools: obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. A non-zero exit code is returned as a tool error with stdout/stderr. Host Python package installs require an explicit user request and allow_host_python_package_install=true."),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -474,7 +474,7 @@ pub fn native_bash_output_tool() -> ChatToolDefinition {
         description: "Inspect background commands started by bash (background:true / auto-detected never-ending servers). With a job_id: waits until that process exits or wait_ms elapses (default 30000; 0 = return immediately), then returns captured stdout/stderr since since_offset (default 0), status (running / exited with exit_code / killed / error), and next_offset. New log lines do not end the wait. Finite jobs should use foreground bash (wait until exit) instead of this tool. With NO job_id: lists all background commands tracked in this app session (job_id, status, command, working directory, age) — background commands survive across turns until killed or the app exits. Always refresh once with bash_output before reporting a background command's result to the user.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -496,7 +496,7 @@ pub fn native_kill_background_tool() -> ChatToolDefinition {
         description: "Stop a background command started by bash (background:true) by killing its process group. Pass the job_id. Use this to stop a dev server or other long-running background process when you are done with it; otherwise it keeps running until the app exits.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -517,7 +517,7 @@ pub fn native_save_assistant_tool() -> ChatToolDefinition {
         description: "Create a new Kivio assistant (专家). ONLY available while building an assistant by chat, and only call it after you have restated the full config and the user confirmed. system_prompt is the assistant's own instructions (write it in the user's language). mcp_server_ids and skill_ids MUST be chosen from the available lists given in your builder instructions — use the exact ids, never invent them; leave a list empty if none apply. Returns the new assistant id.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -548,7 +548,7 @@ pub fn native_present_artifacts_tool() -> ChatToolDefinition {
         description: "Show files or images in the chat. Call this when the user should see a file; reading or describing it does not display it. Pass only a short JSON of identifiers: copy `art_…` ids from tool results into artifact_ids, or pass existing disk paths. Never both for the same file. Never invent a path for a generated file. Never put file contents, image bytes, base64, or data URLs in any field. Caption is optional plain text. Max 16 files. Unselected files stay hidden. Example: {\"artifact_ids\":[\"art_…\"]}".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -586,10 +586,10 @@ pub fn native_memory_read_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_read".to_string(),
         name: "memory_read".to_string(),
-        description: "Read Dsivio Chat memory. L1 is online memory already injected when memory is enabled; use this mainly to inspect exact L1 text or read L2 long-term memory by exact query/heading.".to_string(),
+        description: "Read dsivio Chat memory. L1 is online memory already injected when memory is enabled; use this mainly to inspect exact L1 text or read L2 long-term memory by exact query/heading.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -619,10 +619,10 @@ pub fn native_memory_modify_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_modify".to_string(),
         name: "memory_modify".to_string(),
-        description: "Modify Dsivio Chat memory. Use for adding, replacing, removing, or archiving durable user-approved memory. L1 is short online memory limited to 5000 bytes; L2 is long-term memory that is never auto-loaded.".to_string(),
+        description: "Modify dsivio Chat memory. Use for adding, replacing, removing, or archiving durable user-approved memory. L1 is short online memory limited to 5000 bytes; L2 is long-term memory that is never auto-loaded.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -666,10 +666,10 @@ pub fn native_memory_search_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__memory_search".to_string(),
         name: "memory_search".to_string(),
-        description: "Search Dsivio Chat long-term memory (L2) by keywords and get the most relevant entries back as heading + snippet. Prefer this over memory_read when you are not sure of the exact L2 heading: memory_read needs an exact heading/text match, while memory_search ranks sections by query-token overlap.".to_string(),
+        description: "Search dsivio Chat long-term memory (L2) by keywords and get the most relevant entries back as heading + snippet. Prefer this over memory_read when you are not sure of the exact L2 heading: memory_read needs an exact heading/text match, while memory_search ranks sections by query-token overlap.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -756,7 +756,7 @@ pub fn native_web_fetch_tool() -> ChatToolDefinition {
         description: "Fetch readable text from an HTTPS URL. Uses the configured fetch provider's extract API when available (independent of the search provider: Tavily, Exa, Ollama, TinyFish, Serper, Kimi); otherwise fetches the page directly (HTML stripped to plain text, with a hosted reader fallback).".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -786,7 +786,7 @@ fn native_automation_tool(
         description: description.to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema,
         sensitive,
         annotations: None,
@@ -922,7 +922,7 @@ pub fn native_knowledge_search_tool() -> ChatToolDefinition {
         description: "Search the user's knowledge base(s) for passages relevant to a query and return them with citation markers. Use this whenever the question may be answered by the user's uploaded documents. Each returned passage is prefixed with a [n] marker and its source; when you use a passage, cite it inline as [n]. If no relevant passage is returned, say you don't have that information in the knowledge base instead of guessing. This searches only the libraries the user attached to the current conversation; if none are attached it returns nothing.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -959,7 +959,7 @@ pub fn native_advisor_tool() -> ChatToolDefinition {
         description: "Consult a stronger advisor model for guidance. Use this when you are stuck, have failed the same approach repeatedly, or face a significant design/architecture decision — NOT for routine steps you can handle yourself. Pass the specific question and enough context (relevant code, what you already tried, constraints). Returns the advisor's diagnosis and direction; you remain responsible for carrying it out.".to_string(),
         source: "native".to_string(),
         server_id: None,
-        server_name: Some("Kivio".to_string()),
+        server_name: Some("dsivio".to_string()),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -1158,12 +1158,10 @@ mod tests {
                 .unwrap()
                 .contains("`art_…`"),
         );
-        assert!(
-            def.input_schema["properties"]["caption"]["description"]
-                .as_str()
-                .unwrap()
-                .contains("plain-text"),
-        );
+        assert!(def.input_schema["properties"]["caption"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("plain-text"),);
     }
 
     #[test]
@@ -1431,7 +1429,7 @@ mod tests {
             description: "Search the web".to_string(),
             source: "native".to_string(),
             server_id: None,
-            server_name: Some("Kivio".to_string()),
+            server_name: Some("dsivio".to_string()),
             input_schema: serde_json::json!({ "type": "object" }),
             sensitive: false,
             annotations: None,
@@ -1535,7 +1533,7 @@ pub fn native_studio_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__studio".into(), name: "studio".into(),
         description: format!("Use dsimage/dsvideo directly in conversation with the SAME tasks, models, templates and results as the image/video pages. Read the bundled skill studio guide first. bootstrap lists shared tasks/templates/config; get retrieves a task. For BOTH domains, wait (input: id, optional timeoutMs 0..60000, default 60000) waits for the current step and returns immediately on completion/failure. After a running/submitting result call wait, never bash sleep or repeated model-driven get/poll. On wait.state=timeout call wait again without sleeping; failures/uncertain states need attention, never resubmit automatically. Wait does not submit jobs; stopping the chat only stops waiting. Use current id/revision for mutations, never write task JSON directly. Image: import, save, save_plans, action, config, template_import, template_save. Video actions: {}. In chat, persist your own script with plan_result/analysis_result (input: id, revision, script), then approve the user-confirmed script and persist its converted prompt with prompt_result (input: id, revision, prompt), then quote/submit/wait. prepare preserves the approved prompt verbatim; plan/analyze ask the host model to do that work; do not call them again when you already have the result. draft_get/draft_save share page drafts (image entry main; video creation/analysis/remake); draft_save requires current revision and value. Follow task approval gates. Honor existing confirmation for the unchanged script and generation terms; ask only for missing confirmation. submit requires confirmSpend:true. The host owns ComfyUI upload, submission and polling. On unknown actions, use the listed operations or report an interface mismatch and stop; do not search installation files or bypass this tool with scripts/MCP submission.", crate::video_studio::public_actions().join(", ")),
-        source: "native".into(), server_id: None, server_name: Some("Kivio".into()),
+        source: "native".into(), server_id: None, server_name: Some("dsivio".into()),
         input_schema: serde_json::json!({"type":"object","properties":{"domain":{"type":"string","enum":["image","video"]},"action":{"type":"string"},"input":{"type":"object"}},"required":["domain","action","input"]}),
         sensitive: true, annotations: None, output_schema: None,
     }

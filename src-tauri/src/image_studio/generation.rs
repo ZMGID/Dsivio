@@ -15,6 +15,7 @@ pub(super) trait Backend: Sync {
         cfg: &'a StudioConfig,
         remote: &'a str,
     ) -> BoxFuture<'a, Result<Option<Vec<u8>>, String>>;
+    fn download<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Vec<u8>, String>>;
     fn store(&self, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String>;
 }
 
@@ -85,6 +86,7 @@ pub(super) async fn run(
                 path: None,
                 error: None,
                 remote_id: None,
+                download_url: None,
                 prompt: plan.prompt.clone(),
                 width: 0,
                 height: 0,
@@ -124,6 +126,20 @@ pub(super) async fn run(
                             )
                         }
                         .boxed(),
+                    );
+                    continue;
+                }
+            }
+            Ok(Submission::Download(url)) => {
+                task.results[index].download_url = Some(url.clone());
+                // Save the receipt before a fallible CDN GET; never repeat the paid POST.
+                if let Err(error) = persist(task) {
+                    storage_error = Some(error.clone());
+                    Err(error)
+                } else {
+                    pending.push(
+                        async move { (index, backend.download(&url).await.map(Submission::Image)) }
+                            .boxed(),
                     );
                     continue;
                 }

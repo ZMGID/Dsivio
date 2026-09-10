@@ -398,13 +398,12 @@ describe('cliNativeProviderConfigs', () => {
     }])
   })
 
-  it('emits Pi sparse thinking mappings including xhigh and max', () => {
+  it('emits Pi sparse thinking mappings for the catalog levels', () => {
     const model = emptyNativeModel('pi', 'deepseek-v4-flash')
     expect(resolvePiModelMetadata(model).thinkingLevels).toEqual([
       'off',
       'low',
       'high',
-      'xhigh',
       'max',
     ])
 
@@ -423,7 +422,7 @@ describe('cliNativeProviderConfigs', () => {
       low: 'low',
       medium: null,
       high: 'high',
-      xhigh: 'xhigh',
+      xhigh: null,
       max: 'max',
     })
     expect(readNativeCliProvider('pi', {

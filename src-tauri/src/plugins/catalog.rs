@@ -1,7 +1,7 @@
 //! 内置插件目录：广场条目 + 安装规范 + 启用后注入的 MCP / 提示。
 //!
 //! CLI 插件（OfficeCLI、Cua Driver）用**官方安装器**；Skill 落在 `~/.agents/skills`，
-//! Kivio 直接扫描。「让 AI 代装」只是可选。ego lite 仍在启用时从仓库下载 Skill。
+//! Kivio 直接扫描。紫鸟 CLI 按官方 SETUP 走 AI 交互安装/授权，ego lite 仍在启用时从仓库下载 Skill。
 
 /// 官方 README 里的安装命令（按平台）。只给后端自动执行，不展示给用户。
 #[derive(Debug, Clone)]
@@ -210,6 +210,40 @@ Prefer this plugin over ad-hoc GUI scripts (PyAutoGUI, osascript click storms, c
     skill_download_url: None,
     mcp: Some(PluginMcpSpec { args: &["mcp"] }),
     install_doc: CUA_DRIVER_INSTALL_DOC,
+}, CatalogPlugin {
+    id: "ziniao-cli",
+    name: "紫鸟 CLI",
+    description: "紫鸟开放平台命令行工具。通过统一入口调用 OpenAPI、管理店铺，并使用紫鸟浏览器 Bridge 完成本机页面自动化。附带 12 个官方 Skills。",
+    binary: "ziniao-cli",
+    tags: &["紫鸟", "OpenAPI", "Browser", "Automation", "CLI", "Skill"],
+    homepage: "https://open.ziniao.com/ziniaoCli",
+    repo: "https://open.ziniao.com/ziniaoCli",
+    known_binary_paths: &[
+        r"%APPDATA%\npm\ziniao-cli.cmd",
+        r"%APPDATA%\npm\ziniao-cli",
+        "$HOME/.npm-global/bin/ziniao-cli",
+        "$HOME/.local/bin/ziniao-cli",
+        "/usr/local/bin/ziniao-cli",
+        "/opt/homebrew/bin/ziniao-cli",
+    ],
+    readme_urls: &[
+        "https://ziniao-open-prod.s3.cn-northwest-1.amazonaws.com.cn/ziniao-cli/SETUP.md",
+    ],
+    // 官方 SETUP 要求安装、授权与 doctor 在同一真实本机流程中完成，不能由无交互后台安装器拆开执行。
+    install_commands: &[],
+    system_hint: "\
+### Ziniao CLI (plugin: ziniao-cli)\n\
+**Role.** Use the official `ziniao-cli` for Ziniao OpenAPI, stores, Ziniao Browser, and local-page automation.\n\
+\n\
+**Skills.** Activate the matching installed `ziniao-*` skill before substantial work; use `ziniao-shared` for shared conventions and `ziniao-openapi-explorer` when the endpoint is unclear.\n\
+\n\
+**Required entry point.** For Ziniao stores, Ziniao Browser, or local-page automation, run `ziniao-cli` through the host command tool. Unless the user explicitly asks for another command, do not substitute a different CLI or browser driver.\n\
+Do not reinstall or re-run `config init` when the configured CLI is already healthy.",
+    skill_ids: ZINIAO_OFFICIAL_SKILL_IDS,
+    skill_md: "",
+    skill_download_url: None,
+    mcp: None,
+    install_doc: ZINIAO_INSTALL_DOC,
 }];
 
 /// `officecli load_skill` / skills install 的完整集合（CLI 子名 → frontmatter skill id）。
@@ -240,6 +274,22 @@ pub const OFFICECLI_OFFICIAL_SKILL_IDS: &[&str] = &[
     "officecli-data-dashboard",
     "officecli-financial-model",
     "officecli-word-form",
+];
+
+/// `ziniao-cli skills install --copy` 安装的官方 Skill（目录名与 frontmatter name 一致）。
+pub const ZINIAO_OFFICIAL_SKILL_IDS: &[&str] = &[
+    "ziniao-access-policy",
+    "ziniao-account",
+    "ziniao-department",
+    "ziniao-device",
+    "ziniao-openapi-explorer",
+    "ziniao-page",
+    "ziniao-role",
+    "ziniao-shared",
+    "ziniao-skill-maker",
+    "ziniao-staff",
+    "ziniao-store",
+    "ziniao-workflow-batch-account",
 ];
 
 pub fn catalog_plugin(id: &str) -> Option<&'static CatalogPlugin> {
@@ -339,16 +389,20 @@ const CUA_DRIVER_INSTALL_DOC: &str = r#"## 本插件补充（Cua Driver）
 装完官方二进制后提醒用户去插件页 **刷新并启用**，否则 MCP 不会进对话。
 "#;
 
+/// 紫鸟官方 SETUP 原文。插件页「让 AI 代装」会把它直接作为用户消息发送。
+const ZINIAO_INSTALL_DOC: &str = include_str!("ziniao-setup.md");
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn catalog_pins_three_plugins() {
-        assert_eq!(PLUGIN_CATALOG.len(), 3);
+    fn catalog_pins_four_plugins() {
+        assert_eq!(PLUGIN_CATALOG.len(), 4);
         assert!(catalog_plugin("officecli").is_some());
         assert!(catalog_plugin("ego-lite").is_some());
         assert!(catalog_plugin("cua-driver").is_some());
+        assert!(catalog_plugin("ziniao-cli").is_some());
     }
 
     #[test]
@@ -389,6 +443,15 @@ mod tests {
                 || p.install_doc.contains("也不要 `pip install cua`")
         );
         assert!(p.system_hint.contains("plugin-cua-driver"));
+        let ziniao = catalog_plugin("ziniao-cli").expect("ziniao-cli");
+        assert_eq!(ziniao.binary, "ziniao-cli");
+        assert_eq!(ziniao.skill_ids.len(), 12);
+        assert!(ziniao.uses_shared_skill_dirs());
+        assert!(ziniao.mcp.is_none());
+        assert!(ziniao.host_install_command().is_none());
+        assert!(ziniao.install_doc.contains("ziniao-cli config init --new"));
+        assert!(ziniao.install_doc.contains("ziniao-cli doctor"));
+        assert!(ziniao.install_doc.contains("memberAuth?cliRequestId="));
         #[cfg(windows)]
         {
             assert_eq!(

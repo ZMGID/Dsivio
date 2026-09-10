@@ -782,7 +782,7 @@ export default function VideoStudio() {
                     </p>
                   )}
                   {runtimeMissing && (
-                    <p className="vs-muted">内置运行环境不完整，请重新安装 Dsivio。</p>
+                    <p className="vs-muted">内置运行环境不完整，请重新安装 dsivio。</p>
                   )}
                   <p className="vs-path">{data.configPath}</p>
                 </section>

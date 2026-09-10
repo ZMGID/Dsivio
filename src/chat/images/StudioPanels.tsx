@@ -250,7 +250,7 @@ export function ConfigPanel({
         </p>
         <Field label="图片保存位置">
           <div className="is-actions">
-            <input className="kv-input" readOnly value={draft.outputRoot || '系统图片目录 / Dsivio / Images'} />
+            <input className="kv-input" readOnly value={draft.outputRoot || '系统图片目录 / dsivio / Images'} />
             <IconButton label="选择图片保存位置" disabled={pending || configConflict} onClick={() => {
               void open({ directory: true, title: '选择新任务的图片保存位置' }).then((path) => {
                 if (typeof path === 'string') setDraft((d) => ({ ...d, outputRoot: path }))
@@ -470,7 +470,7 @@ export function TemplatePanel({
   const [pending, setPending] = useState(false)
   const perform = async (fn: () => Promise<void>) => {
     if (!isTauriRuntime()) {
-      report('请在 Dsivio 桌面窗口中导入、保存或导出模板')
+      report('请在 dsivio 桌面窗口中导入、保存或导出模板')
       return
     }
     setPending(true)

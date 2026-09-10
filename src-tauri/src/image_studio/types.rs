@@ -104,6 +104,8 @@ pub struct ImageResult {
     pub path: Option<String>,
     pub error: Option<String>,
     pub remote_id: Option<String>,
+    #[serde(default)]
+    pub download_url: Option<String>,
     pub prompt: String,
     pub width: u32,
     pub height: u32,

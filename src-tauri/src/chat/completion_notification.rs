@@ -41,9 +41,9 @@ fn completion_copy(
     let title = preview(conversation_title, 77);
     let title = if title.is_empty() {
         if is_chinese {
-            "Kivio · 回复已完成"
+            "dsivio · 回复已完成"
         } else {
-            "Kivio · Reply ready"
+            "dsivio · Reply ready"
         }
         .to_string()
     } else {
@@ -100,11 +100,14 @@ mod tests {
     fn empty_title_and_reply_use_localized_fallbacks() {
         assert_eq!(
             completion_copy("en", "  ", &[]),
-            ("Kivio · Reply ready".into(), "Your reply is ready.".into())
+            ("dsivio · Reply ready".into(), "Your reply is ready.".into())
         );
         assert_eq!(
             completion_copy("zh", "", &[]),
-            ("Kivio · 回复已完成".into(), "你的回复已经生成完成。".into())
+            (
+                "dsivio · 回复已完成".into(),
+                "你的回复已经生成完成。".into()
+            )
         );
     }
 
