@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, FolderOpen, Pin, RefreshCw, Search, Trash2, X } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
 import { selectLibraryTasks, taskFilters, type LibraryTask, type TaskFilter, type TaskSort } from './taskLibraryModel'
@@ -21,6 +21,8 @@ export function TaskLibrary({ tasks, library, loading, disabled, currentId, onOp
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState('')
   const [acting, setActing] = useState(false)
+  const revealing = useRef(new Set<string>())
+  const [revealingIds, setRevealingIds] = useState<string[]>([])
   const [actionError, setActionError] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<LibraryTask[]>([])
   const [notice, setNotice] = useState('')
@@ -60,10 +62,12 @@ export function TaskLibrary({ tasks, library, loading, disabled, currentId, onOp
     }
   }
   const rowAction = async (id: string) => {
-    setActing(true); setActionError('')
+    if (revealing.current.has(id)) return
+    revealing.current.add(id)
+    setRevealingIds([...revealing.current]); setActionError('')
     try { await onReveal(id) }
     catch (e) { setActionError(String(e)) }
-    finally { setActing(false) }
+    finally { revealing.current.delete(id); setRevealingIds([...revealing.current]) }
   }
   const refresh = async () => {
     setRefreshing(true); setRefreshError('')
@@ -100,7 +104,7 @@ export function TaskLibrary({ tasks, library, loading, disabled, currentId, onOp
           <span className="tl-task-main"><strong>{library.organization[t.id]?.pinned && <Pin size={12} />}{t.name}</strong><span className="tl-description">{t.description || t.kindLabel}</span><small>{t.kindLabel}{t.detail && ` · ${t.detail}`}</small>{t.error && <span className="tl-task-error">{t.error}</span>}</span>
           <span className="tl-task-state"><span className={`tl-status tl-${t.group}`}><i />{t.status}</span><time dateTime={t.updatedAt ? new Date(t.updatedAt).toISOString() : undefined}>{t.updatedAt ? new Date(t.updatedAt).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '时间未知'}</time></span>
         </button>
-        <div className="tl-row-actions"><IconButton label={`打开所在文件夹 ${t.name}`} disabled={busy} onClick={() => void rowAction(t.id)}><FolderOpen size={14} /></IconButton><IconButton variant="danger" label={`删除 ${t.name}`} disabled={busy || !t.canDelete} onClick={() => { requestDelete([t]) }}><Trash2 size={14} /></IconButton></div>
+        <div className="tl-row-actions"><IconButton label={`打开所在文件夹 ${t.name}`} disabled={busy || revealingIds.includes(t.id)} onClick={() => void rowAction(t.id)}><FolderOpen size={14} /></IconButton><IconButton variant="danger" label={`删除 ${t.name}`} disabled={busy || !t.canDelete} onClick={() => { requestDelete([t]) }}><Trash2 size={14} /></IconButton></div>
       </li>)}</ul>
       <footer className="tl-pagination"><span>第 {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, visible.length)} 项，共 {visible.length} 项</span><div><IconButton label="上一页" disabled={currentPage === 0} onClick={() => { setPage(currentPage - 1); setSelection([]) }}><ChevronLeft size={16} /></IconButton><span>{currentPage + 1} / {pages}</span><IconButton label="下一页" disabled={currentPage + 1 >= pages} onClick={() => { setPage(currentPage + 1); setSelection([]) }}><ChevronRight size={16} /></IconButton></div></footer>
     </>}

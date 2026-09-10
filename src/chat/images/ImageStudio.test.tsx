@@ -552,3 +552,19 @@ it('keeps unsaved changes when an existing task changes during a focus refresh',
   await act(async () => { fireEvent.focus(window) })
   expect(screen.getByLabelText('图片要求')).toHaveValue('local edit')
 })
+
+
+it('keeps image task controls stable during reads and ignores abandoned destinations', async () => {
+  const target = fixture()
+  vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([target]))
+  let finish!: (value: ImageTask) => void
+  vi.mocked(api.imageStudioGet).mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+  render(<ImageStudio />)
+  await openSavedTask(target.brief.name)
+  expect(screen.getByRole('button', { name: '刷新任务' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '新建图片' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '图片设置' })).toBeEnabled()
+  fireEvent.click(screen.getByRole('button', { name: /模板库/ }))
+  await act(async () => finish(target))
+  expect(screen.getByRole('button', { name: /模板库/ })).toHaveAttribute('aria-current', 'page')
+})

@@ -1,3 +1,4 @@
+import { useStudioNavigation } from '../studio/useStudioNavigation'
 import { useChatRouteActive } from '../chatRouteVisibility'
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -102,6 +103,9 @@ export default function VideoStudio() {
   const [script, setScript] = useState(initial?.script || '')
   const [dirty, setDirty] = useState(initial?.dirty || false)
   const [foregroundBusy, setBusy] = useState('')
+  const navigation = useStudioNavigation()
+  const [refreshingTemplates, setRefreshingTemplates] = useState(false)
+  const selectView = (next: typeof view) => { navigation.cancel(); setView(next) }
   const [operations, setOperations] = useState<Record<string, string>>({})
   const operationsRef = useRef(new Set<string>())
   const busy = foregroundBusy || (task ? operations[task.id] || '' : '')
@@ -235,6 +239,7 @@ export default function VideoStudio() {
   }, [entry, view, brief, task, script, step, dirty])
 
   function navigate(next: VideoEntry) {
+    navigation.cancel()
     writeVideoDraft(entry, { brief, task, script, step, dirty })
     const draft = readVideoDrafts()[next]
     setEntry(next)
@@ -266,6 +271,7 @@ export default function VideoStudio() {
     }))
   }
   function change(values: Partial<VideoBrief>) {
+    navigation.cancel()
     const next = { ...brief, ...values }
     if (values.assistantId !== undefined) rememberVideoAssistant(values.assistantId)
     if (values.route !== undefined) {
@@ -276,28 +282,33 @@ export default function VideoStudio() {
     setBrief(next)
     setDirty(true)
   }
-  const openTask = (t: VideoTask) => void guarded('打开任务…', async () => {
-    // Opening another task must not depend on saving the current server task.
-    // The local draft is the recovery copy; an implicit save can fail on a stale
-    // revision (or mutate an approved task) and make the clicked row appear inert.
-    if (!writeVideoDraft(entry, { brief, task, script, step, dirty })) {
-      throw new Error('本地草稿保存失败，请先保存当前任务后再切换。')
-    }
-    const latest = operationsRef.current.has(t.id) ? t : await api.videoStudioTask('get', { id: t.id })
-    const draft = readVideoTaskDraft(latest.id)
-    accept(latest)
-    setEntry(latest.brief.mode)
-    setView(latest.brief.mode)
-    setEditingScript(false)
-    setStep(latest.prompt || latest.output ? 2 : latest.script || latest.concepts?.length ? 1 : 0)
-    if (draft?.dirty && draft.task?.revision === latest.revision && !['submitting', 'running', 'uncertain'].includes(latest.status)) {
-      setBrief(draft.brief)
-      setScript(draft.script)
-      setDirty(true)
-      setStep(draft.step)
-    }
-  })
+  const openTask = (t: VideoTask) => {
+    if (foregroundBusy) return
+    void navigation.open(t.id, async current => {
+      // Opening another task must not depend on saving the current server task.
+      // The local draft is the recovery copy; an implicit save can fail on a stale
+      // revision (or mutate an approved task) and make the clicked row appear inert.
+      if (!writeVideoDraft(entry, { brief, task, script, step, dirty })) {
+        throw new Error('本地草稿保存失败，请先保存当前任务后再切换。')
+      }
+      const latest = operationsRef.current.has(t.id) ? t : await api.videoStudioTask('get', { id: t.id })
+      if (!current()) return
+      const draft = readVideoTaskDraft(latest.id)
+      accept(latest)
+      setEntry(latest.brief.mode)
+      setView(latest.brief.mode)
+      setEditingScript(false)
+      setStep(latest.prompt || latest.output ? 2 : latest.script || latest.concepts?.length ? 1 : 0)
+      if (draft?.dirty && draft.task?.revision === latest.revision && !['submitting', 'running', 'uncertain'].includes(latest.status)) {
+        setBrief(draft.brief)
+        setScript(draft.script)
+        setDirty(true)
+        setStep(draft.step)
+      }
+    }, e => setError(String(e)))
+  }
   function fresh(mode: VideoEntry, template?: VideoTemplate) {
+    navigation.cancel()
     if (brief.mode === 'creation') rememberVideoSettings(brief)
     setTask(undefined)
     setBrief({
@@ -322,6 +333,7 @@ export default function VideoStudio() {
   }
   async function guarded(label: string, fn: () => Promise<void>) {
     if (foregroundBusy) return
+    navigation.cancel()
     setBusy(label)
     setError('')
     try {
@@ -577,15 +589,15 @@ export default function VideoStudio() {
               className={view === 'templates' ? 'active' : ''}
               disabled={!!foregroundBusy}
               onClick={() => {
-                setView('templates')
-                void guarded('刷新模板…', refresh)
+                selectView('templates')
+                void refresh(true).catch(e => setError(String(e)))
               }}
             >
               <Layers size={17} />
               <span>模板库</span>
               <small>{data.templates.length}</small>
             </button>
-            <button className={view === 'tasks' ? 'active' : ''} aria-current={view === 'tasks' ? 'page' : undefined} disabled={!!foregroundBusy} onClick={() => setView('tasks')}>
+            <button className={view === 'tasks' ? 'active' : ''} aria-current={view === 'tasks' ? 'page' : undefined} disabled={!!foregroundBusy} onClick={() => selectView('tasks')}>
               <History size={17} /><span>任务</span><small>{data.tasks.filter(t => ['running', 'submitting', 'uncertain'].includes(t.status) || !library.organization[t.id]?.archived).length}</small>
             </button>
           </nav>
@@ -611,7 +623,7 @@ export default function VideoStudio() {
               size="sm"
               variant="ghost"
               disabled={!!foregroundBusy}
-              onClick={() => setView('settings')}
+              onClick={() => selectView('settings')}
             >
               <Settings2 size={15} />
               视频设置
@@ -785,8 +797,11 @@ export default function VideoStudio() {
                 <div className="vs-actions">
                   <IconButton
                     label="刷新共享模板"
-                    disabled={!native || !!busy}
-                    onClick={() => void guarded('刷新模板…', refresh)}
+                    disabled={!native || refreshingTemplates}
+                    onClick={() => {
+                      setRefreshingTemplates(true)
+                      void refresh(true).catch(e => setError(String(e))).finally(() => setRefreshingTemplates(false))
+                    }}
                   >
                     <RefreshCw size={15} />
                   </IconButton>
@@ -911,7 +926,7 @@ export default function VideoStudio() {
                     <IconButton
                       label="重新读取任务"
                       disabled={!!busy}
-                      onClick={() => void run('get')}
+                      onClick={() => openTask(task)}
                     >
                       <RefreshCw size={14} />
                     </IconButton>
@@ -1271,7 +1286,7 @@ export default function VideoStudio() {
                       </>
                     )}
                   </section>
-                  {inputIssue && <p className="vs-muted" role="status">{inputIssue} <Button size="sm" onClick={() => setView('settings')}>配置生成服务</Button></p>}
+                  {inputIssue && <p className="vs-muted" role="status">{inputIssue} <Button size="sm" onClick={() => selectView('settings')}>配置生成服务</Button></p>}
                   <div className="vs-actions studio-primary-actions">
                     {!isAnalysis && <Button
                       disabled={!native || controlsDisabled || !!inputIssue || !brief.request.trim()}
@@ -1408,9 +1423,7 @@ export default function VideoStudio() {
                       <div className="vs-actions">
                         <Button
                           onClick={() =>
-                            void guarded('打开成片…', async () => {
-                              await api.videoStudioOpen(task.id)
-                            })
+                            void api.videoStudioOpen(task.id).catch(e => setError(String(e)))
                           }
                         >
                           <FolderOpen size={14} />
@@ -1418,9 +1431,7 @@ export default function VideoStudio() {
                         </Button>
                         <Button
                           onClick={() =>
-                            void guarded('在文件管理器中显示…', async () => {
-                              await api.videoStudioOpen(task.id, 'reveal')
-                            })
+                            void api.videoStudioOpen(task.id, 'reveal').catch(e => setError(String(e)))
                           }
                         >
                           <ExternalLink size={14} />
@@ -1520,7 +1531,7 @@ export default function VideoStudio() {
                     )}
                     {task?.submission?.state === 'rejected' && <div role="alert" className="vs-notice">
                       <p>{task.submission.reason}{task.submission.httpStatus ? `（HTTP ${task.submission.httpStatus}）` : ''}</p>
-                      <Button onClick={() => setView('settings')}>检查视频设置</Button>
+                      <Button onClick={() => selectView('settings')}>检查视频设置</Button>
                       <small>剧本、素材和提示词已保留，处理后可直接重试。</small>
                     </div>}
                     {!locked && (
@@ -1558,7 +1569,7 @@ export default function VideoStudio() {
                       {task.status === 'uncertain' ? <>
                         <p role="alert">{task.submission?.reason || '这次提交没有记录到任务编号或具体接口错误，暂时无法确认服务是否接单。'}</p>
                         {task.submission?.httpStatus && <small>HTTP {task.submission.httpStatus}</small>}
-                        <Button onClick={() => setView('settings')}>检查视频设置</Button>
+                        <Button onClick={() => selectView('settings')}>检查视频设置</Button>
                       </> : task.error && <p role="alert">{task.error}</p>}
                       {task.remote.id && task.status !== 'succeeded' && (
                         <Button

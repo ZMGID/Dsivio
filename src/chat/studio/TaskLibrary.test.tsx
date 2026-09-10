@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { TaskLibrary } from './TaskLibrary'
 import { selectLibraryTasks, type LibraryTask } from './taskLibraryModel'
@@ -103,4 +103,18 @@ describe('task library at scale', () => {
     expect(videoLibraryTask({ ...base, brief: newVideoBrief('analysis'), script: '已分析' }).status).toBe('已拆解')
     expect(imageLibraryTask({ id: 'i', revision: 1, createdAt: '', updatedAt: '', brief: emptyBrief('gen'), plans: [], results: [], approvedGroups: [], status: 'interrupted', progress: '', error: null, templates: [] }).group).toBe('attention')
   })
+})
+
+
+it('only marks the revealed row busy instead of dimming all task controls', async () => {
+  let finish!: () => void
+  const onReveal = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+  render(<TaskLibrary noun="视频" tasks={tasks.slice(1, 3)} library={{ organization: {}, ready: true, error: '', pending: false, refresh: vi.fn(), update: vi.fn() }} loading={false} onNew={vi.fn()} onOpen={vi.fn()} onRefresh={vi.fn()} onReveal={onReveal} onDelete={vi.fn()} />)
+  fireEvent.click(screen.getByRole('button', { name: '打开所在文件夹 作品 1' }))
+  expect(screen.getByRole('button', { name: '打开所在文件夹 作品 1' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: '打开所在文件夹 作品 2' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '刷新任务' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '删除 作品 2' })).toBeEnabled()
+  await act(async () => finish())
+  expect(screen.getByRole('button', { name: '打开所在文件夹 作品 1' })).toBeEnabled()
 })
