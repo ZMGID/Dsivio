@@ -246,7 +246,7 @@ export function ThirdPartyApps({ onRequestAiInstall }: ThirdPartyAppsProps) {
   const [busyId, setBusyId] = useState<string | null>(null)
   const [installBusyId, setInstallBusyId] = useState<string | null>(null)
 
-  // 打开页面：只读缓存态（无子进程，~2ms 秒开）。缓存来自 meta.json，对已装/启用的插件已准确。
+  // 打开页面：快速检查托管目录、PATH 和官方安装目录，不启动探测子进程。
   const loadCached = useCallback(async () => {
     if (!isTauriRuntime()) {
       setPlugins([])

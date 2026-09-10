@@ -375,11 +375,15 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
     if package.id == crate::video_studio::PACKAGE_ID && package.source == "builtin:dsvideo" {
         env.extend(crate::video_studio::runtime::environment()?);
     }
+    // Normalize only host-injected paths, before expansion into command/args/env.
+    // Keep canonical paths for containment checks and leave arbitrary values intact.
+    let cli_root = crate::utils::strip_windows_verbatim_prefix(root.to_path_buf());
+    let cli_data = crate::utils::strip_windows_verbatim_prefix(data.to_path_buf());
     for key in ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"] {
-        env.insert(key.into(), root.display().to_string());
+        env.insert(key.into(), cli_root.display().to_string());
     }
     for key in ["PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"] {
-        env.insert(key.into(), data.display().to_string());
+        env.insert(key.into(), cli_data.display().to_string());
     }
     let mut servers = Vec::new();
     let mut mcp_configs = configs(root, manifest.get("mcpServers"), ".mcp.json")?;
@@ -436,7 +440,7 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
             }
             .into();
             server.connector_id = Some(format!("plugin:package:{}", package.id));
-            server.cwd = Some(root.display().to_string());
+            server.cwd = Some(env["PLUGIN_ROOT"].clone());
             if transport == "stdio" && server.command.trim().is_empty() {
                 return Err(format!("MCP {name} requires command"));
             }
@@ -1163,6 +1167,25 @@ mod tests {
             .any(|s| s.args.first().is_some_and(|a| a
                 .contains(&dir.path().display().to_string())
                 && !a.contains("${"))));
+    }
+    #[test]
+    fn canonical_package_paths_are_normalized_before_mcp_expansion() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join(".codex-plugin")).unwrap();
+        fs::write(dir.path().join(".codex-plugin/plugin.json"), r#"{"name":"paths","mcpServers":{"node":{"command":"${PLUGIN_ROOT}/node.exe","args":["${CLAUDE_PLUGIN_ROOT}/index.js"],"env":{"CACHE":"${PLUGIN_DATA}/cache","OTHER":"${CLAUDE_PLUGIN_DATA}/other"}}}}"#).unwrap();
+        // canonicalize supplies the verbatim prefix on Windows.
+        let canonical = fs::canonicalize(dir.path()).unwrap();
+        let plain = crate::utils::strip_windows_verbatim_prefix(canonical.clone());
+        let resolved = resolve(&canonical, fixture(), &canonical).unwrap();
+        let server = &resolved.servers[0];
+        assert_eq!(server.command, format!("{}/node.exe", plain.display()));
+        assert_eq!(server.args, vec![format!("{}/index.js", plain.display())]);
+        assert_eq!(server.env["CACHE"], format!("{}/cache", plain.display()));
+        assert_eq!(server.env["OTHER"], format!("{}/other", plain.display()));
+        assert_eq!(server.cwd.as_deref(), plain.to_str());
+        for key in ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"] {
+            assert_eq!(server.env[key], plain.to_string_lossy());
+        }
     }
     fn fixture() -> Package {
         Package {
