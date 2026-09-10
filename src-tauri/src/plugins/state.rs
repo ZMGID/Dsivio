@@ -193,16 +193,46 @@ fn known_binary_path(catalog: &CatalogPlugin) -> Option<PathBuf> {
     None
 }
 
-/// 解析可用二进制：Kivio 托管 → 刷新后 PATH → 官方常见安装路径。
+/// Read PATH as native paths, without `where` output decoding (Windows usernames
+/// need not be representable as UTF-8 in the console code page).
+fn binary_in_path(binary: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
+    let mut names = vec![binary.to_string()];
+    if cfg!(windows) && Path::new(binary).extension().is_none() {
+        names = ["exe", "com", "cmd", "bat"]
+            .into_iter()
+            .map(|ext| format!("{binary}.{ext}"))
+            .chain(std::iter::once(binary.to_string()))
+            .collect();
+    }
+    for directory in std::env::split_paths(path).filter(|p| p.is_absolute()) {
+        for name in &names {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if !candidate.metadata().ok().is_some_and(|m| m.permissions().mode() & 0o111 != 0) {
+                        continue;
+                    }
+                }
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Fast detection uses actual files, including external installs without meta.json.
+pub(super) fn resolve_binary_cached(catalog: &CatalogPlugin) -> Option<PathBuf> {
+    kivio_binary_path(catalog.id)
+        .or_else(|| std::env::var_os("PATH").and_then(|path| binary_in_path(catalog.binary, &path)))
+        .or_else(|| known_binary_path(catalog))
+}
+
+/// Resolve existing binaries; shell lookup is only a fallback.
 pub fn resolve_binary(id: &str) -> Option<PathBuf> {
-    if let Some(path) = kivio_binary_path(id) {
-        return Some(path);
-    }
     let catalog = catalog_plugin(id)?;
-    if let Some(path) = which_on_path(catalog.binary) {
-        return Some(path);
-    }
-    known_binary_path(catalog)
+    resolve_binary_cached(catalog).or_else(|| which_on_path(catalog.binary))
 }
 
 /// 列表检测用：先刷新 PATH 再 resolve。
@@ -398,4 +428,40 @@ pub fn probe_version(binary: &Path) -> Option<String> {
 
 pub fn default_binary_filename(id: &str) -> Option<String> {
     catalog_plugin(id).map(binary_filename)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn path_detection_reads_unicode_paths_and_links_without_spawning() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("中文用户 with spaces");
+        std::fs::create_dir(&bin).unwrap();
+        let name = if cfg!(windows) { "fixture-driver.exe" } else { "fixture-driver" };
+        let original = dir.path().join("original");
+        std::fs::write(&original, b"not an executable program").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&original, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let linked = bin.join(name);
+        std::fs::hard_link(&original, &linked).unwrap();
+        let path = std::env::join_paths([dir.path().join("missing"), bin]).unwrap();
+        assert_eq!(binary_in_path("fixture-driver", &path), Some(linked.clone()));
+        std::fs::remove_file(linked).unwrap();
+        assert_eq!(binary_in_path("fixture-driver", &path), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn known_windows_path_expands_localappdata() {
+        let base = std::env::var("LOCALAPPDATA").unwrap();
+        assert_eq!(
+            expand_env_in_path(r"%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe"),
+            format!(r"{base}\Programs\Cua\cua-driver\bin\cua-driver.exe")
+        );
+    }
 }

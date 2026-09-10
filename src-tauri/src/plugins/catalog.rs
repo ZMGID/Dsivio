@@ -169,6 +169,7 @@ Activate the `ego-browser` skill, then run browser work via run_command as `ego-
     repo: "https://github.com/trycua/cua",
     known_binary_paths: &[
         r"%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe",
+        r"%USERPROFILE%\.local\bin\cua-driver.exe",
         r"%USERPROFILE%\.local\bin\cua-driver",
         "$HOME/.local/bin/cua-driver",
         "/usr/local/bin/cua-driver",

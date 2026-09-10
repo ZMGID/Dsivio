@@ -12,7 +12,7 @@ use super::lifecycle::{
 };
 use super::state::{
     default_binary_filename, is_enabled, kivio_binary_path, meta_path, plugin_dir, probe_version,
-    read_meta, refresh_process_path_for_detection, resolve_binary, resolve_binary_for_status,
+    read_meta, refresh_process_path_for_detection, resolve_binary, resolve_binary_cached, resolve_binary_for_status,
     skill_dir, write_meta, PluginMeta,
 };
 use crate::proc::NoConsoleWindow;
@@ -91,7 +91,7 @@ pub fn list_plugin_statuses() -> Result<Vec<PluginStatus>, String> {
     Ok(PLUGIN_CATALOG.iter().map(status_for).collect())
 }
 
-/// 无 spawn 的缓存态列表：只查文件（kivio 托管路径）+ meta.json（enabled/version），
+/// 无 spawn 的快速列表：查托管目录、进程 PATH、官方目录 + meta.json（enabled/version），
 /// 不跑 `which` / `--version` 子进程。前端首屏用它秒开页面；完整探测只在手动刷新/操作后跑。
 pub fn list_plugin_statuses_cached() -> Result<Vec<PluginStatus>, String> {
     Ok(PLUGIN_CATALOG.iter().map(status_for_cached).collect())
@@ -114,7 +114,7 @@ fn fill_mcp_active(list: &mut [PluginStatus], state: &AppState) {
 }
 
 /// 构造一条 PluginStatus。`installed` 由调用方决定（精确探测用 `path.is_some()`，缓存态用
-/// kivio 路径存在 + meta 记录），`path`/`version` 同理由调用方按快/慢路径填入。
+/// 实际文件存在），`path`/`version` 同理由调用方按快/慢路径填入。
 fn build_status(
     catalog: &CatalogPlugin,
     kivio: &Option<PathBuf>,
@@ -175,19 +175,14 @@ fn status_for(catalog: &CatalogPlugin) -> PluginStatus {
     build_status(catalog, &kivio, path, installed, version)
 }
 
-/// 缓存态：无子进程。installed 取「kivio 托管二进制存在」或「meta 记录装过/启用过」，
-/// version 直接用 meta 缓存值。system-PATH 安装但无 meta 的插件此处可能暂显未装，随后
-/// 被手动刷新的完整探测修正——秒开优先，短暂不精确可接受。
+/// 无子进程，安装状态依据实际文件；元数据只提供开关和缓存版本。
 fn status_for_cached(catalog: &CatalogPlugin) -> PluginStatus {
     let kivio = kivio_binary_path(catalog.id);
     let meta = read_meta(catalog.id);
-    let installed = kivio.is_some()
-        || meta
-            .as_ref()
-            .map(|m| m.enabled || m.version.is_some() || m.installed_at.is_some())
-            .unwrap_or(false);
+    let path = resolve_binary_cached(catalog);
+    let installed = path.is_some();
     let version = meta.and_then(|m| m.version);
-    build_status(catalog, &kivio, kivio.clone(), installed, version)
+    build_status(catalog, &kivio, path, installed, version)
 }
 
 /// 用 AppState 填充 mcp_active（settings 里是否已注册且 enabled）
@@ -1268,5 +1263,25 @@ mod skill_sync_tests {
             value["canInstall"],
             serde_json::Value::Bool(catalog.host_install_command().is_some())
         );
+    }
+
+    #[test]
+    fn cached_status_detects_external_install_without_installation_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let executable = dir.path().join("cua-driver.exe");
+        std::fs::write(&executable, b"fixture; must never be executed").unwrap();
+        let mut catalog = catalog_plugin("cua-driver").unwrap().clone();
+        catalog.id = "test-external-install-without-meta";
+        catalog.binary = "test-external-install-without-meta";
+        catalog.known_binary_paths = Box::leak(vec![
+            &*Box::leak(executable.to_string_lossy().into_owned().into_boxed_str()),
+        ].into_boxed_slice());
+        let status = super::status_for_cached(&catalog);
+        assert!(status.installed);
+        assert!(!status.enabled);
+        assert_eq!(status.source, "system");
+        assert_eq!(status.path.as_deref(), executable.to_str());
+        std::fs::remove_file(executable).unwrap();
+        assert!(!super::status_for_cached(&catalog).installed);
     }
 }

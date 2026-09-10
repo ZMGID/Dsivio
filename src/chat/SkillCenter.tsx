@@ -26,6 +26,7 @@ import {
   type SkillMeta,
 } from '../api/tauri'
 import { getSettingsCached, refreshSettings, saveSettingsCached } from '../api/settingsCache'
+import { packageApi } from '../api/pluginPackages'
 import { Select, Toggle } from '../settings/components'
 import { useT, type I18n } from '../settings/i18n'
 import { Button, IconButton } from '../components/Button'
@@ -362,23 +363,36 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
     setSkillsLoading(true)
     setSkillError('')
     try {
-      if (isTauriRuntime()) {
-        try {
-          const plugins = await api.pluginsListCached()
-          const ids = new Set<string>()
-          for (const plugin of plugins) {
-            if (!plugin.enabled) continue
-            for (const skillId of plugin.skillIds ?? []) ids.add(skillId)
-          }
-          setEnabledPluginSkillIds(ids)
-        } catch {
-          /* 插件列表失败不挡技能列表 */
-        }
-      }
       const result = await api.chatSkillsList(
         scanPaths ?? settingsRef.current?.chatTools?.skillScanPaths,
         projectCwd || undefined,
       )
+      if (isTauriRuntime()) {
+        // Catalog plugins and manifest packages have separate owner switches.
+        // One unavailable list must not hide the other owner's enabled skills.
+        const [plugins, packages] = await Promise.allSettled([
+          api.pluginsListCached(),
+          packageApi.list(),
+        ])
+        const ids = new Set<string>()
+        if (plugins.status === 'fulfilled') {
+          for (const plugin of plugins.value) {
+            if (!plugin.enabled) continue
+            for (const skillId of plugin.skillIds ?? []) ids.add(skillId)
+          }
+        }
+        if (packages.status === 'fulfilled' && result.success) {
+          const activePrefixes = packages.value
+            .filter((plugin) => plugin.enabled && plugin.diagnostics.length === 0)
+            .map((plugin) => `pkg-${plugin.id}-`)
+          for (const skill of result.skills) {
+            if (skill.source === 'plugin' && activePrefixes.some((prefix) => skill.id.startsWith(prefix))) {
+              ids.add(skill.id)
+            }
+          }
+        }
+        setEnabledPluginSkillIds(ids)
+      }
       if (result.success) {
         setSkills(result.skills)
         return true

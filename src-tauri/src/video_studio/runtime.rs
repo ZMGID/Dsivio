@@ -25,6 +25,7 @@ fn resolve_resource_directory(
     bundled: Result<PathBuf, String>,
     development: bool,
 ) -> Result<PathBuf, String> {
+    let bundled = bundled.map(crate::utils::strip_windows_verbatim_prefix);
     // Packaged debug apps must also work away from the developer checkout.
     if let Ok(path) = &bundled {
         // `tauri dev` recopies executables into target/debug during rebuilds.
@@ -79,6 +80,9 @@ pub(crate) fn bin_dirs() -> Vec<PathBuf> {
 }
 
 fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    // These paths become Node entry arguments and Python environment values.
+    // Keep canonical filesystem paths out of the external-process contract.
+    let root = crate::utils::strip_windows_verbatim_prefix(root.to_path_buf());
     let python = root.join(if cfg!(windows) {
         "python/python.exe"
     } else {
@@ -96,13 +100,15 @@ fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
         root.join("analyzer/node_modules/ffmpeg-static"),
     ];
     if let Some(existing) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&existing));
+        paths.extend(std::env::split_paths(&existing).map(crate::utils::strip_windows_verbatim_prefix));
     }
     let path = std::env::join_paths(paths).map_err(|e| e.to_string())?;
     Ok([
         (
             "DSVIDEO_CONFIG_PATH",
-            super::config::path()?.to_string_lossy().into_owned(),
+            crate::utils::strip_windows_verbatim_prefix(super::config::path()?)
+                .to_string_lossy()
+                .into_owned(),
         ),
         (
             "DSIVIO_MEDIA_PRICING",
@@ -130,6 +136,27 @@ fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn windows_runtime_environment_uses_cli_paths_for_drive_and_unc_installs() {
+        for (verbatim, plain) in [
+            (r"\\?\D:\dsivio app\video-runtime", r"D:\dsivio app\video-runtime"),
+            (r"\\?\UNC\server\share\dsivio\video-runtime", r"\\server\share\dsivio\video-runtime"),
+        ] {
+            let env = environment_at(Path::new(verbatim)).unwrap();
+            assert_eq!(env["DSVIDEO_RUNTIME_ROOT"], plain);
+            assert_eq!(Path::new(&env["DSVIDEO_NODE"]), Path::new(plain).join("node/node.exe"));
+            assert_eq!(Path::new(&env["DSVIDEO_PYTHON"]), Path::new(plain).join("python/python.exe"));
+            for key in ["PATH", "DSVIDEO_RUNTIME_PATH"] {
+                let entries: Vec<_> = std::env::split_paths(&env[key]).collect();
+                assert_eq!(entries[0], Path::new(plain).join("bin"));
+                assert!(entries.iter().all(|p| !p.to_string_lossy().starts_with(r"\\?\")));
+            }
+            assert!(!env["PYTHONPATH"].starts_with(r"\\?\"));
+            assert_eq!(resolve_resource_directory(Ok(verbatim.into()), false).unwrap(), PathBuf::from(plain));
+        }
+    }
+
     #[test]
     fn custom_development_target_falls_back_when_tauri_cannot_resolve_resources() {
         assert_eq!(
