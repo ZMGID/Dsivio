@@ -19,7 +19,8 @@ const MAX_IMAGE_BYTES: usize = 24 * 1024 * 1024;
 const MAX_INPUT_IMAGES: usize = 4;
 /// xAI `/images/edits` 的 `images` 数组上限是 3。
 const XAI_MAX_EDIT_IMAGES: usize = 3;
-pub const IMAGE_GENERATION_TIMEOUT_MS: u64 = 300_000;
+/// 与图片工作台一致；外层工具调用也使用这个上限，避免提前取消出图。
+pub const IMAGE_GENERATION_TIMEOUT_MS: u64 = 600_000;
 const IMAGE_GENERATION_HTTP_TIMEOUT: Duration = Duration::from_millis(IMAGE_GENERATION_TIMEOUT_MS);
 
 /// 出图**端点选择**的唯一运行时枚举（不持久化，不进配置）。`resolve_image_route` 是端点

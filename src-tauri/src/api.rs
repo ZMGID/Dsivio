@@ -129,8 +129,8 @@ pub fn resolve_provider_credentials(
     Ok((provider.base_url.clone(), provider.api_keys.clone()))
 }
 
-/// 普通非流式 API 请求的总超时。
-pub const STANDARD_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+/// 非流式 API 请求最多等待 10 分钟，允许上游排队和长时间计算。
+pub const STANDARD_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// 非流式**对话补全**的总超时。
 ///
 /// 为什么不能沿用 60 秒：一次 high reasoning + 十万 token 输入的补全，光思考就要两三分钟，
@@ -141,8 +141,9 @@ pub const STANDARD_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 pub const CHAT_COMPLETION_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// 只限制 TCP/TLS 建连阶段，避免 DNS/握手长期卡住。
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-/// 流式响应的读空闲超时：持续有 SSE chunk 到达时不会触发。
-const HTTP_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+/// 共享客户端也处理非流式图片生成：读空闲上限不能早于 10 分钟请求上限。
+/// 流式响应持续有 SSE chunk 到达时不会触发。
+const HTTP_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 /// 空闲连接在池中最多保留多久后被淘汰。默认(reqwest 90s)偏长；缩短以更快丢弃可能已被
 /// 服务端/NAT 静默关闭的连接，降低长时间运行后复用陈旧连接的概率。
 const HTTP_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -161,8 +162,7 @@ pub fn with_standard_request_timeout(request: RequestBuilder) -> RequestBuilder 
 
 /// 为非流式**对话补全**设置总超时（[`CHAT_COMPLETION_REQUEST_TIMEOUT`]）。
 /// 四个适配器（openai / anthropic / gemini / responses）的非流式路径都用它，
-/// 别再退回 [`with_standard_request_timeout`]——那是给 embedding / rerank / 文档解析
-/// 这类「秒级就该回」的请求用的。
+/// 独立于普通请求策略，以便后续分别调整。
 pub fn with_chat_request_timeout(request: RequestBuilder) -> RequestBuilder {
     request.timeout(CHAT_COMPLETION_REQUEST_TIMEOUT)
 }
