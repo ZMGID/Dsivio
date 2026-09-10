@@ -25,7 +25,7 @@ Object.assign(env, { PATH: [join(root, 'bin'), dirname(python), dirname(node), d
 
 function run(command, args, input) {
   const result = spawnSync(command, args, { env, cwd: scratch, encoding: 'utf8', timeout: 45000, input })
-  assert.equal(result.status, 0, `${command}: ${result.error || result.stderr}`)
+  assert.equal(result.status, 0, `${command}: ${result.error || result.stderr || result.stdout}`)
   return result.stdout
 }
 async function withMcp(command, args, check) {
