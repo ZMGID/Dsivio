@@ -7,13 +7,19 @@ import {
   MessageSquare,
   ScanSearch,
   Terminal,
+  Upload,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { I18n } from '../../settings/i18n'
 import { OnboardingStepFrame } from '../OnboardingStepFrame'
+import { Button } from '../../components/Button'
 
 type WelcomeStepProps = {
   t: I18n
+  onImportConfig: () => void
+  importing: boolean
+  disabled: boolean
+  importError: string | null
 }
 
 type FeatureCard = {
@@ -22,7 +28,7 @@ type FeatureCard = {
   desc: string
 }
 
-export function WelcomeStep({ t }: WelcomeStepProps) {
+export function WelcomeStep({ t, onImportConfig, importing, disabled, importError }: WelcomeStepProps) {
   const features: FeatureCard[] = [
     { icon: MessageSquare, title: t.onboardingWelcomeChatTitle, desc: t.onboardingWelcomeChatDesc },
     { icon: Terminal, title: t.onboardingWelcomeCliAgentTitle, desc: t.onboardingWelcomeCliAgentDesc },
@@ -40,6 +46,23 @@ export function WelcomeStep({ t }: WelcomeStepProps) {
 
   return (
     <OnboardingStepFrame title={t.onboardingWelcomeTitle} subtitle={t.onboardingWelcomeSubtitle}>
+      <section className="onboarding-card flex flex-col gap-3" aria-busy={importing}>
+        <div className="onboarding-field-copy">
+          <h2 className="onboarding-field-label">{t.onboardingImportTitle}</h2>
+          <p className="onboarding-field-hint">{t.onboardingImportDesc}</p>
+        </div>
+        <div>
+          <Button variant="primary" onClick={onImportConfig} disabled={disabled}>
+            <Upload size={15} />
+            {importing ? t.onboardingImportBusy : t.onboardingImportButton}
+          </Button>
+        </div>
+        {importError ? (
+          <p className="onboarding-panel-note text-red-600 dark:text-red-400" role="alert">
+            {t.onboardingImportFailed} {importError}
+          </p>
+        ) : null}
+      </section>
       <div className="onboarding-section">
         <div className="onboarding-section-label">{t.onboardingWelcomeSectionFeatures}</div>
         <div className="onboarding-feature-grid">

@@ -48,7 +48,7 @@ fn same_rules_input(a: &Brief, b: &Brief) -> bool {
 
 fn unresolved(task: &Task) -> bool {
     latest(task).values().any(|r| {
-        r.remote_id.is_some()
+        (r.remote_id.is_some() || r.download_url.is_some())
             && r.path.is_none()
             && !r
                 .error
@@ -193,8 +193,7 @@ pub(super) fn validate_action(task: &Task, action: &Action) -> Result<(), String
             return Err("请添加商品图或成套参考图，并填写制作要求".into());
         }
     } else {
-        task
-            .workflow
+        task.workflow
             .as_ref()
             .filter(|w| w.rules_current)
             .ok_or("请先根据当前素材和要求制作规则")?;

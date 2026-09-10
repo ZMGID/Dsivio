@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
+import { open } from '@tauri-apps/plugin-dialog'
 import { type Settings } from '../api/tauri'
-import { getSettingsCached, saveSettingsCached } from '../api/settingsCache'
+import { getSettingsCached, importSettingsCached, saveSettingsCached } from '../api/settingsCache'
 import { i18n, type Lang } from '../settings/i18n'
 import { usesNativeTitlebar } from '../chat/platform'
 import { Button } from '../components/Button'
@@ -31,11 +32,14 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
   const [stepIndex, setStepIndex] = useState(0)
   const [skipConfirmOpen, setSkipConfirmOpen] = useState(false)
   const [providerBypass, setProviderBypass] = useState(false)
+  const busy = saving || importing
 
   const stepId = ONBOARDING_STEPS[stepIndex] ?? 'welcome'
   const lang = (settings?.settingsLanguage || 'zh') as Lang
@@ -67,6 +71,24 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const updateSettings = useCallback((next: Settings) => {
     setSettings(next)
   }, [])
+
+  const handleImportConfig = useCallback(async () => {
+    if (busy) return
+    setImporting(true)
+    setImportError(null)
+    try {
+      const selected = await open({ multiple: false, filters: [{ name: 'JSON', extensions: ['json'] }] })
+      if (!selected || typeof selected !== 'string') return
+      const imported = await importSettingsCached(selected, true)
+      setSettings(imported)
+      onSettingsChange?.()
+      onComplete()
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setImporting(false)
+    }
+  }, [busy, onComplete, onSettingsChange])
 
   const providerValidation = useMemo(
     () => (settings ? validateProviderStep(settings) : { ok: false }),
@@ -218,7 +240,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
       >
         <div className="onboarding-side-brand" data-tauri-drag-region>
           <img src="/logo-mark.png" alt="" className="onboarding-side-logo" draggable={false} />
-          <span className="onboarding-side-brand-name">Dsivio</span>
+          <span className="onboarding-side-brand-name">dsivio</span>
         </div>
         <nav className="onboarding-side-steps">
           {ONBOARDING_STEPS.map((step, index) => {
@@ -230,7 +252,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
                 type="button"
                 className={`onboarding-side-step${active ? ' active' : ''}${done ? ' done' : ''}`}
                 data-clickable={done ? 'true' : 'false'}
-                disabled={!done}
+                disabled={!done || busy}
                 onClick={() => {
                   if (done) setStepIndex(index)
                 }}
@@ -251,6 +273,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
           <Button
             variant="ghost"
             onClick={() => setSkipConfirmOpen(true)}
+            disabled={busy}
             data-tauri-drag-region="false"
           >
             {t.onboardingSkip}
@@ -258,7 +281,15 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
         </div>
 
         <div className="onboarding-body kv-scroll custom-scrollbar" data-tauri-drag-region="false">
-          {stepId === 'welcome' ? <WelcomeStep t={t} /> : null}
+          {stepId === 'welcome' ? (
+            <WelcomeStep
+              t={t}
+              onImportConfig={() => void handleImportConfig()}
+              importing={importing}
+              disabled={busy}
+              importError={importError}
+            />
+          ) : null}
           {stepId === 'provider' ? (
             <ProviderStep
               t={t}
@@ -291,7 +322,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
               <Button
                 variant="ghost"
                 onClick={goBack}
-                disabled={saving}
+                disabled={busy}
                 data-tauri-drag-region="false"
               >
                 <ArrowLeft size={14} />
@@ -304,7 +335,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
                 <Button
                   variant="ghost"
                   onClick={goNext}
-                  disabled={saving}
+                  disabled={busy}
                   data-tauri-drag-region="false"
                 >
                   {t.onboardingWebSearchSkipStep}
@@ -313,7 +344,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
               <Button
                 variant="primary"
                 onClick={handlePrimary}
-                disabled={saving || (stepId !== 'done' && !canGoNext) || (stepId === 'done' && !canCompleteOnboarding(settings) && !providerBypass)}
+                disabled={busy || (stepId !== 'done' && !canGoNext) || (stepId === 'done' && !canCompleteOnboarding(settings) && !providerBypass)}
                 data-tauri-drag-region="false"
               >
                 {primaryLabel}

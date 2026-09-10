@@ -44,7 +44,10 @@ async fn try_api_latest(state: &AppState, repo: &str, current: &str) -> Option<s
             .http
             .get(&url)
             // GitHub API 要求显式 User-Agent
-            .header("User-Agent", format!("Kivio/{}", env!("CARGO_PKG_VERSION")))
+            .header(
+                "User-Agent",
+                format!("dsivio/{}", env!("CARGO_PKG_VERSION")),
+            )
             .header("Accept", "application/vnd.github+json"),
     )
     .send()
@@ -86,7 +89,10 @@ async fn try_atom_latest(state: &AppState, repo: &str, current: &str) -> Option<
         state
             .http
             .get(&url)
-            .header("User-Agent", format!("Kivio/{}", env!("CARGO_PKG_VERSION")))
+            .header(
+                "User-Agent",
+                format!("dsivio/{}", env!("CARGO_PKG_VERSION")),
+            )
             .header("Accept", "application/atom+xml"),
     )
     .send()
@@ -183,9 +189,9 @@ fn normalize_release_version(version: &str) -> Option<String> {
 /// 根据发布打包契约生成当前平台的远端资产名，不再依赖 GitHub API 列举 assets。
 fn release_asset_name_for(version: &str, os: &str, arch: &str) -> Option<String> {
     match (os, arch) {
-        ("macos", "aarch64") => Some(format!("Kivio.Desktop_{version}_aarch64.dmg")),
-        ("macos", "x86_64") => Some(format!("Kivio.Desktop_{version}_x64.dmg")),
-        ("windows", "x86_64") => Some(format!("Kivio.Desktop_{version}_x64-setup.exe")),
+        ("macos", "aarch64") => Some(format!("dsivio_{version}_aarch64.dmg")),
+        ("macos", "x86_64") => Some(format!("dsivio_{version}_x64.dmg")),
+        ("windows", "x86_64") => Some(format!("dsivio_{version}_x64-setup.exe")),
         _ => None,
     }
 }
@@ -225,7 +231,10 @@ pub(crate) async fn download_update_asset(
     let mut resp = state
         .http
         .get(&asset_url)
-        .header("User-Agent", format!("Kivio/{}", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            format!("dsivio/{}", env!("CARGO_PKG_VERSION")),
+        )
         .send()
         .await
         .map_err(|e| format!("下载失败: {e}"))?;
@@ -516,15 +525,15 @@ mod tests {
     fn release_asset_names_follow_packaging_contract() {
         assert_eq!(
             release_asset_name_for("2.8.1", "macos", "aarch64").as_deref(),
-            Some("Kivio.Desktop_2.8.1_aarch64.dmg")
+            Some("dsivio_2.8.1_aarch64.dmg")
         );
         assert_eq!(
             release_asset_name_for("2.8.1", "macos", "x86_64").as_deref(),
-            Some("Kivio.Desktop_2.8.1_x64.dmg")
+            Some("dsivio_2.8.1_x64.dmg")
         );
         assert_eq!(
             release_asset_name_for("2.8.1", "windows", "x86_64").as_deref(),
-            Some("Kivio.Desktop_2.8.1_x64-setup.exe")
+            Some("dsivio_2.8.1_x64-setup.exe")
         );
         assert_eq!(release_asset_name_for("2.8.1", "linux", "x86_64"), None);
     }
@@ -532,12 +541,8 @@ mod tests {
     #[test]
     fn release_download_url_uses_tag_specific_public_asset_path() {
         assert_eq!(
-            release_download_url(
-                "ZMGID/kivio",
-                "2.8.1",
-                "Kivio.Desktop_2.8.1_aarch64.dmg"
-            ),
-            "https://github.com/ZMGID/kivio/releases/download/v2.8.1/Kivio.Desktop_2.8.1_aarch64.dmg"
+            release_download_url("ZMGID/kivio", "2.8.1", "dsivio_2.8.1_aarch64.dmg"),
+            "https://github.com/ZMGID/kivio/releases/download/v2.8.1/dsivio_2.8.1_aarch64.dmg"
         );
     }
 

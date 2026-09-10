@@ -11,26 +11,24 @@ pub mod connectors;
 pub mod dock;
 pub mod external_agents;
 pub mod fonts;
+pub mod image_studio;
 pub mod lens;
 pub mod lens_commands;
-pub mod image_studio;
-pub mod studio;
-pub mod video_studio;
+#[cfg(any(target_os = "macos", test))]
+mod macos_hang_watchdog;
 #[cfg(target_os = "macos")]
 pub mod macos_ocr;
 pub mod mcp;
 pub mod native_tools;
 pub mod notes;
 pub mod offline_models;
+mod opencode_free;
 pub mod path_env;
 pub mod plugins;
 pub mod proc;
-#[cfg(any(target_os = "macos", test))]
-mod macos_hang_watchdog;
 pub mod prompts;
-pub mod provider_request;
 pub mod provider_oauth;
-mod opencode_free;
+pub mod provider_request;
 pub mod rapidocr;
 pub mod replace_translation;
 #[cfg(target_os = "macos")]
@@ -38,12 +36,15 @@ pub mod sck;
 pub mod screenshot;
 pub mod self_config;
 pub mod settings;
+mod settings_backup;
 pub mod shortcuts;
 pub mod skills;
 pub mod state;
+pub mod studio;
 pub mod updates;
 pub mod usage;
 pub mod utils;
+pub mod video_studio;
 pub mod web_search;
 pub mod windows;
 #[cfg(target_os = "windows")]

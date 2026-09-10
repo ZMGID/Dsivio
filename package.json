@@ -1,8 +1,8 @@
 {
   "name": "dsivio",
   "private": true,
-  "version": "2.9.8",
-  "description": "Dsivio - Screen-level AI assistant for macOS and Windows",
+  "version": "1.0.0",
+  "description": "dsivio - Screen-level AI assistant for macOS and Windows",
   "license": "GPL-3.0-or-later",
   "author": "ZM",
   "type": "module",

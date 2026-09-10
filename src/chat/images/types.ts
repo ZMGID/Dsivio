@@ -49,6 +49,7 @@ export type ImageResult = {
   path: string | null
   error: string | null
   remoteId: string | null
+  downloadUrl?: string | null
   prompt: string
   width: number
   height: number

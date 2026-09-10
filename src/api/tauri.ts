@@ -1993,8 +1993,8 @@ export const api = {
   setTranslateCardSize: (width: number) =>
     invoke<void>('set_translate_card_size', { width }),
   exportSettings: (path: string) => invoke<void>('export_settings', { path }),
-  importSettings: async (path: string) =>
-    normalizeSettings(await invoke<Settings>('import_settings', { path })),
+  importSettings: async (path: string, completeOnboarding = false) =>
+    normalizeSettings(await invoke<Settings>('import_settings', { path, completeOnboarding })),
   usageGetStats: (query?: UsageStatsQuery) =>
     invoke<UsageStatsResponse>('usage_get_stats', { query }),
   usageClear: () => invoke<void>('usage_clear'),

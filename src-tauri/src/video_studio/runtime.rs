@@ -100,7 +100,14 @@ fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
     }
     let path = std::env::join_paths(paths).map_err(|e| e.to_string())?;
     Ok([
-        ("DSIVIO_MEDIA_PRICING", crate::chat::model_metadata::media_pricing_catalog().to_string()),
+        (
+            "DSVIDEO_CONFIG_PATH",
+            super::config::path()?.to_string_lossy().into_owned(),
+        ),
+        (
+            "DSIVIO_MEDIA_PRICING",
+            crate::chat::model_metadata::media_pricing_catalog().to_string(),
+        ),
         ("DSVIDEO_RUNTIME_ROOT", root.display().to_string()),
         ("DSVIDEO_PYTHON", python.display().to_string()),
         ("DSVIDEO_NODE", node.display().to_string()),
@@ -136,7 +143,10 @@ mod tests {
             resolve_resource_directory(Ok(target.clone()), true).unwrap(),
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")
         );
-        assert_eq!(resolve_resource_directory(Ok(target.clone()), false).unwrap(), target);
+        assert_eq!(
+            resolve_resource_directory(Ok(target.clone()), false).unwrap(),
+            target
+        );
     }
 
     #[test]

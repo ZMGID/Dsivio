@@ -336,6 +336,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const settingsRef = useRef<SettingsData | null>(null)
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveInFlightRef = useRef(false)
+  const importInFlightRef = useRef(false)
   const saveAgainRef = useRef(false)
   const toastClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -797,6 +798,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
    * 保存中若草稿又变了，收尾后会再跑一轮，避免丢字。
    */
   const persistSettingsNow = useCallback(async () => {
+    if (importInFlightRef.current) return false
     const draft = settingsRef.current
     if (!draft) return false
     const toSave = rebaseDraftAgainstCache(initialSettingsSnapshot, draft, peekSettings())
@@ -1013,8 +1015,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     })
   }, [])
 
-  // 设置备份：导出/导入 JSON。导入会覆盖全部设置并立即生效。
+  // 统一配置：全局设置 + 生图/视频配置；导入保留本机目录。
   const [backupStatus, setBackupStatus] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null)
+  const [backupBusy, setBackupBusy] = useState(false)
 
   // 哪些 API Key 输入框处于明文显示（按 `${providerId}-${idx}` 记），默认全部隐藏。
   const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set())
@@ -1029,30 +1032,53 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   }, [])
 
   const handleExportSettings = useCallback(async () => {
+    setBackupBusy(true)
+    setBackupStatus(null)
     try {
+      if (!await persistSettingsNow()) {
+        throw new Error(lang === 'zh' ? '设置尚未保存完成，请稍后重试。' : 'Settings are still saving. Please retry shortly.')
+      }
       const path = await save({
-        defaultPath: 'kivio-settings-backup.json',
+        defaultPath: 'dsivio-config.json',
         filters: [{ name: 'JSON', extensions: ['json'] }],
       })
       if (!path) return
       await api.exportSettings(path)
-      setBackupStatus({ kind: 'ok', msg: lang === 'zh' ? '设置已导出。' : 'Settings exported.' })
+      setBackupStatus({ kind: 'ok', msg: lang === 'zh' ? '配置已导出，包含生图和视频配置。' : 'Configuration exported, including image and video settings.' })
     } catch (err) {
       setBackupStatus({ kind: 'err', msg: `${lang === 'zh' ? '导出失败：' : 'Export failed: '}${err}` })
+    } finally {
+      setBackupBusy(false)
     }
-  }, [lang])
+  }, [lang, persistSettingsNow])
 
   const handleImportSettings = useCallback(async () => {
+    setBackupBusy(true)
+    setBackupStatus(null)
     try {
       const selected = await open({ multiple: false, filters: [{ name: 'JSON', extensions: ['json'] }] })
       if (!selected || typeof selected !== 'string') return
+      if (saveInFlightRef.current) {
+        throw new Error(lang === 'zh' ? '设置尚未保存完成，请稍后重试。' : 'Settings are still saving. Please retry shortly.')
+      }
+      importInFlightRef.current = true
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
       const imported = await importSettingsCached(selected)
+      settingsRef.current = imported
+      currentSettingsSnapshotRef.current = stableStringify(imported)
+      initialSettingsSnapshotRef.current = stableStringify(imported)
       setSettings(imported)
       setInitialSettingsSnapshot(stableStringify(imported))
       onSettingsChange()
-      setBackupStatus({ kind: 'ok', msg: lang === 'zh' ? '设置已导入并生效。' : 'Settings imported and applied.' })
+      setBackupStatus({ kind: 'ok', msg: lang === 'zh' ? '配置已导入并生效。' : 'Configuration imported and applied.' })
     } catch (err) {
       setBackupStatus({ kind: 'err', msg: `${lang === 'zh' ? '导入失败：' : 'Import failed: '}${err}` })
+    } finally {
+      importInFlightRef.current = false
+      setBackupBusy(false)
     }
   }, [lang, onSettingsChange])
 
@@ -1946,29 +1972,31 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                   </SettingRow>
                 </SettingsGroup>
 
-                <SettingsGroup title={lang === 'zh' ? '备份与恢复' : 'Backup & Restore'}>
+                <SettingsGroup title={lang === 'zh' ? '配置导入与导出' : 'Import & Export Configuration'}>
                   <FieldBlock
-                    label={lang === 'zh' ? '设置备份' : 'Settings backup'}
+                    label={lang === 'zh' ? '统一配置文件' : 'Shared configuration file'}
                     description={lang === 'zh'
-                      ? '导出/导入全部设置（含 API Key）。'
-                      : 'Export/import all settings (incl. API keys).'}
+                      ? '将全局设置、供应商、模型及生图/视频配置（含 API Key）导出为一个 JSON，同事导入即可应用。导入覆盖对应配置，保留本机工作目录和保存位置；不包含聊天记录、任务、素材和生成文件。兼容旧版设置备份。'
+                      : 'Share one JSON with application settings, providers, models, and image/video configuration (including API keys). Import replaces these settings while keeping local directories. Chats, tasks, assets, and generated files are excluded. Legacy settings backups are supported.'}
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <Button
                         size="sm"
                         onClick={handleExportSettings}
+                        disabled={backupBusy}
                         data-tauri-drag-region="false"
                       >
                         <Download size={11} />
-                        {lang === 'zh' ? '导出设置' : 'Export'}
+                        {lang === 'zh' ? '导出配置' : 'Export configuration'}
                       </Button>
                       <Button
                         size="sm"
                         onClick={handleImportSettings}
+                        disabled={backupBusy}
                         data-tauri-drag-region="false"
                       >
                         <Upload size={11} />
-                        {lang === 'zh' ? '导入设置' : 'Import'}
+                        {lang === 'zh' ? '导入配置' : 'Import configuration'}
                       </Button>
                       {backupStatus && (
                         <span className={`text-[12px] ${backupStatus.kind === 'ok' ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'}`}>
@@ -2436,7 +2464,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             <div className="kv-sidebar-brand-mark">
               <img src="/icon.png" alt="" aria-hidden="true" />
             </div>
-            <div className="kv-sidebar-brand-name">Dsivio</div>
+            <div className="kv-sidebar-brand-name">dsivio</div>
             <div className="kv-sidebar-brand-ver">v{appVersion}</div>
           </div>
           {categoryNav}

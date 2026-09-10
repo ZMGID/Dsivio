@@ -110,8 +110,8 @@ export async function saveSettingsCached(settings: Settings): Promise<Settings> 
  * importSettings + 成功写通缓存。import 会用文件内容整体覆盖磁盘 settings，
  * 返回归一化后的新 Settings，直接替换缓存。
  */
-export async function importSettingsCached(path: string): Promise<Settings> {
-  const imported = await api.importSettings(path)
+export async function importSettingsCached(path: string, completeOnboarding = false): Promise<Settings> {
+  const imported = await api.importSettings(path, completeOnboarding)
   ++readGeneration
   cached = imported
   notifySettingsUpdated(imported)

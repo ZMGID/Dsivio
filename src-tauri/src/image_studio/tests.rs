@@ -711,6 +711,7 @@ struct GenerationBackend {
     active: std::sync::atomic::AtomicUsize,
     peak: std::sync::atomic::AtomicUsize,
     remote: bool,
+    download_receipt: bool,
     failures: Vec<String>,
 }
 
@@ -723,6 +724,7 @@ impl GenerationBackend {
             active: 0.into(),
             peak: 0.into(),
             remote,
+            download_receipt: false,
             failures: vec![],
         }
     }
@@ -757,6 +759,12 @@ impl generation::Backend for GenerationBackend {
             self.submitted.lock().unwrap().push(plan.slot_id.clone());
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(active, Ordering::SeqCst);
+            if self.download_receipt {
+                return Ok(engine::Submission::Download(format!(
+                    "https://cdn.example/{}",
+                    plan.slot_id
+                )));
+            }
             if self.remote {
                 return Ok(engine::Submission::Pending(plan.slot_id.clone()));
             }
@@ -792,6 +800,32 @@ impl generation::Backend for GenerationBackend {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             self.active.fetch_sub(1, Ordering::SeqCst);
             Ok(Some(remote.as_bytes().to_vec()))
+        })
+    }
+
+    fn download<'a>(
+        &'a self,
+        url: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<Vec<u8>, String>> {
+        Box::pin(async move {
+            assert!(
+                self.snapshots
+                    .lock()
+                    .unwrap()
+                    .last()
+                    .unwrap()
+                    .results
+                    .iter()
+                    .any(|r| r.download_url.as_deref() == Some(url)),
+                "receipt must reach disk before GET"
+            );
+            let mut downloads = self.polled.lock().unwrap();
+            let first = downloads.is_empty();
+            downloads.push(url.into());
+            if first {
+                return Err("CDN unavailable".into());
+            }
+            Ok(url.rsplit('/').next().unwrap().as_bytes().to_vec())
         })
     }
 
@@ -1014,9 +1048,15 @@ fn async_download_accepts_dsimage_url_arrays_and_sync_urls() {
         json!({"data":{"result":{"images":[{"url":"https://cdn.example/image.png"}]}}}),
         json!({"data":[{"url":"https://cdn.example/image.png"}]}),
     ] {
-        assert_eq!(engine::image_download_url(&response), Some("https://cdn.example/image.png"));
+        assert_eq!(
+            engine::image_download_url(&response),
+            Some("https://cdn.example/image.png")
+        );
     }
-    assert_eq!(engine::image_download_url(&json!({"data":{"result":{"images":[]}}})), None);
+    assert_eq!(
+        engine::image_download_url(&json!({"data":{"result":{"images":[]}}})),
+        None
+    );
 }
 
 #[test]
@@ -1026,8 +1066,16 @@ fn single_image_plans_preserve_request_and_reference_order_without_ai_rewriting(
     task.brief.requirement = "只把背景换成纯白。\n保留图案和角度，不要字。".into();
     task.brief.count = 2;
     task.brief.products[0].assets = vec![
-        Asset { id: "one".into(), name: "原图".into(), path: "assets/one.png".into() },
-        Asset { id: "two".into(), name: "商品".into(), path: "assets/two.png".into() },
+        Asset {
+            id: "one".into(),
+            name: "原图".into(),
+            path: "assets/one.png".into(),
+        },
+        Asset {
+            id: "two".into(),
+            name: "商品".into(),
+            path: "assets/two.png".into(),
+        },
     ];
     let plans = agent::gen_plans(&task.brief, &task.brief.products[0]);
     assert_eq!(plans.len(), 2);
@@ -1039,4 +1087,32 @@ fn single_image_plans_preserve_request_and_reference_order_without_ai_rewriting(
         assert!(!plan.prompt.contains("圣母"));
         assert!(!plan.prompt.contains("王冠"));
     }
+}
+
+#[tokio::test]
+async fn failed_cdn_download_preserves_receipt_and_resumes_without_paid_resubmission() {
+    use generation::Backend;
+    let mut task = fixture();
+    let plans = generation_plans(&task, 1);
+    let mut backend = GenerationBackend::new(false);
+    backend.download_receipt = true;
+    let error = generation::run(
+        &mut task,
+        &StudioConfig::default(),
+        plans,
+        &AtomicBool::new(false),
+        &backend,
+        |t| backend.persist(t),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, "CDN unavailable");
+    let result = task.results.last_mut().unwrap();
+    assert!(result.path.is_none() && result.remote_id.is_none());
+    let url = result.download_url.clone().unwrap();
+    let bytes = backend.download(&url).await.unwrap();
+    backend.store(result, &bytes).unwrap();
+    assert!(result.path.is_some());
+    assert_eq!(backend.submitted.lock().unwrap().len(), 1);
+    assert_eq!(backend.polled.lock().unwrap().len(), 2);
 }

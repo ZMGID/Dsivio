@@ -216,6 +216,11 @@ pub fn list_plugin_statuses_cached_with_state(
 /// 用户点「启用」后，Kivio 运行时再挂官方 MCP stdio + 把已装官方 Skill 接入 Agent。
 pub fn get_install_brief(id: &str) -> Result<PluginInstallBrief, String> {
     let catalog = catalog_plugin(id).ok_or_else(|| format!("unknown plugin: {id}"))?;
+    // 紫鸟官方 SETUP 是一个完整的本机交互流程（安装、系统浏览器授权、doctor），
+    // 且明确禁止沙盒内静默安装；不能套用下方默认的 CLI + MCP 模板。
+    if catalog.id == "ziniao-cli" {
+        return Ok(build_ziniao_cli_brief(catalog));
+    }
     // GUI 应用型插件（Skill 由 Kivio 下载、无 MCP，如 ego lite）：officecli 那套 MCP/skills-install
     // 模板不适用，走精简简报。
     if catalog.skill_download_url.is_some() {
@@ -338,6 +343,22 @@ PATH 若仅新终端生效：请用户在插件页点刷新，或重启 Kivio。
         readme_urls,
         user_message,
     })
+}
+
+fn build_ziniao_cli_brief(catalog: &CatalogPlugin) -> PluginInstallBrief {
+    let readme_urls = catalog
+        .readme_urls
+        .iter()
+        .map(|url| (*url).to_string())
+        .collect::<Vec<_>>();
+    PluginInstallBrief {
+        plugin_id: catalog.id.to_string(),
+        plugin_name: catalog.name.to_string(),
+        conversation_title: format!("安装插件 · {}", catalog.name),
+        readme_urls,
+        // 官方给出的文本本身就是完整的 Agent 安装任务，直接发送，避免二次包装改变语义。
+        user_message: catalog.install_doc.trim().to_string(),
+    }
 }
 
 fn official_install_program_args(script: &str) -> (&'static str, Vec<String>) {
@@ -1198,6 +1219,25 @@ mod skill_sync_tests {
     }
 
     #[test]
+    fn ziniao_brief_sends_official_setup_verbatim() {
+        let brief = get_install_brief("ziniao-cli").expect("brief");
+        let catalog = catalog_plugin("ziniao-cli").expect("ziniao-cli");
+        assert_eq!(brief.user_message, catalog.install_doc.trim());
+        assert!(brief
+            .user_message
+            .contains("npm install -g @ziniao-open/cli"));
+        assert!(brief
+            .user_message
+            .contains("ziniao-cli skills install --copy"));
+        assert!(brief.user_message.contains("ziniao-cli config init --new"));
+        assert!(brief.user_message.contains("memberAuth?cliRequestId="));
+        assert!(brief.user_message.contains("ziniao-cli doctor"));
+        assert!(brief
+            .user_message
+            .starts_with("# 帮我安装并初始化紫鸟开放平台 CLI"));
+    }
+
+    #[test]
     fn cua_driver_skill_install_uses_all_platforms() {
         let p = catalog_plugin("cua-driver").expect("cua-driver");
         assert_eq!(
@@ -1212,6 +1252,9 @@ mod skill_sync_tests {
         let ego = catalog_plugin("ego-lite").expect("ego-lite");
         assert!(official_skill_install_argvs(ego).is_empty());
         assert!(!official_skills_need_install(ego));
+        let ziniao = catalog_plugin("ziniao-cli").expect("ziniao-cli");
+        assert!(official_skill_install_argvs(ziniao).is_empty());
+        assert!(!official_skills_need_install(ziniao));
         assert!(office.skill_ids.len() > 1);
     }
 

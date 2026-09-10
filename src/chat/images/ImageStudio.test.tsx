@@ -429,6 +429,23 @@ describe('Built-in image workflows', () => {
       }),
     )
   })
+  it('resumes a saved CDN download without submitting another generation', async () => {
+    const t = fixture()
+    t.results = [{ ...result('a', 2, null), downloadUrl: 'https://cdn.example/image.png', error: '等待超时' }]
+    vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([t]))
+    vi.mocked(api.imageStudioGet).mockResolvedValue(t)
+    vi.mocked(api.imageStudioAction).mockResolvedValue(t)
+    render(<ImageStudio />)
+    await openSavedTask('背包秋季套图')
+    fireEvent.click(await screen.findByRole('button', { name: '恢复下载' }))
+    await waitFor(() =>
+      expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, {
+        kind: 'resume',
+        resultId: 'a-2',
+        group: '背包',
+      }),
+    )
+  })
   it('shows concurrent pending pages alongside completed and failed results', async () => {
     const t = fixture()
     t.brief.products.push({ ...t.brief.products[0], id: 'd', name: 'd' })

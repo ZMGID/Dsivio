@@ -225,43 +225,43 @@ async fn apply_settings(
     Ok(sanitized)
 }
 
-/// 设置备份文件格式版本。结构变化不兼容时递增。
-const SETTINGS_BACKUP_VERSION: u32 = 1;
-
-/// 导出全部设置（含供应商/模型配置与 API Key）到指定路径的 JSON 备份文件。
+/// 导出可分发配置：全局设置、生图模型、视频接口与密钥。
 #[tauri::command]
 pub(crate) fn export_settings(state: State<AppState>, path: String) -> Result<(), String> {
     let settings = state.settings_read().clone();
-    let backup = serde_json::json!({
-        "app": "kivio",
-        "type": "settings-backup",
-        "version": SETTINGS_BACKUP_VERSION,
-        "settings": serde_json::to_value(&settings).map_err(|e| e.to_string())?,
-    });
+    let backup = crate::settings_backup::export(&settings)?;
     let json = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| format!("写入失败: {e}"))?;
+    crate::settings_backup::write_atomic(std::path::Path::new(&path), json.as_bytes())
+        .map_err(|e| format!("写入失败: {e}"))?;
     Ok(())
 }
 
-/// 从备份文件导入设置，覆盖当前全部设置并立即生效（与保存同样走 sanitize/回滚）。
+/// 导入统一配置；v2 保留本机目录，v1 仍兼容原来的全局设置备份。
 #[tauri::command]
 pub(crate) async fn import_settings(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
+    complete_onboarding: Option<bool>,
 ) -> Result<Settings, String> {
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|_| "文件不是有效的 JSON".to_string())?;
-    if value.get("type").and_then(|v| v.as_str()) != Some("settings-backup") {
-        return Err("这不是 Kivio 设置备份文件".to_string());
-    }
-    let settings_value = value
-        .get("settings")
-        .ok_or_else(|| "备份文件缺少 settings 字段".to_string())?;
-    let settings: Settings = serde_json::from_value(settings_value.clone())
-        .map_err(|e| format!("备份内容无法解析: {e}"))?;
-    apply_settings(&app, &state, settings, false).await
+    let local = state.settings_read().clone();
+    // Complete onboarding in the same transaction; no second save of a stale draft.
+    let mut import =
+        crate::settings_backup::parse(&raw, &local, complete_onboarding.unwrap_or(false))?;
+    let files = {
+        let _lock = crate::image_studio::lock()?;
+        import.install_studios()?
+    };
+    let imported = match apply_settings(&app, &state, import.settings, false).await {
+        Ok(settings) => settings,
+        Err(error) => return Err(files.rollback_error(error)),
+    };
+    files.commit();
+    // Existing persistent clients must reconnect using the imported credentials.
+    state.mcp_disconnect_all().await;
+    let _ = tauri::Emitter::emit(&app, "kivio-configuration-changed", ());
+    Ok(imported)
 }
 
 #[tauri::command]
@@ -719,7 +719,9 @@ fn apply_provider_auth(
     api_format: ProviderApiFormat,
     api_key: &str,
 ) -> reqwest::RequestBuilder {
-    if api_key.is_empty() { return request; }
+    if api_key.is_empty() {
+        return request;
+    }
     match api_format {
         ProviderApiFormat::AnthropicMessages => request
             .header("x-api-key", api_key)
@@ -839,13 +841,23 @@ pub(crate) async fn fetch_models(
     provider: Option<ProviderConnectionInput>,
 ) -> Result<Vec<String>, String> {
     let settings = state.settings_read().clone();
-    let mut oauth_provider = effective_request_provider(&settings, &provider_id, provider.as_ref().and_then(|p| p.request.clone()));
+    let mut oauth_provider = effective_request_provider(
+        &settings,
+        &provider_id,
+        provider.as_ref().and_then(|p| p.request.clone()),
+    );
     if let Some(input) = provider.as_ref() {
-        if input.id.as_deref().is_some_and(|id| !id.is_empty() && id != provider_id) {
+        if input
+            .id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty() && id != provider_id)
+        {
             return Err("Provider ID mismatch".into());
         }
         oauth_provider.base_url = input.base_url.clone();
-        if let Some(format) = &input.api_format { oauth_provider.api_format = format.clone(); }
+        if let Some(format) = &input.api_format {
+            oauth_provider.api_format = format.clone();
+        }
     }
     if oauth_provider.request.oauth.is_some() {
         return crate::provider_oauth::models(&state, &oauth_provider).await;
@@ -858,7 +870,9 @@ pub(crate) async fn fetch_models(
     let anonymous = api_format == ProviderApiFormat::OpenAiChat
         && crate::opencode_free::is_endpoint(&base_url)
         && api_keys.iter().all(|key| key.trim().is_empty());
-    if anonymous { api_keys = vec![String::new()]; }
+    if anonymous {
+        api_keys = vec![String::new()];
+    }
     let retry_attempts = effective_retry_attempts(&settings);
     let effective = effective_request_provider(&settings, &provider_id, request_override);
 
@@ -904,7 +918,9 @@ pub(crate) async fn fetch_models(
         .map_err(|e| format!("Failed to parse models response JSON: {e}"))?;
 
     let mut ids = parse_model_list_ids(&value)?;
-    if anonymous { ids.retain(|id| crate::opencode_free::is_free_model(id)); }
+    if anonymous {
+        ids.retain(|id| crate::opencode_free::is_free_model(id));
+    }
     Ok(ids)
 }
 
@@ -921,16 +937,29 @@ pub(crate) async fn test_provider_connection(
     provider: Option<ProviderConnectionInput>,
 ) -> Result<serde_json::Value, String> {
     let settings = state.settings_read().clone();
-    let mut oauth_provider = effective_request_provider(&settings, &provider_id, provider.as_ref().and_then(|p| p.request.clone()));
+    let mut oauth_provider = effective_request_provider(
+        &settings,
+        &provider_id,
+        provider.as_ref().and_then(|p| p.request.clone()),
+    );
     if let Some(input) = provider.as_ref() {
-        if input.id.as_deref().is_some_and(|id| !id.is_empty() && id != provider_id) {
+        if input
+            .id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty() && id != provider_id)
+        {
             return Err("Provider ID mismatch".into());
         }
         oauth_provider.base_url = input.base_url.clone();
-        if let Some(format) = &input.api_format { oauth_provider.api_format = format.clone(); }
+        if let Some(format) = &input.api_format {
+            oauth_provider.api_format = format.clone();
+        }
     }
     if oauth_provider.request.oauth.is_some() {
-        let model = provider.as_ref().and_then(|p| p.model.as_deref()).filter(|m| !m.trim().is_empty());
+        let model = provider
+            .as_ref()
+            .and_then(|p| p.model.as_deref())
+            .filter(|m| !m.trim().is_empty());
         let result = crate::provider_oauth::test_connection(&state, &oauth_provider, model).await;
         return Ok(match result {
             Ok(()) => serde_json::json!({"success": true}),
@@ -955,9 +984,15 @@ pub(crate) async fn test_provider_connection(
     let anonymous = api_format == ProviderApiFormat::OpenAiChat
         && crate::opencode_free::is_endpoint(&base_url)
         && api_keys.iter().all(|key| key.trim().is_empty());
-    if anonymous { api_keys = vec![String::new()]; }
+    if anonymous {
+        api_keys = vec![String::new()];
+    }
 
-    let api_key = match if anonymous { Some(String::new()) } else { crate::api::pick_key_at(&api_keys, preferred_idx) } {
+    let api_key = match if anonymous {
+        Some(String::new())
+    } else {
+        crate::api::pick_key_at(&api_keys, preferred_idx)
+    } {
         Some(k) => k,
         None => {
             return Ok(serde_json::json!({
@@ -981,7 +1016,9 @@ pub(crate) async fn test_provider_connection(
     let result = match model.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
         Some(model) => {
             if anonymous && !crate::opencode_free::is_free_model(model) {
-                return Ok(serde_json::json!({"success": false, "error": "OpenCode Free only supports free models"}));
+                return Ok(
+                    serde_json::json!({"success": false, "error": "OpenCode Free only supports free models"}),
+                );
             }
             let (url, body) = connection_test_url_and_body(api_format, base, model);
             send_with_retry("Provider API", retry_attempts, || {

@@ -89,7 +89,7 @@ export function ImageWorkflow({
     !!workflow && [...sampleIds].sort().join(',') === [...workflow.sampleIds].sort().join(',')
   const complete = !!task && workflowSamplesComplete(task) && selectedSamplesMatch
   const unresolved = results.some(
-    (r) => r.remoteId && !r.path && !r.error?.startsWith('远程图片任务失败'),
+    (r) => (r.remoteId || r.downloadUrl) && !r.path && !r.error?.startsWith('远程图片任务失败'),
   )
   const successful = results.filter((r) => r.path)
   const productionPending = template
@@ -646,7 +646,7 @@ export function ImageWorkflow({
                     )
                     const source = input.sources[input.mode === 'replace' ? index : 0]
                     const remote =
-                      result?.remoteId &&
+                      (result?.remoteId || result?.downloadUrl) &&
                       !result.path &&
                       !result.error?.startsWith('远程图片任务失败')
                     return (
@@ -677,7 +677,7 @@ export function ImageWorkflow({
                             ) : (
                               <div className="iw-wait">
                                 {busy ? <Loader2 size={20} className="is-spinning" /> : null}
-                                {remote ? '远程生成中' : result?.error ? '本页未完成' : '等待生成'}
+                                {result?.downloadUrl ? '等待恢复下载' : remote ? '远程生成中' : result?.error ? '本页未完成' : '等待生成'}
                               </div>
                             )}
                             <figcaption>当前结果 · v{workflow?.ruleVersion}</figcaption>
@@ -702,7 +702,7 @@ export function ImageWorkflow({
                                   )
                                 }
                               >
-                                {remote ? '恢复查询' : '重试本页'}
+                                {result.downloadUrl ? '恢复下载' : remote ? '恢复查询' : '重试本页'}
                               </Button>
                             )
                           )}

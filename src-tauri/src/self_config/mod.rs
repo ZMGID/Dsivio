@@ -46,7 +46,7 @@ fn definition(
         description: description.into(),
         source: "native".into(),
         server_id: None,
-        server_name: Some("Kivio".into()),
+        server_name: Some("dsivio".into()),
         input_schema,
         sensitive,
         annotations: None,
@@ -165,7 +165,7 @@ pub fn inspect(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
 }
 
 fn status_summary(settings: &Settings, cwd: Option<&Path>) -> Value {
-    json!({"application":"Kivio","version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,
+    json!({"application":"dsivio","version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,
         "appData":crate::app_data::app_data_dir(),"userSkills":crate::skills::kivio_skills_dir(),"cwd":cwd,
         "skillRuntime":settings.chat_tools.native_tools.skill_runtime,"skillAutoMatch":settings.chat_tools.skill_auto_match,
         "skillScanPaths":settings.chat_tools.skill_scan_paths,"disabledSkillIds":settings.chat_tools.disabled_skill_ids,

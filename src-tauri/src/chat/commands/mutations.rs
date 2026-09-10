@@ -121,7 +121,7 @@ pub(super) fn prepare_reply_with_model(
     preferred_group_id: Option<&str>,
 ) -> Result<ReplyWithModelPrep, String> {
     if conversation.agent_runtime.is_external() {
-        return Err("换模型回答仅支持 Dsivio Agent 和 Dsivio Chat".to_string());
+        return Err("换模型回答仅支持 dsivio Agent 和 dsivio Chat".to_string());
     }
     if crate::chat::plan::is_plan_mode(&conversation.agent_plan_state)
         || crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state)
@@ -729,15 +729,30 @@ pub(crate) async fn chat_fork_conversation(
     exclude_anchor: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let mut source = load_conversation(&app, &conversation_id)?;
-    if source.goal_state.as_ref().is_some_and(|goal| crate::chat::goal::is_running(goal.status)) {
+    if source
+        .goal_state
+        .as_ref()
+        .is_some_and(|goal| crate::chat::goal::is_running(goal.status))
+    {
         state.cancel_chat_generation(&conversation_id);
-        source = crate::chat::repository::repository(&app).mutate(&app,&conversation_id,|conversation|{
-            if let Some(goal)=conversation.goal_state.as_mut().filter(|goal|crate::chat::goal::is_running(goal.status)){
-                goal.version+=1;goal.status=crate::chat::types::GoalStatus::Paused;goal.status_reason=Some("Paused before creating a history branch".into());goal.active_run_id=None;goal.updated_at=chrono::Local::now().timestamp();
-            }
-            Ok(())
-        }).await.map_err(crate::chat::repository::repository_error)?;
-        crate::chat::goal::emit_goal_state(&app,&source);
+        source = crate::chat::repository::repository(&app)
+            .mutate(&app, &conversation_id, |conversation| {
+                if let Some(goal) = conversation
+                    .goal_state
+                    .as_mut()
+                    .filter(|goal| crate::chat::goal::is_running(goal.status))
+                {
+                    goal.version += 1;
+                    goal.status = crate::chat::types::GoalStatus::Paused;
+                    goal.status_reason = Some("Paused before creating a history branch".into());
+                    goal.active_run_id = None;
+                    goal.updated_at = chrono::Local::now().timestamp();
+                }
+                Ok(())
+            })
+            .await
+            .map_err(crate::chat::repository::repository_error)?;
+        crate::chat::goal::emit_goal_state(&app, &source);
     }
     let anchor_idx = find_message_index(&source, &message_id)?;
 
@@ -948,10 +963,15 @@ pub(crate) async fn chat_update_conversation(
     let mut conversation = crate::chat::repository::repository(&app)
         .mutate(&app, &conversation_id, |conversation| {
             if pauses_goal {
-                if let Some(goal) = conversation.goal_state.as_mut().filter(|goal| crate::chat::goal::is_running(goal.status)) {
+                if let Some(goal) = conversation
+                    .goal_state
+                    .as_mut()
+                    .filter(|goal| crate::chat::goal::is_running(goal.status))
+                {
                     goal.version += 1;
                     goal.status = crate::chat::types::GoalStatus::Paused;
-                    goal.status_reason = Some("Paused because the execution context changed".into());
+                    goal.status_reason =
+                        Some("Paused because the execution context changed".into());
                     goal.active_run_id = None;
                     goal.updated_at = chrono::Local::now().timestamp();
                 }

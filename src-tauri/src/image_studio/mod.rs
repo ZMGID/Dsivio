@@ -114,7 +114,11 @@ fn recover(mut t: Task) -> Result<Task, String> {
         t.status = "interrupted".into();
         t.progress = "应用退出时任务未完成。已有结果已保留；远程任务可恢复查询。".into();
         for result in &mut t.results {
-            if result.path.is_none() && result.remote_id.is_none() && result.error.is_none() {
+            if result.path.is_none()
+                && result.remote_id.is_none()
+                && result.download_url.is_none()
+                && result.error.is_none()
+            {
                 result.error = Some("请求可能已提交；请先核对供应商记录再重试".into());
             }
         }
@@ -447,7 +451,11 @@ pub fn image_studio_action(
         "start" | "sample" | "bulk" | "generate" | "retry" | "revise" | "plan"
     ) || matches!(
         action.kind.as_str(),
-        "workflow_trial" | "workflow_refine" | "workflow_edit" | "workflow_produce" | "workflow_build"
+        "workflow_trial"
+            | "workflow_refine"
+            | "workflow_edit"
+            | "workflow_produce"
+            | "workflow_build"
     ) {
         engine::validate(&cfg, &t.brief)?;
         engine::provider(&app, &cfg)?;
@@ -692,7 +700,11 @@ async fn execute_step(
             if t.plans.iter().any(|plan| plan.product_id == p.id) {
                 continue;
             }
-            t.progress = if t.brief.feature == "gen" { "正在使用原始出图要求…".into() } else { format!("Agent 正在规划 {} 的每页画面…", p.name) };
+            t.progress = if t.brief.feature == "gen" {
+                "正在使用原始出图要求…".into()
+            } else {
+                format!("Agent 正在规划 {} 的每页画面…", p.name)
+            };
             persist(t)?;
             let plans = agent::plan(app, t, &p, cfg, flag.clone()).await?;
             t.plans.extend(plans);
@@ -780,7 +792,7 @@ async fn execute_step(
                         && r.revision == t.revision
                 })
                 .is_some_and(|r| {
-                    r.remote_id.is_some()
+                    (r.remote_id.is_some() || r.download_url.is_some())
                         && r.path.is_none()
                         && !r
                             .error
@@ -837,6 +849,11 @@ async fn resume(
     index: usize,
     flag: &Arc<AtomicBool>,
 ) -> Result<(), String> {
+    if let Some(url) = t.results[index].download_url.clone() {
+        stopped(flag)?;
+        let bytes = engine::download(app, &url).await?;
+        return engine::store_image(&t.id, &mut t.results[index], &bytes);
+    }
     let remote = t.results[index]
         .remote_id
         .clone()

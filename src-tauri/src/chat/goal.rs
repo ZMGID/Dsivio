@@ -41,7 +41,7 @@ pub fn start(conversation: &mut Conversation, objective: &str) -> Result<GoalSta
         conversation.agent_runtime.kind,
         crate::chat::types::AgentRuntimeKind::Builtin
     ) {
-        return Err("Goal mode is available only for Dsivio Agent".into());
+        return Err("Goal mode is available only for dsivio Agent".into());
     }
     if crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state) {
         return Err("Goal mode does not support Orchestrate in this version".into());
@@ -152,7 +152,7 @@ fn tool(name: &str, description: &str, input_schema: Value, read_only: bool) -> 
         description: description.into(),
         source: "native".into(),
         server_id: None,
-        server_name: Some("Kivio".into()),
+        server_name: Some("dsivio".into()),
         input_schema,
         sensitive: false,
         annotations: Some(

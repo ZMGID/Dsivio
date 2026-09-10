@@ -130,7 +130,7 @@ export function ProviderOAuthPanel({ provider, lang, onUpdateProvider }: {
       {login && <div className="mt-3 space-y-2 rounded-lg border border-[var(--border)] p-3">
         <p className="text-sm">{login.userCode
           ? (zh ? '在授权页面输入设备码：' : 'Enter this device code on the authorization page:')
-          : (zh ? '请在浏览器中完成 Google 登录，完成后会自动返回授权结果。' : 'Complete Google sign-in in your browser. Dsivio will receive the authorization automatically.')}</p>
+          : (zh ? '请在浏览器中完成 Google 登录，完成后会自动返回授权结果。' : 'Complete Google sign-in in your browser. dsivio will receive the authorization automatically.')}</p>
         {login.userCode && <code className="block select-text text-lg tracking-widest">{login.userCode}</code>}
         <button type="button" className="text-sm text-indigo-500 hover:underline" onClick={() => void api.openExternal(login.verificationUrl).catch(err => setError(String(err)))}>
           {zh ? '打开授权页面 ↗' : 'Open authorization page ↗'}

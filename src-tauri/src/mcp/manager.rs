@@ -20,7 +20,10 @@
 
 use std::{
     collections::VecDeque,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -106,6 +109,7 @@ pub struct McpSession {
     /// stderr 尾巴（最近 STDERR_TAIL_LINES 行），用于状态面板。
     pub stderr_tail: Arc<Mutex<VecDeque<String>>>,
     pub last_used: Instant,
+    in_flight: Arc<AtomicUsize>,
     pub handshake_count: u64,
     /// Discovery reconnect failures are throttled so a dead server cannot delay every chat turn.
     pub consecutive_connect_failures: u32,
@@ -127,6 +131,20 @@ pub struct McpSession {
     ping_unsupported: bool,
 }
 
+// Drop also runs when the caller is cancelled or an RPC returns early.
+struct ActiveCall(Arc<AtomicUsize>);
+impl ActiveCall {
+    fn new(count: Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(count)
+    }
+}
+impl Drop for ActiveCall {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 impl Drop for McpSession {
     fn drop(&mut self) {
         if let Some(task) = self.stderr_task.take() {
@@ -145,6 +163,7 @@ impl McpSession {
             tools_revision: 0,
             stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
             last_used: Instant::now(),
+            in_flight: Arc::new(AtomicUsize::new(0)),
             handshake_count: 0,
             consecutive_connect_failures: 0,
             discovery_retry_after: None,
@@ -540,7 +559,7 @@ impl AppState {
         // 会话锁只保护生命周期状态迁移：拿到 Arc 后必须先释放锁再 await 响应。
         // rmcp 按 JSON-RPC id 路由响应，所以一次丢响应不会阻塞后面对同一个健康
         // 服务器的请求。
-        let service = {
+        let (service, _active_call) = {
             let mut guard = session.lock().await;
             let dead = guard
                 .transport
@@ -556,7 +575,10 @@ impl AppState {
             // 请求开始时也刷一次 last_used，否则空闲回收器会把一个正在跑的长请求
             // 误判成闲置会话。
             guard.last_used = Instant::now();
-            guard.transport.clone()
+            (
+                guard.transport.clone(),
+                ActiveCall::new(guard.in_flight.clone()),
+            )
         };
         let Some(service) = service else {
             return Err("MCP transport unavailable".to_string());
@@ -780,7 +802,9 @@ impl AppState {
         let mut expired_ids = Vec::new();
         for (id, session) in &candidates {
             let guard = session.lock().await;
-            if now.duration_since(guard.last_used) <= idle_timeout {
+            if guard.in_flight.load(Ordering::SeqCst) > 0
+                || now.duration_since(guard.last_used) <= idle_timeout
+            {
                 continue;
             }
             let live_http = matches!(guard.state, McpServerState::Connected)
@@ -797,9 +821,21 @@ impl AppState {
         {
             let mut pool = self.mcp_sessions.lock().await;
             for id in &expired_ids {
-                if let Some(session) = pool.remove(id) {
-                    evicted.push((id.clone(), session));
+                // Recheck under the pool lock: a call may have started since the scan.
+                let Some(session) = pool.get(id).cloned() else {
+                    continue;
+                };
+                let Ok(guard) = session.try_lock() else {
+                    continue;
+                };
+                if guard.in_flight.load(Ordering::SeqCst) > 0
+                    || guard.last_used.elapsed() <= idle_timeout
+                {
+                    continue;
                 }
+                drop(guard);
+                pool.remove(id);
+                evicted.push((id.clone(), session));
             }
         }
         for (_, session) in &evicted {
@@ -2005,6 +2041,33 @@ while True:
 
             state.mcp_disconnect_all().await;
             let _ = std::fs::remove_file(&script);
+        }
+
+        #[tokio::test]
+        async fn idle_reap_preserves_inflight_call() {
+            let script = write_fake_server();
+            let state = test_app_state();
+            let mut server = python_server(&script);
+            server
+                .env
+                .insert("KIVIO_DELAY_CALL_MS".into(), "250".into());
+            let session = state.mcp_get_or_connect(None, &server).await.unwrap();
+            let call =
+                state.mcp_call_tool(None, &server, "echo", serde_json::json!({"text":"slow"}));
+            let reap = async {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                assert_eq!(session.lock().await.in_flight.load(Ordering::SeqCst), 1);
+                assert!(state
+                    .mcp_reap_idle(Duration::from_millis(1))
+                    .await
+                    .is_empty());
+            };
+            let (result, ()) = tokio::join!(call, reap);
+            assert_eq!(result.unwrap().content, "echo: slow");
+            assert_eq!(session.lock().await.in_flight.load(Ordering::SeqCst), 0);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            assert_eq!(state.mcp_reap_idle(Duration::from_millis(1)).await.len(), 1);
+            let _ = std::fs::remove_file(script);
         }
 
         #[tokio::test]

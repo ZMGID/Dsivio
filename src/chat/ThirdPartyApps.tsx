@@ -47,6 +47,7 @@ function ApplicationCard({
 }) {
   const t = useT()
   const canInstall = plugin.canInstall === true
+  const aiInstallOnly = plugin.id === 'ziniao-cli'
 
   return (
     <article className="chat-motion-fade-up flex min-w-0 flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-5 shadow-sm transition-[border-color,box-shadow] duration-[var(--kv-dur-fast)] hover:border-neutral-300 dark:border-neutral-800 dark:bg-neutral-950/40 dark:hover:border-neutral-700">
@@ -161,29 +162,31 @@ function ApplicationCard({
         )}
       </div>
 
-      {!plugin.installed && !canInstall ? (
+      {!plugin.installed && !canInstall && !aiInstallOnly ? (
         <p className="text-[12px] leading-relaxed text-neutral-400 dark:text-neutral-500">
           {t.chatPluginInstallUnavailable}
         </p>
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          disabled={!canInstall || installBusy || busy}
-          onClick={() => onRunInstall(plugin.id)}
-          title={t.chatPluginRunInstallTitle}
-        >
-          {installBusy ? <Loader2 size={14} className="animate-spin" /> : <Terminal size={14} />}
-          {installBusy
-            ? t.chatPluginInstalling
-            : plugin.installed
-              ? t.chatPluginRunReinstall
-              : t.chatPluginRunInstall}
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => void api.openExternal(plugin.repo)}>
+        {!aiInstallOnly && (
+          <Button
+            size="sm"
+            disabled={!canInstall || installBusy || busy}
+            onClick={() => onRunInstall(plugin.id)}
+            title={t.chatPluginRunInstallTitle}
+          >
+            {installBusy ? <Loader2 size={14} className="animate-spin" /> : <Terminal size={14} />}
+            {installBusy
+              ? t.chatPluginInstalling
+              : plugin.installed
+                ? t.chatPluginRunReinstall
+                : t.chatPluginRunInstall}
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={() => void api.openExternal(plugin.homepage)}>
           <ExternalLink size={14} />
-          GitHub
+          {t.chatPluginHomepage}
         </Button>
         <Button
           size="sm"

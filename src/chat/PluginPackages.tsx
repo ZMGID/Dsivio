@@ -22,8 +22,8 @@ export function PluginPackages({ lang }: { lang: Lang }) {
   return <section className="mb-6 space-y-3 rounded-xl border border-neutral-200 p-4 dark:border-neutral-700" aria-label={zh ? '通用插件' : 'Plugin packages'}>
     <h3 className="text-sm font-semibold">{zh ? '通用插件' : 'Plugin packages'}</h3>
     <p className="text-xs text-neutral-500">{zh
-      ? '导入 Dsivio / Claude Code / Codex 格式的插件包，供内置 Dsivio Agent 使用。个人范围生效；外部 CLI 使用各自的插件配置。'
-      : 'Import Dsivio / Claude Code / Codex packages for the built-in Dsivio Agent. Packages apply across your projects; external CLIs use their own configuration.'}</p>
+      ? '导入 dsivio / Claude Code / Codex 格式的插件包，供内置 dsivio Agent 使用。个人范围生效；外部 CLI 使用各自的插件配置。'
+      : 'Import dsivio / Claude Code / Codex packages for the built-in dsivio Agent. Packages apply across your projects; external CLIs use their own configuration.'}</p>
     <form className="flex flex-wrap gap-2" onSubmit={e => { e.preventDefault(); void act(async () => { await packageApi.import(source.trim(), subdirectory.trim() || undefined); setSource(''); setSubdirectory('') }) }}>
       <input className="kv-input min-w-48 flex-1" aria-label={zh ? '插件来源' : 'Plugin source'} value={source} disabled={busy}
         onChange={e => setSource(e.target.value)} placeholder={zh ? '本地插件目录或 HTTPS Git 仓库地址' : 'Local plugin directory or HTTPS Git repository'} />

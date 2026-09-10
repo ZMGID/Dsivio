@@ -187,7 +187,7 @@ fn acp_initialize_params(terminal: bool) -> Value {
         "clientCapabilities": { "terminal": terminal },
         "clientInfo": {
             "name": "kivio",
-            "title": "Kivio",
+            "title": "dsivio",
             "version": env!("CARGO_PKG_VERSION"),
         },
     })
@@ -2644,7 +2644,7 @@ mod tests {
         assert_eq!(params["clientCapabilities"]["terminal"], json!(true));
         assert_eq!(params["protocolVersion"], json!(ACP_PROTOCOL_VERSION));
         assert_eq!(params["clientInfo"]["name"], json!("kivio"));
-        assert_eq!(params["clientInfo"]["title"], json!("Kivio"));
+        assert_eq!(params["clientInfo"]["title"], json!("dsivio"));
         assert_eq!(
             params["clientInfo"]["version"],
             json!(env!("CARGO_PKG_VERSION"))
