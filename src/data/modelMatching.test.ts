@@ -38,6 +38,24 @@ describe('matchModel', () => {
     expect(matchModelExact('gpt-6')).toBeNull()
   })
 
+  it('uses the current GPT-5.6 windows and promotional token prices', () => {
+    expect(matchModel('gpt-5.6')).toMatchObject({
+      contextWindow: 1_050_000,
+      maxOutput: 128_000,
+      pricing: { input: 4, output: 20, cachedInput: 0.4 },
+    })
+    expect(matchModel('gpt-5.6-terra')?.pricing).toEqual({
+      input: 2,
+      output: 12,
+      cachedInput: 0.2,
+    })
+    expect(matchModel('gpt-5.6-luna')?.pricing).toEqual({
+      input: 0.2,
+      output: 1.2,
+      cachedInput: 0.02,
+    })
+  })
+
   it('returns null for blank model names', () => {
     expect(matchModel('')).toBeNull()
     expect(matchModel('   ')).toBeNull()
@@ -94,6 +112,15 @@ describe('matchModel', () => {
   it('recognizes image generation model naming patterns', () => {
     const info = matchModel('dall-e-3')
     expect(info?.capabilities?.imageGeneration).toBe(true)
+  })
+
+  it('matches both GPT Image 2.5 variants and their dated snapshots', () => {
+    const sunburst = matchModel('gpt-image-2.5-sunburst')
+    expect(sunburst?.displayName).toBe('GPT Image 2.5 Sunburst')
+    expect(sunburst?.capabilities?.imageGeneration).toBe(true)
+    expect(sunburst?.pricing).toEqual({ input: 5, output: 30, cachedInput: 1.25 })
+    expect(matchModel('gpt-image-2.5-sunburst-2026-09-08')).toEqual(sunburst)
+    expect(matchModel('openai/gpt-image-2.5-flare')?.displayName).toBe('GPT Image 2.5 Flare')
   })
 
   it('matches current Grok Imagine image ids without collapsing variants', () => {
@@ -381,17 +408,27 @@ describe('matchModel', () => {
     expect(matchModel('qwen3.5-flash')?.displayName).not.toBe('Qwen3.5 Plus')
   })
 
-  it('matches DeepSeek V4 official windows and the vision-exp sibling', () => {
+  it('matches DeepSeek V4.1 Flash and resolves retired V4 aliases to its current metadata', () => {
+    const current = matchModel('deepseek-flash')
+    expect(current?.displayName).toBe('DeepSeek V4.1 Flash')
+    expect(current?.contextWindow).toBe(1_048_576)
+    expect(current?.maxOutput).toBe(384_000)
+    expect(current?.capabilities?.vision).toBe(true)
+    expect(current?.reasoningEfforts).toEqual(['low', 'high', 'max'])
+    expect(current?.pricing).toEqual({ input: 0.3, output: 1.2, cachedInput: 0.006 })
+
     const flash = matchModel('deepseek-v4-flash')
-    expect(flash?.displayName).toBe('DeepSeek V4 Flash')
+    expect(flash?.displayName).toBe('DeepSeek V4.1 Flash (legacy V4 Flash alias)')
     expect(flash?.contextWindow).toBe(1_048_576)
     expect(flash?.maxOutput).toBe(384_000)
-    expect(flash?.capabilities?.vision).toBe(false)
+    expect(flash?.capabilities?.vision).toBe(true)
     expect(flash?.capabilities?.reasoning).toBe(true)
-    expect(flash?.pricing?.input).toBe(0.44)
+    expect(flash?.pricing?.input).toBe(0.3)
     expect(matchModel('deepseek-v4-pro')?.maxOutput).toBe(384_000)
     expect(matchModel('deepseek-v4-flash-vision-exp')?.capabilities?.vision).toBe(true)
-    expect(matchModel('deepseek-v4-flash-vision-exp')?.displayName).not.toBe('DeepSeek V4 Flash')
+    expect(matchModel('deepseek-v4-flash-vision-exp')?.displayName).toBe(
+      'DeepSeek V4.1 Flash (legacy Vision Exp alias)',
+    )
   })
 
   it('matches MiniMax M2.7 as a thinking model without collapsing onto highspeed', () => {
