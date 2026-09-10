@@ -80,7 +80,9 @@ try {
   // skills invoke Python directly without the MCP-specific environment.
   const site = join(staging, process.platform === 'win32' ? 'python/Lib/site-packages' : `python/lib/python${versions.python.split('.').slice(0, 2).join('.')}/site-packages`)
   mkdirSync(site, { recursive: true })
-  writeFileSync(join(site, 'dsivio-runtime.pth'), process.platform === 'win32' ? '../../../python-packages\n' : '../../../../python-packages\n')
+  writeFileSync(join(site, 'dsivio-runtime.pth'), process.platform === 'win32'
+    ? '../../../python-packages\n../../../python-packages/win32\n../../../python-packages/win32/lib\n../../../python-packages/pythonwin\nimport pywin32_bootstrap\n'
+    : '../../../../python-packages\n')
   mkdirSync(join(staging, 'bin'))
   const probe = spawnSync(node, ['-p', 'require("ffprobe-static").path'], { cwd: analyzer, encoding: 'utf8' })
   if (probe.status !== 0) throw new Error(`Cannot locate bundled ffprobe: ${probe.stderr}`)
