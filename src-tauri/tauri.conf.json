@@ -35,9 +35,6 @@
       "msi",
       "nsis"
     ],
-    "externalBin": [
-      "binaries/kivio-ocr-helper"
-    ],
     "resources": {
       "resources/skills": "skills",
       "resources/company-skills": "company-skills",

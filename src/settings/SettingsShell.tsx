@@ -323,7 +323,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   )
   const platform = getPlatform()
   const isMac = platform === 'macos'
-  const hasSystemOcr = isMac || platform === 'windows'
+  const hasLocalOcr = isMac || platform === 'windows'
   // 加载失败时的错误信息；非空则渲染错误 UI 而不是用合成默认值进入正常视图
   // （否则用户可能没察觉就自动保存把磁盘真实数据覆盖掉）
   const [loadError, setLoadError] = useState('')
@@ -653,14 +653,14 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   /** 拉一次 RapidOCR 状态(app data 里 dylib + 模型 4 个文件齐不齐)。
    *  挂载时 + 切换到 RapidOCR 引擎时调一下。 */
   const refreshRapidOcrStatus = useCallback(async () => {
-    if (!hasSystemOcr) return
+    if (!hasLocalOcr) return
     try {
       const status = await api.rapidOcrStatus()
       setRapidOcrStatus(status)
     } catch (err) {
       console.error('rapidOcrStatus failed:', err)
     }
-  }, [hasSystemOcr])
+  }, [hasLocalOcr])
 
   /** 下载指定档位的 RapidOCR 包(dylib 共享 + 该档模型):阻塞若干秒,完成后 refresh status。 */
   const handleDownloadRapidOcr = useCallback(async (tier: import('../api/tauri').RapidOcrTier) => {
@@ -683,13 +683,13 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   }, [refreshRapidOcrStatus])
 
   const refreshReplacePackStatus = useCallback(async (tier: RapidOcrTier) => {
-    if (!hasSystemOcr) return
+    if (!hasLocalOcr) return
     try {
       setReplacePackStatus(await api.replaceTranslationPackStatus(tier))
     } catch (err) {
       console.error('replaceTranslationPackStatus failed:', err)
     }
-  }, [hasSystemOcr])
+  }, [hasLocalOcr])
 
   const handleDownloadReplacePack = useCallback(async (tier: RapidOcrTier) => {
     dispatchReplacePackDownload({ type: 'start' })
@@ -2034,7 +2034,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 <ScreenshotTranslationSettings
                   settings={settings}
                   isMac={isMac}
-                  hasSystemOcr={hasSystemOcr}
+                  hasLocalOcr={hasLocalOcr}
                   defaultPrompts={defaultPrompts}
                   rapidOcrStatus={rapidOcrStatus}
                   rapidOcrDownloadState={rapidOcrDownloadState}

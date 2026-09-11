@@ -44,7 +44,7 @@ export function DocumentProcessingPanel({
 
   const patch = (updates: Partial<DocumentProcessingConfig>) => onChange({ ...cfg, ...updates })
 
-  const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
+  const hasSystemOcr = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
 
   // 固定 provider 条目按 kind 定位（id = kind）；改 key 时就地建/改。
   const providerOf = (kind: string) => cfg.providers.find((p) => p.kind === kind)
@@ -142,7 +142,7 @@ export function DocumentProcessingPanel({
             onChange={(v) => patch({ ocrEngine: v as OcrEngine })}
             options={[
               { value: 'off', label: t('关闭', 'Off') },
-              { value: 'system', label: t('系统 OCR', 'System OCR') },
+              ...(hasSystemOcr ? [{ value: 'system', label: t('系统 OCR', 'System OCR') }] : []),
               { value: 'rapid_ocr', label: t('RapidOCR 离线', 'RapidOCR (offline)') },
             ]}
           />
@@ -150,9 +150,7 @@ export function DocumentProcessingPanel({
 
         {cfg.ocrEngine === 'system' && (
           <p className="kv-row-desc -mt-1 px-1 pb-1">
-            {isMac
-              ? t('macOS：Apple Vision', 'macOS: Apple Vision')
-              : t('Windows：Windows.Media.Ocr', 'Windows: Windows.Media.Ocr')}
+            {t('Windows：Windows.Media.Ocr', 'Windows: Windows.Media.Ocr')}
           </p>
         )}
 

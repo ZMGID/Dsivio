@@ -679,8 +679,6 @@ mod tests {
                 uuid::Uuid::new_v4()
             )),
             reqwest::Client::new(),
-            #[cfg(target_os = "macos")]
-            crate::macos_ocr::MacOcrClient::disabled(),
             offline_models.clone(),
             crate::rapidocr::RapidOcrClient::new(offline_models),
         )

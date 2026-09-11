@@ -40,7 +40,7 @@ resources/python-sandbox/
 /src-tauri/resources/skills/dsimage/**/__pycache__/
 .cache/swift
 
-# Swift sidecar 编译产物 (npm run build:swift / CI 生成,不入库)
+# Sidecar binaries and legacy Swift build caches
 src-tauri/binaries/
 src-tauri/swift/kivio-ai-helper/.build/
 src-tauri/swift/kivio-ocr-helper/.build/

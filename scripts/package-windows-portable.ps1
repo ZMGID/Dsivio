@@ -1,5 +1,5 @@
 # Pack a Windows portable zip that mirrors the NSIS install layout:
-# exe + sidecar + bundled skills, unzip-and-run, no Start Menu / uninstaller.
+# exe + bundled resources, unzip-and-run, no Start Menu / uninstaller.
 # Output: src-tauri/target/release/bundle/portable/dsivio_${Version}_x64-portable.zip
 #
 # Requires a finished `tauri build --bundles nsis` (dsivio.exe in target/release).
@@ -19,7 +19,6 @@ $exe = Join-Path $releaseDir 'dsivio.exe'
 $skillsSrc = Join-Path $repoRoot 'src-tauri\resources\skills'
 $pluginsSrc = Join-Path $repoRoot 'src-tauri\resources\plugins'
 $runtimeSrc = Join-Path $repoRoot 'src-tauri\resources\video-runtime'
-$sidecarSrc = Join-Path $repoRoot 'src-tauri\binaries\kivio-ocr-helper-x86_64-pc-windows-msvc.exe'
 
 if (-not (Test-Path -LiteralPath $exe)) {
   throw "dsivio.exe not found at $exe. Run tauri build first."
@@ -41,10 +40,6 @@ Copy-Item -LiteralPath $pluginsSrc -Destination (Join-Path $appDir 'plugins') -R
 Copy-Item -LiteralPath $runtimeSrc -Destination (Join-Path $appDir 'video-runtime') -Recurse
 node (Join-Path $repoRoot 'scripts/verify-video-runtime.mjs') (Join-Path $appDir 'video-runtime')
 if ($LASTEXITCODE -ne 0) { throw 'Portable video runtime verification failed' }
-
-if (Test-Path -LiteralPath $sidecarSrc) {
-  Copy-Item -LiteralPath $sidecarSrc -Destination (Join-Path $appDir 'kivio-ocr-helper.exe')
-}
 
 Get-ChildItem -LiteralPath $releaseDir -File -Filter '*.dll' -ErrorAction SilentlyContinue |
   ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $appDir $_.Name) }

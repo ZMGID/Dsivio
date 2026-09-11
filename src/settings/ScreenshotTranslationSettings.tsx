@@ -22,7 +22,7 @@ type ReplacePackDownloadState = 'idle' | 'downloading' | 'failed'
 interface ScreenshotTranslationSettingsProps {
   settings: Settings
   isMac: boolean
-  hasSystemOcr: boolean
+  hasLocalOcr: boolean
   defaultPrompts: DefaultPromptTemplates | null
   rapidOcrStatus: RapidOcrStatus | null
   rapidOcrDownloadState: RapidOcrDownloadState
@@ -42,7 +42,7 @@ interface ScreenshotTranslationSettingsProps {
 export function ScreenshotTranslationSettings({
   settings,
   isMac,
-  hasSystemOcr,
+  hasLocalOcr,
   defaultPrompts,
   rapidOcrStatus,
   rapidOcrDownloadState,
@@ -152,7 +152,7 @@ export function ScreenshotTranslationSettings({
             />
           </SettingRow>
 
-          {hasSystemOcr && screenshot?.replaceEnabled !== false && (
+          {hasLocalOcr && screenshot?.replaceEnabled !== false && (
             <SettingRow label={t.replaceTranslateOfflinePack} stack>
               <ReplaceTranslationPackPanel
                 status={replacePackStatus}
@@ -172,7 +172,7 @@ export function ScreenshotTranslationSettings({
 
       {screenshot?.enabled !== false && (
         <>
-          {hasSystemOcr && (
+          {hasLocalOcr && (
             <SettingsGroup title={t.ocrEngine}>
                   <SettingRow label={t.ocrEngine} description={t.ocrEngineHint}>
                     <Select
@@ -184,7 +184,7 @@ export function ScreenshotTranslationSettings({
                       }
                       options={[
                         { value: 'cloud_vision', label: t.ocrEngineCloudVision },
-                        { value: 'system', label: t.ocrEngineSystem },
+                        ...(!isMac ? [{ value: 'system', label: t.ocrEngineSystem }] : []),
                         { value: 'rapid_ocr', label: t.ocrEngineRapidOcr },
                       ]}
                       className="w-44"
@@ -194,7 +194,7 @@ export function ScreenshotTranslationSettings({
                   {ocrMode === 'system' && (
                     <div className="kv-panel mt-2">
                       <div className="kv-panel-body">
-                      {isMac ? t.ocrEngineMacHint : t.ocrEngineWindowsHint}
+                      {t.ocrEngineWindowsHint}
                       </div>
                     </div>
                   )}

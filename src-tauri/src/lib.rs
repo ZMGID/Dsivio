@@ -16,8 +16,6 @@ pub mod lens;
 pub mod lens_commands;
 #[cfg(any(target_os = "macos", test))]
 mod macos_hang_watchdog;
-#[cfg(target_os = "macos")]
-pub mod macos_ocr;
 pub mod mcp;
 pub mod native_tools;
 pub mod notes;
@@ -498,8 +496,6 @@ pub fn run() {
                 settings,
                 usage_dir,
                 build_http_client(),
-                #[cfg(target_os = "macos")]
-                macos_ocr::MacOcrClient::new(&app.handle()),
                 offline_models.clone(),
                 rapidocr::RapidOcrClient::new(offline_models),
             ));
@@ -1044,8 +1040,6 @@ pub fn run() {
                     if killed > 0 {
                         eprintln!("Killed {killed} background command process group(s) on exit.");
                     }
-                    #[cfg(target_os = "macos")]
-                    state.macos_ocr.shutdown();
                     // OfficeCLI live preview (`officecli watch`) 等插件附属进程
                     crate::plugins::stop_all_previews();
                 }

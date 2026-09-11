@@ -12,8 +12,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-#[cfg(target_os = "macos")]
-use crate::macos_ocr::MacOcrClient;
 use crate::mcp::manager::McpSession;
 use crate::mcp::types::McpTool;
 use crate::offline_models::OfflineModelManager;
@@ -274,9 +272,6 @@ pub struct AppState {
     /// 直连客户端（忽略系统/环境代理）。只有当某个供应商关掉「跟随系统代理」时才构造，
     /// 默认全跟随系统代理的用户不会多出一个连接池。
     http_direct: std::sync::OnceLock<Client>,
-    /// macOS Apple Vision OCR sidecar 客户端。只有系统 OCR 路径会拉起。
-    #[cfg(target_os = "macos")]
-    pub macos_ocr: std::sync::Arc<MacOcrClient>,
     /// RapidOCR 与替换翻译共用的离线模型清单、下载器和 ONNX Runtime 生命周期。
     pub offline_models: std::sync::Arc<OfflineModelManager>,
     /// RapidOCR 离线 OCR 客户端。模型 + onnxruntime dylib 都由用户在设置页面下载到 app data 目录,
@@ -377,13 +372,12 @@ fn set_cached<V>(
 
 impl AppState {
     /// 集中构造点：`lib.rs::run` 的 `app.manage`、`new_headless`、以及测试用 `test_app_state`
-    /// 三处唯一的差异只有 `settings` / `usage_dir` / `http` 与两个 OCR 客户端；其余字段全是
+    /// 三处唯一的差异只有 `settings` / `usage_dir` / `http` 与离线 OCR 客户端；其余字段全是
     /// 同样的空默认值。这里统一构造，三处只提供差异字段，避免同一份 ~40 行字面量重复三次。
     pub(crate) fn base(
         settings: Settings,
         usage_dir: PathBuf,
         http: Client,
-        #[cfg(target_os = "macos")] macos_ocr: std::sync::Arc<MacOcrClient>,
         offline_models: std::sync::Arc<OfflineModelManager>,
         rapidocr: std::sync::Arc<RapidOcrClient>,
     ) -> Self {
@@ -442,8 +436,6 @@ impl AppState {
             usage_dir,
             http,
             http_direct: std::sync::OnceLock::new(),
-            #[cfg(target_os = "macos")]
-            macos_ocr,
             offline_models,
             rapidocr,
             sub_agents: crate::chat::sub_agent::SubAgentManager::default(),
@@ -457,7 +449,7 @@ impl AppState {
 
     /// Build a headless `AppState` for the `kivio-code` terminal agent — no
     /// `AppHandle`, no Tauri runtime. Differs from the live construction in
-    /// `lib.rs::run` only in the two OCR clients (`headless()` constructors) and
+    /// `lib.rs::run` only in the offline OCR clients (`headless()` constructors) and
     /// `usage_dir` (passed in). The agent loop only touches `settings`, the
     /// chat-generation state, session-consent set, `http`, and `usage_dir`; the
     /// rest are inert defaults kept for struct completeness.
@@ -467,8 +459,6 @@ impl AppState {
             settings,
             usage_dir,
             crate::api::build_http_client(),
-            #[cfg(target_os = "macos")]
-            MacOcrClient::headless(),
             offline_models.clone(),
             RapidOcrClient::headless(offline_models),
         )
@@ -1577,8 +1567,6 @@ pub(crate) fn test_app_state() -> AppState {
         Settings::default(),
         std::env::temp_dir().join(format!("kivio-test-usage-{}", uuid::Uuid::new_v4())),
         Client::new(),
-        #[cfg(target_os = "macos")]
-        MacOcrClient::disabled(),
         offline_models.clone(),
         RapidOcrClient::new(offline_models),
     )
