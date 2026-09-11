@@ -599,21 +599,6 @@ class SetupUpdateTests(TempTemplatesMixin, unittest.TestCase):
         self.assertEqual(gen_image.detect_mode("custom", "https://gw/v1", "sync", "grok-imagine-image-2.0"), "sync")
         self.assertEqual(gen_image.detect_mode("grok", "https://api.x.ai/v1", None, "grok-imagine-image-2.0"), "grok")
 
-    def test_async_gpt_image_uses_pixel_size(self) -> None:
-        args = gen_image.argparse.Namespace(size="1:1", resolution="1k", image=[])
-        payload = gen_image.build_async_payload(args, "hi", "gpt-image-2")
-        self.assertEqual(payload["size"], "1024x1024")
-        self.assertEqual(gen_image.gpt_image_size("9:16", "1k"), "864x1536")
-        self.assertEqual(gen_image.gpt_image_size("16:9", "1k"), "1536x864")
-        self.assertEqual(gen_image.gpt_image_size("16:9", "2k"), "2048x1152")
-        self.assertEqual(gen_image.gpt_image_size("9:16", "4k"), "2160x3840")
-        self.assertNotIn("resolution", payload)
-        self.assertNotIn("quality", payload)
-        self.assertEqual(payload["n"], 1)
-        apimart = gen_image.build_async_payload(args, "hi", "midjourney")
-        self.assertEqual(apimart["size"], "1:1")
-        self.assertEqual(apimart["resolution"], "1k")
-
     def test_gemini_request_shapes(self) -> None:
         args = gen_image.argparse.Namespace(size="1:1", resolution="1k")
         parts = [{"text": "draw a circle"}]
@@ -680,10 +665,23 @@ class SetupUpdateTests(TempTemplatesMixin, unittest.TestCase):
         self.assertEqual(set(gen_image.API_MODES), set(gen_image.ADAPTER_RUNNERS))
 
     def test_setup_env_cli(self) -> None:
-        env = self.tmp / 's.env'
-        self.assertEqual(dsimage.main(['setup', 'env', '--env-file', str(env)]), 0)
-        self.assertFalse(env.exists())
-
+        env = self.tmp / "s.env"
+        original = gen_image.list_models
+        gen_image.list_models = lambda *a, **k: (_ for _ in ()).throw(gen_image.GenError("offline"))
+        try:
+            self.assertEqual(dsimage.main(["setup", "env", "--provider", "xai", "--key", "sk-1", "--env-file", str(env)]), 0)
+            self.assertEqual(gen_image.read_env_file(env)["IMG_PROVIDER"], "grok")
+            self.assertEqual(gen_image.read_env_file(env)["IMG_MODEL"], "grok-imagine-image-2.0")
+            self.assertNotEqual(dsimage.main(["setup", "env", "--provider", "custom", "--key", "k", "--env-file", str(env)]), 0)
+            self.assertNotEqual(dsimage.main(["setup", "env", "--provider", "openai", "--base-url", "https://gw/v1", "--key", "k", "--env-file", str(env)]), 0)
+            self.assertEqual(dsimage.main(["setup", "env", "--provider", "custom", "--base-url", "https://gw/v1/", "--key", "k", "--env-file", str(env)]), 0)
+            values = gen_image.read_env_file(env)
+            self.assertEqual(values["IMG_BASE_URL"], "https://gw/v1")
+            self.assertNotIn("IMG_MODEL", values)
+            self.assertEqual(dsimage.main(["setup", "model", "flux-pro", "--no-test", "--env-file", str(env)]), 0)
+            self.assertEqual(gen_image.read_env_file(env)["IMG_MODEL"], "flux-pro")
+        finally:
+            gen_image.list_models = original
 
     def test_sync_skill_keeps_env_and_user_templates(self) -> None:
         src = self.tmp / "src"

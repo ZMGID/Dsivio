@@ -123,16 +123,6 @@ pub struct NativeToolEntry {
 /// conversation-level tools that are appended elsewhere.
 pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
     NativeToolEntry {
-        name: "studio",
-        def: super::types::native_studio_tool,
-        enabled: |native, _, _| native.run_command,
-        parallel_safe: false,
-        bypasses_approval: false,
-        read_only: false,
-        requires_session_consent: false,
-        call: NativeToolCall::Async(call_studio),
-    },
-    NativeToolEntry {
         name: "web_search",
         def: native_web_search_tool,
         enabled: |native, web_search_configured, _| native.web_search && web_search_configured,
@@ -657,16 +647,6 @@ fn call_web_search(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
             })),
             follow_up_user_messages: Vec::new(),
         })
-    })
-}
-
-fn call_studio(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
-    Box::pin(async move {
-        let domain = ctx.arguments["domain"].as_str().ok_or("需要 domain")?.to_string();
-        let action = ctx.arguments["action"].as_str().ok_or("需要 action")?.to_string();
-        let result = crate::studio::call(ctx.app.clone(), domain.clone(), action, ctx.arguments["input"].clone()).await?;
-        let result = crate::studio::wait::with_next_action(result, &domain);
-        Ok(text_tool_result(result.to_string()))
     })
 }
 
@@ -1252,7 +1232,6 @@ mod tests {
     }
 
     const EXPECTED_ORDER: &[&str] = &[
-        "studio",
         "web_search",
         "web_fetch",
         "knowledge_search",
@@ -1570,7 +1549,6 @@ mod tests {
         assert_eq!(
             names(&all, true, true),
             [
-                "studio",
                 "web_search",
                 "web_fetch",
                 "knowledge_search",

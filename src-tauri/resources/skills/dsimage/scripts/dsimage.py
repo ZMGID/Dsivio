@@ -45,7 +45,6 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-sys.dont_write_bytecode = True
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -296,7 +295,7 @@ def cmd_derive(args: argparse.Namespace) -> int:
             print(f"  {job['label']}  refs: {', '.join(Path(p).name for p in job['image'])}")
         return 0
     failed = core.run_pool(todo, concurrency=args.concurrency, redo=True, env_file=args.env_file,
-                           api_mode=args.mode, model_pin=None, label="derive")
+                           api_mode=args.mode, model_pin=tpl.get("model"), label="derive")
     print()
     print("派生图（打开看：是不是同一个产品的背面、颜色/材质/五金对不对）：")
     for job in todo:
@@ -311,7 +310,7 @@ def _run_wave(jobs: list[dict], args: argparse.Namespace, tpl: dict, label: str)
         return []
     return core.run_pool(
         jobs, concurrency=args.concurrency, redo=args.redo, env_file=args.env_file,
-        api_mode=args.mode, model_pin=None, label=label,
+        api_mode=args.mode, model_pin=tpl.get("model"), label=label,
     )
 
 
@@ -952,17 +951,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    import dsivio
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] in {"studio", "setup", "update"}:
-        try:
-            if argv[0] == "studio":
-                return dsivio.main(argv[1:])
-            print("这是 Dsivio 内置 Skill。配置请在「图片 → 图片设置」和应用供应商设置中修改；Skill 随应用更新。")
-            return 0
-        except (RuntimeError, core.DsError) as exc:
-            print(f"错误：{exc}", file=sys.stderr)
-            return 1
     args = parse_args(argv)
     handlers = {
         "template": cmd_template, "sort": cmd_sort, "init": cmd_init, "run": cmd_run,

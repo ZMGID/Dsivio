@@ -1,4 +1,4 @@
-"""Chat-authored results round-trip through the same worker CLI as the desktop."""
+"""Page-authored results round-trip through the independent video page worker."""
 import json
 import os
 from pathlib import Path
@@ -8,10 +8,10 @@ import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'src-tauri/resources/plugins/dsvideo-plugin/scripts/studio.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'src-tauri/resources/video-studio/scripts/studio.py'
 
 
-class ChatResultActionsTests(unittest.TestCase):
+class PageResultActionsTests(unittest.TestCase):
     def test_confirmed_script_can_resume_through_prompt_and_quote_without_resubmission(self):
         with tempfile.TemporaryDirectory(prefix='video chat ') as directory:
             root = Path(directory)
@@ -42,10 +42,10 @@ class ChatResultActionsTests(unittest.TestCase):
             task_id = task['id']
             task = update(task, 'plan_result', script='0–5秒：标志从静止开始旋转。')
             task = update(task, 'approve')
-            # This is the exact persisted state where the reported chat got stuck.
+            # Approval preserves the current page script as the generation prompt.
             task = call('get', {'id': task_id})
             self.assertTrue(task['approved'])
-            self.assertEqual(task['prompt'], '')
+            self.assertEqual(task['prompt'], task['script'])
             task = update(task, 'prompt_result', prompt='One continuous five-second shot of the logo rotating.')
             task = update(task, 'quote')
             resumed = call('get', {'id': task_id})

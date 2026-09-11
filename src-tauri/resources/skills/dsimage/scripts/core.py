@@ -26,10 +26,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import gen_image  # noqa: E402
-import dsivio
 
 SKILL_ROOT = ROOT.parent
-TEMPLATES_DIR = dsivio.workspace() / "templates"
+from dsivio import templates_dir
+TEMPLATES_DIR = templates_dir()
 TEMPLATE_FILE = "template.json"
 REQUIRE_FILE = "要求.json"
 WORK_DIR = "_dsimage"
@@ -96,7 +96,8 @@ def read_json(path: Path) -> Any:
 
 
 def write_json(path: Path, data: Any) -> None:
-    dsivio.atomic_json(path, data)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def list_images(folder: Path) -> list[Path]:
@@ -306,8 +307,8 @@ def list_templates() -> list[dict[str, Any]]:
             data = {}
         client = template_client(folder)
         items.append({
-            "name": data.get("name") or folder.name,
-            "key": f"{client}/{data.get('name') or folder.name}" if client else data.get("name") or folder.name,
+            "name": folder.name,
+            "key": template_key(folder),
             "client": client,
             "mode": data.get("mode", "?"),
             "category": data.get("category", ""),
@@ -324,7 +325,7 @@ def find_template(name_or_path: str) -> Path:
         folder = candidate.parent if candidate.name == TEMPLATE_FILE else candidate
         if (folder / TEMPLATE_FILE).is_file():
             return folder.resolve()
-    matches = [item["path"] for item in list_templates() if item["name"] == name_or_path or item["key"] == name_or_path or template_key(item["path"]) == name_or_path]
+    matches = [item["path"] for item in list_templates() if item["name"] == name_or_path or item["key"] == name_or_path]
     if len(matches) == 1:
         return matches[0].resolve()
     if len(matches) > 1:

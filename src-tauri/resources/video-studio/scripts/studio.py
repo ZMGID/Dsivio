@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dsivio video workspace. JSON stdin/stdout; shared by the desktop and chat skills.
+"""Dsivio video workspace. JSON stdin/stdout; used only by the video page.
 
 No credentials in task files. Submission is persisted BEFORE the network call;
 an uncertain submission is never automatically repeated.
@@ -142,6 +142,37 @@ def import_brief(brief):
     return b
 
 
+def template_for_page(value, filename):
+    """Read upstream templates as-is; add display fields only in the response."""
+    if not isinstance(value, dict) or not isinstance(value.get('name'), str) or not value['name'].strip():
+        raise ValueError('模板需要 name')
+    result = dict(value)
+    script = next((value[k] for k in ('script', 'full_video_prompt', 'prompt_pattern')
+                   if isinstance(value.get(k), str) and value[k].strip()), '')
+    shots = value.get('shots')
+    if not isinstance(shots, list) or not shots:
+        breakdown = value.get('shot_breakdown')
+        breakdown = breakdown if isinstance(breakdown, list) else []
+        shots = [dict(time=s.get('time', ''), purpose=s.get('purpose', ''),
+                      action=s.get('generation_prompt') or s.get('subject', ''),
+                      camera=s.get('composition_camera', ''))
+                 for s in breakdown if isinstance(s, dict)]
+    shots = [s for s in shots if isinstance(s, dict)]
+    if not script and not shots:
+        raise ValueError('模板需要剧本或镜头内容')
+    result['id'] = value['id'] if isinstance(value.get('id'), str) and value['id'] else Path(filename).stem
+    result['script'], result['shots'] = script, shots
+    validated = isinstance(value.get('validated_from'), dict) and value['validated_from'].get('user_approved') is True
+    result['kind'] = 'generation' if not value.get('reference_template') and (validated or value.get('kind') == 'generation') else 'reference'
+    spec = dict(value['spec']) if isinstance(value.get('spec'), dict) else {}
+    source = value.get('source') if isinstance(value.get('source'), dict) else {}
+    for key in ('duration_seconds', 'aspect_ratio'):
+        if not spec.get(key) and source.get(key):
+            spec[key] = source[key]
+    result['spec'] = spec
+    return result
+
+
 def bootstrap():
     for folder in ('tasks', 'templates', 'outputs'):
         (ROOT / folder).mkdir(parents=True, exist_ok=True)
@@ -154,7 +185,12 @@ def bootstrap():
         result = []
         for path in (ROOT / folder).glob('*.json'):
             try:
-                result.append(read(path))
+                if folder == 'templates':
+                    if path.name.startswith('_'):
+                        continue
+                    result.append(template_for_page(read(path), path.name))
+                else:
+                    result.append(read(path))
             except (ValueError, OSError):
                 pass
         return result
@@ -330,12 +366,12 @@ def handle(action, data):
         return settings()
     if action == 'template_import':
         value = read(Path(data['path']))
-        if not value.get('name') or not (value.get('shots') or value.get('script')):
-            raise ValueError('模板需要 name 和 shots 或 script')
+        template_for_page(value, Path(data['path']).name)
         value['id'] = str(uuid.uuid4())
-        value['kind'] = data.get('kind', 'reference')
+        if 'kind' in data:
+            value['kind'] = data['kind']
         write(ROOT / 'templates' / (value['id'] + '.json'), value)
-        return value
+        return template_for_page(value, value['id'])
     if action == 'create':
         bootstrap()
         return persist({'id': str(uuid.uuid4()), 'brief': import_brief(data['brief']), 'script': '', 'prompt': '',

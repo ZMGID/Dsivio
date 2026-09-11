@@ -5,12 +5,12 @@ description: 电商商品图技能，也能当普通生图工具用。套图走�
 
 # dsimage
 
-这是 Dsivio 内置图片 Skill，与左侧「图片」页面共用模板和图片设置。首次使用先读 `guides/studio.md`，运行 `python scripts/dsimage.py studio paths` 定位共享目录。不要在技能安装目录另建模板库，不要安装另一个 dsimage，不要自行更新此内置副本。
+脚本出图。你定**路**、看图、在该写的地方写 prompt、改模板。命令在本技能目录跑（Windows `python`，其他 `python3`）：`python scripts/dsimage.py <子命令>`。
 
-内置聊天提供 `studio` 工具时，任务和出图必须走该工具，调用顺序见 `guides/studio.md`；不要再用 gen/run 脚本建立独立批次。没有该工具的外部宿主才使用原脚本出图。你定**路**、看图、在该写的地方写 prompt、改模板。命令在本技能目录跑（Windows `python`，其他 `python3`）：`python scripts/dsimage.py <子命令>`。
+本技能下文的 `templates/` 都指文末列出的共享模板目录，由脚本自动定位，不是安装目录。
 
-一个模板 = 共享模板目录下的一个文件夹：`template.json` + `h1.png…` + 可选 `assets/`。同一甲方多套放 `{甲方}/{模板名}/`，共用 `要求.json`。页面创建的模板直接可用；聊天创建或修改后页面会自动刷新，无需导入。
-图片供应商、模型和协议读取「图片 → 图片设置」，凭据读取应用供应商设置，仅在脚本进程内使用，不复制到 `.env`。未配置 → `SETUP.md`。不要读取或回显整个 settings.json，不在对话里索要或展示 key。
+一个模板 = `templates/<名>/`：`template.json` + `h1.png…` + 可选 `assets/`。同一甲方多套放 `templates/{甲方}/`，共用 `要求.json`。
+有 `.env` 就能出图；没有 → `SETUP.md`。对话里给了接口地址 / key → 立刻按 `SETUP.md` 第 2 步（`setup env` 不带 `--model`），拉列表等人选模型。不回显 key，不手改 `.env`。
 
 ## 路
 
@@ -38,7 +38,7 @@ description: 电商商品图技能，也能当普通生图工具用。套图走�
 
 做到这里先等人，收到明确答复再往下：
 
-- 未配置图片模型：引导用户打开「图片 → 图片设置」选择已配置的供应商和模型。
+- 没 `.env`：等人给 URL 和 key；模型列表出来后等人选名字。
 - 引导：只给 howto，等他用其中一句开口。
 - 先问：五问问完等人回（已说的划掉）。用模板时名单最多 5 个，等人回序号或名字。
 - 甲方大单：`要求.json`、分类表、每类 2 个预览，三处都等人点头。
@@ -133,3 +133,12 @@ skills/dsimage/
                {甲方}/要求.json + {甲方}/{模板}/
   scripts/     dsimage.py  core.py  gen_image.py  test_dsimage.py
 ```
+
+## Dsivio 模板共享
+
+对话按本 Skill 的原始步骤、脚本和配置工作，产物保存在本次工作目录。无需创建图片页面任务或同步页面草稿。
+模板目录已连接到图片页面的模板库，`template list/init/freeze` 使用同一目录；对话保存模板后，返回图片页即可看到。
+一套模板一个文件夹，保留原版 template.json、示例图和 assets；不用额外 ID 或登记文件，保存后运行 `template check <模板名>`。内置文件随应用发布更新，不在对话中自更新安装副本。
+配置按 SETUP.md 使用 dsimage 自己的配置；需要持久保存时使用工作目录中的 `.env` 和 `--env-file`，不要将凭据写入模板。
+
+共享图片模板目录：Windows `%APPDATA%/com.zmair.kivio/image-studio/templates`；macOS `~/Library/Application Support/com.zmair.kivio/image-studio/templates`；Linux `${XDG_DATA_HOME:-~/.local/share}/com.zmair.kivio/image-studio/templates`。内置模板先复制为新的模板文件夹再修改，避免应用更新覆盖。

@@ -24,7 +24,7 @@
 - IPC：统一在 `src/api/tauri.ts`；路由同时接入 Chat、Sidebar、chatRoutes 和 useChatRouting。
 - 后端：`src-tauri/src/image_studio/`。类型、持久化、Agent 步骤、图片接口和命令分开组织。
 - Agent 复用现有 `run_agent_loop`，使用专门的无工具 Host 做商品识别、画面规划、规则提取和质检。不发现、安装或激活 Skill，不依赖 Python。
-- 内置聊天通过 `studio` 原生工具调用相同的 `image_studio_*` 服务。另保留 `resources/skills/dsimage` 的规则与脚本，供没有宿主工具的外部 CLI 使用；独立脚本依赖 Python，页面及内置聊天的原生图片执行不依赖 Python。
+- 聊天使用 `resources/skills/dsimage` 的上游 Skill 和 gen/run 脚本，独立管理配置、批次及输出；图片页面仍使用原生 Rust 服务。两边直接读写同一个模板目录，不提供聊天模板工具。
 - 图片生成使用 Rust 原生适配器：OpenAI 标准、Grok、dsimage Gemini responseFormat、Gemini Chat 兼容、返回 task_id 的异步网关。沿用应用供应商的地址、密钥、代理选择和请求头配置。
 - 模板和拍法说明来自 ZMGID/dsimage，作为应用资源编译进入客户端；保留 MIT 署名。新任务引用模板快照，后续编辑模板不改写已有任务。
 - 模板核对版本：`bc83321d19cf51f694b1aa06efbc4cdcc7effd34`。两套背包的 18 张参考图及男款 logo / 背面辅助图完整打包；默认与童装规则模板上游没有参考图。卡片只预览前 3 页，点击可翻阅全部页面。内置素材在桌面端落到工作台模板目录，供生成、导出和保存副本使用，浏览器预览使用同源打包图片。上游「童装图片」客户分类目录不作为独立通用模板导入。

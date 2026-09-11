@@ -43,6 +43,7 @@
       "resources/company-skills": "company-skills",
       "resources/plugins": "plugins",
       "resources/video-runtime": "video-runtime",
+      "resources/video-studio": "video-studio",
       "../docs/licenses": "licenses"
     },
     "windows": {
