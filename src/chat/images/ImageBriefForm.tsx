@@ -2,7 +2,7 @@ import { useMemo, useState, type DragEvent } from 'react'
 import { ArrowRight, FolderOpen, ImagePlus, Layers3, Loader2, Plus, Search, X } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
 import { ImageRatioSelect, ImageResolutionSelect } from './ImageOutputSelect'
-import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
+import { AssetImage, Field, ImageLanguageSelect } from './StudioPanels'
 import type { ImageAsset, ImageBrief, ImageTemplate } from './types'
 
 function templateHaystack(item: ImageTemplate): string {
@@ -249,9 +249,6 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
       </div>
       <details className="if-more">
         <summary>更多设置</summary>
-        <Field label="使用平台"><StudioSelect disabled={busy} value={brief.platform} onChange={(e) => onChange({ platform: e.target.value })}>
-          {['通用电商', 'Amazon', 'Shopify', 'Mercado Livre', 'Shopee', 'TikTok Shop', '社交媒体 / 广告'].map((value) => <option key={value}>{value}</option>)}
-        </StudioSelect></Field>
         <Field label="统一风格（可选）"><textarea className="kv-textarea custom-scrollbar" rows={2} disabled={busy} value={brief.style} onChange={(e) => onChange({ style: e.target.value })} placeholder="有特别的色调、背景或排版要求，可以在这里补充" /></Field>
         {brief.products.map((product) => <Field key={product.id} label={brief.products.length > 1 ? `${product.name} 的商品信息（可选）` : '商品信息（可选）'}>
           <textarea className="kv-textarea custom-scrollbar" rows={2} disabled={busy} value={product.facts} placeholder="可补充图片看不出的信息，例如尺寸、容量"

@@ -20,7 +20,7 @@ import { api } from '../../api/tauri'
 import { ImageRatioSelect, ImageResolutionSelect } from './ImageOutputSelect'
 import { humanizeImageError } from './imageValidation'
 import { Button, IconButton } from '../../components/Button'
-import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
+import { AssetImage, Field, ImageLanguageSelect } from './StudioPanels'
 import {
   latestResults,
   suggestImageTaskName,
@@ -354,19 +354,6 @@ export function ImageWorkflow({
                     onChange={(e) => onChange({ name: e.target.value })}
                     placeholder={suggestImageTaskName(brief)}
                   />
-                </Field>
-                <Field label="使用平台">
-                  <StudioSelect
-                    disabled={busy}
-                    value={brief.platform}
-                    onChange={(e) => onChange({ platform: e.target.value })}
-                  >
-                    {['通用电商', 'Amazon', 'Mercado Livre', 'Shopee', 'TikTok Shop', '独立站'].map(
-                      (v) => (
-                        <option key={v}>{v}</option>
-                      ),
-                    )}
-                  </StudioSelect>
                 </Field>
                 </details><Field label="图内语言">
                   <ImageLanguageSelect

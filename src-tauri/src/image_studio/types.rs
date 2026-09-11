@@ -42,6 +42,7 @@ pub struct Brief {
     pub name: String,
     pub requirement: String,
     pub language: String,
+    #[serde(default)]
     pub platform: String,
     pub ratio: String,
     pub resolution: String,
