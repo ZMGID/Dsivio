@@ -122,6 +122,7 @@ function FileAttachmentCard({
   return (
     <FileChip
       name={attachment.name}
+      kind={attachment.type === 'folder' ? 'folder' : undefined}
       onClick={() => {
         if (typeof attachment.content === 'string' && onEdit) {
           onEdit(attachment)

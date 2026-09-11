@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::chat::model::MessagePart;
 use crate::mcp::types::ChatToolArtifact;
 
-use super::storage::conversation_attachments_dir;
-use super::{Attachment, ChatMessage};
+use super::storage::{conversation_attachments_dir, normalize_additional_directories};
+use super::{AdditionalDirectory, Attachment, ChatMessage};
 
 const MAX_ATTACHMENT_PREVIEW_BYTES: u64 = 12 * 1024 * 1024;
 const MAX_PASTED_IMAGE_BYTES: usize = 12 * 1024 * 1024;
@@ -151,6 +151,12 @@ pub(crate) fn resolve_attachment_file_path(
         return Err("附件路径为空".to_string());
     }
 
+    let candidate = PathBuf::from(path);
+    // 文件夹附件保存的是本机绝对路径；发送后点开芯片要能打开原目录。
+    if candidate.is_absolute() && candidate.is_dir() {
+        return Ok(candidate);
+    }
+
     if let Some(conversation_id) = conversation_id {
         if path.contains('/') || path.contains('\\') {
             return Err("无效的附件路径".to_string());
@@ -163,11 +169,10 @@ pub(crate) fn resolve_attachment_file_path(
         return Ok(full);
     }
 
-    let full = PathBuf::from(path);
-    if !full.is_file() {
+    if !candidate.is_file() {
         return Err(format!("文件不存在: {path}"));
     }
-    Ok(full)
+    Ok(candidate)
 }
 
 fn normalize_pasted_image_mime(mime_type: &str) -> Result<&'static str, String> {
@@ -751,31 +756,78 @@ pub(crate) fn save_message_attachments(
 
     let dir = conversation_attachments_dir(app, conversation_id)?;
     for source in attachment_paths {
-        let source_path = Path::new(&source);
-        if !source_path.is_file() {
-            return Err(format!("附件不存在或不是文件: {source}"));
-        }
+        attachments.push(store_attachment_from_path(&source, &dir)?);
+    }
 
-        let id = format!("att_{}", Uuid::new_v4());
-        let original_name = source_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("attachment");
-        let safe_name = sanitize_attachment_name(original_name);
-        let stored_name = format!("{}-{}", id, safe_name);
-        let dest = dir.join(&stored_name);
-        fs::copy(source_path, &dest).map_err(|e| format!("保存附件失败: {e}"))?;
+    Ok(attachments)
+}
 
-        attachments.push(Attachment {
+fn store_attachment_from_path(source: &str, dest_dir: &Path) -> Result<Attachment, String> {
+    let source_path = Path::new(source);
+    let id = format!("att_{}", Uuid::new_v4());
+    let original_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment");
+
+    if source_path.is_dir() {
+        let stored_path = fs::canonicalize(source_path)
+            .map(|path| {
+                crate::utils::strip_windows_verbatim_prefix(path)
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .unwrap_or_else(|_| source.to_string());
+        return Ok(Attachment {
             id,
-            attachment_type: attachment_type_for_name(original_name).to_string(),
+            attachment_type: "folder".to_string(),
             name: original_name.to_string(),
-            path: stored_name,
+            path: stored_path,
             content: None,
         });
     }
 
-    Ok(attachments)
+    if !source_path.is_file() {
+        return Err(format!("附件不存在或不是文件: {source}"));
+    }
+
+    let safe_name = sanitize_attachment_name(original_name);
+    let stored_name = format!("{}-{}", id, safe_name);
+    let dest = dest_dir.join(&stored_name);
+    fs::copy(source_path, &dest).map_err(|e| format!("保存附件失败: {e}"))?;
+
+    Ok(Attachment {
+        id,
+        attachment_type: attachment_type_for_name(original_name).to_string(),
+        name: original_name.to_string(),
+        path: stored_name,
+        content: None,
+    })
+}
+
+pub(crate) fn is_folder_attachment(attachment: &Attachment) -> bool {
+    attachment.attachment_type == "folder"
+}
+
+/// 把本轮文件夹附件并入对话附加目录，供工作台提示和外部 CLI allowed-dir 使用。
+/// 已满 8 个或规范化失败时跳过该条，不阻断发送。
+pub(crate) fn merge_folder_attachments_as_additional_directories(
+    existing: Vec<AdditionalDirectory>,
+    attachments: &[Attachment],
+    primary: Option<&str>,
+) -> Vec<AdditionalDirectory> {
+    let mut entries = existing;
+    for attachment in attachments.iter().filter(|attachment| is_folder_attachment(attachment)) {
+        let mut attempt = entries.clone();
+        attempt.push(AdditionalDirectory {
+            path: attachment.path.clone(),
+            name: Some(attachment.name.clone()),
+        });
+        if let Ok(normalized) = normalize_additional_directories(attempt, primary) {
+            entries = normalized;
+        }
+    }
+    entries
 }
 
 fn sanitize_attachment_name(name: &str) -> String {
@@ -817,6 +869,7 @@ fn attachment_type_for_name(name: &str) -> &'static str {
 fn attachment_type_label(attachment_type: &str) -> &'static str {
     match attachment_type {
         "image" => "图片",
+        "folder" => "文件夹",
         _ => "文件",
     }
 }
@@ -842,6 +895,9 @@ fn attachment_format_label(attachment: &Attachment) -> &'static str {
     if attachment.attachment_type == "image" {
         return "图片";
     }
+    if is_folder_attachment(attachment) {
+        return "文件夹";
+    }
 
     match attachment_extension(&attachment.name).as_str() {
         "pdf" => "PDF",
@@ -858,14 +914,28 @@ fn stored_attachment_path_for_prompt(
     attachment: &Attachment,
     attachment_dir: Option<&Path>,
 ) -> String {
+    if is_folder_attachment(attachment) || Path::new(&attachment.path).is_absolute() {
+        return attachment.path.clone();
+    }
     attachment_dir
         .map(|dir| dir.join(&attachment.path).display().to_string())
         .unwrap_or_else(|| attachment.path.clone())
 }
 
+fn attachment_path_label(attachment: &Attachment) -> &'static str {
+    if is_folder_attachment(attachment) {
+        "本机文件夹路径"
+    } else {
+        "Kivio 安全副本路径"
+    }
+}
+
 fn attachment_processing_hint(attachment: &Attachment) -> String {
     if attachment.attachment_type == "image" {
         return "图片附件会随本轮请求发送给视觉模型。".to_string();
+    }
+    if is_folder_attachment(attachment) {
+        return "这是文件夹附件，保留用户本机原路径（未复制）。请用 list_dir / glob / read 等工具按该绝对路径访问；不要凭文件夹名臆测内容。".to_string();
     }
 
     if let Some(skill) = attachment_skill_for_name(&attachment.name) {
@@ -896,34 +966,43 @@ pub(crate) fn compose_user_content_for_api(
     let has_images = real_attachments
         .iter()
         .any(|attachment| attachment.attachment_type == "image");
-    let has_files = real_attachments
+    let has_folders = real_attachments
         .iter()
-        .any(|attachment| attachment.attachment_type != "image");
+        .any(|attachment| is_folder_attachment(attachment));
+    let has_files = real_attachments.iter().any(|attachment| {
+        attachment.attachment_type != "image" && !is_folder_attachment(attachment)
+    });
     let attachment_lines = real_attachments
         .iter()
         .map(|attachment| {
             let stored_path = stored_attachment_path_for_prompt(attachment, attachment_dir);
             format!(
-                "- {} ({})\n  - 附件 ID：{}\n  - Kivio 安全副本路径：{}\n  - 处理建议：{}",
+                "- {} ({})\n  - 附件 ID：{}\n  - {}：{}\n  - 处理建议：{}",
                 attachment.name,
                 attachment_format_label(attachment),
                 attachment.id,
+                attachment_path_label(attachment),
                 stored_path,
                 attachment_processing_hint(attachment)
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let capability_note = match (has_images, has_files) {
-        (true, true) => {
-            "图片附件会随本轮请求发送给视觉模型；文档/表格附件不会直接随模型请求内联正文，必须复用对应 Agent Skill 或可用工具实际读取安全副本后再分析。"
-        }
-        (true, false) => "图片附件会随本轮请求发送给视觉模型。",
-        (false, true) => {
-            "文档/表格附件不会直接随模型请求内联正文，必须复用对应 Agent Skill 或可用工具实际读取安全副本后再分析；不要仅凭文件名臆测内容。"
-        }
-        (false, false) => "",
-    };
+    let mut capability_parts = Vec::new();
+    if has_images {
+        capability_parts.push("图片附件会随本轮请求发送给视觉模型。");
+    }
+    if has_folders {
+        capability_parts.push(
+            "文件夹附件保留用户本机原路径（未复制）；请用 list_dir / glob / read 等工具按绝对路径访问，不要凭文件夹名臆测内容。",
+        );
+    }
+    if has_files {
+        capability_parts.push(
+            "文档/表格附件不会直接随模型请求内联正文，必须复用对应 Agent Skill 或可用工具实际读取安全副本后再分析；不要仅凭文件名臆测内容。",
+        );
+    }
+    let capability_note = capability_parts.join("");
     let attachment_note = format!(
         "[已添加附件]\n{}\n\n注意：{}",
         attachment_lines, capability_note
@@ -1057,6 +1136,13 @@ pub(crate) fn stored_file_paths_for_attachments(
         if is_memory_text_attachment(attachment) {
             continue;
         }
+        if is_folder_attachment(attachment) {
+            let path = PathBuf::from(&attachment.path);
+            if path.is_dir() {
+                paths.push(path);
+            }
+            continue;
+        }
         let stored = Path::new(&attachment.path);
         if stored.components().count() != 1 {
             return Err(format!("Invalid attachment path: {}", attachment.path));
@@ -1117,6 +1203,67 @@ mod tests {
         assert!(content.contains("看看这个"));
         assert!(content.contains("screen.png"));
         assert!(content.contains("图片附件会随本轮请求发送给视觉模型"));
+    }
+
+    #[test]
+    fn store_attachment_from_path_keeps_folder_absolute() {
+        let root = std::env::temp_dir().join(format!("kivio-folder-att-{}", Uuid::new_v4()));
+        let dest = root.join("copied");
+        fs::create_dir_all(&dest).unwrap();
+        let folder = root.join("VE女包系列");
+        fs::create_dir_all(&folder).unwrap();
+
+        let attachment = store_attachment_from_path(folder.to_str().unwrap(), &dest).unwrap();
+        assert_eq!(attachment.attachment_type, "folder");
+        assert_eq!(attachment.name, "VE女包系列");
+        assert!(Path::new(&attachment.path).is_dir());
+        assert_eq!(fs::read_dir(&dest).unwrap().count(), 0);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn compose_user_content_for_api_lists_folder_path() {
+        let content = compose_user_content_for_api(
+            "看看这个文件夹",
+            &[Attachment {
+                id: "att_folder".to_string(),
+                attachment_type: "folder".to_string(),
+                name: "VE女包系列".to_string(),
+                path: r"E:\ZM database\numao\VE女包系列".to_string(),
+                content: None,
+            }],
+            Some(Path::new("/tmp/attachments")),
+        );
+
+        assert!(content.contains("看看这个文件夹"));
+        assert!(content.contains("VE女包系列"));
+        assert!(content.contains(r"E:\ZM database\numao\VE女包系列"));
+        assert!(content.contains("本机文件夹路径"));
+        assert!(!content.contains("/tmp/attachments"));
+        assert!(content.contains("list_dir"));
+    }
+
+    #[test]
+    fn merge_folder_attachments_adds_real_folder() {
+        let root = std::env::temp_dir().join(format!("kivio-merge-dir-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.to_string_lossy().to_string();
+        let merged = merge_folder_attachments_as_additional_directories(
+            Vec::new(),
+            &[Attachment {
+                id: "att_folder".to_string(),
+                attachment_type: "folder".to_string(),
+                name: "VE女包系列".to_string(),
+                path: path.clone(),
+                content: None,
+            }],
+            None,
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].name.as_deref(), Some("VE女包系列"));
+        assert!(Path::new(&merged[0].path).is_dir());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

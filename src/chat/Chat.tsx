@@ -484,7 +484,7 @@ function attachmentExtension(name: string): string {
 }
 
 function documentSkillNameForAttachment(attachment: PendingAttachment): string | null {
-  if (attachment.type === 'image') return null
+  if (attachment.type === 'image' || attachment.type === 'folder') return null
   switch (attachmentExtension(attachment.name)) {
     case 'pdf':
       return 'pdf'

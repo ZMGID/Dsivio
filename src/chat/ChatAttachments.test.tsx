@@ -74,4 +74,18 @@ describe('ChatAttachments 卡片形态', () => {
     expect(container.textContent).toContain('notes.pdf')
     expect(container.textContent).toContain('PDF')
   })
+
+  it('renders folder cards with a folder label', () => {
+    const { container } = render(
+      <ChatAttachments
+        attachments={[
+          { id: 'd1', name: 'VE女包系列', type: 'folder', path: 'E:\\\\goods\\\\VE女包系列' },
+        ]}
+        variant="composer"
+      />,
+    )
+
+    expect(container.textContent).toContain('VE女包系列')
+    expect(container.textContent).toContain('FOLDER')
+  })
 })

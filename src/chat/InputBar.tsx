@@ -684,21 +684,33 @@ export const InputBar = memo(function InputBar({
     setPresetMenuOpen(false)
   }, [])
 
-  const attachmentsFromPaths = useCallback(
-    (paths: string[]) =>
-      paths.map((path) => {
-        const normalized = path.replace(/\\/g, '/')
-        const name = normalized.split('/').filter(Boolean).pop() || t.chatAttachmentFallbackName
-        const ext = name.split('.').pop()?.toLowerCase() ?? ''
-        const type: PendingAttachment['type'] = IMAGE_EXTENSIONS.includes(ext) ? 'image' : 'file'
+  const pendingFromPath = useCallback(
+    (path: string, kind?: 'file' | 'directory'): PendingAttachment => {
+      const normalized = path.replace(/\\/g, '/')
+      const name = normalized.split('/').filter(Boolean).pop() || t.chatAttachmentFallbackName
+      if (kind === 'directory') {
         return {
           id: `pending-att-${crypto.randomUUID()}`,
-          type,
+          type: 'folder',
           name,
           path,
         }
-      }),
+      }
+      const ext = name.split('.').pop()?.toLowerCase() ?? ''
+      const type: PendingAttachment['type'] = IMAGE_EXTENSIONS.includes(ext) ? 'image' : 'file'
+      return {
+        id: `pending-att-${crypto.randomUUID()}`,
+        type,
+        name,
+        path,
+      }
+    },
     [t],
+  )
+
+  const attachmentsFromPaths = useCallback(
+    (paths: string[]) => paths.map((path) => pendingFromPath(path)),
+    [pendingFromPath],
   )
 
   const loadProjectOptions = useCallback(async () => {
@@ -1037,6 +1049,23 @@ export const InputBar = memo(function InputBar({
       textareaRef.current?.focus()
     },
     [t],
+  )
+
+  const attachOsPaths = useCallback(
+    async (paths: string[]) => {
+      if (paths.length === 0) return
+      try {
+        const classified = await api.chatClassifyAttachmentPaths(paths)
+        if (classified.length > 0) {
+          addAttachments(classified.map((item) => pendingFromPath(item.path, item.kind)))
+          return
+        }
+      } catch (err) {
+        console.error('Failed to classify dropped paths:', err)
+      }
+      addAttachments(attachmentsFromPaths(paths))
+    },
+    [addAttachments, attachmentsFromPaths, pendingFromPath],
   )
 
   // 编辑弹窗保存：用编辑后的内容重建内存附件数据（提交时由 api 层生成新的 File/Blob 内容）。
@@ -1490,17 +1519,17 @@ export const InputBar = memo(function InputBar({
       e.preventDefault()
     }
 
-    const nativePaths: string[] = []
+    const nativeFiles: Array<{ path: string; name: string; kind?: 'file' | 'directory' }> = []
     try {
       const native = await api.chatReadClipboardFiles()
       if (native.success && native.files?.length) {
-        nativePaths.push(...native.files.map((file) => file.path))
+        nativeFiles.push(...native.files)
       }
     } catch (err) {
       console.error('Failed to read clipboard files:', err)
     }
 
-    const hasNativeFiles = nativePaths.length > 0
+    const hasNativeFiles = nativeFiles.length > 0
     const hasClipboardFiles = attachableClipboardFiles.length > 0
 
     // 纯文字粘贴：短文本放行交给浏览器默认处理；超长文本已在上方同步阶段 preventDefault
@@ -1540,7 +1569,9 @@ export const InputBar = memo(function InputBar({
       const pastedAttachments: PendingAttachment[] = []
 
       if (hasNativeFiles) {
-        pastedAttachments.push(...attachmentsFromPaths(nativePaths))
+        pastedAttachments.push(
+          ...nativeFiles.map((file) => pendingFromPath(file.path, file.kind)),
+        )
       } else for (const [index, file] of attachableClipboardFiles.entries()) {
         const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
 
@@ -1763,7 +1794,7 @@ export const InputBar = memo(function InputBar({
 
       if (event.payload.type === 'drop') {
         setDragActive(false)
-        addAttachments(attachmentsFromPaths(event.payload.paths))
+        void attachOsPaths(event.payload.paths)
       }
     }).then((handler) => {
       if (cancelled) {
@@ -1780,7 +1811,7 @@ export const InputBar = memo(function InputBar({
       setDragActive(false)
       unlisten?.()
     }
-  }, [addAttachments, attachmentsFromPaths, composerLocked])
+  }, [attachOsPaths, composerLocked])
 
   const canSend = (Boolean(input.trim()) || attachments.length > 0)
     && !slashPanelOpen

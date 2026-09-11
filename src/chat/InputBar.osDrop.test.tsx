@@ -21,7 +21,17 @@ vi.mock('@tauri-apps/api/webview', () => ({
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ onFocusChanged: () => Promise.resolve(() => {}) }),
 }))
-vi.mock('../api/tauri', () => ({ api: {}, isTauriRuntime: () => true }))
+vi.mock('../api/tauri', () => ({
+  api: {
+    chatClassifyAttachmentPaths: async (paths: string[]) =>
+      paths.map((path) => ({
+        path,
+        name: path.split(/[/\\]/).pop() || path,
+        kind: /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif)$/i.test(path) ? 'file' : 'directory',
+      })),
+  },
+  isTauriRuntime: () => true,
+}))
 vi.mock('./api', () => ({
   chatApi: {
     getProjects: () => Promise.resolve([]),
@@ -46,5 +56,13 @@ describe('InputBar OS drops', () => {
     await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
     dropHandler?.({ payload: { type: 'drop', paths: ['C:\\goods\\shot.png'] } })
     expect(await screen.findByRole('button', { name: '移除' })).toBeInTheDocument()
+  })
+
+  it('attaches dropped folders as folder chips', async () => {
+    render(<InputBar onSend={() => {}} />)
+    await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+    dropHandler?.({ payload: { type: 'drop', paths: ['E:\\ZM database\\numao\\VE女包系列'] } })
+    expect(await screen.findByText('FOLDER')).toBeInTheDocument()
+    expect(screen.getByText('VE女包系列')).toBeInTheDocument()
   })
 })
