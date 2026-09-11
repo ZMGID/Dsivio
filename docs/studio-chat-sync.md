@@ -16,7 +16,7 @@ dsimage 是随 Dsivio 打包的内置 Skill，dsvideo 是内置插件；启动�
 - 视频：每个 JSON 一个模板，直接保存为 `video-studio/templates/易读名称.json`。最少 name + script；兼容上游 reference_template/full_video_prompt/shot_breakdown 和 template/prompt_pattern/shots 格式。无需 UUID 或额外 kind。页面只在读取时适配展示字段，不重写文件。统一保存说明在插件根目录 TEMPLATES.md。
 - 所有 Agent 都按 Skill 中的平台路径读写同一个模板目录；不需要中间接口。
 - 两个页面在聚焦及定时刷新时读取模板。新任务使用模板快照，后续改模板不改写已有任务。
-- 凭据不进入模板。dsimage 恢复上游 `.env` 配置方式，可用工作目录 `.env` 和 `--env-file`；dsvideo 使用上游 providers.json。
+- 凭据不进入模板。dsimage 默认直接读取图片页面 config.json 和 settings.json 中选中的模型、协议、供应商凭据；显式 `--env-file` 可独立覆盖。dsvideo 页面和插件共用上游 providers.json。
 
 ## 上游与应用适配
 
@@ -25,7 +25,7 @@ dsimage 是随 Dsivio 打包的内置 Skill，dsvideo 是内置插件；启动�
 - https://github.com/ZMGID/dsimage — `bc83321d19cf51f694b1aa06efbc4cdcc7effd34`
 - https://github.com/ZMGID/dsvideo-plugin — `33af713d96d7d5d171080e23a618ed4fb37a6d8e`
 
-聊天生成脚本恢复上游。dsimage 只适配模板目录，并在 Skill 末尾追加宿主说明；dsvideo Skill 仅追加模板共享说明，保留可搬迁的 MCP 运行环境配置和启动器。页面定制过的视频客户端、worker、工作流资产在 `resources/video-studio`，不再覆盖聊天插件。应用升级删除旧内置包中的 STUDIO.md/studio.py 桥接文件，保留用户数据和启用状态。
+聊天生成脚本恢复上游。dsimage 适配共享模板目录和页面配置读取，并在 Skill 中标明配置位置；dsvideo Skill 仅追加模板共享说明，保留可搬迁的 MCP 运行环境配置和启动器。页面定制过的视频客户端、worker、工作流资产在 `resources/video-studio`，不再覆盖聊天插件。应用升级删除旧内置包中的 STUDIO.md/studio.py 桥接文件，保留用户数据和启用状态。
 
 ## 页面内部持久化
 

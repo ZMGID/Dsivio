@@ -176,6 +176,12 @@ def env_defines_img_keys(env_file: Path) -> bool:
 
 
 def find_default_env_file() -> Path | None:
+    from dsivio import use_image_config
+    try:
+        if use_image_config():
+            return None
+    except (ValueError, OSError) as exc:
+        fail(f"读取图片页面配置失败：{exc}")
     # 向上查找时只认包含 IMG_ 配置的 .env，避免误用其他项目里给
     # 文本模型准备的 OPENAI_API_KEY
     for directory in (Path.cwd(), *Path.cwd().parents):
@@ -1482,10 +1488,8 @@ def build_check_report(
 def run_check(args: argparse.Namespace) -> None:
     env_file = Path(args.env_file) if args.env_file else find_default_env_file()
     load_env_file(env_file)
-    if env_file is None:
-        fail("没有找到 .env。先按 SETUP 写入 IMG_PROVIDER / IMG_MODEL / IMG_API_KEY。")
     print("配置检查（不打接口）")
-    print("配置文件：已读取（不回显内容）")
+    print("配置来源：" + (str(env_file) if env_file else "图片页面配置 / 环境变量"))
     provider, base_url, model, api_key = resolve_runtime()
     mode = detect_mode(provider, base_url, args.mode, model)
     with tempfile.TemporaryDirectory() as tmp:
