@@ -302,7 +302,7 @@ pub struct ModelPricing {
  * OCR 引擎模式（截图翻译用）
  *
  * - CloudVision：发图给多模态 provider 一次完成 OCR+翻译（旧 use_system_ocr=false 等价行为）
- * - System：调用 macOS Apple Vision 或 Windows.Media.Ocr 识别文字，再交 provider 翻译
+ * - System：调用 Windows.Media.Ocr 识别文字，再交 provider 翻译
  * - RapidOcr：本地 RapidOCR (PaddleOCR ONNX) 识别文字，再交 provider 翻译。onnxruntime
  *   dylib 与模型文件均由用户在设置页面下载到 app data 目录，安装包不含。
  * - Legacy：反序列化兜底，吸收旧版本 settings.json 里的未知字符串（如 "tesseract"），
@@ -364,7 +364,7 @@ pub struct ScreenshotTranslationConfig {
     /// 快速翻译结果卡左右宽度（px）。截图翻译与选中文本翻译两种卡共用，保证宽度一致且可调。
     #[serde(default = "default_translate_card_width")]
     pub card_width: u32,
-    /// 用平台本地 OCR 做文字识别，把识别出的文字喂给翻译模型（macOS Apple Vision / Windows OCR）。
+    /// 用 Windows 系统 OCR 做文字识别，把识别出的文字喂给翻译模型。
     /// true → 系统 OCR + provider 文字翻译（provider 可是任意 OpenAI 兼容 endpoint）
     /// false → provider 必须是多模态模型，一次完成 OCR+翻译
     ///
@@ -2754,7 +2754,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
 
     settings.retry_attempts = clamp_retry_attempts(settings.retry_attempts);
 
-    // 系统 OCR 依赖平台本地 OCR 能力（macOS Apple Vision / Windows.Media.Ocr）。其它平台
+    // 系统 OCR 依赖 Windows.Media.Ocr。其它不支持本地 OCR 的平台
     // 同步来的旧配置必须关闭，否则截图翻译会误入不可用分支。
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -2780,6 +2780,18 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             } else {
                 OcrMode::CloudVision
             });
+    }
+    // Apple Vision sidecar has been removed. Preserve local-only recognition
+    // for existing macOS users; RapidOCR setup handles missing local models.
+    #[cfg(target_os = "macos")]
+    {
+        if settings.screenshot_translation.ocr_mode == Some(OcrMode::System) {
+            settings.screenshot_translation.ocr_mode = Some(OcrMode::RapidOcr);
+        }
+        settings.screenshot_translation.use_system_ocr = false;
+        if settings.document_processing.ocr_engine == "system" {
+            settings.document_processing.ocr_engine = "rapid_ocr".into();
+        }
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -3436,13 +3448,31 @@ mod tests {
         s.screenshot_translation.use_system_ocr = true;
         s.screenshot_translation.ocr_mode = None;
         let s = sanitize_settings(s);
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        #[cfg(target_os = "windows")]
         assert_eq!(s.screenshot_translation.ocr_mode, Some(OcrMode::System));
+        #[cfg(target_os = "macos")]
+        assert_eq!(s.screenshot_translation.ocr_mode, Some(OcrMode::RapidOcr));
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         assert_eq!(
             s.screenshot_translation.ocr_mode,
             Some(OcrMode::CloudVision)
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sanitize_settings_migrates_removed_apple_ocr_to_local_rapidocr() {
+        let mut s = Settings::default();
+        s.screenshot_translation.ocr_mode = Some(OcrMode::System);
+        s.screenshot_translation.use_system_ocr = true;
+        s.document_processing.ocr_engine = "system".into();
+        let s = sanitize_settings(s);
+        assert_eq!(s.screenshot_translation.ocr_mode, Some(OcrMode::RapidOcr));
+        assert!(!s.screenshot_translation.use_system_ocr);
+        assert_eq!(s.document_processing.ocr_engine, "rapid_ocr");
+        let s = sanitize_settings(s);
+        assert_eq!(s.screenshot_translation.ocr_mode, Some(OcrMode::RapidOcr));
+        assert_eq!(s.document_processing.ocr_engine, "rapid_ocr");
     }
 
     #[test]

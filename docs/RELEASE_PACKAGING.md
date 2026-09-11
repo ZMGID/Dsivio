@@ -18,16 +18,13 @@ npm run build
 
 `npm run build` runs:
 
-1. `npm run build:swift`
-   - Builds the macOS Swift sidecars.
-   - On non-macOS platforms, creates stub binaries so Tauri `externalBin` validation passes.
-2. `npm run protocol:check`
+1. `npm run protocol:check`
    - Verifies generated TypeScript and JSON Schemas against the Rust protocol.
-3. `tauri build`
+2. `tauri build`
    - Runs `beforeBuildCommand` from `src-tauri/tauri.conf.json`: `npm run build:video-runtime && npm run build:ui`.
    - Prepares bundled Python / Node / media tools and MCP dependencies; see [video runtime build and verification](video-studio.md#内置运行环境构建).
    - Vite writes the production frontend to `dist/`.
-   - Tauri packages `dist/`, configured `externalBin` files, configured `resources`, and platform icons into DMG / MSI / NSIS bundles.
+   - Tauri packages `dist/`, configured `resources`, and platform icons into DMG / MSI / NSIS bundles.
 
 GitHub release packaging (this is the official path — do not build installers locally):
 
@@ -173,4 +170,3 @@ A README-only bump is docs; `.github/workflows/ci.yml` skips `**.md` / `docs/**`
 ## Common Failure To Avoid
 
 Do not treat "Skill files are bundled" as equivalent to "the host can parse those documents." `SKILL.md` only tells the model to use host `read`/`bash` tools. If Python or a PDF/Office CLI is missing, the agent should say so rather than inventing contents.
-

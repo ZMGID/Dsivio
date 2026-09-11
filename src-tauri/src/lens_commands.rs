@@ -1816,21 +1816,13 @@ async fn run_system_ocr(
     state: &State<'_, AppState>,
     image_path: &std::path::Path,
 ) -> Result<String, String> {
-    #[cfg(target_os = "macos")]
-    {
-        return state
-            .macos_ocr
-            .ocr_image(&image_path.to_string_lossy())
-            .await;
-    }
-
     #[cfg(target_os = "windows")]
     {
         let _ = state;
         return windows_ocr::ocr_image(image_path).await;
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(target_os = "windows"))]
     {
         let _ = (state, image_path);
         Err("System OCR is not available on this platform".to_string())
@@ -1851,7 +1843,7 @@ async fn run_rapidocr_ocr(
 }
 
 /// 本地 OCR + 任意 provider 翻译的两步链路。
-/// `engine` 决定 OCR 来源:`OcrMode::System`(macOS Apple Vision / Windows.Media.Ocr) 或
+/// `engine` 决定 OCR 来源:`OcrMode::System`(Windows.Media.Ocr) 或
 /// `OcrMode::RapidOcr`(本地 RapidOCR PaddleOCR ONNX)。`OcrMode::CloudVision` 走另一条单步路径,
 /// 不进这里。
 /// 翻译使用配置的 OpenAI 兼容 cloud provider。

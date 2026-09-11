@@ -75,9 +75,6 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Windows sidecar stub
-        run: npm run build:swift
-
       - name: Prepare and verify bundled MCP runtimes
         run: npm run build:video-runtime
 

@@ -333,8 +333,6 @@ mod tests {
             Settings::default(),
             std::env::temp_dir().join(format!("kivio-title-test-usage-{}", uuid::Uuid::new_v4())),
             reqwest::Client::new(),
-            #[cfg(target_os = "macos")]
-            crate::macos_ocr::MacOcrClient::disabled(),
             offline_models.clone(),
             crate::rapidocr::RapidOcrClient::new(offline_models),
         )

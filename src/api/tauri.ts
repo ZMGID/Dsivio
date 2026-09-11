@@ -1165,13 +1165,13 @@ export type Settings = {
     keepFullscreenAfterCapture?: boolean
     /** 快速翻译结果卡左右宽度(px)。截图翻译与选中文本翻译共用，统一且可调（默认 480） */
     cardWidth?: number
-    /** 使用系统 OCR(macOS Apple Vision / Windows OCR) 做文字识别,然后让 provider 翻译纯文本(默认 false)。
+    /** 使用 Windows 系统 OCR 做文字识别,然后让 provider 翻译纯文本(默认 false)。
      *  true 时 provider 可以是任意文字模型;false 时 provider 必须是多模态视觉模型。
      *  从 vNext 起作 ocrMode 的降级镜像保留:System→true，其它→false。新代码应读 ocrMode。 */
     useSystemOcr?: boolean
     /** OCR 引擎选择(vNext+):
      *  - 'cloud_vision': 现有云端多模态 provider 一次完成 OCR+翻译
-     *  - 'system': macOS Apple Vision / Windows.Media.Ocr 识别后交 provider 翻译
+     *  - 'system': Windows.Media.Ocr 识别后交 provider 翻译
      *  - 'rapid_ocr': 本地 RapidOCR (PaddleOCR ONNX) 识别后交 provider 翻译。
      *    模型文件 + onnxruntime dylib 由用户在设置页面下载,安装包不带。
      *  缺省时由后端 sanitize_settings 按 useSystemOcr 自动迁移。 */
