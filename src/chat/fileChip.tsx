@@ -7,6 +7,7 @@ import {
   FilePlay,
   FileSpreadsheet,
   FileText,
+  Folder,
   Presentation,
 } from 'lucide-react'
 
@@ -32,7 +33,15 @@ function extensionOf(name: string): string {
   return base.slice(dot + 1).toLowerCase()
 }
 
-function fileKindVisual(name: string): FileKindVisual {
+function fileKindVisual(name: string, kind?: 'folder'): FileKindVisual {
+  if (kind === 'folder') {
+    return {
+      Icon: Folder,
+      label: 'FOLDER',
+      iconClass: 'text-amber-600 dark:text-amber-400',
+      wellClass: 'bg-amber-500/10 dark:bg-amber-400/15',
+    }
+  }
   const ext = extensionOf(name)
   const label = ext ? ext.toUpperCase() : 'FILE'
   if (ext === 'pdf') {
@@ -71,14 +80,16 @@ function fileKindVisual(name: string): FileKindVisual {
 /** 输入框 / 用户气泡 / 助手产物共用的 64px 文件芯片。 */
 export function FileChip({
   name,
+  kind,
   onClick,
   ariaLabel,
 }: {
   name: string
+  kind?: 'folder'
   onClick: () => void
   ariaLabel?: string
 }) {
-  const visual = fileKindVisual(name)
+  const visual = fileKindVisual(name, kind)
   const Icon = visual.Icon
   return (
     <button

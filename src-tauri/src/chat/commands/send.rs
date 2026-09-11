@@ -2,10 +2,13 @@ use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 use crate::chat::attachments::{
-    compose_text_attachments_for_api, compose_user_content_for_api, save_message_attachments,
+    compose_text_attachments_for_api, compose_user_content_for_api,
+    merge_folder_attachments_as_additional_directories, save_message_attachments,
     stored_image_paths_for_attachments, title_source_for_user_message, TextAttachmentInput,
 };
-use crate::chat::storage::{conversation_attachments_dir, load_conversation};
+use crate::chat::storage::{
+    conversation_attachments_dir, load_conversation, resolve_conversation_working_directory,
+};
 use crate::chat::Attachment;
 use crate::chat::ChatMessage;
 use crate::state::AppState;
@@ -150,9 +153,24 @@ pub(crate) async fn chat_send_message(
     // 多模型一问多答（任务 06-30）：从会话级 reply_models 解析本次要并行的「臂」。
     // 0/1 个有效臂 → 单模型现状路径（行为完全不变，防回归 AC5）。≥2 → fan-out。
     // 仅普通（Act）模式生效（R11）：plan / orchestrate 模式下不 fan-out。
-    let reply_arms = {
+    let (reply_arms, merged_additional_directories) = {
         let settings = state.settings_read();
-        resolve_reply_arms(&settings, &conversation.reply_models)?
+        let primary_workdir = resolve_conversation_working_directory(
+            &app,
+            &conversation,
+            &settings.chat_tools.native_tools.working_directory,
+        )
+        .ok()
+        .map(|path| path.to_string_lossy().to_string());
+        let merged_additional_directories = merge_folder_attachments_as_additional_directories(
+            conversation.additional_directories.clone(),
+            &message_attachments,
+            primary_workdir.as_deref(),
+        );
+        (
+            resolve_reply_arms(&settings, &conversation.reply_models)?,
+            merged_additional_directories,
+        )
     };
     let plan_or_orchestrate = crate::chat::plan::is_plan_mode(&conversation.agent_plan_state)
         || crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state);
@@ -208,6 +226,7 @@ pub(crate) async fn chat_send_message(
             let provisional_title = provisional_title.clone();
             let goal_started = goal_started.clone();
             let waiting_goal_guard = waiting_goal_guard.clone();
+            let merged_additional_directories = merged_additional_directories.clone();
             move |latest| {
                 if latest
                     .messages
@@ -240,6 +259,7 @@ pub(crate) async fn chat_send_message(
                         latest.title = title;
                     }
                 }
+                latest.additional_directories = merged_additional_directories;
                 Ok(())
             }
         })

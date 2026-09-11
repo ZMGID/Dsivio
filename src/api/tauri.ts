@@ -444,8 +444,14 @@ export type ChatPastedImageResult = {
 
 export type ChatClipboardFilesResult = {
   success: boolean
-  files?: Array<{ path: string; name: string }>
+  files?: Array<{ path: string; name: string; kind?: 'file' | 'directory' }>
   error?: string | null
+}
+
+export type ChatClassifiedAttachmentPath = {
+  path: string
+  name: string
+  kind: 'file' | 'directory'
 }
 
 export function defaultNativeTools(): ChatNativeToolsConfig {
@@ -2474,6 +2480,8 @@ export const api = {
     invoke<ChatPastedImageResult>('chat_save_pasted_attachment', { name, dataBase64 }),
   chatReadClipboardFiles: () =>
     invoke<ChatClipboardFilesResult>('chat_read_clipboard_files'),
+  chatClassifyAttachmentPaths: (paths: string[]) =>
+    invoke<ChatClassifiedAttachmentPath[]>('chat_classify_attachment_paths', { paths }),
   // permissionMode 只有计划批准卡会传（三选一里用户选的那一档），决定批准后把 CLI 切到
   // 哪个权限模式。普通审批传 null。
   chatConfirmToolCall: (

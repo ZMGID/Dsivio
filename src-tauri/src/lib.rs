@@ -798,6 +798,7 @@ pub fn run() {
             chat::commands::attachments::chat_save_pasted_image,
             chat::commands::attachments::chat_save_pasted_attachment,
             chat::commands::attachments::chat_read_clipboard_files,
+            chat::commands::attachments::chat_classify_attachment_paths,
             chat::commands::mutations::chat_delete_conversation,
             chat::commands::mutations::chat_update_conversation,
             chat::commands::title::chat_regenerate_title,
