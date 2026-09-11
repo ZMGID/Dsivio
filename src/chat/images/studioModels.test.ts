@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeProvider } from '../../settings/tabs/testFixtures'
-import { inferImageStudioProtocol, isImageGenerationModel, isVisionModel } from './studioModels'
+import { inferImageStudioProtocol, isImageGenerationModel, isVisionModel, reconcileImageStudioProtocol } from './studioModels'
 
 describe('studioModels', () => {
   it('keeps chat-only providers out of the image-generation list', () => {
@@ -38,5 +38,27 @@ describe('studioModels', () => {
     ).toBe('gemini-chat')
     expect(inferImageStudioProtocol(makeProvider(), 'gpt-image-1')).toBe('openai')
     expect(inferImageStudioProtocol(makeProvider({ baseUrl: 'https://api.apimart.ai/v1' }), 'gpt-image-1')).toBe('async')
+    expect(
+      inferImageStudioProtocol(
+        makeProvider({ baseUrl: 'https://ybw-ai.com/v1' }),
+        'gpt-image-2',
+      ),
+    ).toBe('async')
+  })
+
+  it('upgrades a stale openai protocol for relay gpt-image models', () => {
+    const relay = makeProvider({ baseUrl: 'https://ybw-ai.com/v1' })
+    expect(
+      reconcileImageStudioProtocol({ protocol: 'openai', model: 'gpt-image-2' }, relay).protocol,
+    ).toBe('async')
+    expect(
+      reconcileImageStudioProtocol({ protocol: 'async', model: 'custom-image' }, relay).protocol,
+    ).toBe('async')
+    expect(
+      reconcileImageStudioProtocol(
+        { protocol: 'openai', model: 'gpt-image-2' },
+        makeProvider(),
+      ).protocol,
+    ).toBe('openai')
   })
 })

@@ -25,6 +25,26 @@ export function inferImageStudioProtocol(provider: ModelProvider | undefined, mo
   ) {
     return 'gemini-chat'
   }
-  if (base.includes('apimart')) return 'async'
+  if (usesAsyncImageGateway(base, name)) return 'async'
   return 'openai'
+}
+
+/** Official OpenAI can hold a sync images call. Compatible gateways time out; they need submit + poll. */
+function usesAsyncImageGateway(base: string, model: string): boolean {
+  if (base.includes('apimart')) return true
+  const officialOpenAI = base.includes('api.openai.com')
+  const imagesApiModel = model.includes('gpt-image') || model.startsWith('dall-e')
+  return imagesApiModel && !officialOpenAI
+}
+
+/** Stale `openai` configs for relay image models must flip to async; do not clobber other saved protocols. */
+export function reconcileImageStudioProtocol<T extends { protocol: string; model: string }>(
+  config: T,
+  provider?: ModelProvider,
+): T {
+  const inferred = inferImageStudioProtocol(provider, config.model)
+  if (config.protocol === 'openai' && inferred === 'async') {
+    return { ...config, protocol: 'async' }
+  }
+  return config
 }

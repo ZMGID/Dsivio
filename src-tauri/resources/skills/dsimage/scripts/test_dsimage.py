@@ -599,6 +599,15 @@ class SetupUpdateTests(TempTemplatesMixin, unittest.TestCase):
         self.assertEqual(gen_image.detect_mode("custom", "https://gw/v1", "sync", "grok-imagine-image-2.0"), "sync")
         self.assertEqual(gen_image.detect_mode("grok", "https://api.x.ai/v1", None, "grok-imagine-image-2.0"), "grok")
 
+    def test_async_gpt_image_uses_pixel_size(self) -> None:
+        args = gen_image.argparse.Namespace(size="1:1", resolution="1k", image=[])
+        payload = gen_image.build_async_payload(args, "hi", "gpt-image-2")
+        self.assertEqual(payload["size"], "1024x1024")
+        self.assertNotIn("resolution", payload)
+        apimart = gen_image.build_async_payload(args, "hi", "midjourney")
+        self.assertEqual(apimart["size"], "1:1")
+        self.assertEqual(apimart["resolution"], "1k")
+
     def test_gemini_request_shapes(self) -> None:
         args = gen_image.argparse.Namespace(size="1:1", resolution="1k")
         parts = [{"text": "draw a circle"}]

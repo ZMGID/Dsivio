@@ -51,7 +51,7 @@ import {
 import { builtinTemplates as initialTemplates } from './builtinTemplates'
 import './imageStudio.css'
 import './studioLayout.css'
-import { imageConfigIssue } from './imageValidation'
+import { humanizeImageError, imageConfigIssue } from './imageValidation'
 import { DRAFT_KEY, readStudioDraft, storeStudioDraft, rememberImageSettings, newImageDraftBrief } from './draft'
 import { ImageBriefForm } from './ImageBriefForm'
 import './imageFlow.css'
@@ -974,7 +974,7 @@ export default function ImageStudio() {
                                           ? '远程任务已保存'
                                           : '等待图片结果'}
                                   </p>
-                                  <small>{r.error}</small>
+                                  <small>{humanizeImageError(r.error)}</small>
                                 </div>
                               )}
                               <span className="is-result-slot">{r.slotId}</span>
@@ -1048,7 +1048,7 @@ export default function ImageStudio() {
         {view !== 'tasks' && view !== 'templates' && <ExecutionStatus
           active={busy}
           title={task?.error ? '执行失败' : running ? 'AI 正在执行' : pending ? '正在处理操作' : '图片执行状态'}
-          detail={[task?.error || task?.progress || '添加素材和要求后开始，执行进度将在这里显示。', successCount ? `已保存 ${successCount} 张结果` : ''].filter(Boolean).join(' · ')}
+          detail={[task?.error ? humanizeImageError(task.error) : task?.progress || '添加素材和要求后开始，执行进度将在这里显示。', successCount ? `已保存 ${successCount} 张结果` : ''].filter(Boolean).join(' · ')}
         >{running && <Button size="sm" disabled={pending} onClick={() => void act({ kind: 'cancel' })}><Square size={12} />停止</Button>}</ExecutionStatus>}
         </div>
       </div>

@@ -664,6 +664,126 @@ fn missing_back_ref_is_a_user_fix_not_an_invented_structure() {
     assert!(error.contains("真实背面"));
 }
 #[test]
+fn relay_gpt_image_uses_async_instead_of_a_sync_wait() {
+    let official: crate::settings::ModelProvider = serde_json::from_value(json!({
+        "id": "p",
+        "name": "OpenAI",
+        "baseUrl": "https://api.openai.com/v1",
+        "apiKeys": ["k"],
+    }))
+    .unwrap();
+    let relay: crate::settings::ModelProvider = serde_json::from_value(json!({
+        "id": "p",
+        "name": "relay",
+        "baseUrl": "https://ybw-ai.com/v1",
+        "apiKeys": ["k"],
+    }))
+    .unwrap();
+    assert_eq!(engine::resolve_protocol(&official, "gpt-image-2"), "openai");
+    assert_eq!(engine::resolve_protocol(&relay, "gpt-image-2"), "async");
+    assert_eq!(
+        engine::resolve_protocol(&relay, "grok-imagine-image-2.0"),
+        "grok"
+    );
+    let mut cfg = StudioConfig {
+        protocol: "openai".into(),
+        model: "gpt-image-2".into(),
+        ..Default::default()
+    };
+    engine::apply_resolved_protocol(&mut cfg, &relay);
+    assert_eq!(cfg.protocol, "async");
+    let settings: crate::settings::Settings = serde_json::from_value(json!({
+        "providers": [{
+            "id": "p",
+            "name": "relay",
+            "baseUrl": "https://ybw-ai.com/v1",
+            "apiKeys": ["k"],
+        }]
+    }))
+    .unwrap();
+    cfg.protocol = "openai".into();
+    cfg.provider_id = "p".into();
+    assert!(engine::sync_protocol_from_settings(&settings, &mut cfg));
+    assert_eq!(cfg.protocol, "async");
+    assert!(!engine::sync_protocol_from_settings(&settings, &mut cfg));
+}
+
+#[test]
+fn async_gpt_image_sends_pixel_size_not_a_ratio() {
+    let payload = engine::async_generation_payload("gpt-image-2", "anime portrait", "1:1", "1k", &[]);
+    assert_eq!(payload["size"], "1024x1024");
+    assert!(payload.get("resolution").is_none());
+    assert_eq!(
+        engine::async_generation_payload("midjourney", "x", "1:1", "1k", &[])["size"],
+        "1:1"
+    );
+}
+
+#[test]
+fn gpt_image_sizes_meet_the_documented_pixel_contract() {
+    for resolution in ["1k", "2k", "4k"] {
+        for ratio in ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9"] {
+            let size = engine::gpt_image_size(ratio, resolution);
+            let (w, h) = size.split_once('x').unwrap();
+            let w: u32 = w.parse().unwrap();
+            let h: u32 = h.parse().unwrap();
+            assert_eq!(w % 16, 0, "{size}");
+            assert_eq!(h % 16, 0, "{size}");
+            assert!(w.max(h) <= 3840, "{size}");
+            assert!(w.max(h) <= 3 * w.min(h), "{size}");
+            let pixels = w * h;
+            assert!((655360..=8_294_400).contains(&pixels), "{size} = {pixels}");
+        }
+    }
+    assert_eq!(engine::gpt_image_size("1:1", "1k"), "1024x1024");
+    assert_eq!(engine::gpt_image_size("16:9", "2k"), "2560x1440");
+    assert_eq!(engine::gpt_image_size("1:1", "4k"), "2880x2880");
+}
+
+#[test]
+fn relay_gpt_image_uses_the_gateway_async_task_api() {
+    assert_eq!(
+        engine::async_submit_path("https://ybw-ai.com/v1", "gpt-image-2"),
+        "images/generations/async"
+    );
+    assert_eq!(
+        engine::async_poll_path("https://ybw-ai.com/v1", "gpt-image-2", "imgtask_1"),
+        "images/tasks/imgtask_1"
+    );
+    assert_eq!(
+        engine::async_submit_path("https://api.apimart.ai/v1", "gpt-image-2"),
+        "images/generations"
+    );
+    let submit = json!({
+        "id": "imgtask_1",
+        "object": "image.generation.task",
+        "poll_url": "/v1/images/tasks/imgtask_1",
+        "status": "processing"
+    });
+    assert_eq!(engine::remote_task_id(&submit).as_deref(), Some("imgtask_1"));
+    let done = json!({
+        "status": "completed",
+        "image_url": "https://cdn.example/a.png",
+        "result": {"data": [{"url": "https://cdn.example/a.png"}]}
+    });
+    assert_eq!(engine::image_download_url(&done), Some("https://cdn.example/a.png"));
+}
+
+#[test]
+fn gateway_size_and_timeout_errors_are_not_dumped_raw() {
+    let size = engine::explain_image_http_error(
+        400,
+        r#"{"error":{"code":"invalid_request","message":"image-2 size must be 16-multiple dimensions, long edge \u003c= 3840, ratio \u003c= 3:1, and 655360-8294400 pixels: 1:1"}}"#,
+    );
+    assert!(size.contains("像素尺寸"));
+    assert!(!size.contains("16-multiple"));
+    assert!(!size.contains("\\u003c"));
+    let timeout = engine::explain_image_http_error(504, "error code: 504\n");
+    assert!(timeout.contains("超时"));
+    assert!(!timeout.contains("error code: 504"));
+}
+
+#[test]
 fn provider_capabilities_are_enforced_instead_of_silently_downgrading() {
     let mut b = fixture().brief;
     let mut c = StudioConfig {

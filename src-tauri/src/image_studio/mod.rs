@@ -99,6 +99,7 @@ pub fn image_studio_bootstrap(app: AppHandle) -> Result<Value, String> {
     let settings = app.state::<AppState>().settings_read().clone();
     let providers:Vec<_>=settings.providers.iter().filter(|p|p.enabled).map(|p|json!({"id":p.id,"name":p.name,"models":p.available_models,"ready":p.has_credentials()})).collect();
     let mut config = storage::config()?;
+    persist_resolved_protocol(&settings, &mut config);
     config.output_root = output::root(&config)?.to_string_lossy().into();
     Ok(
         json!({"tasks":tasks,"templates":storage::templates()?,"config":config,"providers":providers}),
@@ -344,13 +345,22 @@ pub async fn image_studio_import(
 }
 
 #[tauri::command]
-pub fn image_studio_config(config: StudioConfig) -> Result<(), String> {
+pub fn image_studio_config(app: AppHandle, mut config: StudioConfig) -> Result<(), String> {
     output::root(&config)?;
     let _lock = lock()?;
     if config.agent_provider_id.is_empty() != config.agent_model.is_empty() {
         return Err("Agent 供应商和模型需要一起选择，或同时留空使用当前聊天模型".into());
     }
+    persist_resolved_protocol(&app.state::<AppState>().settings_read(), &mut config);
     storage::write(&storage::root()?.join("config.json"), &config)
+}
+
+fn persist_resolved_protocol(settings: &crate::settings::Settings, cfg: &mut StudioConfig) {
+    if engine::sync_protocol_from_settings(settings, cfg) {
+        if let Ok(root) = storage::root() {
+            let _ = storage::write(&root.join("config.json"), cfg);
+        }
+    }
 }
 #[tauri::command]
 pub async fn image_studio_preview(path: String, original: Option<bool>) -> Result<String, String> {
@@ -444,7 +454,8 @@ pub fn image_studio_action(
     if matches!(action.kind.as_str(), "sample" | "generate") && t.plans.is_empty() {
         return Err("请先生成并检查方案".into());
     }
-    let cfg = storage::config()?;
+    let mut cfg = storage::config()?;
+    persist_resolved_protocol(&app.state::<AppState>().settings_read(), &mut cfg);
     output::prepare(&mut t, &cfg)?;
     if matches!(
         action.kind.as_str(),
