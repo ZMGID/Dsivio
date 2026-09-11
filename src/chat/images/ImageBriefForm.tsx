@@ -1,6 +1,7 @@
 import { useMemo, useState, type DragEvent } from 'react'
 import { ArrowRight, FolderOpen, ImagePlus, Layers3, Loader2, Plus, Search, X } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
+import { ImageRatioSelect, ImageResolutionSelect } from './ImageOutputSelect'
 import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 import type { ImageAsset, ImageBrief, ImageTemplate } from './types'
 
@@ -86,6 +87,8 @@ const START_LABELS = {
 
 type Props = {
   configurationIssue?: string
+  model?: string
+  protocol?: string
   brief: ImageBrief
   templates: ImageTemplate[]
   busy: boolean
@@ -98,7 +101,7 @@ type Props = {
   onStart: () => void
 }
 
-export function ImageBriefForm({ configurationIssue, brief, templates, busy, dropActive, dropTarget, onChange, onImport, onImportExamples, onDrop, onStart }: Props) {
+export function ImageBriefForm({ configurationIssue, model, protocol, brief, templates, busy, dropActive, dropTarget, onChange, onImport, onImportExamples, onDrop, onStart }: Props) {
   const quick = brief.feature === 'gen'
   const replace = brief.feature === 'replace'
   const batch = brief.feature === 'client'
@@ -238,21 +241,17 @@ export function ImageBriefForm({ configurationIssue, brief, templates, busy, dro
         <Field label={quick ? '张数' : '每款张数'}><input className="kv-input" type="number" min={1} max={30} disabled={busy || !!template || (replace && !!sources.length)}
           value={pages}
           onChange={(e) => onChange({ count: Math.max(1, Math.min(30, Number(e.target.value) || 1)) })} /></Field>
-        <Field label="画幅"><StudioSelect disabled={busy} value={brief.ratio} onChange={(e) => onChange({ ratio: e.target.value })}>
-          {['1:1', '4:5', '3:4', '2:3', '3:2', '4:3', '5:4', '9:16', '16:9'].map((ratio) => <option key={ratio} value={ratio}>{ratio === '1:1' ? '正方形 1:1' : ratio}</option>)}
-        </StudioSelect></Field>
+        <Field label="比例"><ImageRatioSelect disabled={busy} model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
+          onChange={(output) => onChange(output)} /></Field>
+        <Field label="分辨率"><ImageResolutionSelect disabled={busy} model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
+          onChange={(output) => onChange(output)} /></Field>
         <Field label="图内文字"><ImageLanguageSelect disabled={busy} allowFollowExample={replace} inheritedValue={template?.data.language} value={brief.language} onChange={(language) => onChange({ language })} /></Field>
       </div>
       <details className="if-more">
         <summary>更多设置</summary>
-        <div className="if-options">
-          <Field label="使用平台"><StudioSelect disabled={busy} value={brief.platform} onChange={(e) => onChange({ platform: e.target.value })}>
-            {['通用电商', 'Amazon', 'Shopify', 'Mercado Livre', 'Shopee', 'TikTok Shop', '社交媒体 / 广告'].map((value) => <option key={value}>{value}</option>)}
-          </StudioSelect></Field>
-          <Field label="生成清晰度"><StudioSelect disabled={busy} value={brief.resolution} onChange={(e) => onChange({ resolution: e.target.value })}>
-            <option value="1k">标准 / 1K</option><option value="2k">高清 / 2K</option><option value="4k">超清 / 4K</option>
-          </StudioSelect></Field>
-        </div>
+        <Field label="使用平台"><StudioSelect disabled={busy} value={brief.platform} onChange={(e) => onChange({ platform: e.target.value })}>
+          {['通用电商', 'Amazon', 'Shopify', 'Mercado Livre', 'Shopee', 'TikTok Shop', '社交媒体 / 广告'].map((value) => <option key={value}>{value}</option>)}
+        </StudioSelect></Field>
         <Field label="统一风格（可选）"><textarea className="kv-textarea custom-scrollbar" rows={2} disabled={busy} value={brief.style} onChange={(e) => onChange({ style: e.target.value })} placeholder="有特别的色调、背景或排版要求，可以在这里补充" /></Field>
         {brief.products.map((product) => <Field key={product.id} label={brief.products.length > 1 ? `${product.name} 的商品信息（可选）` : '商品信息（可选）'}>
           <textarea className="kv-textarea custom-scrollbar" rows={2} disabled={busy} value={product.facts} placeholder="可补充图片看不出的信息，例如尺寸、容量"

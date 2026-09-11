@@ -14,6 +14,8 @@ it('blocks missing image configuration and incompatible output before generation
 it('does not dump gateway size or timeout payloads to the user', () => {
   expect(humanizeImageError('图片接口 HTTP 400 Bad Request：{"error":{"message":"image-2 size must be 16-multiple dimensions, long edge \\u003c= 3840, ratio \\u003c= 3:1, and 655360-8294400 pixels: 1:1"}}')).toContain('像素尺寸')
   expect(humanizeImageError('图片接口 HTTP 504 Gateway Timeout：error code: 504')).toContain('超时')
+  expect(humanizeImageError('远程图片任务失败：Upstream request failed；可单独重新生成该页。')).toContain('Upstream request failed')
+  expect(humanizeImageError('远程图片任务失败：No available compatible accounts；可单独重新生成该页。')).toContain('No available compatible accounts')
   expect(humanizeImageError('本地草稿保存失败')).toBe('本地草稿保存失败')
   expect(humanizeImageError(null)).toBe('')
 })

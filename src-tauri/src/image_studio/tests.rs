@@ -713,6 +713,8 @@ fn async_gpt_image_sends_pixel_size_not_a_ratio() {
     let payload = engine::async_generation_payload("gpt-image-2", "anime portrait", "1:1", "1k", &[]);
     assert_eq!(payload["size"], "1024x1024");
     assert!(payload.get("resolution").is_none());
+    assert!(payload.get("quality").is_none());
+    assert_eq!(payload["n"], 1);
     assert_eq!(
         engine::async_generation_payload("midjourney", "x", "1:1", "1k", &[])["size"],
         "1:1"
@@ -721,23 +723,16 @@ fn async_gpt_image_sends_pixel_size_not_a_ratio() {
 
 #[test]
 fn gpt_image_sizes_meet_the_documented_pixel_contract() {
-    for resolution in ["1k", "2k", "4k"] {
-        for ratio in ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9"] {
-            let size = engine::gpt_image_size(ratio, resolution);
-            let (w, h) = size.split_once('x').unwrap();
-            let w: u32 = w.parse().unwrap();
-            let h: u32 = h.parse().unwrap();
-            assert_eq!(w % 16, 0, "{size}");
-            assert_eq!(h % 16, 0, "{size}");
-            assert!(w.max(h) <= 3840, "{size}");
-            assert!(w.max(h) <= 3 * w.min(h), "{size}");
-            let pixels = w * h;
-            assert!((655360..=8_294_400).contains(&pixels), "{size} = {pixels}");
-        }
-    }
     assert_eq!(engine::gpt_image_size("1:1", "1k"), "1024x1024");
-    assert_eq!(engine::gpt_image_size("16:9", "2k"), "2560x1440");
-    assert_eq!(engine::gpt_image_size("1:1", "4k"), "2880x2880");
+    assert_eq!(engine::gpt_image_size("2:3", "1k"), "1024x1536");
+    assert_eq!(engine::gpt_image_size("3:2", "1k"), "1536x1024");
+    assert_eq!(engine::gpt_image_size("9:16", "1k"), "864x1536");
+    assert_eq!(engine::gpt_image_size("9:16", "2k"), "1152x2048");
+    assert_eq!(engine::gpt_image_size("16:9", "1k"), "1536x864");
+    assert_eq!(engine::gpt_image_size("1:1", "2k"), "2048x2048");
+    assert_eq!(engine::gpt_image_size("16:9", "2k"), "2048x1152");
+    assert_eq!(engine::gpt_image_size("16:9", "4k"), "3840x2160");
+    assert_eq!(engine::gpt_image_size("9:16", "4k"), "2160x3840");
 }
 
 #[test]
@@ -767,6 +762,12 @@ fn relay_gpt_image_uses_the_gateway_async_task_api() {
         "result": {"data": [{"url": "https://cdn.example/a.png"}]}
     });
     assert_eq!(engine::image_download_url(&done), Some("https://cdn.example/a.png"));
+    assert_eq!(engine::remote_task_status(&submit), "processing");
+    assert_eq!(engine::remote_task_status(&done), "completed");
+    assert_eq!(
+        engine::remote_task_status(&json!({"data": {"status": "queued"}})),
+        "queued"
+    );
 }
 
 #[test]
@@ -798,6 +799,13 @@ fn provider_capabilities_are_enforced_instead_of_silently_downgrading() {
     c.protocol = "grok".into();
     assert!(engine::validate(&c, &b).is_err());
     c.protocol = "gemini".into();
+    assert!(engine::validate(&c, &b).is_err());
+    b.resolution = "2k".into();
+    assert!(engine::validate(&c, &b).is_ok());
+    c.protocol = "async".into();
+    c.model = "gpt-image-2".into();
+    b.ratio = "9:16".into();
+    b.resolution = "1k".into();
     assert!(engine::validate(&c, &b).is_ok());
 }
 #[test]

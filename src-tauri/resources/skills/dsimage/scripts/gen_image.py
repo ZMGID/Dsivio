@@ -986,10 +986,10 @@ def build_async_payload(args: argparse.Namespace, prompt: str, model: str) -> di
     if "gpt-image-2" in name:
         payload: dict[str, Any] = {
             "model": model, "prompt": prompt, "n": 1,
-            "size": gpt_image_size(ratio, args.resolution), "quality": "high",
+            "size": gpt_image_size(ratio, args.resolution),
         }
     elif "gpt-image" in name or name.startswith("dall-e"):
-        payload = {"model": model, "prompt": prompt, "n": 1, "size": sync_size(ratio), "quality": "high"}
+        payload = {"model": model, "prompt": prompt, "n": 1, "size": sync_size(ratio)}
     else:
         payload = {"model": model, "prompt": prompt, "n": 1, "size": ratio, "resolution": args.resolution}
     images = ref_images(args)
@@ -1000,17 +1000,18 @@ def build_async_payload(args: argparse.Namespace, prompt: str, model: str) -> di
 
 def gpt_image_size(ratio: str, resolution: str) -> str:
     table = {
-        ("2k", "1:1"): "2048x2048", ("2k", "2:3"): "1280x1920", ("2k", "3:2"): "1920x1280",
-        ("2k", "3:4"): "1536x2048", ("2k", "4:3"): "2048x1536", ("2k", "4:5"): "1600x2000",
-        ("2k", "5:4"): "2000x1600", ("2k", "9:16"): "1440x2560", ("2k", "16:9"): "2560x1440",
-        ("4k", "1:1"): "2880x2880", ("4k", "2:3"): "2304x3456", ("4k", "3:2"): "3456x2304",
-        ("4k", "3:4"): "2448x3264", ("4k", "4:3"): "3264x2448", ("4k", "4:5"): "2560x3200",
-        ("4k", "5:4"): "3200x2560", ("4k", "9:16"): "2160x3840", ("4k", "16:9"): "3840x2160",
-        ("1k", "2:3"): "1024x1536", ("1k", "3:2"): "1536x1024", ("1k", "3:4"): "1152x1536",
-        ("1k", "4:3"): "1536x1152", ("1k", "4:5"): "1024x1280", ("1k", "5:4"): "1280x1024",
-        ("1k", "9:16"): "1152x2048", ("1k", "16:9"): "2048x1152",
+        ("1:1", "1k"): "1024x1024",
+        ("1:1", "2k"): "2048x2048",
+        ("2:3", "1k"): "1024x1536",
+        ("3:2", "1k"): "1536x1024",
+        ("9:16", "1k"): "864x1536",
+        ("9:16", "2k"): "1152x2048",
+        ("9:16", "4k"): "2160x3840",
+        ("16:9", "1k"): "1536x864",
+        ("16:9", "2k"): "2048x1152",
+        ("16:9", "4k"): "3840x2160",
     }
-    return table.get((resolution, ratio), "1024x1024")
+    return table.get((ratio, resolution)) or table.get((ratio, "1k")) or "1024x1024"
 
 
 def _openai_async_task(base_url: str, model: str) -> bool:
