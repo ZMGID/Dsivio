@@ -33,6 +33,20 @@ describe('ChatMarkdown 公式稳定性', () => {
 })
 
 describe('ChatMarkdown artifact 图片', () => {
+  it('does not append emphasis markers after a generated image', () => {
+    for (const name of ['generated-image-1.png', 'generated_image_1.png']) {
+      const { container, unmount } = render(
+        <ChatMarkdown
+          content={`![结果图](${name})`}
+          artifacts={[{ name, mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAAA' }]}
+        />,
+      )
+      expect(container.querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,AAAA')
+      expect(container.textContent?.trim()).toBe('')
+      unmount()
+    }
+  })
+
   it('Streamdown 清洗前保留相对图片路径，并映射到 artifact data URL', () => {
     const { container } = render(
       <ChatMarkdown

@@ -716,25 +716,22 @@ pub(crate) fn image_generation_model_for_session(
     }
 }
 
-fn image_generation_model_name_heuristic(provider: &ModelProvider, model: &str) -> Option<bool> {
-    let descriptor = format!(
-        "{} {} {} {}",
-        provider.name,
-        provider.base_url,
-        provider.api_format,
-        normalize_model_name(model)
-    )
-    .to_ascii_lowercase();
+fn image_generation_model_name_heuristic(_provider: &ModelProvider, model: &str) -> Option<bool> {
+    // 供应商名称可能是“Gemini 生图”，不能因此把它下面的文本模型也当成生图模型。
+    let descriptor = normalize_model_name(model);
     let known_image_model = [
         "gpt-image",
         "dall-e",
         "grok-imagine-image",
+        "grok-2-image",
         "gemini-3.1-flash-image",
         "gemini-3.1-flash-lite-image",
         "gemini-3-pro-image",
         "gemini-2.5-flash-image",
         "nano-banana",
         "qwen-image",
+        "z-image",
+        "ernie-image",
         "glm-image",
         "hy-image",
         "seedream",

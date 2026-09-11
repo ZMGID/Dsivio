@@ -24,11 +24,12 @@ pub const IMAGE_GENERATION_TIMEOUT_MS: u64 = 600_000;
 const IMAGE_GENERATION_HTTP_TIMEOUT: Duration = Duration::from_millis(IMAGE_GENERATION_TIMEOUT_MS);
 
 /// 出图**端点选择**的唯一运行时枚举（不持久化，不进配置）。`resolve_image_route` 是端点
-/// 判定的单一事实源，收敛此前散落的 `uses_*` 子串表；`generate_image_with_provider` 按此三分支
-/// 调对应 `generate_with_*`。自愈只在 `Chat` ↔ `ImagesApi` 间摆动，`GeminiNative` 由 api_format 决定。
+/// 判定的单一事实源；`generate_image_with_provider` 按路由调对应 `generate_with_*`。
+/// 自愈只在 `Chat` ↔ `ImagesApi` 间摆动，Google 原生路由由协议和模型共同决定。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageRoute {
     GeminiNative,
+    ImagenNative,
     Chat,
     ImagesApi,
 }
@@ -77,9 +78,7 @@ pub async fn tool_generate_image(
         crate::chat::storage::load_conversation(app, conversation_id).ok()
     });
     let drafts = conversation_id
-        .map(|conversation_id| {
-            crate::chat::draft_journal::latest_drafts_for(app, conversation_id)
-        })
+        .map(|conversation_id| crate::chat::draft_journal::latest_drafts_for(app, conversation_id))
         .unwrap_or_default();
     let session_ref = conversation
         .as_ref()
@@ -95,8 +94,7 @@ pub async fn tool_generate_image(
         .cloned()
         .ok_or_else(|| "Mixer image generation provider is missing".to_string())?;
     let retry_attempts = crate::api::effective_retry_attempts(&settings);
-    let input_images =
-        collect_mixer_input_images(app, conversation.as_ref(), &drafts, arguments)?;
+    let input_images = collect_mixer_input_images(app, conversation.as_ref(), &drafts, arguments)?;
     generate_image_with_provider(
         state,
         &provider,
@@ -249,6 +247,11 @@ async fn call_image_route(
     route: ImageRoute,
 ) -> Result<(Vec<GeneratedImage>, Option<String>), String> {
     match route {
+        ImageRoute::ImagenNative => Ok((
+            generate_with_imagen_native(state, provider, model, request, retry_attempts, operation)
+                .await?,
+            None,
+        )),
         ImageRoute::GeminiNative => {
             generate_with_gemini_native(state, provider, model, request, retry_attempts, operation)
                 .await
@@ -272,20 +275,22 @@ async fn call_image_route(
     }
 }
 
-/// **端点选择的单一事实源**。优先级：① `api_format==Gemini` → GeminiNative；
+/// **端点选择的单一事实源**。优先级：① Gemini 协议 → GeminiNative / ImagenNative；
 /// ② base_url 含 `openrouter.ai` → Chat；③ 归一化名字启发式 → Chat | ImagesApi。
 /// 收敛了旧 `uses_openrouter_chat_image_generation` 的全部判据（openrouter base、
 /// api.openai.com / api.x.ai 早退、vendor 前缀表 + 裸名子串表合并为一处，均走归一化名）。
 pub(crate) fn resolve_image_route(provider: &ModelProvider, model: &str) -> ImageRoute {
     if provider.api_format_kind() == ProviderApiFormat::Gemini {
+        if normalize_model_name(model).starts_with("imagen-") {
+            return ImageRoute::ImagenNative;
+        }
         return ImageRoute::GeminiNative;
     }
     if is_openrouter_base_url(&provider.base_url) {
         return ImageRoute::Chat;
     }
     // 官方直连端点（OpenAI / xAI）不走 chat 仿 OpenRouter 出图，交给各自 images API。
-    let base_url = provider.base_url.to_ascii_lowercase();
-    if base_url.contains("api.openai.com") || base_url.contains("api.x.ai") {
+    if is_official_image_host(provider) {
         return ImageRoute::ImagesApi;
     }
     let normalized = normalize_model_name(model);
@@ -313,7 +318,7 @@ fn alternate_route(route: ImageRoute) -> Option<ImageRoute> {
     match route {
         ImageRoute::Chat => Some(ImageRoute::ImagesApi),
         ImageRoute::ImagesApi => Some(ImageRoute::Chat),
-        ImageRoute::GeminiNative => None,
+        ImageRoute::GeminiNative | ImageRoute::ImagenNative => None,
     }
 }
 
@@ -334,25 +339,38 @@ pub(crate) fn has_known_direct_image_generation_route(
     provider: &ModelProvider,
     model: &str,
 ) -> bool {
-    // xAI 也算：`resolve_image_route` 已把 api.x.ai 判到 ImagesApi、`uses_xai_images_api`
-    // 认得 grok-imagine，管子是通的，只差这道门。不放行的话，用 Grok 预设（xai_responses）
-    // 的用户选 grok-imagine 模型直接打 prompt 会退化成一次普通文本请求。
+    // 供应商的聊天协议不决定专用图片模型的端点。Responses 供应商也必须让
+    // gpt-image / grok-imagine 进入已有的生图路径，否则会误发到 /responses。
     if !matches!(
         provider.api_format_kind(),
-        ProviderApiFormat::OpenAiChat | ProviderApiFormat::XaiResponses
+        ProviderApiFormat::OpenAiChat
+            | ProviderApiFormat::OpenAiResponses
+            | ProviderApiFormat::XaiResponses
+            | ProviderApiFormat::Gemini
     ) {
         return false;
     }
-    // 判据来源换成单一 resolver，但**不扩大直连范围**：Chat route 恒为已知直连；ImagesApi route
-    // 仅当命中已知 images API 模型（xai grok-imagine / gpt-image / dall-e）才算已知直连，
-    // 与旧 `openrouter_chat || xai_images || openai_images_model` 逐例等价。
+    // 兼容网关允许模型库或用户明确标记的生图模型走 Images API。
+    // 官方 OpenAI/xAI 仍只接收各自支持的专用图片模型。
     match resolve_image_route(provider, model) {
         ImageRoute::Chat => true,
         ImageRoute::ImagesApi => {
-            uses_xai_images_api(provider, model) || uses_openai_images_api_model(model)
+            uses_xai_images_api(provider, model)
+                || uses_openai_images_api_model(model)
+                || (!is_official_image_host(provider)
+                    && crate::chat::model_metadata::model_supports_image_generation(
+                        Some(provider),
+                        model,
+                    ) == Some(true))
         }
-        ImageRoute::GeminiNative => false,
+        ImageRoute::GeminiNative | ImageRoute::ImagenNative => true,
     }
+}
+
+fn is_official_image_host(provider: &ModelProvider) -> bool {
+    reqwest::Url::parse(&provider.base_url)
+        .ok()
+        .is_some_and(|url| matches!(url.host_str(), Some("api.openai.com" | "api.x.ai")))
 }
 
 fn parse_request(arguments: &Value) -> Result<ImageGenerationRequest, String> {
@@ -740,6 +758,85 @@ fn parse_openrouter_response(value: &Value) -> Result<Vec<GeneratedImage>, Strin
     Ok(images)
 }
 
+fn build_imagen_body(request: &ImageGenerationRequest) -> Result<Value, String> {
+    if !request.input_images.is_empty() {
+        return Err("Imagen 文生图接口不支持参考图，请选择 Gemini 图片模型进行编辑。".into());
+    }
+    let mut parameters = serde_json::json!({ "sampleCount": request.n });
+    if let Some(ratio) = size_aspect_ratio(&request.size) {
+        parameters["aspectRatio"] = Value::String(ratio.to_string());
+    }
+    Ok(serde_json::json!({
+        "instances": [{ "prompt": request.prompt }],
+        "parameters": parameters,
+    }))
+}
+
+fn parse_imagen_response(value: &Value) -> Result<Vec<GeneratedImage>, String> {
+    let predictions = value["predictions"]
+        .as_array()
+        .ok_or_else(|| "Imagen response missing predictions array".to_string())?;
+    predictions
+        .iter()
+        .map(|item| {
+            let data = item["bytesBase64Encoded"].as_str().ok_or_else(|| {
+                item["raiFilteredReason"]
+                    .as_str()
+                    .unwrap_or("Imagen response missing image bytes")
+                    .to_string()
+            })?;
+            validate_base64_image(data)?;
+            Ok(GeneratedImage {
+                mime_type: item["mimeType"].as_str().unwrap_or("image/png").to_string(),
+                base64: data.to_string(),
+                revised_prompt: None,
+            })
+        })
+        .collect()
+}
+
+async fn generate_with_imagen_native(
+    state: &AppState,
+    provider: &ModelProvider,
+    model: &str,
+    request: &ImageGenerationRequest,
+    retry_attempts: usize,
+    operation: &str,
+) -> Result<Vec<GeneratedImage>, String> {
+    let body = build_imagen_body(request)?;
+    let url = format!(
+        "{}/models/{}:predict",
+        provider.base_url.trim_end_matches('/'),
+        model.trim_start_matches("models/")
+    );
+    let response = send_with_failover(
+        state,
+        operation,
+        retry_attempts,
+        &provider.id,
+        &provider.api_keys,
+        |key| {
+            crate::provider_request::apply(
+                state
+                    .client_for(provider)
+                    .post(&url)
+                    .header("x-goog-api-key", key),
+                provider,
+                None,
+            )
+            .timeout(IMAGE_GENERATION_HTTP_TIMEOUT)
+            .json(&body)
+            .send()
+        },
+    )
+    .await?;
+    let value: Value = response
+        .json()
+        .await
+        .map_err(|err| format!("Imagen read response: {err}"))?;
+    parse_imagen_response(&value)
+}
+
 /// Gemini 原生 `generateContent` 出图路径（api_format = gemini）。
 /// n>1 时顺序多次调用；首次失败则透传错误，若已有成功图则返回已收集的图。
 async fn generate_with_gemini_native(
@@ -1078,10 +1175,9 @@ fn size_aspect_ratio(size: &str) -> Option<&'static str> {
     }
 }
 
-fn uses_xai_images_api(provider: &ModelProvider, model: &str) -> bool {
-    let descriptor =
-        format!("{} {} {}", provider.base_url, provider.name, model).to_ascii_lowercase();
-    descriptor.contains("api.x.ai") || descriptor.contains("grok-imagine-image")
+fn uses_xai_images_api(_provider: &ModelProvider, model: &str) -> bool {
+    let model = normalize_model_name(model);
+    model.contains("grok-imagine-image") || model.contains("grok-2-image")
 }
 
 fn uses_openai_images_api_model(model: &str) -> bool {
@@ -1858,6 +1954,107 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn responses_provider_routes_dedicated_image_models_before_chat_planning() {
+        let provider = ModelProvider {
+            api_format: "openai_responses".to_string(),
+            base_url: "https://relay.example.com/v1".to_string(),
+            ..gemini_provider()
+        };
+        for model in ["gpt-image-2", "gpt-image-1.5", "grok-imagine-image"] {
+            assert!(
+                crate::chat::model_metadata::model_can_generate_images_directly(&provider, model),
+                "{model} must bypass chat planning"
+            );
+            assert_eq!(resolve_image_route(&provider, model), ImageRoute::ImagesApi);
+        }
+        // Text models can produce hosted images through Responses; keep their chat path.
+        assert!(
+            !crate::chat::model_metadata::model_can_generate_images_directly(&provider, "gpt-5.6")
+        );
+        let anthropic = ModelProvider {
+            api_format: "anthropic_messages".to_string(),
+            ..provider
+        };
+        assert!(!has_known_direct_image_generation_route(
+            &anthropic,
+            "gpt-image-2"
+        ));
+    }
+
+    #[test]
+    fn image_families_use_their_provider_contracts() {
+        use crate::chat::model_metadata::model_can_generate_images_directly as direct;
+        let native = gemini_provider();
+        for model in [
+            "models/gemini-2.5-flash-image",
+            "gemini-3.1-flash-image",
+            "gemini-3-pro-image-preview",
+        ] {
+            assert!(direct(&native, model), "{model}");
+            assert_eq!(
+                resolve_image_route(&native, model),
+                ImageRoute::GeminiNative
+            );
+        }
+        assert!(direct(&native, "models/imagen-4.0-generate-001"));
+        assert_eq!(
+            resolve_image_route(&native, "models/imagen-4.0-generate-001"),
+            ImageRoute::ImagenNative
+        );
+        assert!(!direct(&native, "gemini-2.5-pro"));
+        for format in ["openai_chat", "openai_responses", "xai_responses"] {
+            let proxy = ModelProvider {
+                name: "Gemini image-generation proxy".into(),
+                api_format: format.into(),
+                base_url: "https://relay.example.com/v1".into(),
+                ..native.clone()
+            };
+            for (model, route) in [
+                ("grok-imagine-image-2.0", ImageRoute::ImagesApi),
+                ("grok-imagine-image-quality", ImageRoute::ImagesApi),
+                ("gemini-3.1-flash-image", ImageRoute::Chat),
+                ("google/gemini-3-pro-image-preview", ImageRoute::Chat),
+                ("Qwen/Qwen-Image", ImageRoute::ImagesApi),
+                ("Tongyi-MAI/Z-Image-Turbo", ImageRoute::ImagesApi),
+                ("baidu/ERNIE-Image-Turbo", ImageRoute::ImagesApi),
+                ("black-forest-labs/flux.2-pro", ImageRoute::Chat),
+                ("seedream-4.0", ImageRoute::ImagesApi),
+            ] {
+                assert!(direct(&proxy, model), "{format}/{model}");
+                assert_eq!(resolve_image_route(&proxy, model), route);
+            }
+            assert!(!direct(&proxy, "unknown-text-model"));
+            assert!(!direct(&proxy, "grok-4"));
+        }
+    }
+
+    #[test]
+    fn imagen_uses_predict_schema_and_rejects_unsupported_edit_before_sending() {
+        let mut request = parse_request(&serde_json::json!({"prompt":"A cat", "n":2})).unwrap();
+        let body = build_imagen_body(&request).unwrap();
+        assert_eq!(body["instances"][0]["prompt"], "A cat");
+        assert_eq!(body["parameters"]["sampleCount"], 2);
+        assert!(body.get("contents").is_none());
+        let images = parse_imagen_response(&serde_json::json!({"predictions":[{
+            "bytesBase64Encoded":"aGVsbG8=", "mimeType":"image/jpeg"
+        }]}))
+        .unwrap();
+        assert_eq!(images[0].mime_type, "image/jpeg");
+        assert_eq!(images[0].base64, "aGVsbG8=");
+        assert!(parse_imagen_response(&serde_json::json!({"predictions":[{
+            "raiFilteredReason":"Blocked by provider"
+        }]}))
+        .err()
+        .unwrap()
+        .contains("Blocked by provider"));
+        request.input_images.push(InputImage {
+            mime_type: "image/png".into(),
+            base64: "aGVsbG8=".into(),
+        });
+        assert!(build_imagen_body(&request).is_err());
+    }
+
     fn gemini_provider() -> ModelProvider {
         ModelProvider {
             id: "gemini".to_string(),
@@ -2130,26 +2327,21 @@ mod tests {
     #[test]
     fn mixer_finds_same_turn_artifact_on_draft_not_main_json() {
         let conversation = conversation_from_messages(vec![]);
-        let drafts: Vec<crate::chat::ChatMessage> = vec![serde_json::from_value(
-            assistant_with_tool_artifact("art_new", "aGVsbG8="),
-        )
-        .expect("draft")];
-        let found = resolve_mixer_artifacts(
-            Some(&conversation),
-            &drafts,
-            &["art_new".to_string()],
-        )
-        .expect("draft artifact");
+        let drafts: Vec<crate::chat::ChatMessage> =
+            vec![
+                serde_json::from_value(assistant_with_tool_artifact("art_new", "aGVsbG8="))
+                    .expect("draft"),
+            ];
+        let found = resolve_mixer_artifacts(Some(&conversation), &drafts, &["art_new".to_string()])
+            .expect("draft artifact");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id.as_deref(), Some("art_new"));
     }
 
     #[test]
     fn mixer_unknown_artifact_errors_even_if_another_image_is_known() {
-        let conversation = conversation_from_messages(vec![assistant_with_tool_artifact(
-            "art_old",
-            "aGVsbG8=",
-        )]);
+        let conversation =
+            conversation_from_messages(vec![assistant_with_tool_artifact("art_old", "aGVsbG8=")]);
         let err = resolve_mixer_artifacts(
             Some(&conversation),
             &[],
