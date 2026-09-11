@@ -49,6 +49,7 @@ impl super::generation::Backend for NativeBackend<'_> {
 
 /// Studio still stores a protocol string; resolve it from the live provider + model
 /// so a stale `openai` config cannot keep gpt-image on a relay in a sync wait.
+/// Grok / Gemini detection copies dsimage `detect_mode` + `_provider_from_model`.
 pub fn resolve_protocol(provider: &ModelProvider, model: &str) -> String {
     let name = model.to_ascii_lowercase();
     let base = provider.base_url.to_ascii_lowercase();
@@ -56,8 +57,9 @@ pub fn resolve_protocol(provider: &ModelProvider, model: &str) -> String {
         return "gemini".into();
     }
     if provider.api_format_kind() == ProviderApiFormat::XaiResponses
+        || name.starts_with("grok")
         || name.contains("grok-imagine")
-        || base.contains("api.x.ai")
+        || host_matches(&base, "api.x.ai")
     {
         return "grok".into();
     }
@@ -65,12 +67,33 @@ pub fn resolve_protocol(provider: &ModelProvider, model: &str) -> String {
         || name.contains("nano-banana")
         || name.starts_with("imagen")
     {
-        return "gemini-chat".into();
+        return if host_matches(&base, "ybw-ai.com") {
+            "gemini-chat".into()
+        } else {
+            "gemini".into()
+        };
     }
     if uses_async_image_gateway(&base, &name) {
         return "async".into();
     }
     "openai".into()
+}
+
+fn host_matches(base: &str, domain: &str) -> bool {
+    let host = base
+        .split("://")
+        .nth(1)
+        .unwrap_or(base)
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split('@')
+        .next_back()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+    host == domain || host.ends_with(&format!(".{domain}"))
 }
 
 fn uses_async_image_gateway(base: &str, model: &str) -> bool {
@@ -158,9 +181,11 @@ fn allowed_image_output(model: &str, protocol: &str, ratio: &str, resolution: &s
     if name.contains("gpt-image") || name.starts_with("dall-e") || protocol == "openai" {
         return resolution == "1k" && matches!(ratio, "1:1" | "2:3" | "3:2");
     }
-    if protocol == "grok" || name.contains("grok") {
-        return resolution != "4k"
-            && matches!(ratio, "1:1" | "2:3" | "3:4" | "9:16" | "3:2" | "4:3" | "16:9");
+    if protocol == "grok" || name.starts_with("grok") || name.contains("grok-imagine") {
+        return matches!(
+            grok_ratio(ratio).as_str(),
+            "1:1" | "2:3" | "3:4" | "9:16" | "3:2" | "4:3" | "16:9"
+        ) && grok_resolution(resolution) != "4k";
     }
     if protocol == "gemini"
         || protocol == "gemini-chat"
@@ -360,18 +385,7 @@ pub async fn submit(
             "openai" => {
                 json!({"model":cfg.model,"prompt":plan.prompt,"n":1,"size":images_size(&cfg.model, &b.ratio, &b.resolution),"quality":"high"})
             }
-            "grok" => {
-                let mut v = json!({"model":cfg.model,"prompt":grok_prompt(&plan.prompt, images.len()),"n":1,"aspect_ratio":b.ratio,"resolution":b.resolution,"response_format":"b64_json","quality":"medium"});
-                if images.len() == 1 {
-                    v["image"] = json!({"url":images[0],"type":"image_url"});
-                } else if refs {
-                    v["images"] = json!(images
-                        .iter()
-                        .map(|u| json!({"url":u,"type":"image_url"}))
-                        .collect::<Vec<_>>());
-                }
-                v
-            }
+            "grok" => grok_generation_payload(&cfg.model, &plan.prompt, &b.ratio, &b.resolution, &images),
             "gemini" => {
                 let mut parts = vec![json!({"text":plan.prompt})];
                 for u in &images {
@@ -495,30 +509,86 @@ pub(super) fn gpt_image_size(ratio: &str, resolution: &str) -> String {
     .into()
 }
 
+/// dsimage `GROK_RATIO_FALLBACK` + `GROK_RATIOS`. Unknown ratios become 1:1.
+pub(super) fn grok_ratio(ratio: &str) -> String {
+    let mapped = match ratio {
+        "5:4" => "4:3",
+        "4:5" => "3:4",
+        "9:21" => "9:16",
+        other => other,
+    };
+    match mapped {
+        "1:1" | "16:9" | "9:16" | "4:3" | "3:4" | "3:2" | "2:3" | "2:1" | "1:2" | "19.5:9"
+        | "9:19.5" | "20:9" | "9:20" | "21:9" | "5:2" | "auto" => mapped.into(),
+        _ => "1:1".into(),
+    }
+}
+
+/// dsimage `grok_resolution`: official Imagine tops out at 2k.
+pub(super) fn grok_resolution(resolution: &str) -> String {
+    if resolution == "4k" {
+        "2k".into()
+    } else {
+        resolution.into()
+    }
+}
+
+/// dsimage `build_grok_payload`. Do not invent `quality` — relays reject extra fields.
+pub(super) fn grok_generation_payload(
+    model: &str,
+    prompt: &str,
+    ratio: &str,
+    resolution: &str,
+    image_urls: &[String],
+) -> Value {
+    let mut v = json!({
+        "model": model,
+        "prompt": grok_prompt(prompt, image_urls.len()),
+        "n": 1,
+        "aspect_ratio": grok_ratio(ratio),
+        "resolution": grok_resolution(resolution),
+        "response_format": "b64_json",
+    });
+    if image_urls.len() == 1 {
+        v["image"] = json!({"url": image_urls[0], "type": "image_url"});
+    } else if image_urls.len() > 1 {
+        v["images"] = json!(image_urls
+            .iter()
+            .map(|u| json!({"url": u, "type": "image_url"}))
+            .collect::<Vec<_>>());
+    }
+    v
+}
+
+/// dsimage `grok_tagged_prompt`: xAI multi-image edits name refs as `<IMAGE_0>`…
 pub(super) fn grok_prompt(prompt: &str, count: usize) -> String {
     if count <= 1 || prompt.contains("<IMAGE_0>") {
         return prompt.into();
     }
     let mut text = prompt.to_string();
-    for (i, ordinal) in ["first", "second", "third", "fourth", "fifth"]
-        .iter()
-        .take(count)
-        .enumerate()
+    for (i, phrase) in [
+        "the first image",
+        "the second image",
+        "the third image",
+        "the fourth image",
+        "the fifth image",
+    ]
+    .iter()
+    .take(count)
+    .enumerate()
     {
-        if let Ok(pattern) = regex::Regex::new(&format!("(?i)(?:the )?{ordinal} image")) {
+        if let Ok(pattern) = regex::Regex::new(&format!("(?i){}", regex::escape(phrase))) {
             text = pattern
                 .replace_all(&text, format!("<IMAGE_{i}>"))
                 .into_owned();
         }
     }
     if !text.contains("<IMAGE_0>") {
-        text.push_str(&format!(
-            "\nReference images in order: {}",
-            (0..count)
-                .map(|i| format!("<IMAGE_{i}>"))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ));
+        let tags = (0..count)
+            .map(|i| format!("<IMAGE_{i}>"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        text = format!("{text}\nUse reference images in order: {tags}.");
     }
     text
 }

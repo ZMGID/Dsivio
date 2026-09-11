@@ -15,7 +15,7 @@ export function inferImageStudioProtocol(provider: ModelProvider | undefined, mo
   const format = normalizeProviderApiFormat(provider?.apiFormat)
   const base = (provider?.baseUrl || '').toLowerCase()
   if (format === 'gemini') return 'gemini'
-  if (format === 'xai_responses' || name.includes('grok-imagine') || base.includes('api.x.ai')) {
+  if (format === 'xai_responses' || name.startsWith('grok') || name.includes('grok-imagine') || hostMatches(base, 'api.x.ai')) {
     return 'grok'
   }
   if (
@@ -23,10 +23,19 @@ export function inferImageStudioProtocol(provider: ModelProvider | undefined, mo
     || name.includes('nano-banana')
     || name.startsWith('imagen')
   ) {
-    return 'gemini-chat'
+    return hostMatches(base, 'ybw-ai.com') ? 'gemini-chat' : 'gemini'
   }
   if (usesAsyncImageGateway(base, name)) return 'async'
   return 'openai'
+}
+
+function hostMatches(base: string, domain: string): boolean {
+  try {
+    const host = new URL(base.includes('://') ? base : `https://${base}`).hostname.toLowerCase()
+    return host === domain || host.endsWith(`.${domain}`)
+  } catch {
+    return base.toLowerCase().includes(domain)
+  }
 }
 
 /** Official OpenAI can hold a sync images call. Compatible gateways time out; they need submit + poll. */
@@ -43,6 +52,9 @@ export function reconcileImageStudioProtocol<T extends { protocol: string; model
   provider?: ModelProvider,
 ): T {
   const inferred = inferImageStudioProtocol(provider, config.model)
+  if (inferred === 'grok' || inferred === 'gemini' || inferred === 'gemini-chat') {
+    return config.protocol === inferred ? config : { ...config, protocol: inferred }
+  }
   if (config.protocol === 'openai' && inferred === 'async') {
     return { ...config, protocol: 'async' }
   }

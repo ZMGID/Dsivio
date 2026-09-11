@@ -7,7 +7,9 @@ it('blocks missing image configuration and incompatible output before generation
   expect(imageConfigIssue(config, brief)).toBe('')
   expect(imageConfigIssue({ ...config, model: '' }, brief)).toContain('模型')
   expect(imageConfigIssue(config, { ...brief, ratio: '9:16' })).toContain('OpenAI')
-  expect(imageConfigIssue({ ...config, protocol: 'grok' }, { ...brief, resolution: '4k' })).toContain('4K')
+  expect(imageConfigIssue({ ...config, protocol: 'grok' }, { ...brief, resolution: '4k' })).toBe('')
+  expect(imageConfigIssue({ ...config, protocol: 'grok' }, { ...brief, ratio: '5:4' })).toBe('')
+  expect(imageConfigIssue({ ...config, protocol: 'grok' }, { ...brief, ratio: '4:5', resolution: '2k' })).toBe('')
   expect(imageConfigIssue(config, { ...brief, count: 0 })).toContain('1–30')
 })
 

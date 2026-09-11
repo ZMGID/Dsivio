@@ -685,6 +685,15 @@ fn relay_gpt_image_uses_async_instead_of_a_sync_wait() {
         engine::resolve_protocol(&relay, "grok-imagine-image-2.0"),
         "grok"
     );
+    assert_eq!(engine::resolve_protocol(&relay, "grok-2-image"), "grok");
+    assert_eq!(
+        engine::resolve_protocol(&relay, "gemini-3.1-flash-image"),
+        "gemini-chat"
+    );
+    assert_eq!(
+        engine::resolve_protocol(&official, "gemini-3.1-flash-image"),
+        "gemini"
+    );
     let mut cfg = StudioConfig {
         protocol: "openai".into(),
         model: "gpt-image-2".into(),
@@ -797,7 +806,7 @@ fn provider_capabilities_are_enforced_instead_of_silently_downgrading() {
     b.resolution = "4k".into();
     assert!(engine::validate(&c, &b).is_err());
     c.protocol = "grok".into();
-    assert!(engine::validate(&c, &b).is_err());
+    assert!(engine::validate(&c, &b).is_ok());
     c.protocol = "gemini".into();
     assert!(engine::validate(&c, &b).is_err());
     b.resolution = "2k".into();
@@ -824,12 +833,39 @@ fn grok_multi_image_edits_identify_the_target_and_product_refs() {
         "Edit <IMAGE_0> using <IMAGE_1>"
     );
     assert!(
-        engine::grok_prompt("Preserve the product", 3).contains("<IMAGE_0> <IMAGE_1> <IMAGE_2>")
+        engine::grok_prompt("Preserve the product", 3)
+            .contains("Use reference images in order: <IMAGE_0> <IMAGE_1> <IMAGE_2>.")
     );
     assert_eq!(
         engine::grok_prompt("Single reference", 1),
         "Single reference"
     );
+}
+
+#[test]
+fn grok_payload_matches_dsimage_not_gpt_pixel_size() {
+    let payload = engine::grok_generation_payload(
+        "grok-imagine-image-2.0",
+        "edit the product",
+        "5:4",
+        "4k",
+        &[],
+    );
+    assert_eq!(payload["aspect_ratio"], "4:3");
+    assert_eq!(payload["resolution"], "2k");
+    assert_eq!(payload["response_format"], "b64_json");
+    assert_eq!(payload["n"], 1);
+    assert!(payload.get("size").is_none());
+    assert!(payload.get("quality").is_none());
+    let one = engine::grok_generation_payload(
+        "grok-imagine-image-2.0",
+        "keep the bottle",
+        "1:1",
+        "1k",
+        &["data:image/png;base64,xx".into()],
+    );
+    assert_eq!(one["image"]["type"], "image_url");
+    assert!(one.get("images").is_none());
 }
 
 struct GenerationBackend {
