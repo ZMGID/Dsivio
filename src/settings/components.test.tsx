@@ -34,6 +34,26 @@ describe('Select', () => {
     await user.click(screen.getByRole('option', { name: 'Option B' }))
     expect(onChange).toHaveBeenCalledWith('b')
   })
+
+  it('keeps the menu wide enough to show option labels', async () => {
+    const user = userEvent.setup()
+    const box = { left: 24, top: 24, right: 74, bottom: 54, width: 50, height: 30, x: 24, y: 24, toJSON() {} }
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(box as DOMRect)
+    render(
+      <Select
+        value="a"
+        onChange={() => undefined}
+        options={[
+          { value: 'a', label: '1:1 正方形' },
+          { value: 'b', label: '16:9 横版' },
+        ]}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /1:1 正方形/ }))
+    const menu = screen.getByRole('listbox')
+    expect(Number.parseFloat(menu.style.width)).toBeGreaterThanOrEqual(168)
+    expect(screen.getByRole('option', { name: '16:9 横版' })).toHaveTextContent('16:9 横版')
+  })
 })
 
 describe('TextArea', () => {

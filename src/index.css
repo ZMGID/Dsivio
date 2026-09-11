@@ -4471,6 +4471,7 @@ button.chat-composer-status-item:hover {
 }
 .kv-select-button { line-height: 1.35; }
 .kv-select-menu {
+  min-width: 168px;
   padding: 4px;
   border-radius: 10px;
   border: 1px solid var(--theme-surface-border);
@@ -4492,6 +4493,12 @@ button.chat-composer-status-item:hover {
 /* 选项行：与 .kv-menu-item 同规格（28px / 12.5px）。
    勾常驻左侧但未选中时 visibility:hidden —— 这样标签起点始终对齐，
    且不必给右侧留 32px 空位（原来 pr-8 把标签提前截断成「白山智算 - DeepSeek-…」）。 */
+.kv-select-group {
+  padding: 8px 8px 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
 .kv-select-option {
   display: flex;
   width: 100%;

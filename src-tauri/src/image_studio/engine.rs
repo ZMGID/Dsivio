@@ -119,17 +119,57 @@ pub fn validate(cfg: &StudioConfig, brief: &Brief) -> Result<(), String> {
     if !matches!(brief.resolution.as_str(), "1k" | "2k" | "4k") {
         return Err("不支持的生成清晰度".into());
     }
-    if cfg.protocol == "openai"
-        && (!matches!(brief.ratio.as_str(), "1:1" | "2:3" | "3:2") || brief.resolution != "1k")
-    {
-        return Err("OpenAI 标准接口支持 1:1 / 2:3 / 3:2、标准尺寸；请调整画幅或切换兼容网关协议。交付尺寸可在导出时设置。".into());
-    }
-    if cfg.protocol == "grok"
-        && (brief.resolution == "4k" || matches!(brief.ratio.as_str(), "4:5" | "5:4"))
-    {
-        return Err("Grok 不支持所选画幅或 4K，请调整设置".into());
+    if !allowed_image_output(&cfg.model, &cfg.protocol, &brief.ratio, &brief.resolution) {
+        let name = cfg.model.to_ascii_lowercase();
+        if name.contains("gpt-image-2") {
+            return Err("gpt-image-2 请使用官方尺寸：1:1、2:3、3:2、9:16、16:9".into());
+        }
+        if cfg.protocol == "openai" {
+            return Err("OpenAI 标准接口支持 1:1 / 2:3 / 3:2、标准尺寸；请调整画幅或切换兼容网关协议。交付尺寸可在导出时设置。".into());
+        }
+        if cfg.protocol == "grok" {
+            return Err("Grok 不支持所选画幅或 4K，请调整设置".into());
+        }
+        return Err("请选择当前模型支持的分辨率".into());
     }
     Ok(())
+}
+
+fn allowed_image_output(model: &str, protocol: &str, ratio: &str, resolution: &str) -> bool {
+    let name = model.to_ascii_lowercase();
+    if name.contains("gpt-image-2") {
+        return matches!(
+            (ratio, resolution),
+            ("1:1", "1k")
+                | ("1:1", "2k")
+                | ("2:3", "1k")
+                | ("3:2", "1k")
+                | ("9:16", "1k")
+                | ("9:16", "2k")
+                | ("9:16", "4k")
+                | ("16:9", "1k")
+                | ("16:9", "2k")
+                | ("16:9", "4k")
+        );
+    }
+    if name.contains("dall-e-3") {
+        return resolution == "1k" && matches!(ratio, "1:1" | "9:16" | "16:9");
+    }
+    if name.contains("gpt-image") || name.starts_with("dall-e") || protocol == "openai" {
+        return resolution == "1k" && matches!(ratio, "1:1" | "2:3" | "3:2");
+    }
+    if protocol == "grok" || name.contains("grok") {
+        return resolution != "4k"
+            && matches!(ratio, "1:1" | "2:3" | "3:4" | "9:16" | "3:2" | "4:3" | "16:9");
+    }
+    if protocol == "gemini"
+        || protocol == "gemini-chat"
+        || name.contains("gemini")
+        || name.starts_with("imagen")
+    {
+        return resolution != "4k" && matches!(ratio, "1:1" | "3:4" | "9:16" | "4:3" | "16:9");
+    }
+    resolution != "4k" && matches!(ratio, "1:1" | "9:16" | "16:9")
 }
 
 pub(super) fn provider(app: &AppHandle, cfg: &StudioConfig) -> Result<ModelProvider, String> {
@@ -171,7 +211,20 @@ fn request(
     } else {
         req.bearer_auth(p.preferred_api_key().unwrap_or_default())
     };
-    crate::provider_request::apply(req, p, Some(task_id))
+    let req = crate::provider_request::apply(req, p, Some(task_id));
+    // dsimage always sends a browser UA. Cloudflare on this gateway 403s
+    // default library UAs; only add ours when the provider did not set one.
+    if crate::provider_request::header_pairs(p, Some(task_id))
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+    {
+        req
+    } else {
+        req.header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        )
+    }
 }
 async fn body(mut r: Response, max: usize) -> Result<Vec<u8>, String> {
     if r.content_length().unwrap_or(0) > max as u64 {
@@ -267,7 +320,7 @@ pub async fn submit(
     );
     let b = brief;
     if cfg.protocol == "openai" && refs {
-        let size = openai_size(&b.ratio);
+        let size = images_size(&cfg.model, &b.ratio, &b.resolution);
         let mut form = reqwest::multipart::Form::new()
             .text("model", cfg.model.clone())
             .text("prompt", plan.prompt.clone())
@@ -305,7 +358,7 @@ pub async fn submit(
     } else {
         let payload = match cfg.protocol.as_str() {
             "openai" => {
-                json!({"model":cfg.model,"prompt":plan.prompt,"n":1,"size":openai_size(&b.ratio),"quality":"high"})
+                json!({"model":cfg.model,"prompt":plan.prompt,"n":1,"size":images_size(&cfg.model, &b.ratio, &b.resolution),"quality":"high"})
             }
             "grok" => {
                 let mut v = json!({"model":cfg.model,"prompt":grok_prompt(&plan.prompt, images.len()),"n":1,"aspect_ratio":b.ratio,"resolution":b.resolution,"response_format":"b64_json","quality":"medium"});
@@ -352,9 +405,6 @@ pub(super) fn explain_image_http_error(status: u16, body: &str) -> String {
     if status == 504 || lower.contains("gateway timeout") || lower.contains("error code: 504") {
         return "图片生成超时，兼容网关无法同步等待出图。请重新生成。".into();
     }
-    if status == 502 || lower.contains("upstream request failed") {
-        return "上游生图暂时失败，请稍后单独重试该页，不要整单重提。".into();
-    }
     if lower.contains("16-multiple")
         || lower.contains("image-2 size")
         || (lower.contains("invalid_request") && lower.contains("size") && lower.contains("1:1"))
@@ -376,12 +426,25 @@ pub(super) fn explain_image_http_error(status: u16, body: &str) -> String {
     format!("图片接口 HTTP {status}")
 }
 
-fn openai_size(ratio: &str) -> &'static str {
+fn images_size(model: &str, ratio: &str, resolution: &str) -> String {
+    let name = model.to_ascii_lowercase();
+    if name.contains("gpt-image-2") {
+        return gpt_image_size(ratio, resolution);
+    }
+    if name.contains("dall-e-3") {
+        return match ratio {
+            "9:16" => "1024x1792",
+            "16:9" => "1792x1024",
+            _ => "1024x1024",
+        }
+        .into();
+    }
     match ratio {
         "2:3" | "3:4" | "4:5" | "9:16" => "1024x1536",
         "3:2" | "4:3" | "5:4" | "16:9" => "1536x1024",
         _ => "1024x1024",
     }
+    .into()
 }
 
 /// Apimart-style gateways take `size` as a ratio. gpt-image / DALL·E on new-api
@@ -393,8 +456,11 @@ pub(super) fn async_generation_payload(
     resolution: &str,
     image_urls: &[String],
 ) -> Value {
+    // Official dsimage sync body for gpt-image / DALL·E is model + prompt + n +
+    // pixel size. It only adds quality when the user passes --quality. Do not
+    // invent quality/high here — ybw-ai / new-api reject extra fields upstream.
     let mut v = if let Some(size) = async_images_size(model, ratio, resolution) {
-        json!({"model":model,"prompt":prompt,"n":1,"size":size,"quality":"high"})
+        json!({"model":model,"prompt":prompt,"n":1,"size":size})
     } else {
         json!({"model":model,"prompt":prompt,"n":1,"size":ratio,"resolution":resolution})
     };
@@ -406,46 +472,27 @@ pub(super) fn async_generation_payload(
 
 fn async_images_size(model: &str, ratio: &str, resolution: &str) -> Option<String> {
     let name = model.to_ascii_lowercase();
-    if name.contains("gpt-image-2") {
-        return Some(gpt_image_size(ratio, resolution));
-    }
     if name.contains("gpt-image") || name.starts_with("dall-e") {
-        return Some(openai_size(ratio).into());
+        return Some(images_size(model, ratio, resolution));
     }
     None
 }
 
+/// Official gpt-image-2 sizes from the OpenAI image-prompting guide, plus `1536x864`.
 pub(super) fn gpt_image_size(ratio: &str, resolution: &str) -> String {
-    let (w, h) = match (resolution, ratio) {
-        ("2k", "1:1") => (2048, 2048),
-        ("2k", "2:3") => (1280, 1920),
-        ("2k", "3:2") => (1920, 1280),
-        ("2k", "3:4") => (1536, 2048),
-        ("2k", "4:3") => (2048, 1536),
-        ("2k", "4:5") => (1600, 2000),
-        ("2k", "5:4") => (2000, 1600),
-        ("2k", "9:16") => (1440, 2560),
-        ("2k", "16:9") => (2560, 1440),
-        ("4k", "1:1") => (2880, 2880),
-        ("4k", "2:3") => (2304, 3456),
-        ("4k", "3:2") => (3456, 2304),
-        ("4k", "3:4") => (2448, 3264),
-        ("4k", "4:3") => (3264, 2448),
-        ("4k", "4:5") => (2560, 3200),
-        ("4k", "5:4") => (3200, 2560),
-        ("4k", "9:16") => (2160, 3840),
-        ("4k", "16:9") => (3840, 2160),
-        (_, "2:3") => (1024, 1536),
-        (_, "3:2") => (1536, 1024),
-        (_, "3:4") => (1152, 1536),
-        (_, "4:3") => (1536, 1152),
-        (_, "4:5") => (1024, 1280),
-        (_, "5:4") => (1280, 1024),
-        (_, "9:16") => (1152, 2048),
-        (_, "16:9") => (2048, 1152),
-        _ => (1024, 1024),
-    };
-    format!("{w}x{h}")
+    match (ratio, resolution) {
+        ("1:1", "2k") => "2048x2048",
+        ("2:3", _) => "1024x1536",
+        ("3:2", _) => "1536x1024",
+        ("9:16", "2k") => "1152x2048",
+        ("9:16", "4k") => "2160x3840",
+        ("9:16", _) => "864x1536",
+        ("16:9", "2k") => "2048x1152",
+        ("16:9", "4k") => "3840x2160",
+        ("16:9", _) => "1536x864",
+        _ => "1024x1024",
+    }
+    .into()
 }
 
 pub(super) fn grok_prompt(prompt: &str, count: usize) -> String {
@@ -504,22 +551,32 @@ pub async fn poll(
         &p,
     )
     .await?;
-    match v
-        .pointer("/data/status")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-    {
+    match remote_task_status(&v).as_str() {
         "completed" | "succeeded" | "success" => Ok(Some(extract(app, &v).await?)),
-        "failed" | "cancelled" | "error" => {
+        "failed" | "cancelled" | "canceled" | "error" => {
             let detail = v
                 .pointer("/error/message")
+                .or_else(|| v.pointer("/data/error/message"))
                 .and_then(Value::as_str)
                 .unwrap_or("请在供应商后台核对原因");
             Err(format!("远程图片任务失败：{detail}；可单独重新生成该页。"))
         }
-        "pending" | "queued" | "running" | "processing" | "submitted" => Ok(None),
-        _ => Err("无法识别远程任务状态。已保留任务 ID，可稍后恢复查询。".into()),
+        "pending" | "queued" | "running" | "processing" | "submitted" | "in_progress" => Ok(None),
+        other => Err(if other.is_empty() {
+            "无法识别远程任务状态。已保留任务 ID，可稍后恢复查询。".into()
+        } else {
+            format!("无法识别远程任务状态（{other}）。已保留任务 ID，可稍后恢复查询。")
+        }),
     }
+}
+
+pub(super) fn remote_task_status(v: &Value) -> String {
+    ["/status", "/data/status", "/data/0/status"]
+        .into_iter()
+        .find_map(|path| v.pointer(path).and_then(Value::as_str))
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
 }
 
 async fn extract(app: &AppHandle, v: &Value) -> Result<Vec<u8>, String> {

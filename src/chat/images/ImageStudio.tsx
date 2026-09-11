@@ -667,6 +667,8 @@ export default function ImageStudio() {
               task={task}
               busy={busy || loading}
               configurationIssue={configurationIssue}
+              model={config.model}
+              protocol={config.protocol}
               draftSaved={draftSaved}
               onChange={patch}
               onAction={act}
@@ -729,7 +731,7 @@ export default function ImageStudio() {
                 </div>
               )}
               {stage === 'brief' && (
-                <ImageBriefForm configurationIssue={configurationIssue} brief={brief} templates={templates} busy={busy || loading}
+                <ImageBriefForm configurationIssue={configurationIssue} model={config.model} protocol={config.protocol} brief={brief} templates={templates} busy={busy || loading}
                   dropActive={dropActive} onChange={patch}
                   onImport={(folder) => void importImages(folder)}
                   onImportExamples={() => void perform(async () => {

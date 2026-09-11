@@ -70,7 +70,12 @@
 .image-studio--polished .if-requirements textarea { display: block; height: 160px; resize: none; overflow-y: auto; padding: 15px 16px; border: 1px solid var(--if-line); border-radius: 10px; background: var(--bg); font-size: 14px; line-height: 1.8; box-shadow: none; }
 .image-studio--polished .if-requirements textarea::placeholder { color: var(--text-muted); opacity: .7; font-size: 13px; }
 .image-studio--polished .if-requirements textarea:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 8%, transparent); }
-.image-studio--polished .if-options { display: grid; grid-template-columns: minmax(64px, .45fr) minmax(110px, .85fr) minmax(140px, 1.2fr); gap: 12px; min-width: 0; }
+.image-studio--polished .if-options { display: grid; grid-template-columns: minmax(56px, .32fr) minmax(128px, .8fr) minmax(148px, 1fr) minmax(110px, 1fr); gap: 12px; min-width: 0; }
+.image-studio--polished .if-output { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.image-studio--polished .if-output > :last-child { flex: 1; min-width: 0; }
+.image-studio--polished .if-output .kv-select { width: 100%; min-width: 0; }
+.image-studio--polished .if-output-frame { width: 18px; height: 18px; display: grid; place-items: center; flex: 0 0 18px; }
+.image-studio--polished .if-output-frame > i { display: block; box-sizing: border-box; border: 1.5px solid color-mix(in srgb, var(--text) 42%, transparent); border-radius: 2px; background: color-mix(in srgb, var(--text) 6%, transparent); }
 .image-studio--polished .if-options .is-field { margin: 0; min-width: 0; gap: 0; }
 .image-studio--polished .if-options .is-field > span { font-size: 11px; font-weight: 400; color: var(--text-muted); margin-bottom: 7px; }
 .image-studio--polished .if-options :is(.kv-input, .kv-select) { min-height: 36px; height: 36px; padding-top: 6px; padding-bottom: 6px; font-size: 12px; border: 1px solid transparent; border-radius: 7px; background: var(--if-soft); box-shadow: none; }
@@ -81,7 +86,7 @@
 .image-studio--polished .if-more > summary::before { content: ''; width: 5px; height: 5px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); margin-right: 2px; }
 .image-studio--polished .if-more[open] > summary::before { transform: rotate(45deg); }
 .image-studio--polished .if-more[open] > summary { color: var(--text); margin-bottom: 18px; }
-.image-studio--polished .if-more > .if-options { max-width: 660px; margin-bottom: 20px; }
+.image-studio--polished .if-more > .is-field:first-of-type { max-width: 280px; margin-bottom: 16px; }
 .image-studio--polished .if-submit { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding-top: 18px; border-top: 1px solid var(--if-line); }
 .image-studio--polished .if-submit p { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
 .image-studio--polished .if-submit > .kv-btn { min-height: 42px; min-width: 154px; justify-content: center; font-size: 13px; padding: 10px 18px; border-radius: 9px; flex-shrink: 0; box-shadow: none; }
@@ -97,8 +102,8 @@
 .image-studio--polished .if-form--split > .if-template-choice { grid-column: 1 / 7; }
 .image-studio--polished .if-form--split > .if-materials { grid-column: 7 / -1; }
 .image-studio--polished .if-form--split > .if-requirements { display: flex; flex-direction: column; grid-area: auto; grid-column: 1 / 9; min-width: 0; }
-.image-studio--polished .if-form--split > .if-options { grid-area: auto; grid-column: 9 / -1; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; align-self: stretch; align-content: start; }
-.image-studio--polished .if-form--split > .if-options > .is-field:last-child { grid-column: 1 / -1; }
+.image-studio--polished .if-form--split > .if-options { grid-area: auto; grid-column: 9 / -1; grid-template-columns: minmax(64px, .8fr) minmax(0, 1fr); gap: 10px; align-self: stretch; align-content: start; }
+.image-studio--polished .if-form--split > .if-options > .is-field:last-child { grid-column: auto; }
 .image-studio--polished .if-form--split > :is(.if-more, .if-submit) { grid-area: auto; grid-column: 1 / -1; }
 .image-studio--polished .if-form--split :is(.if-upload, .if-replace-source, .if-template-search) { flex: 1; min-height: 176px; }
 .image-studio--polished .if-form--split .if-materials .if-drop-bar { margin-top: 0; padding-top: 10px; }

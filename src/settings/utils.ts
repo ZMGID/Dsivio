@@ -7,6 +7,7 @@ export type SelectOption = {
   value: string
   label: string
   title?: string
+  group?: string
 }
 
 // 修饰键集合（录制快捷键时忽略）

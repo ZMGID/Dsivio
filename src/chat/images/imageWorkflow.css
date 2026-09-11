@@ -229,14 +229,6 @@
 .iw-source .is-editor-column > .is-req {
   flex: 1;
 }
-.iw-specs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-.iw-specs > * {
-  min-width: 0;
-}
 .iw-slot-list {
   display: flex;
   flex-wrap: wrap;

@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from '../../api/tauri'
+import { ImageRatioSelect, ImageResolutionSelect } from './ImageOutputSelect'
 import { humanizeImageError } from './imageValidation'
 import { Button, IconButton } from '../../components/Button'
 import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
@@ -36,6 +37,8 @@ import './imageWorkflow.css'
 
 type Props = {
   configurationIssue?: string
+  model?: string
+  protocol?: string
   brief: ImageBrief
   task: ImageTask | null
   busy: boolean
@@ -53,6 +56,8 @@ type Props = {
 
 export function ImageWorkflow({
   configurationIssue,
+  model,
+  protocol,
   brief,
   task,
   busy,
@@ -371,32 +376,26 @@ export function ImageWorkflow({
                     onChange={(language) => onChange({ language })}
                   />
                 </Field>
-                <div className="iw-specs">
-                  <Field label="画幅">
-                    <StudioSelect
-                      disabled={busy}
-                      value={brief.ratio}
-                      onChange={(e) => onChange({ ratio: e.target.value })}
-                    >
-                      {['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9'].map(
-                        (v) => (
-                          <option key={v}>{v}</option>
-                        ),
-                      )}
-                    </StudioSelect>
-                  </Field>
-                  <Field label="清晰度">
-                    <StudioSelect
-                      disabled={busy}
-                      value={brief.resolution}
-                      onChange={(e) => onChange({ resolution: e.target.value })}
-                    >
-                      <option value="1k">标准 / 1K</option>
-                      <option value="2k">高清 / 2K</option>
-                      <option value="4k">超清 / 4K</option>
-                    </StudioSelect>
-                  </Field>
-                </div>
+                <Field label="比例">
+                  <ImageRatioSelect
+                    disabled={busy}
+                    model={model}
+                    protocol={protocol}
+                    ratio={brief.ratio}
+                    resolution={brief.resolution}
+                    onChange={(output) => onChange(output)}
+                  />
+                </Field>
+                <Field label="分辨率">
+                  <ImageResolutionSelect
+                    disabled={busy}
+                    model={model}
+                    protocol={protocol}
+                    ratio={brief.ratio}
+                    resolution={brief.resolution}
+                    onChange={(output) => onChange(output)}
+                  />
+                </Field>
                 <Field
                   label="每套页数"
                   hint={fromSet ? '一张套图对应一页，可在投放区调整顺序。' : undefined}
