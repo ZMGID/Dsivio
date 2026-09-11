@@ -1,5 +1,7 @@
 # dsimage 安装与配置
 
+内置版默认读取图片页面保存的模型和供应商配置，位置见 SKILL.md「配置在哪」。已在页面配置好时无需再创建 `.env`；以下流程用于独立配置或显式 `--env-file` 覆盖。
+
 > 给 Agent 读。用户把这份文件的路径或 URL 交给你，例如：
 > `按 https://raw.githubusercontent.com/ZMGID/dsimage/main/skills/dsimage/SETUP.md 安装并配置 dsimage`
 
