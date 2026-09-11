@@ -680,6 +680,18 @@ fn relay_gpt_image_uses_async_instead_of_a_sync_wait() {
     }))
     .unwrap();
     assert_eq!(engine::resolve_protocol(&official, "gpt-image-2"), "openai");
+    let sync_relay = crate::settings::ModelProvider {
+        base_url: "https://img.hezu.ink/v1".into(),
+        ..official.clone()
+    };
+    assert_eq!(engine::resolve_protocol(&sync_relay, "gpt-image-2"), "openai");
+    let mut stale = StudioConfig {
+        protocol: "async".into(),
+        model: "gpt-image-2".into(),
+        ..Default::default()
+    };
+    engine::apply_resolved_protocol(&mut stale, &sync_relay);
+    assert_eq!(stale.protocol, "openai");
     assert_eq!(engine::resolve_protocol(&relay, "gpt-image-2"), "async");
     assert_eq!(
         engine::resolve_protocol(&relay, "grok-imagine-image-2.0"),

@@ -48,7 +48,7 @@ impl super::generation::Backend for NativeBackend<'_> {
 }
 
 /// Studio still stores a protocol string; resolve it from the live provider + model
-/// so a stale `openai` config cannot keep gpt-image on a relay in a sync wait.
+/// without assuming every compatible gateway implements asynchronous tasks.
 /// Grok / Gemini detection copies dsimage `detect_mode` + `_provider_from_model`.
 pub fn resolve_protocol(provider: &ModelProvider, model: &str) -> String {
     let name = model.to_ascii_lowercase();
@@ -97,12 +97,11 @@ fn host_matches(base: &str, domain: &str) -> bool {
 }
 
 fn uses_async_image_gateway(base: &str, model: &str) -> bool {
-    if base.contains("apimart") {
+    if host_matches(base, "apimart.ai") {
         return true;
     }
-    let official_openai = base.contains("api.openai.com");
     let images_api_model = model.contains("gpt-image") || model.starts_with("dall-e");
-    images_api_model && !official_openai
+    images_api_model && host_matches(base, "ybw-ai.com")
 }
 
 pub fn apply_resolved_protocol(cfg: &mut StudioConfig, provider: &ModelProvider) {

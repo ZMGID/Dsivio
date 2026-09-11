@@ -23,10 +23,12 @@ import base64
 import binascii
 import concurrent.futures
 import http.client
+import hashlib
 import ipaddress
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -397,23 +399,65 @@ def ref_images(args: argparse.Namespace) -> list[str]:
 
 # ── HTTP 工具 ──────────────────────────────────────────────
 
+_recovery = threading.local()
+
+
+def _save_recovery(path: Path, value: dict[str, Any]) -> None:
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            os.chmod(temporary, 0o600)
+            json.dump(value, handle)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _request_checkpoint() -> tuple[Path | None, dict[str, Any] | None]:
+    root = getattr(_recovery, "root", None)
+    if root is None:
+        return None, None
+    index = _recovery.index
+    _recovery.index += 1
+    path = root / f"request-{index}.json"
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            os.chmod(path, 0o600)
+            json.dump({"state": "pending"}, handle)
+    except FileExistsError:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        if saved.get("state") == "completed":
+            log("recovery", "使用已保存的供应商响应，继续取图，不重新提交")
+            return path, saved["response"]
+        fail(f"提交结果未知：已有请求尚无响应，未重复提交。请先核对供应商记录。恢复记录：{path}")
+    return path, None
+
 def _post_json(request: urllib.request.Request, timeout: int, what: str) -> dict[str, Any]:
+    checkpoint, cached = _request_checkpoint()
+    if cached is not None:
+        return cached
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
+        # Explicit HTTP errors release this attempt for normal rate-limit/5xx
+        # retries. A dropped connection has no such response and stays pending.
+        if checkpoint is not None:
+            checkpoint.unlink(missing_ok=True)
         detail = exc.read().decode("utf-8", errors="replace")[:400]
         fail(f"{what}返回 HTTP {exc.code}：{detail}")
     except urllib.error.URLError as exc:
         fail(f"无法连接接口：{exc.reason}")
-    except (http.client.RemoteDisconnected, TimeoutError):
-        fail("接口连接失败或超时，请稍后重试。")
+    except (http.client.RemoteDisconnected, TimeoutError) as exc:
+        fail(f"提交结果未知（{type(exc).__name__}，等待上限 {timeout}s）：连接断开或超时，供应商可能仍在处理；请先核对供应商记录，勿直接重提。")
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
         fail(f"{what}返回的不是有效 JSON：{raw[:500]}")
     if not isinstance(parsed, dict):
         fail(f"{what}格式不正确：顶层结果不是对象。")
+    if checkpoint is not None:
+        _save_recovery(checkpoint, {"state": "completed", "response": parsed})
     return parsed
 
 
@@ -490,7 +534,17 @@ def download_to_path(url: str, dest: Path) -> None:
         fail("下载图片超时。")
     if len(data) > MAX_DOWNLOAD_BYTES:
         fail("图片超过 25MB，拒绝保存。")
-    dest.write_bytes(data)
+    save_image_bytes(dest, data)
+
+
+def save_image_bytes(dest: Path, data: bytes) -> None:
+    """A killed worker must not leave a partial image that skip-existing accepts."""
+    temporary = dest.with_name(dest.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        temporary.write_bytes(data)
+        temporary.replace(dest)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def http_get(url: str, api_key: str, timeout: int = 30, *, auth: str = "bearer") -> dict[str, Any]:
@@ -682,7 +736,7 @@ def save_sync_images(result: dict[str, Any], output_dir: Path, fmt: str,
             except (binascii.Error, ValueError) as exc:
                 fail(f"无法解码 b64_json 图片：{exc}")
             p = output_dir / output_name(name_prefix, index, fmt)
-            p.write_bytes(image_bytes)
+            save_image_bytes(p, image_bytes)
             paths.append(p)
         elif item.get("url"):
             image_url = item["url"]
@@ -710,12 +764,12 @@ def run_sync(base_url: str, api_key: str, args: argparse.Namespace, prompt: str,
         if args.quality:
             fields["quality"] = args.quality
         log(label, f"图生图模式：{len(files)} 张参考图经 {endpoint} 提交...")
-        result = http_post_multipart(endpoint, api_key, fields, files)
+        result = http_post_multipart(endpoint, api_key, fields, files, timeout=max(300, resolve_timeout(args)))
         return save_sync_images(result, output_dir, fmt, name_prefix)
     payload = build_sync_payload(args, prompt, model)
     endpoint = f"{base_url}/images/generations"
     log(label, f"提交生成请求到 {endpoint}...")
-    result = http_post(endpoint, api_key, payload, timeout=300)
+    result = http_post(endpoint, api_key, payload, timeout=max(300, resolve_timeout(args)))
     return save_sync_images(result, output_dir, fmt, name_prefix)
 
 
@@ -882,7 +936,7 @@ def save_gemini_images(result: dict[str, Any], output_dir: Path, fmt: str,
             fail(f"无法解码 Gemini 图片：{exc}")
         mime = str(inline.get("mimeType") or inline.get("mime_type") or "")
         p = output_dir / output_name(name_prefix, start_index + offset, _suffix_from_mime(mime, fmt))
-        p.write_bytes(image_bytes)
+        save_image_bytes(p, image_bytes)
         paths.append(p)
     return paths
 
@@ -891,6 +945,24 @@ def run_gemini(base_url: str, api_key: str, args: argparse.Namespace, prompt: st
                model: str, output_dir: Path, fmt: str,
                label: str = "gemini", name_prefix: str | None = None) -> list[Path]:
     images = ref_images(args)
+    if model.split("/")[-1].lower().startswith("imagen-"):
+        if images:
+            fail("Imagen 文生图不支持参考图，请选择 Gemini 图片模型进行编辑。")
+        if not 1 <= int(args.n) <= 4:
+            fail("Imagen 一次仅支持 1 至 4 张图片。")
+        ratio = gemini_ratio(args.size)
+        if ratio not in {"1:1", "3:4", "4:3", "9:16", "16:9"}:
+            fail(f"Imagen 不支持画幅 {ratio}。")
+        endpoint = gemini_endpoint(base_url, model).replace(":generateContent", ":predict")
+        result = http_post(endpoint, api_key, {
+            "instances": [{"prompt": prompt}],
+            "parameters": {"sampleCount": args.n, "aspectRatio": ratio},
+        }, timeout=max(300, resolve_timeout(args)), auth="gemini")
+        predictions = result.get("predictions", [])
+        if not predictions or any(not item.get("bytesBase64Encoded") for item in predictions):
+            fail("Imagen 未返回图片：" + str(result)[:300])
+        return save_sync_images({"data": [{"b64_json": item["bytesBase64Encoded"]}
+                                          for item in predictions]}, output_dir, fmt, name_prefix)
     endpoint = gemini_endpoint(base_url, model)
     parts: list[dict[str, Any]] = [{"text": prompt}]
     if images:
@@ -968,7 +1040,7 @@ def save_gemini_chat_images(result: dict[str, Any], output_dir: Path, fmt: str,
         p = output_dir / output_name(
             name_prefix, start_index + offset, _suffix_from_mime(mime, fmt)
         )
-        p.write_bytes(image_bytes)
+        save_image_bytes(p, image_bytes)
         paths.append(p)
     return paths
 
@@ -1050,6 +1122,9 @@ def _poll_task(base_url: str, api_key: str, task_id: str,
         if status == "completed":
             return task_data
         if status == "failed":
+            root = getattr(_recovery, "root", None)
+            if root is not None:
+                (root / f"request-{_recovery.index - 1}.json").unlink(missing_ok=True)
             error = task_data.get("error", {})
             fail(f"任务 {task_id} 失败：{error.get('message', json.dumps(task_data)[:300])}")
         progress = task_data.get("progress", 0)
@@ -1083,10 +1158,12 @@ def run_async_adapter(base_url: str, api_key: str, args: argparse.Namespace, pro
                       model: str, output_dir: Path, fmt: str,
                       label: str = "async", name_prefix: str | None = None) -> list[Path]:
     payload = build_async_payload(args, prompt, model)
-    return run_async(
-        base_url, api_key, payload, output_dir, fmt,
-        args.poll_interval, resolve_timeout(args), label, name_prefix,
-    )
+    paths = []
+    for index in range(int(args.n)):
+        prefix = name_prefix if index == 0 or name_prefix is None else f"{name_prefix}-{index + 1}"
+        paths.extend(run_async(base_url, api_key, payload, output_dir, fmt,
+                               args.poll_interval, resolve_timeout(args), label, prefix))
+    return paths
 
 
 ADAPTER_RUNNERS = {
@@ -1104,10 +1181,26 @@ def generate_one(base_url: str, api_key: str, model: str, mode: str,
     runner = ADAPTER_RUNNERS.get(mode)
     if not runner:
         fail(f"未知 API 模式：{mode}")
-    return runner(
-        base_url, api_key, args, prompt, model, output_dir,
-        args.format, label, name_prefix,
-    )
+    if int(args.n) < 1:
+        fail("图片数量必须大于零。")
+    # Per-job, per-request checkpoints are thread-local. They contain responses
+    # and task IDs, never credentials. Replays recover downloads/polling without
+    # re-billing earlier images in an n>1 operation.
+    identity = [base_url, hashlib.sha256(api_key.encode()).hexdigest(), model, mode,
+                prompt, name_prefix, {key: getattr(args, key, None) for key in JOB_FIELDS}]
+    for image in ref_images(args):
+        identity.append(hashlib.sha256(Path(image).read_bytes()).hexdigest())
+    digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+    root = output_dir / ".dsimage-recovery" / digest
+    root.mkdir(parents=True, exist_ok=True)
+    _recovery.root, _recovery.index = root, 0
+    try:
+        paths = runner(base_url, api_key, args, prompt, model, output_dir,
+                       args.format, label, name_prefix)
+        shutil.rmtree(root)
+        return paths
+    finally:
+        _recovery.root = None
 
 
 def is_rate_limit(exc: BaseException) -> bool:
@@ -1121,6 +1214,8 @@ def is_backoff_error(message: str) -> bool:
     （误判只是多试一次）。
     """
     text = message.lower()
+    if "提交结果未知" in text:
+        return False
     if any(x in text for x in (
         "http 401", "http 403", "code=401", "code=403", "unauthorized",
         "不存在", "prompt 为空", "缺少配置", "不支持", "非法",
@@ -1254,16 +1349,27 @@ def run_job_pool(
 ) -> dict[str, tuple[str, Any]]:
     """并发生成一组槽位。每项含 slot / prompt / args / output_dir，可选 job_id / label。
 
-    job_id 必须跨品唯一（单品清单用槽位名即可）。429/超时自动 降并发回退。
+    job_id 必须跨品唯一。限流降并发，恢复轮询/下载不重新提交。
     """
     results: dict[str, tuple[str, Any]] = {}
     pending: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_outputs: set[tuple[str, str]] = set()
     for job in jobs:
         job_id = _job_id(job)
         output_dir = Path(job["output_dir"])
-        existing = _existing_output(output_dir, job["slot"].lower(), job["args"].format)
-        if skip_existing and existing is not None:
-            results[job_id] = ("skip", [existing])
+        output_key = (str(output_dir.resolve()), job["slot"].lower())
+        if job_id in seen_ids or output_key in seen_outputs:
+            fail(f"批量任务存在重复 ID 或输出槽位：{job_id}")
+        seen_ids.add(job_id)
+        seen_outputs.add(output_key)
+        count = int(job["args"].n)
+        if count < 1:
+            fail(f"槽位 {job_id} 的图片数量必须大于零。")
+        existing = [_existing_output(output_dir, job["slot"].lower() + (f"-{i + 1}" if i else ""), job["args"].format)
+                    for i in range(count)]
+        if skip_existing and all(path is not None for path in existing):
+            results[job_id] = ("skip", existing)
         else:
             pending.append(job)
 
@@ -1300,7 +1406,9 @@ def run_job_pool(
                     log(log_label, f"{job_id} 失败：{payload}")
         return wave_results
 
+    attempt = 0
     while pending:
+        attempt += 1
         workers = min(workers_n, len(pending))
         log(log_label, f"本轮 {len(pending)} 个槽位，并发 {workers}")
         wave_results = run_wave(pending, workers)
@@ -1322,14 +1430,15 @@ def run_job_pool(
             for job in next_pending:
                 results[_job_id(job)] = wave_results[_job_id(job)]
             break
-        if workers_n <= 1:
-            log(log_label, "并发已降到 1 仍失败，停止回退")
+        if attempt >= 4:
+            log(log_label, "已达到 4 次尝试上限，保留失败槽位")
             for job in next_pending:
                 results[_job_id(job)] = wave_results[_job_id(job)]
             break
         workers_n = max(1, workers_n // 2)
-        log(log_label, f"报错回退，并发改为 {workers_n}，15s 后重试 {len(next_pending)} 个槽位")
-        time.sleep(15)
+        delay = min(15 * (2 ** (attempt - 1)), 60)
+        log(log_label, f"报错回退，并发改为 {workers_n}，{delay}s 后重试 {len(next_pending)} 个槽位")
+        time.sleep(delay)
         pending = next_pending
     return results
 
