@@ -149,10 +149,42 @@ class WorkspaceTests(unittest.TestCase):
         t = self.action(t, 'plan_result', script='product shot')
         t = self.action(t, 'approve')
         t = self.action(t, 'prompt_result', prompt='product shot')
-        t = self.action(t, 'submit')
+        with patch.object(studio, 'check_comfy_connection'):
+            t = self.action(t, 'submit')
         t = self.action(t, 'preflight_failed', detail='upload_file: connection refused')
         self.assertEqual(t['status'], 'approved')
         self.assertIn('upload_file: connection refused', t['error'])
+
+    def test_unreachable_comfy_stays_approved_without_submission_and_can_retry(self):
+        studio.handle('config', {'name': 'comfy', 'base_url': 'http://127.0.0.1:8188'})
+        self.brief.update(route='comfy', resolution='0.5')
+        t = self.draft()
+        t = self.action(t, 'plan_result', script='product shot')
+        t = self.action(t, 'approve')
+        t = self.action(t, 'prompt_result', prompt='product shot')
+        with patch.object(studio, 'urlopen', side_effect=studio.URLError('connection refused')), self.assertRaisesRegex(ValueError, '无法连接'):
+            self.action(t, 'submit')
+        t = studio.read(studio.task_path(t['id']))
+        self.assertEqual(t['status'], 'approved')
+        self.assertNotIn('id', t['remote'])
+        self.assertIn('另一台电脑', t['error'])
+        self.assertIn('未上传素材', t['error'])
+        with patch.object(studio, 'check_comfy_connection'):
+            t = self.action(t, 'submit')
+        self.assertEqual(t['status'], 'submitting')
+        self.assertEqual(t['error'], '')
+
+    def test_comfy_connection_rejects_non_comfy_services(self):
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        for body in (b'<html>login</html>', b'{}', b'{"system": "invalid"}'):
+            response.read.return_value = body
+            with patch.object(studio, 'urlopen', return_value=response), self.assertRaisesRegex(ValueError, '有效的 ComfyUI'):
+                studio.check_comfy_connection('http://example.test:8188')
+        response.read.return_value = b'{"system": {}, "devices": []}'
+        with patch.object(studio, 'urlopen', return_value=response):
+            studio.check_comfy_connection('http://example.test:8188')
 
     def test_concepts_cannot_be_approved_until_script_is_written(self):
         t = self.action(self.draft(), 'plan_result', script='', concepts=['细节', '场景', '动态'])
@@ -457,6 +489,69 @@ class WorkspaceTests(unittest.TestCase):
         self.assertTrue(task['output'])
         self.assertEqual(task['remote']['id'], 'job')
 
+    def test_download_receipt_survives_failure_and_recovers_without_polling_or_resubmission(self):
+        for route in ('grok', 'minimax'):
+            with self.subTest(route=route):
+                task = self.approved()
+                task.update(status='running', remote={'route': route, 'id': 'paid-job', 'base_url': 'https://provider.test'})
+                studio.persist(task)
+                c = Mock(base_url='https://provider.test', api_key='secret')
+                result = {'status': 'done', 'video': {'url': '/result.mp4'}, 'content': {'url': '/result.mp4'}}
+                c.get_video.return_value = c.get_task.return_value = result
+                module = studio.grok if route == 'grok' else studio.mini
+
+                def fail_download(*args, **kwargs):
+                    saved = studio.read(studio.task_path(task['id']))
+                    self.assertEqual(saved['remote']['download_url'], 'https://provider.test/result.mp4')
+                    raise OSError('secret signed download error')
+
+                with patch.object(studio, 'client', return_value=c), patch.object(module, 'download_video', side_effect=fail_download):
+                    task = self.action(task, 'poll')
+                self.assertEqual(task['status'], 'running')
+                self.assertIn('下载尚未完成', task['error'])
+                self.assertNotIn('secret', task['error'])
+                with self.assertRaisesRegex(ValueError, '已经提交'):
+                    self.action(task, 'submit')
+                c.reset_mock()
+                c.get_video.side_effect = c.get_task.side_effect = AssertionError('Must try saved URL first')
+                with patch.object(studio, 'client', return_value=c), patch.object(module, 'download_video') as download, \
+                     patch.object(studio, 'probe_video', return_value=dict(width=720, height=1280, duration=10, hasAudio=True)):
+                    task = self.action(studio.read(studio.task_path(task['id'])), 'poll')
+                self.assertEqual(task['status'], 'succeeded')
+                self.assertEqual(task['error'], '')
+                download.assert_called_once()
+                c.get_video.assert_not_called()
+                c.get_task.assert_not_called()
+                c.create_video.assert_not_called()
+
+    def test_expired_download_url_refreshes_without_losing_receipt_on_query_failure(self):
+        task = self.approved()
+        task.update(status='running', remote={'route': 'grok', 'id': 'paid-job', 'base_url': 'https://provider.test',
+                                             'download_url': 'https://cdn.test/expired.mp4'})
+        studio.persist(task)
+        c = Mock(base_url='https://provider.test', api_key='secret')
+        c.get_video.side_effect = studio.grok.ApiError('query unavailable')
+        with patch.object(studio, 'client', return_value=c), patch.object(studio.grok, 'download_video', side_effect=OSError('expired')):
+            task = self.action(task, 'poll')
+        self.assertEqual(task['remote']['download_url'], 'https://cdn.test/expired.mp4')
+        self.assertEqual(task['status'], 'running')
+        c.get_video.side_effect = None
+        c.get_video.return_value = {'status': 'done', 'video': {'url': 'https://cdn.test/fresh.mp4'}}
+        with patch.object(studio, 'client', return_value=c), \
+             patch.object(studio.grok, 'download_video', side_effect=[OSError('expired'), None]) as download, \
+             patch.object(studio, 'probe_video', return_value=dict(width=720, height=1280, duration=10, hasAudio=True)):
+            task = self.action(task, 'poll')
+        self.assertEqual(task['status'], 'succeeded')
+        self.assertEqual(task['remote']['download_url'], 'https://cdn.test/fresh.mp4')
+        self.assertEqual(download.call_count, 2)
+        self.assertTrue(all(call.kwargs['api_key'] is None for call in download.call_args_list))
+        c.create_video.assert_not_called()
+
+    def test_missing_video_object_reports_actionable_error(self):
+        for route in ('grok', 'minimax'):
+            with self.assertRaisesRegex(ValueError, '没有返回视频地址'):
+                studio.result_download_url({'status': 'done'}, route, 'https://provider.test')
+
     def test_reference_template_keeps_measured_ratio_without_invalid_generation_duration(self):
         task = self.draft()
         task = self.action(task, 'save', brief=dict(task['brief'], mode='analysis'))
@@ -503,6 +598,7 @@ class WorkspaceTests(unittest.TestCase):
         with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='job-2') as create:
             t = self.action(t, 'submit')
         self.assertEqual(t['remote']['id'], 'job-2')
+        self.assertNotIn('download_url', t['remote'])
         create.assert_called_once()
         with patch.object(studio.grok.GrokVideoClient, 'get_video', return_value=result), patch.object(studio.grok, 'download_video'), patch.object(studio, 'probe_video', return_value={'width': 720, 'height': 1280, 'duration': 10.04, 'hasAudio': True}):
             t = self.action(t, 'poll')

@@ -37,7 +37,7 @@ export interface VideoTask {
   error?: string
   output?: string
   media?: { width: number; height: number; duration: number; hasAudio: boolean }
-  remote?: { route: VideoRoute; id?: string; base_url: string }
+  remote?: { route: VideoRoute; id?: string; base_url: string; download_url?: string }
   quote?: {
     pricingStatus?: 'reference' | 'unknown'
     currency?: string
@@ -129,3 +129,9 @@ export const languages = [
   ['vi', '越南语'],
   ['custom', '其他语言…'],
 ]
+
+export function videoTaskStatus(task: VideoTask): string {
+  return task.status === 'running' && task.remote?.download_url
+    ? task.error ? '下载待恢复' : '正在下载'
+    : videoStatus[task.status] || task.status
+}

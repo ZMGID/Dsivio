@@ -84,6 +84,12 @@ class RequestTests(unittest.TestCase):
             {"480p": "0.81", "720p": "1.41", "1080p": "2.51"},
         )
 
+    def test_plain_text_gateway_rejection_is_actionable(self):
+        error = grok_video._api_error(b'error code: 1010', 403)
+        self.assertEqual(error.http_status, 403)
+        self.assertEqual(error.code, '1010')
+        self.assertIn('gateway', str(error).lower())
+
     def test_quote_command_needs_no_api_key(self):
         output = io.StringIO()
         with patch.dict(os.environ, {}, clear=True), redirect_stdout(output):
@@ -100,6 +106,9 @@ class _ApiHandler(BaseHTTPRequestHandler):
     video_bytes = b"\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
 
     def do_POST(self):
+        if 'Mozilla/5.0' not in self.headers.get('User-Agent', ''):
+            self.send_error(403, 'gateway rejects default Python user agent')
+            return
         if self.path != "/v1/videos/generations":
             self.send_error(404)
             return

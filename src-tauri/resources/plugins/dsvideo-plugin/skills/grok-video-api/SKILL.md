@@ -11,9 +11,9 @@ Before a paid request, read [references/grok-video-api.md](references/grok-video
 
 ## Required rules
 
-1. Show the final user-readable video script and obtain explicit confirmation before any paid request or dry run. A modification invalidates the prior confirmation.
+1. Preserve the current task’s agreed script, product, language and audio across follow-ups. Consolidate missing choices and cost confirmation into one question. A user instruction to generate the displayed plan or a specific variant is authorization for that variant; do not ask again for unchanged choices. Newly invented scripts or an unconfirmed paid cost require confirmation. Preparation and free dry runs may run before confirmation.
 2. Read credentials from the saved `grok` provider or the legacy `XAI_API_KEY` override. Never print or place a literal key in a command.
-3. Obtain an explicit `480p`, `720p`, or `1080p` choice for every paid creation. Never infer or silently change it.
+3. Obtain an explicit `480p`, `720p`, or `1080p` choice for the current task. Never infer or silently change it. Reuse the user’s existing choice unless they change it.
 4. Show the USD estimate from `quote`, including the selected duration and whether one source image is charged, before asking the user to choose Grok.
 5. Run `--dry-run` first and compare model, resolution, duration, aspect ratio, mode, and audio with the confirmed request.
 6. Run exactly one `generate` command for a completed file. It submits once, prints the request ID, polls that request, checks returned duration, and downloads the MP4.
@@ -61,3 +61,7 @@ The result URL is temporary, so download promptly. The client accepts both absol
 
 视频页面和本插件共用一份 `providers.json`，页面保存后下次脚本调用直接生效，不需要重复配置。路径优先取 `DSVIDEO_CONFIG_PATH`；否则 Windows 为 `%APPDATA%/dsvideo/providers.json`，macOS/Linux 为 `${XDG_CONFIG_HOME:-~/.config}/dsvideo/providers.json`。
 用户问模型或配置时，运行 `python <插件根目录>/scripts/dsvideo_config.py show`（密钥脱敏），查看 `providers.grok` / `providers.minimax` / `providers.comfy` 的 `model` 和 `base_url`。MiniMax-H3 路线模型固定为 MiniMax-H3；ComfyUI 模型由工作流决定。旧环境变量显式覆盖时说明来源。生成仍使用插件自己的脚本和 MCP。
+
+## Execution context
+
+Read [运行与恢复](../ecom-h3-video/references/execution.md) before running commands. Keep requested speech and its language when switching routes or shortening a video. Official price estimates are not a custom gateway invoice.

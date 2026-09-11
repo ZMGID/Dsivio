@@ -216,6 +216,7 @@ async fn mcp(
     // The task's original endpoint remains authoritative during recovery.
     if let Some(url) = url {
         server.env.insert("COMFYUI_URL".into(), url.into());
+        server.env.insert("DSVIDEO_COMFY_TASK_URL".into(), url.into());
     }
     let result = app
         .state::<AppState>()
