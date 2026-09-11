@@ -130,7 +130,7 @@ pub async fn call(
         "save_plans" => serde_json::to_value(s::image_studio_save_plans(field(&input,"id")?,field(&input,"revision")?,field(&input,"plans")?)?).map_err(|e|e.to_string())?,
         "import" => serde_json::to_value(s::image_studio_import(field(&input,"paths")?,input["asProducts"].as_bool().unwrap_or(true)).await?).map_err(|e|e.to_string())?,
         "action" => serde_json::to_value(s::image_studio_action(app,field(&input,"id")?,field(&input,"revision")?,field(&input,"action")?)?).map_err(|e|e.to_string())?,
-        "config" => { s::image_studio_config(field(&input,"config")?)?; Value::Null },
+        "config" => { s::image_studio_config(app, field(&input,"config")?)?; Value::Null },
         "template_import" => serde_json::to_value(s::image_studio_template_import(field(&input,"path")?).await?).map_err(|e|e.to_string())?,
         "freeze" => serde_json::to_value(s::image_studio_freeze(field(&input,"id")?,field(&input,"productId")?,field(&input,"name")?)?).map_err(|e|e.to_string())?,
         "export" => json!(s::image_studio_export(field(&input,"id")?,field(&input,"destination")?,field(&input,"width")?,field(&input,"height")?,field(&input,"maxKb")?).await?),

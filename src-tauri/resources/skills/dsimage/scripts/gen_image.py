@@ -982,17 +982,48 @@ def run_gemini_chat(base_url: str, api_key: str, args: argparse.Namespace, promp
 
 def build_async_payload(args: argparse.Namespace, prompt: str, model: str) -> dict[str, Any]:
     ratio = size_to_ratio(args.size)
-    payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1, "size": ratio, "resolution": args.resolution}
+    name = model.lower()
+    if "gpt-image-2" in name:
+        payload: dict[str, Any] = {
+            "model": model, "prompt": prompt, "n": 1,
+            "size": gpt_image_size(ratio, args.resolution), "quality": "high",
+        }
+    elif "gpt-image" in name or name.startswith("dall-e"):
+        payload = {"model": model, "prompt": prompt, "n": 1, "size": sync_size(ratio), "quality": "high"}
+    else:
+        payload = {"model": model, "prompt": prompt, "n": 1, "size": ratio, "resolution": args.resolution}
     images = ref_images(args)
     if images:
         payload["image_urls"] = [encode_image_data_uri(path) for path in images]
     return payload
 
 
+def gpt_image_size(ratio: str, resolution: str) -> str:
+    table = {
+        ("2k", "1:1"): "2048x2048", ("2k", "2:3"): "1280x1920", ("2k", "3:2"): "1920x1280",
+        ("2k", "3:4"): "1536x2048", ("2k", "4:3"): "2048x1536", ("2k", "4:5"): "1600x2000",
+        ("2k", "5:4"): "2000x1600", ("2k", "9:16"): "1440x2560", ("2k", "16:9"): "2560x1440",
+        ("4k", "1:1"): "2880x2880", ("4k", "2:3"): "2304x3456", ("4k", "3:2"): "3456x2304",
+        ("4k", "3:4"): "2448x3264", ("4k", "4:3"): "3264x2448", ("4k", "4:5"): "2560x3200",
+        ("4k", "5:4"): "3200x2560", ("4k", "9:16"): "2160x3840", ("4k", "16:9"): "3840x2160",
+        ("1k", "2:3"): "1024x1536", ("1k", "3:2"): "1536x1024", ("1k", "3:4"): "1152x1536",
+        ("1k", "4:3"): "1536x1152", ("1k", "4:5"): "1024x1280", ("1k", "5:4"): "1280x1024",
+        ("1k", "9:16"): "1152x2048", ("1k", "16:9"): "2048x1152",
+    }
+    return table.get((resolution, ratio), "1024x1024")
+
+
+def _openai_async_task(base_url: str, model: str) -> bool:
+    name = model.lower()
+    return "apimart" not in base_url.lower() and ("gpt-image" in name or name.startswith("dall-e"))
+
+
 def run_async(base_url: str, api_key: str, payload: dict[str, Any],
               output_dir: Path, fmt: str, poll_interval: int, timeout: int,
               label: str = "async", name_prefix: str | None = None) -> list[Path]:
-    endpoint = f"{base_url}/images/generations"
+    model = str(payload.get("model") or "")
+    openai_task = _openai_async_task(base_url, model)
+    endpoint = f"{base_url}/images/generations/async" if openai_task else f"{base_url}/images/generations"
     log(label, f"提交异步任务到 {endpoint}...")
     result = http_post(endpoint, api_key, payload, timeout=30)
 
@@ -1001,17 +1032,18 @@ def run_async(base_url: str, api_key: str, payload: dict[str, Any],
         error = result.get("error", {})
         fail(f"提交失败（code={code}）：{error.get('message', json.dumps(result))}")
 
+    task_id = result.get("id") or result.get("task_id")
     data = result.get("data")
-    if not isinstance(data, list) or not data:
-        fail(f"提交响应缺少 data 数组：{json.dumps(result)[:300]}")
-    task_id = data[0].get("task_id")
+    if not task_id and isinstance(data, list) and data:
+        task_id = data[0].get("task_id") or data[0].get("id")
     if not task_id:
-        fail(f"提交响应缺少 task_id：{json.dumps(data[0])[:300]}")
+        fail(f"提交响应缺少 task_id：{json.dumps(result)[:300]}")
 
     log(label, f"任务已提交: {task_id}，等待 15s 后开始轮询...")
     time.sleep(15)
 
-    task_data = _poll_task(base_url, api_key, task_id, poll_interval, timeout, label)
+    poll_url = f"{base_url}/images/tasks/{task_id}" if openai_task else f"{base_url}/tasks/{task_id}"
+    task_data = _poll_task(poll_url, api_key, task_id, poll_interval, timeout, label, openai_task)
     try:
         cost = float(task_data.get("cost", 0) or 0)
     except (TypeError, ValueError):
@@ -1021,20 +1053,22 @@ def run_async(base_url: str, api_key: str, payload: dict[str, Any],
     return _save_async_images(task_data, output_dir, fmt, name_prefix, label)
 
 
-def _poll_task(base_url: str, api_key: str, task_id: str,
-               poll_interval: int, timeout: int, label: str = "async") -> dict[str, Any]:
-    url = f"{base_url}/tasks/{task_id}"
+def _poll_task(url: str, api_key: str, task_id: str,
+               poll_interval: int, timeout: int, label: str = "async",
+               top_level: bool = False) -> dict[str, Any]:
     start = time.time()
     while True:
         elapsed = time.time() - start
         if elapsed > timeout:
             fail(f"任务 {task_id} 超时（{timeout}s），请稍后手动查询。")
         result = http_get(url, api_key)
-        task_data = result.get("data", {})
+        task_data = result if top_level else result.get("data", {})
+        if not isinstance(task_data, dict):
+            task_data = {}
         status = task_data.get("status", "")
-        if status == "completed":
+        if status in {"completed", "succeeded", "success"}:
             return task_data
-        if status == "failed":
+        if status in {"failed", "cancelled", "error"}:
             error = task_data.get("error", {})
             fail(f"任务 {task_id} 失败：{error.get('message', json.dumps(task_data)[:300])}")
         progress = task_data.get("progress", 0)
@@ -1045,16 +1079,28 @@ def _poll_task(base_url: str, api_key: str, task_id: str,
 def _save_async_images(task_data: dict[str, Any], output_dir: Path, fmt: str,
                        name_prefix: str | None = None, label: str = "async") -> list[Path]:
     result = task_data.get("result", {})
-    images = result.get("images")
-    if not isinstance(images, list) or not images:
-        fail(f"任务结果中缺少 images 数组：{json.dumps(task_data)[:300]}")
+    images = result.get("images") if isinstance(result, dict) else None
+    urls: list[str] = []
+    if isinstance(images, list):
+        for img_item in images:
+            url_list = img_item.get("url") if isinstance(img_item, dict) else None
+            if isinstance(url_list, list) and url_list:
+                urls.append(url_list[0])
+            elif isinstance(url_list, str):
+                urls.append(url_list)
+    if not urls and isinstance(result, dict):
+        data = result.get("data")
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and isinstance(item.get("url"), str):
+                    urls.append(item["url"])
+    if not urls and isinstance(task_data.get("image_url"), str):
+        urls.append(task_data["image_url"])
+    if not urls:
+        fail(f"任务结果中缺少图片地址：{json.dumps(task_data)[:300]}")
     output_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
-    for index, img_item in enumerate(images):
-        url_list = img_item.get("url")
-        if not isinstance(url_list, list) or not url_list:
-            fail(f"图片结果缺少 url 数组：{json.dumps(img_item)[:300]}")
-        image_url = url_list[0]
+    for index, image_url in enumerate(urls):
         output_path = output_dir / output_name(name_prefix, index, _suffix_from_url(image_url, fmt))
         log(label, f"下载图片: {image_url}")
         download_to_path(image_url, output_path)
@@ -1459,7 +1505,7 @@ def build_check_report(
         if not urls or not str(urls[0]).startswith("data:image/"):
             fail("异步图生图试装失败：payload 没有 image_urls data URI")
         lines.append(f"参考图：异步 POST {base_url}/images/generations，image_urls 已带上 data URI")
-        lines.append(f"--size 仍传比例。1:1 → {payload.get('size')}；16:9 → {size_to_ratio('16:9')}")
+        lines.append(f"--size 仍传比例，gpt-image-2 翻译成像素。1:1 → {payload.get('size')}")
     else:
         lines.append(f"参考图：sync multipart POST {base_url}/images/edits 字段 image（已读入 {filename}）")
         lines.append(

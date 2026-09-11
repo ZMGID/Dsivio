@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import { api } from '../../api/tauri'
+import { humanizeImageError } from './imageValidation'
 import { Button, IconButton } from '../../components/Button'
 import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 import {
@@ -199,7 +200,7 @@ export function ImageWorkflow({
       </ol>
       {task?.error && (
         <p role="alert" className="is-alert is-error">
-          {task.error}
+          {humanizeImageError(task.error)}
         </p>
       )}
       {rulesChanged && <p className="iw-hint">制作素材或要求已修改，请先更新制作，再进行试品。</p>}
@@ -683,7 +684,7 @@ export function ImageWorkflow({
                             <figcaption>当前结果 · v{workflow?.ruleVersion}</figcaption>
                           </figure>
                         </div>
-                        {result?.error && <p className="iw-result-error">{result.error}</p>}
+                        {result?.error && <p className="iw-result-error">{humanizeImageError(result.error)}</p>}
                         <div className="is-actions">
                           {result?.path ? (
                             <Button size="sm" onClick={() => onOpenResult(result)}>

@@ -16,7 +16,7 @@ import { Select } from '../../settings/components'
 import { ModelPairSelect } from '../../settings/ModelPairSelect'
 import type { ImageConfig, ImageTemplate, ImageTemplateSlot } from './types'
 import { builtinImageUrl } from './builtinTemplates'
-import { inferImageStudioProtocol, isImageGenerationModel, isVisionModel } from './studioModels'
+import { inferImageStudioProtocol, isImageGenerationModel, isVisionModel, reconcileImageStudioProtocol } from './studioModels'
 
 /** Adapt option children to the application's shared Select; no separate menu styling. */
 export function StudioSelect({
@@ -312,7 +312,11 @@ export function ConfigPanel({
             disabled={pending || configConflict}
             onClick={() => {
               setPending(true)
-              void onSave(draft)
+              const next = reconcileImageStudioProtocol(
+                draft,
+                providers.find((p) => p.id === draft.providerId),
+              )
+              void onSave(next)
                 .catch((e) => setError(String(e)))
                 .finally(() => setPending(false))
             }}

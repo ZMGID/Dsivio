@@ -1,7 +1,10 @@
 //! Native image adapters derived from dsimage's generation contracts.
 //! Submissions are never automatically retried: a timeout may still be billable.
 use super::{storage, types::*};
-use crate::{settings::ModelProvider, state::AppState};
+use crate::{
+    settings::{ModelProvider, ProviderApiFormat, Settings},
+    state::AppState,
+};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures::{future::BoxFuture, FutureExt};
 use reqwest::{Client, Response};
@@ -42,6 +45,59 @@ impl super::generation::Backend for NativeBackend<'_> {
     fn store(&self, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
         store_image(self.task_id, result, bytes)
     }
+}
+
+/// Studio still stores a protocol string; resolve it from the live provider + model
+/// so a stale `openai` config cannot keep gpt-image on a relay in a sync wait.
+pub fn resolve_protocol(provider: &ModelProvider, model: &str) -> String {
+    let name = model.to_ascii_lowercase();
+    let base = provider.base_url.to_ascii_lowercase();
+    if provider.api_format_kind() == ProviderApiFormat::Gemini {
+        return "gemini".into();
+    }
+    if provider.api_format_kind() == ProviderApiFormat::XaiResponses
+        || name.contains("grok-imagine")
+        || base.contains("api.x.ai")
+    {
+        return "grok".into();
+    }
+    if (name.contains("gemini") && name.contains("image"))
+        || name.contains("nano-banana")
+        || name.starts_with("imagen")
+    {
+        return "gemini-chat".into();
+    }
+    if uses_async_image_gateway(&base, &name) {
+        return "async".into();
+    }
+    "openai".into()
+}
+
+fn uses_async_image_gateway(base: &str, model: &str) -> bool {
+    if base.contains("apimart") {
+        return true;
+    }
+    let official_openai = base.contains("api.openai.com");
+    let images_api_model = model.contains("gpt-image") || model.starts_with("dall-e");
+    images_api_model && !official_openai
+}
+
+pub fn apply_resolved_protocol(cfg: &mut StudioConfig, provider: &ModelProvider) {
+    cfg.protocol = resolve_protocol(provider, &cfg.model);
+}
+
+/// Rewrite a stored studio protocol from the live provider + model.
+/// Returns true when the on-disk value was stale.
+pub fn sync_protocol_from_settings(settings: &Settings, cfg: &mut StudioConfig) -> bool {
+    let Some(p) = settings.get_provider(&cfg.provider_id) else {
+        return false;
+    };
+    let next = resolve_protocol(p, &cfg.model);
+    if cfg.protocol == next {
+        return false;
+    }
+    cfg.protocol = next;
+    true
 }
 
 pub fn validate(cfg: &StudioConfig, brief: &Brief) -> Result<(), String> {
@@ -150,10 +206,7 @@ async fn json_response(
                 detail = detail.replace(key, "[redacted]");
             }
         }
-        return Err(format!(
-            "图片接口 HTTP {status}：{}",
-            detail.chars().take(500).collect::<String>()
-        ));
+        return Err(explain_image_http_error(status.as_u16(), &detail));
     }
     serde_json::from_slice(&bytes)
         .map_err(|_| "图片接口没有返回 JSON，请核对协议和供应商地址".into())
@@ -175,8 +228,11 @@ pub async fn submit(
     brief: &Brief,
     plan: &ImagePlan,
 ) -> Result<Submission, String> {
-    validate(cfg, brief)?;
     let p = provider(app, cfg)?;
+    let mut resolved = cfg.clone();
+    apply_resolved_protocol(&mut resolved, &p);
+    let cfg = &resolved;
+    validate(cfg, brief)?;
     if plan.refs.len() > if cfg.protocol == "grok" { 5 } else { 16 } {
         return Err("参考图数量超出该接口限制，请减少参考素材".into());
     }
@@ -192,7 +248,7 @@ pub async fn submit(
             cfg.model.rsplit('/').next().unwrap_or(&cfg.model)
         ),
         "gemini-chat" => "chat/completions".into(),
-        "async" => "images/generations".into(),
+        "async" => async_submit_path(&p.base_url, &cfg.model).into(),
         _ => {
             if refs {
                 "images/edits".into()
@@ -278,27 +334,118 @@ pub async fn submit(
                 }
                 json!({"model":cfg.model,"messages":[{"role":"user","content":content}],"stream":false,"generationConfig":{"responseModalities":["IMAGE"],"imageConfig":{"aspectRatio":b.ratio,"imageSize":b.resolution.to_uppercase()}}})
             }
-            _ => {
-                json!({"model":cfg.model,"prompt":plan.prompt,"n":1,"size":b.ratio,"resolution":b.resolution,"image_urls":images})
-            }
+            _ => async_generation_payload(&cfg.model, &plan.prompt, &b.ratio, &b.resolution, &images),
         };
         req = req.json(&payload);
     }
     let v = json_response(req.send().await, &p).await?;
-    if let Some(id) = v.pointer("/data/0/task_id").and_then(Value::as_str) {
-        return Ok(Submission::Pending(id.into()));
-    }
     if let Some(url) = image_download_url(&v) {
         return Ok(Submission::Download(url.into()));
     }
+    if let Some(id) = remote_task_id(&v) {
+        return Ok(Submission::Pending(id));
+    }
     Ok(Submission::Image(extract(app, &v).await?))
 }
+pub(super) fn explain_image_http_error(status: u16, body: &str) -> String {
+    let lower = body.to_ascii_lowercase();
+    if status == 504 || lower.contains("gateway timeout") || lower.contains("error code: 504") {
+        return "图片生成超时，兼容网关无法同步等待出图。请重新生成。".into();
+    }
+    if status == 502 || lower.contains("upstream request failed") {
+        return "上游生图暂时失败，请稍后单独重试该页，不要整单重提。".into();
+    }
+    if lower.contains("16-multiple")
+        || lower.contains("image-2 size")
+        || (lower.contains("invalid_request") && lower.contains("size") && lower.contains("1:1"))
+    {
+        return "该模型需要像素尺寸（如 1024x1024），不能把画幅比例直接当作 size。请重新生成。".into();
+    }
+    if let Ok(v) = serde_json::from_str::<Value>(body) {
+        if let Some(msg) = v
+            .pointer("/error/message")
+            .or_else(|| v.pointer("/message"))
+            .and_then(Value::as_str)
+        {
+            let clean: String = msg.chars().take(160).collect();
+            if !clean.is_empty() {
+                return format!("图片接口拒绝请求：{clean}");
+            }
+        }
+    }
+    format!("图片接口 HTTP {status}")
+}
+
 fn openai_size(ratio: &str) -> &'static str {
     match ratio {
-        "2:3" => "1024x1536",
-        "3:2" => "1536x1024",
+        "2:3" | "3:4" | "4:5" | "9:16" => "1024x1536",
+        "3:2" | "4:3" | "5:4" | "16:9" => "1536x1024",
         _ => "1024x1024",
     }
+}
+
+/// Apimart-style gateways take `size` as a ratio. gpt-image / DALL·E on new-api
+/// relays reject that (`size must be 16-multiple... : 1:1`) and want WxH.
+pub(super) fn async_generation_payload(
+    model: &str,
+    prompt: &str,
+    ratio: &str,
+    resolution: &str,
+    image_urls: &[String],
+) -> Value {
+    let mut v = if let Some(size) = async_images_size(model, ratio, resolution) {
+        json!({"model":model,"prompt":prompt,"n":1,"size":size,"quality":"high"})
+    } else {
+        json!({"model":model,"prompt":prompt,"n":1,"size":ratio,"resolution":resolution})
+    };
+    if !image_urls.is_empty() {
+        v["image_urls"] = json!(image_urls);
+    }
+    v
+}
+
+fn async_images_size(model: &str, ratio: &str, resolution: &str) -> Option<String> {
+    let name = model.to_ascii_lowercase();
+    if name.contains("gpt-image-2") {
+        return Some(gpt_image_size(ratio, resolution));
+    }
+    if name.contains("gpt-image") || name.starts_with("dall-e") {
+        return Some(openai_size(ratio).into());
+    }
+    None
+}
+
+pub(super) fn gpt_image_size(ratio: &str, resolution: &str) -> String {
+    let (w, h) = match (resolution, ratio) {
+        ("2k", "1:1") => (2048, 2048),
+        ("2k", "2:3") => (1280, 1920),
+        ("2k", "3:2") => (1920, 1280),
+        ("2k", "3:4") => (1536, 2048),
+        ("2k", "4:3") => (2048, 1536),
+        ("2k", "4:5") => (1600, 2000),
+        ("2k", "5:4") => (2000, 1600),
+        ("2k", "9:16") => (1440, 2560),
+        ("2k", "16:9") => (2560, 1440),
+        ("4k", "1:1") => (2880, 2880),
+        ("4k", "2:3") => (2304, 3456),
+        ("4k", "3:2") => (3456, 2304),
+        ("4k", "3:4") => (2448, 3264),
+        ("4k", "4:3") => (3264, 2448),
+        ("4k", "4:5") => (2560, 3200),
+        ("4k", "5:4") => (3200, 2560),
+        ("4k", "9:16") => (2160, 3840),
+        ("4k", "16:9") => (3840, 2160),
+        (_, "2:3") => (1024, 1536),
+        (_, "3:2") => (1536, 1024),
+        (_, "3:4") => (1152, 1536),
+        (_, "4:3") => (1536, 1152),
+        (_, "4:5") => (1024, 1280),
+        (_, "5:4") => (1280, 1024),
+        (_, "9:16") => (1152, 2048),
+        (_, "16:9") => (2048, 1152),
+        _ => (1024, 1024),
+    };
+    format!("{w}x{h}")
 }
 
 pub(super) fn grok_prompt(prompt: &str, count: usize) -> String {
@@ -348,7 +495,7 @@ pub async fn poll(
             app,
             &p,
             reqwest::Method::GET,
-            &endpoint(&p, &format!("tasks/{remote_id}"))?,
+            &endpoint(&p, &async_poll_path(&p.base_url, &cfg.model, remote_id))?,
             cfg,
             task_id,
         )
@@ -363,8 +510,12 @@ pub async fn poll(
         .unwrap_or("")
     {
         "completed" | "succeeded" | "success" => Ok(Some(extract(app, &v).await?)),
-        "failed" | "cancelled" => {
-            Err("远程图片任务失败，请在供应商后台核对原因；可单独重新生成该页。".into())
+        "failed" | "cancelled" | "error" => {
+            let detail = v
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("请在供应商后台核对原因");
+            Err(format!("远程图片任务失败：{detail}；可单独重新生成该页。"))
         }
         "pending" | "queued" | "running" | "processing" | "submitted" => Ok(None),
         _ => Err("无法识别远程任务状态。已保留任务 ID，可稍后恢复查询。".into()),
@@ -433,11 +584,53 @@ pub(super) async fn download(app: &AppHandle, u: &str) -> Result<Vec<u8>, String
 
 pub(super) fn image_download_url(v: &Value) -> Option<&str> {
     v.pointer("/data/0/url")
+        .or_else(|| v.pointer("/result/data/0/url"))
+        .or_else(|| v.pointer("/image_url"))
         // dsimage async returns images[].url as an array, not a string.
         .or_else(|| v.pointer("/data/result/images/0/url/0"))
         .or_else(|| v.pointer("/data/result/images/0/url"))
         .or_else(|| v.pointer("/data/result/images/0"))
         .and_then(Value::as_str)
+}
+
+pub(super) fn remote_task_id(v: &Value) -> Option<String> {
+    ["id", "task_id"]
+        .into_iter()
+        .filter_map(|k| v.get(k).and_then(Value::as_str))
+        .chain(
+            [
+                "/data/0/task_id",
+                "/data/task_id",
+                "/data/0/id",
+                "/data/id",
+            ]
+            .into_iter()
+            .filter_map(|p| v.pointer(p).and_then(Value::as_str)),
+        )
+        .find(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn uses_openai_async_task(base_url: &str, model: &str) -> bool {
+    let base = base_url.to_ascii_lowercase();
+    let name = model.to_ascii_lowercase();
+    !base.contains("apimart") && (name.contains("gpt-image") || name.starts_with("dall-e"))
+}
+
+pub(super) fn async_submit_path(base_url: &str, model: &str) -> &'static str {
+    if uses_openai_async_task(base_url, model) {
+        "images/generations/async"
+    } else {
+        "images/generations"
+    }
+}
+
+pub(super) fn async_poll_path(base_url: &str, model: &str, remote_id: &str) -> String {
+    if uses_openai_async_task(base_url, model) {
+        format!("images/tasks/{remote_id}")
+    } else {
+        format!("tasks/{remote_id}")
+    }
 }
 
 pub fn store_image(task_id: &str, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
