@@ -13,10 +13,10 @@ Before presenting the API route for a new video, run `quote` for both resolution
 
 ## Required Rules
 
-1. Before constructing the final H3 prompt or running `--dry-run`, show the current user-readable video script and obtain explicit confirmation after it is displayed. Route choice, resolution choice, or an earlier request to generate does not confirm an unseen script. Any script or generation-spec change invalidates the confirmation and requires the revised script to be shown and confirmed again.
+1. Preserve the current task’s agreed script, product, language and audio across follow-ups. Consolidate missing choices and cost confirmation into one question. A user instruction to generate the displayed plan or a specific variant is authorization for that variant; do not ask again for unchanged choices. Newly invented scripts or an unconfirmed paid cost require confirmation. Preparation and free dry runs may run before confirmation.
 2. Use the Pay-as-you-go API key saved under `minimax` in the current user's `dsvideo/providers.json`; the legacy `MINIMAX_API_KEY` variable remains an override. Never print, repeat, or place a literal key in a command.
 3. Select `global` or `cn` with `MINIMAX_REGION`. This plugin defaults to `cn`, using the official `https://api.minimaxi.com` endpoint; use `global` only when the user explicitly has an international API account.
-4. Obtain an explicit `768P` or `2K` choice from the user for every paid create request. Never infer, default, upgrade, or downgrade the resolution.
+4. Obtain an explicit `768P` or `2K` choice from the user for the current task. Never infer, default, upgrade, or downgrade the resolution. Reuse the user’s existing choice unless they change it.
 5. Show the current balance with the currency returned by `balance` and the estimated cost before asking the user to choose the API route. If balance lookup fails, report that it is unavailable and still show the estimate. For `global`, stop before paid creation unless a reliable current international estimate is available; never reuse the bundled CNY quote. Never treat an estimate as the final charge.
 6. Run `--dry-run` first and check `model`, `resolution`, `duration`, `ratio`, and mode against the request. The paid command prints the same billable request summary immediately before its single POST.
 7. Run exactly one `generate` command when the user wants a completed file. The script submits once, prints the task ID immediately, polls that task, verifies the returned resolution and duration, and then downloads its result.
@@ -83,3 +83,7 @@ For a completed request, verify that the reported local MP4 exists and is non-em
 
 视频页面和本插件共用一份 `providers.json`，页面保存后下次脚本调用直接生效，不需要重复配置。路径优先取 `DSVIDEO_CONFIG_PATH`；否则 Windows 为 `%APPDATA%/dsvideo/providers.json`，macOS/Linux 为 `${XDG_CONFIG_HOME:-~/.config}/dsvideo/providers.json`。
 用户问模型或配置时，运行 `python <插件根目录>/scripts/dsvideo_config.py show`（密钥脱敏），查看 `providers.grok` / `providers.minimax` / `providers.comfy` 的 `model` 和 `base_url`。MiniMax-H3 路线模型固定为 MiniMax-H3；ComfyUI 模型由工作流决定。旧环境变量显式覆盖时说明来源。生成仍使用插件自己的脚本和 MCP。
+
+## Execution context
+
+Read [运行与恢复](../ecom-h3-video/references/execution.md) before running commands. Keep requested speech and its language when switching routes or shortening a video. Official price estimates are not a custom gateway invoice.

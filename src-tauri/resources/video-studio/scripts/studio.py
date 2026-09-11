@@ -17,6 +17,8 @@ import sys
 import time
 import uuid
 from urllib.parse import urljoin, urlsplit
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from dsvideo_config import get_provider, save_provider, normalize_base_url, config_path
 import runtime
@@ -346,6 +348,85 @@ def request(t):
                                    reference_videos=b.get('referenceVideos', []), reference_audios=b.get('referenceAudios', []))
 
 
+def check_comfy_connection(base_url):
+    parsed = urlsplit(base_url)
+    # Display only the endpoint; never echo embedded credentials or queries.
+    endpoint = parsed.hostname or '未配置地址'
+    try:
+        if parsed.port:
+            endpoint += f':{parsed.port}'
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+            raise ValueError('无效地址')
+        request = Request(base_url.rstrip('/') + '/system_stats', headers={'Accept': 'application/json'})
+        with urlopen(request, timeout=5) as response:
+            stats = json.loads(response.read(1024 * 1024))
+        if not isinstance(stats, dict) or not isinstance(stats.get('system'), dict):
+            raise ValueError('不是 ComfyUI 状态响应')
+    except HTTPError as error:
+        raise ValueError(f'ComfyUI 服务 {endpoint} 返回 HTTP {error.code}，请检查视频设置中的服务地址和访问权限。本次未上传素材、未提交生成。') from None
+    except (URLError, OSError):
+        local_hint = '当前地址指向这台电脑；若 ComfyUI 在另一台电脑上，请填写那台电脑的地址。' if parsed.hostname in ('localhost', '127.0.0.1', '::1') else ''
+        raise ValueError(f'无法连接 ComfyUI 服务 {endpoint}，请确认服务已启动且网络可达。{local_hint}本次未上传素材、未提交生成。') from None
+    except (ValueError, UnicodeError):
+        raise ValueError(f'地址 {endpoint} 未返回有效的 ComfyUI 状态，请检查视频设置中的服务地址。本次未上传素材、未提交生成。') from None
+
+
+def result_download_url(result, route, base_url):
+    content = result.get('video' if route == 'grok' else 'content') or {}
+    url = content.get('url') if isinstance(content, dict) else None
+    if not isinstance(url, str) or not url.strip():
+        raise ValueError('生成完成但服务没有返回视频地址')
+    url = urljoin(base_url + '/', url)
+    if urlsplit(url).scheme not in ('http', 'https') or not urlsplit(url).netloc:
+        raise ValueError('服务返回的视频地址无效')
+    return url
+
+
+def download_result(t, c, cached):
+    r = t['remote']
+    dest = ROOT / 'outputs' / t['id'] / 'video.mp4'
+
+    def download():
+        # Persist the receipt before CDN access, including after URL refresh.
+        persist(t)
+        if r['route'] == 'grok':
+            same_origin = urlsplit(r['download_url'])[:2] == urlsplit(c.base_url)[:2]
+            grok.download_video(r['download_url'], dest, api_key=c.api_key if same_origin else None)
+        else:
+            mini.download_video(r['download_url'], dest)
+
+    try:
+        try:
+            download()
+        except (OSError, grok.ApiError, mini.ApiError):
+            if not cached:
+                raise
+            # Signed URLs can expire. Refresh only after trying the saved URL.
+            result = c.get_video(r['id']) if r['route'] == 'grok' else c.get_task(r['id'])
+            if result.get('status') not in ('done', 'succeeded'):
+                raise ValueError('暂时无法刷新视频地址')
+            r['download_url'] = result_download_url(result, r['route'], c.base_url)
+            download()
+    except (OSError, ValueError, grok.ApiError, mini.ApiError):
+        # Do not persist exception text: it may contain signed URLs or headers.
+        t.update(status='running', error='视频已生成，下载尚未完成；已保存下载地址和任务编号，可恢复下载，不会重新生成。')
+        return persist(t)
+    t.update(output=str(dest), error='')
+    if r['route'] == 'grok':
+        try:
+            t['media'] = probe_video(dest)
+            requested = {**{'aspect_ratio': t['brief']['ratio'], 'resolution': t['brief']['resolution'],
+                            'duration': t['brief']['duration'], 'generate_audio': t['brief'].get('speechMode') != 'silent'},
+                         **t.get('requested', {})}
+            issues = output_mismatches(t['media'], requested)
+        except (OSError, ValueError, KeyError, StopIteration, subprocess.SubprocessError):
+            issues = ['无法检查成片规格，请检查内置 FFmpeg / ffprobe']
+        t.update(status='failed' if issues else 'succeeded', error='；'.join(issues))
+    else:
+        t.update(status='succeeded')
+    return persist(t)
+
+
 def handle(action, data):
     if action == 'install_comfy':
         return runtime.install()
@@ -429,7 +510,7 @@ def handle(action, data):
         if not t.get('prompt') or not t['approved']:
             raise ValueError('请先确认剧本并转换提示词')
         if route == 'comfy':
-            t['quote'] = {'note': '本地工作流；算力与工作流节点费用取决于你的 ComfyUI 配置。', 'base_url': get_provider('comfy').get('base_url') or 'http://127.0.0.1:8188'}
+            t['quote'] = {'note': '本地工作流；算力与工作流节点费用取决于你的 ComfyUI 配置。', 'base_url': get_provider('comfy').get('base_url') or 'http://192.168.1.171:8188'}
         else:
             provider = get_provider(route)
             model = (provider.get('model') or grok.MODEL) if route == 'grok' else 'MiniMax-H3'
@@ -452,9 +533,15 @@ def handle(action, data):
         if not t.get('prompt') or not t.get('approved'):
             raise ValueError('请先确认当前剧本和生成提示词')
         t['remote'] = {'route': route, 'base_url': get_provider(route).get('base_url') or
-                       {'grok': 'https://api.x.ai', 'minimax': 'https://api.minimaxi.com', 'comfy': 'http://127.0.0.1:8188'}[route]}
+                       {'grok': 'https://api.x.ai', 'minimax': 'https://api.minimaxi.com', 'comfy': 'http://192.168.1.171:8188'}[route]}
         if route == 'comfy':
-            t['status'] = 'submitting'
+            try:
+                check_comfy_connection(t['remote']['base_url'])
+            except ValueError as error:
+                t.update(status='approved', error=str(error))
+                persist(t)
+                raise
+            t.update(status='submitting', error='')
             return persist(t)
         c = client(route, t['remote'])
         payload = request(t)
@@ -523,33 +610,13 @@ def handle(action, data):
         if r['route'] == 'comfy':
             return t
         c = client(r['route'], r)
+        if r.get('download_url'):
+            return download_result(t, c, cached=True)
         result = c.get_video(r['id']) if r['route'] == 'grok' else c.get_task(r['id'])
         status = result.get('status')
         if status in ('done', 'succeeded'):
-            m = grok if r['route'] == 'grok' else mini
-            url = (result.get('video') if r['route'] == 'grok' else result.get('content') or {}).get('url')
-            if not url:
-                raise ValueError('生成完成但服务没有返回视频地址')
-            dest = ROOT / 'outputs' / t['id'] / 'video.mp4'
-            download_url = urljoin(c.base_url + '/', url)
-            if r['route'] == 'grok':
-                same_origin = urlsplit(download_url)[:2] == urlsplit(c.base_url)[:2]
-                m.download_video(download_url, dest, api_key=c.api_key if same_origin else None)
-            else:
-                m.download_video(download_url, dest)
-            t.update(output=str(dest))
-            if r['route'] == 'grok':
-                try:
-                    t['media'] = probe_video(dest)
-                    requested = {**{'aspect_ratio': t['brief']['ratio'], 'resolution': t['brief']['resolution'],
-                                    'duration': t['brief']['duration'], 'generate_audio': t['brief'].get('speechMode') != 'silent'},
-                                 **t.get('requested', {})}
-                    issues = output_mismatches(t['media'], requested)
-                except (OSError, ValueError, KeyError, StopIteration, subprocess.SubprocessError):
-                    issues = ['无法检查成片规格，请检查内置 FFmpeg / ffprobe']
-                t.update(status='failed' if issues else 'succeeded', error='；'.join(issues))
-            else:
-                t.update(status='succeeded')
+            r['download_url'] = result_download_url(result, r['route'], c.base_url)
+            return download_result(t, c, cached=False)
         elif status in ('failed', 'cancelled', 'expired', 'error'):
             t.update(status='failed', error='供应商任务失败：' + str(status))
         return persist(t)

@@ -534,6 +534,16 @@ describe('video confirmation and monitoring', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(16000) })
     expect(vi.mocked(api.videoStudioTask).mock.calls).toHaveLength(2)
   })
+  it('shows download recovery and polls the existing job without submitting again', async () => {
+    const task: VideoTask = { ...readyTask(), status: 'running', error: '视频已生成，下载尚未完成',
+      remote: { route: 'grok', id: 'remote-1', base_url: 'https://api.x.ai', download_url: 'https://cdn.test/video.mp4' } }
+    seed(task, 2)
+    vi.mocked(api.videoStudioTask).mockImplementation(async action => action === 'poll' ? { ...task, status: 'succeeded', error: '' } : task)
+    render(<VideoStudio />)
+    expect(screen.getByRole('heading', { name: '下载待恢复' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '恢复下载' }))
+    await waitFor(() => expect(vi.mocked(api.videoStudioTask).mock.calls.map(c => c[0])).toEqual(['get', 'poll']))
+  })
   it('allows explicit recovery checks for an uncertain task with a known remote id', async () => {
     const task: VideoTask = { ...readyTask(), status: 'uncertain', remote: { route: 'grok', id: 'remote-1', base_url: 'https://api.x.ai' } }
     seed(task, 2)

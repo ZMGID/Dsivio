@@ -276,7 +276,7 @@ pub(crate) fn build_shell_command(command: &str) -> Command {
             let mut c = Command::new(bash);
             // 与 PowerShell 分支同法:.arg() 把整段命令当单个 argv 传给 bash 的
             // -c,由 bash 自己的引号/转义规则解析,不在 Kivio 侧二次拆分。
-            c.arg("-c");
+            c.args(["-o", "pipefail", "-c"]);
             c.arg(command);
             return c;
         }
@@ -284,8 +284,8 @@ pub(crate) fn build_shell_command(command: &str) -> Command {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let mut c = Command::new("sh");
-        c.args(["-c", command]);
+        let mut c = Command::new("/bin/bash");
+        c.args(["-o", "pipefail", "-c", command]);
         c
     }
 }
@@ -1187,6 +1187,15 @@ fn format_command_output(output: &CommandOutput) -> String {
 mod tests {
     use super::*;
     use crate::native_tools::user_home_dir;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn pipeline_failure_is_not_hidden_by_tee_or_tail() {
+        let output = build_shell_command("printf 'provider failed\\n' >&2; (exit 7) | cat").output().await.unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        let output = build_shell_command("printf ok | cat").output().await.unwrap();
+        assert!(output.status.success());
+    }
 
     #[test]
     fn default_cwd_uses_first_workspace_root_when_configured() {

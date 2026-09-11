@@ -22,7 +22,7 @@ import { api, isTauriRuntime } from '../../api/tauri'
 import { Button, IconButton } from '../../components/Button'
 import { Field, StudioSelect } from '../images/StudioPanels'
 import {
-  videoStatus,
+  videoTaskStatus,
   videoRatios,
   languages,
   type VideoBootstrap,
@@ -114,7 +114,7 @@ export default function VideoStudio() {
   const [templateName, setTemplateName] = useState('')
   const [reviseNote, setReviseNote] = useState('')
   const [provider, setProvider] = useState('comfy')
-  const [base, setBase] = useState('http://127.0.0.1:8188')
+  const [base, setBase] = useState('http://192.168.1.171:8188')
   const [key, setKey] = useState('')
   const [configDirty, setConfigDirty] = useState(false)
   const [configConflict, setConfigConflict] = useState(false)
@@ -218,7 +218,7 @@ export default function VideoStudio() {
       return
     }
     configVersion.current = version
-    setBase(data.config[provider]?.base_url || ({ comfy: 'http://127.0.0.1:8188', minimax: 'https://api.minimaxi.com', grok: 'https://api.x.ai' } as Record<string, string>)[provider])
+    setBase(data.config[provider]?.base_url || ({ comfy: 'http://192.168.1.171:8188', minimax: 'https://api.minimaxi.com', grok: 'https://api.x.ai' } as Record<string, string>)[provider])
     setModel(data.config[provider]?.model || 'grok-imagine-video-1.5')
     setConfigConflict(false)
   }, [provider, data.config, configDirty])
@@ -669,7 +669,7 @@ export default function VideoStudio() {
                           data.config[p]?.base_url ||
                             (
                               {
-                                comfy: 'http://127.0.0.1:8188',
+                                comfy: 'http://192.168.1.171:8188',
                                 minimax: 'https://api.minimaxi.com',
                                 grok: 'https://api.x.ai',
                               } as Record<string, string>
@@ -910,7 +910,7 @@ export default function VideoStudio() {
                 </div>
                 <div className="vs-actions is-task-actions">
                   <span className="vs-muted">
-                    {task ? videoStatus[task.status] || task.status : '新任务'}
+                    {task ? videoTaskStatus(task) : '新任务'}
                     {dirty ? ' · 未保存' : ''}
                   </span>
                   <Button
@@ -1564,7 +1564,7 @@ export default function VideoStudio() {
                   </section>
                   {task?.remote && (
                     <section className="vs-panel">
-                      <h3>{videoStatus[task.status]}</h3>
+                      <h3>{videoTaskStatus(task)}</h3>
                       {task.remote.id && <p className="vs-path">任务编号：{task.remote.id}</p>}
                       {task.status === 'uncertain' ? <>
                         <p role="alert">{task.submission?.reason || '这次提交没有记录到任务编号或具体接口错误，暂时无法确认服务是否接单。'}</p>
@@ -1577,7 +1577,7 @@ export default function VideoStudio() {
                           onClick={() => void run('poll')}
                         >
                           <RefreshCw size={14} />
-                          查询进度 / 恢复结果
+                          {task.status === 'running' && task.remote.download_url ? '恢复下载' : '查询进度 / 恢复结果'}
                         </Button>
                       )}
                       {task.remote.id && <p className="vs-muted">已保存任务编号，重新打开后可继续查询。</p>}
@@ -1622,10 +1622,10 @@ export default function VideoStudio() {
         </main>
         {(view === 'creation' || view === 'analysis' || view === 'remake') && <ExecutionStatus
           active={!!busy || task?.status === 'running' || task?.status === 'submitting'}
-          title={busy || (task ? videoStatus[task.status] || task.status : 'AI 执行状态')}
+          title={busy || (task ? videoTaskStatus(task) : 'AI 执行状态')}
           detail={error || task?.error || (busy
             ? '操作完成后会显示结果；等待时间不代表完成比例。'
-            : task?.status === 'running' ? `视频服务正在生成${task.remote?.id ? ` · 任务编号 ${task.remote.id}` : ''}`
+            : task?.status === 'running' ? `${task.remote?.download_url ? '视频已生成，正在下载成片' : '视频服务正在生成'}${task.remote?.id ? ` · 任务编号 ${task.remote.id}` : ''}`
             : task?.output ? '成片已保存，可在生成与成片中查看。'
             : '当前步骤的执行状态将在这里显示。')}
         />}

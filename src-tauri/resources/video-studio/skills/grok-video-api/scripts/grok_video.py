@@ -323,7 +323,10 @@ def _api_error(body: bytes, http_status: int) -> ApiError:
     try:
         value = _decode_json(body)
     except ApiError:
-        return ApiError(f"xAI API returned HTTP {http_status}.", http_status=http_status)
+        # Plain-text gateway rejection should remain actionable without echoing HTML or credentials.
+        if b"error code: 1010" in body.lower():
+            return ApiError(f"Gateway rejected the request (HTTP {http_status}, Cloudflare 1010). Check gateway access rules; no reliable task receipt was returned.", http_status=http_status, code="1010")
+        return ApiError(f"Video API returned HTTP {http_status} with a non-JSON response. Check the configured gateway.", http_status=http_status)
     detail = value.get("error") if isinstance(value.get("error"), dict) else {}
     message = detail.get("message") or value.get("message") or f"xAI API returned HTTP {http_status}."
     code = detail.get("code")

@@ -11,9 +11,9 @@ Before a paid request, read [references/grok-video-api.md](references/grok-video
 
 ## Required rules
 
-1. Show the final user-readable video script and obtain explicit confirmation before any paid request or dry run. A modification invalidates the prior confirmation.
+1. Preserve the current task’s agreed script, product, language and audio across follow-ups. Consolidate missing choices and cost confirmation into one question. A user instruction to generate the displayed plan or a specific variant is authorization for that variant; do not ask again for unchanged choices. Newly invented scripts or an unconfirmed paid cost require confirmation. Preparation and free dry runs may run before confirmation.
 2. Read credentials from the saved `grok` provider or the legacy `XAI_API_KEY` override. Never print or place a literal key in a command.
-3. Obtain an explicit `480p`, `720p`, or `1080p` choice for every paid creation. Never infer or silently change it.
+3. Obtain an explicit `480p`, `720p`, or `1080p` choice for the current task. Never infer or silently change it. Reuse the user’s existing choice unless they change it.
 4. Show the USD estimate from `quote`, including the selected duration and whether one source image is charged, before asking the user to choose Grok.
 5. Run `--dry-run` first and compare model, resolution, duration, aspect ratio, mode, and audio with the confirmed request.
 6. Run exactly one `generate` command for a completed file. It submits once, prints the request ID, polls that request, checks returned duration, and downloads the MP4.
@@ -52,3 +52,7 @@ python <skill-directory>/scripts/grok_video.py wait <request-id> \
 ```
 
 The result URL is temporary, so download promptly. The client accepts both absolute xAI URLs and gateway-relative `/v1/videos/.../content` URLs; it sends the API credential on relative same-gateway downloads only. Deliver the local MP4 path, request ID, mode, selected resolution, verified duration, aspect ratio, and that Grok was the paid route.
+
+## Execution context
+
+Read [运行与恢复](../ecom-h3-video/references/execution.md) before running commands. Keep requested speech and its language when switching routes or shortening a video. Official price estimates are not a custom gateway invoice.

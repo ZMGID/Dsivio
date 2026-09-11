@@ -144,3 +144,7 @@ description: >
 
 视频页面和本插件共用一份 `providers.json`，页面保存后下次脚本调用直接生效，不需要重复配置。路径优先取 `DSVIDEO_CONFIG_PATH`；否则 Windows 为 `%APPDATA%/dsvideo/providers.json`，macOS/Linux 为 `${XDG_CONFIG_HOME:-~/.config}/dsvideo/providers.json`。
 用户问模型或配置时，运行 `python <插件根目录>/scripts/dsvideo_config.py show`（密钥脱敏），查看 `providers.grok` / `providers.minimax` / `providers.comfy` 的 `model` 和 `base_url`。MiniMax-H3 路线模型固定为 MiniMax-H3；ComfyUI 模型由工作流决定。旧环境变量显式覆盖时说明来源。生成仍使用插件自己的脚本和 MCP。
+
+## 仿拍需求的交接
+
+交给生成技能时一并传递商品素材、选定镜头、口播/对白、语言、声音和字幕要求。无真人不等于无旁白，无字幕不等于无音轨。用户后续仅修改路线或时长时保留其余已明确要求，不重新默认成静音商品展示。

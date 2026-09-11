@@ -290,7 +290,8 @@ impl AppState {
         // 连接前钩子：远程 MCP 的 OAuth token 若临近/已过期，先用 refresh_token 刷新，
         // 更新 server 的 Authorization header 与 auth，并持久化新 token。失败则用旧
         // token 继续连接（记录错误，不 panic）。StreamableHttpMcpClient 不变（仍只发 header）。
-        let overlaid = self.overlay_oauth_from_settings(server);
+        let configured = crate::video_studio::config::current_comfy_server(server)?;
+        let overlaid = self.overlay_oauth_from_settings(&configured);
         let refreshed = self.refresh_mcp_oauth(sink, &overlaid, false).await;
         let server = refreshed.as_ref().unwrap_or(&overlaid);
         let fingerprint = config_fingerprint(server);
@@ -552,7 +553,8 @@ impl AppState {
         name: &str,
         arguments: Value,
     ) -> Result<McpToolCallResult, String> {
-        let server = self.overlay_oauth_from_settings(server);
+        let configured = crate::video_studio::config::current_comfy_server(server)?;
+        let server = self.overlay_oauth_from_settings(&configured);
         let session = self.mcp_get_or_connect(sink, &server).await?;
         let timeout_dur = self.mcp_tool_timeout();
 

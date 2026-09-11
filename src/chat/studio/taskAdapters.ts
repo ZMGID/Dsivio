@@ -1,5 +1,5 @@
 import { FEATURES, latestResults, type ImageTask } from '../images/types'
-import { videoStatus, type VideoTask } from '../videos/types'
+import { videoTaskStatus, type VideoTask } from '../videos/types'
 import type { LibraryTask, TaskGroup } from './taskLibraryModel'
 
 export function imageLibraryTask(task: ImageTask): LibraryTask {
@@ -26,7 +26,7 @@ export function videoLibraryTask(task: VideoTask): LibraryTask {
   return {
     id: task.id, name: task.brief.name || '未命名视频任务', description: task.brief.request || task.brief.source,
     kind: analysis ? 'analysis' : task.brief.route || 'creation', kindLabel: analysis ? '视频拆解 / 参考' : `${route} 视频`,
-    status: task.submission?.retryable ? '生成被拒绝 · 可重试' : analysis && task.script && group === 'ready' ? '已拆解' : videoStatus[task.status] || task.status,
+    status: task.submission?.retryable ? '生成被拒绝 · 可重试' : analysis && task.script && group === 'ready' ? '已拆解' : videoTaskStatus(task),
     group, updatedAt: Number(task.updatedAt) || 0,
     detail: analysis ? '参考分析' : [task.brief.duration ? `${task.brief.duration} 秒` : '', task.brief.ratio, task.brief.resolution, task.output ? '成片已保存' : ''].filter(Boolean).join(' · '),
     error: task.error || task.submission?.reason,

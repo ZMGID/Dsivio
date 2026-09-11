@@ -34,9 +34,44 @@ fn resolve(
         .join("dsvideo/providers.json")
 }
 
+/// Resolve file-backed provider settings before MCP session fingerprinting.
+/// Task recovery explicitly pins its original endpoint; ordinary chat uses the latest settings.
+pub(crate) fn current_comfy_server(server: &crate::settings::ChatMcpServer) -> Result<crate::settings::ChatMcpServer, String> {
+    let mut resolved = server.clone();
+    if server.connector_id.as_deref() != Some(&format!("plugin:package:{}", super::PACKAGE_ID))
+        || !server.name.ends_with("comfy-mcp") {
+        return Ok(resolved);
+    }
+    let config_path = path()?;
+    let provider: serde_json::Value = match std::fs::read(&config_path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "视频配置文件格式无效，请检查视频设置")?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::Value::Null,
+        Err(_) => return Err("无法读取视频配置文件，请检查视频设置".into()),
+    };
+    let url = comfy_endpoint(&server.env, &provider);
+    resolved.env.insert("COMFYUI_URL".into(), url);
+    resolved.env.insert("DSVIDEO_CONFIG_PATH".into(), config_path.to_string_lossy().into_owned());
+    Ok(resolved)
+}
+
+fn comfy_endpoint(env: &std::collections::HashMap<String, String>, provider: &serde_json::Value) -> String {
+    env.get("DSVIDEO_COMFY_TASK_URL").map(String::as_str)
+        .or_else(|| provider["providers"]["comfy"]["base_url"].as_str().filter(|url| !url.trim().is_empty()))
+        .unwrap_or("http://192.168.1.171:8188").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_uses_latest_provider_but_recovery_keeps_original_endpoint() {
+        let mut env = std::collections::HashMap::from([("COMFYUI_URL".into(), "http://127.0.0.1:8188".into())]);
+        let provider = serde_json::json!({"providers":{"comfy":{"base_url":"http://192.168.1.171:8188"}}});
+        assert_eq!(comfy_endpoint(&env, &provider), "http://192.168.1.171:8188");
+        env.insert("DSVIDEO_COMFY_TASK_URL".into(), "http://original:8188".into());
+        assert_eq!(comfy_endpoint(&env, &provider), "http://original:8188");
+    }
 
     #[test]
     fn video_config_locations_match_python_contract() {
