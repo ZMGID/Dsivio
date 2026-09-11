@@ -35,6 +35,12 @@ describe('studioModels', () => {
     ).toBe('grok')
     expect(
       inferImageStudioProtocol(makeProvider({ apiFormat: 'openai_chat' }), 'gemini-3.1-flash-image'),
+    ).toBe('gemini')
+    expect(
+      inferImageStudioProtocol(
+        makeProvider({ apiFormat: 'openai_chat', baseUrl: 'https://ybw-ai.com/v1' }),
+        'gemini-3.1-flash-image',
+      ),
     ).toBe('gemini-chat')
     expect(inferImageStudioProtocol(makeProvider(), 'gpt-image-1')).toBe('openai')
     expect(inferImageStudioProtocol(makeProvider({ baseUrl: 'https://api.apimart.ai/v1' }), 'gpt-image-1')).toBe('async')
@@ -44,6 +50,15 @@ describe('studioModels', () => {
         'gpt-image-2',
       ),
     ).toBe('async')
+    expect(
+      inferImageStudioProtocol(
+        makeProvider({ baseUrl: 'https://ybw-ai.com/v1' }),
+        'grok-imagine-image-2.0',
+      ),
+    ).toBe('grok')
+    expect(
+      inferImageStudioProtocol(makeProvider({ baseUrl: 'https://ybw-ai.com/v1' }), 'grok-2-image'),
+    ).toBe('grok')
   })
 
   it('upgrades a stale openai protocol for relay gpt-image models', () => {
@@ -60,5 +75,11 @@ describe('studioModels', () => {
         makeProvider(),
       ).protocol,
     ).toBe('openai')
+    expect(
+      reconcileImageStudioProtocol(
+        { protocol: 'async', model: 'grok-imagine-image-2.0' },
+        relay,
+      ).protocol,
+    ).toBe('grok')
   })
 })

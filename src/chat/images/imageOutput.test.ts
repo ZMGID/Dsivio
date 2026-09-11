@@ -64,8 +64,10 @@ it('lists Grok as ratio plus 1K/2K, not pixels', () => {
   expect(labels).toContain('1K · 9:16')
   expect(labels).toContain('2K · 16:9')
   expect(labels.some((label) => label.includes('×'))).toBe(false)
-  expect(isAllowedImageOutput('1:1', '4k', 'grok-imagine-image', 'grok')).toBe(false)
-  expect(isAllowedImageOutput('4:5', '1k', 'grok-imagine-image', 'grok')).toBe(false)
+  expect(isAllowedImageOutput('1:1', '4k', 'grok-imagine-image', 'grok')).toBe(true)
+  expect(isAllowedImageOutput('4:5', '1k', 'grok-imagine-image', 'grok')).toBe(true)
+  expect(isAllowedImageOutput('5:4', '4k', 'grok-2-image', 'async')).toBe(true)
+  expect(snapImageOutput('grok-imagine-image', 'grok', '5:4', '4k')).toEqual({ ratio: '4:3', resolution: '2k' })
 })
 
 it('still shows the current size when it is outside the current model', () => {
