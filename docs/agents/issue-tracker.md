@@ -1,6 +1,6 @@
 # Issue tracker: GitHub
 
-Issues and PRDs for this repo live as GitHub issues in [`ZMGID/kivio`](https://github.com/ZMGID/kivio). Use the `gh` CLI for all operations.
+Issues and PRDs for this repo live as GitHub issues in [`ZMGID/Dsivio`](https://github.com/ZMGID/Dsivio). Use the `gh` CLI for all operations.
 
 ## Conventions
 

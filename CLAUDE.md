@@ -348,7 +348,7 @@ Bundled document Skills (`pdf` / `docx` / `xlsx`) tell the model to use host `re
 
 ### Issue tracker
 
-议题走 GitHub Issues（`ZMGID/kivio`），用 `gh` CLI 读写。见 `docs/agents/issue-tracker.md`。
+议题走 GitHub Issues（`ZMGID/Dsivio`），用 `gh` CLI 读写。见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 
