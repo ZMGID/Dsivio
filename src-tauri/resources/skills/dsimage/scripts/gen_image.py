@@ -176,17 +176,39 @@ def env_defines_img_keys(env_file: Path) -> bool:
 
 
 def find_default_env_file() -> Path | None:
-    import dsivio
-    return dsivio.workspace() / "config.json"
+    # 向上查找时只认包含 IMG_ 配置的 .env，避免误用其他项目里给
+    # 文本模型准备的 OPENAI_API_KEY
+    for directory in (Path.cwd(), *Path.cwd().parents):
+        env_file = directory / ".env"
+        if env_file.is_file() and env_defines_img_keys(env_file):
+            return env_file
+    skill_env = Path(__file__).resolve().parent.parent / ".env"
+    if skill_env.is_file():
+        return skill_env
+    return None
 
 
 def load_env_file(env_file: Path | None) -> None:
-    import dsivio
-    global _dsivio_provider
+    if env_file is None:
+        return
     try:
-        _dsivio_provider = dsivio.load_config()
-    except RuntimeError as exc:
-        fail(str(exc))
+        lines = env_file.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        fail(f"无法读取 .env 文件：{exc}")
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            fail(f".env 第 {line_number} 行格式不正确，应为 KEY=value。")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            fail(f".env 第 {line_number} 行缺少变量名。")
+        if key not in os.environ:
+            os.environ[key] = strip_env_value(value)
 
 
 def optional_config(name: str) -> str:
@@ -369,22 +391,9 @@ def ref_images(args: argparse.Namespace) -> list[str]:
 
 # ── HTTP 工具 ──────────────────────────────────────────────
 
-_dsivio_provider: dict[str, Any] = {}
-
-
-def _api_open(request: urllib.request.Request, timeout: int):
-    config = _dsivio_provider.get("request", {})
-    for header in config.get("customHeaders", []):
-        key, value = header.get("key", ""), header.get("value", "")
-        if key.lower() not in {"authorization", "x-goog-api-key", "host", "content-length", "content-type"} and key:
-            request.add_header(key, value)
-    if config.get("useSystemProxy", True):
-        return urllib.request.urlopen(request, timeout=timeout)
-    return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout)
-
 def _post_json(request: urllib.request.Request, timeout: int, what: str) -> dict[str, Any]:
     try:
-        with _api_open(request, timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:400]
@@ -486,7 +495,7 @@ def http_get(url: str, api_key: str, timeout: int = 30, *, auth: str = "bearer")
         headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with _api_open(request, timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:400]
@@ -982,49 +991,17 @@ def run_gemini_chat(base_url: str, api_key: str, args: argparse.Namespace, promp
 
 def build_async_payload(args: argparse.Namespace, prompt: str, model: str) -> dict[str, Any]:
     ratio = size_to_ratio(args.size)
-    name = model.lower()
-    if "gpt-image-2" in name:
-        payload: dict[str, Any] = {
-            "model": model, "prompt": prompt, "n": 1,
-            "size": gpt_image_size(ratio, args.resolution),
-        }
-    elif "gpt-image" in name or name.startswith("dall-e"):
-        payload = {"model": model, "prompt": prompt, "n": 1, "size": sync_size(ratio)}
-    else:
-        payload = {"model": model, "prompt": prompt, "n": 1, "size": ratio, "resolution": args.resolution}
+    payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1, "size": ratio, "resolution": args.resolution}
     images = ref_images(args)
     if images:
         payload["image_urls"] = [encode_image_data_uri(path) for path in images]
     return payload
 
 
-def gpt_image_size(ratio: str, resolution: str) -> str:
-    table = {
-        ("1:1", "1k"): "1024x1024",
-        ("1:1", "2k"): "2048x2048",
-        ("2:3", "1k"): "1024x1536",
-        ("3:2", "1k"): "1536x1024",
-        ("9:16", "1k"): "864x1536",
-        ("9:16", "2k"): "1152x2048",
-        ("9:16", "4k"): "2160x3840",
-        ("16:9", "1k"): "1536x864",
-        ("16:9", "2k"): "2048x1152",
-        ("16:9", "4k"): "3840x2160",
-    }
-    return table.get((ratio, resolution)) or table.get((ratio, "1k")) or "1024x1024"
-
-
-def _openai_async_task(base_url: str, model: str) -> bool:
-    name = model.lower()
-    return "apimart" not in base_url.lower() and ("gpt-image" in name or name.startswith("dall-e"))
-
-
 def run_async(base_url: str, api_key: str, payload: dict[str, Any],
               output_dir: Path, fmt: str, poll_interval: int, timeout: int,
               label: str = "async", name_prefix: str | None = None) -> list[Path]:
-    model = str(payload.get("model") or "")
-    openai_task = _openai_async_task(base_url, model)
-    endpoint = f"{base_url}/images/generations/async" if openai_task else f"{base_url}/images/generations"
+    endpoint = f"{base_url}/images/generations"
     log(label, f"提交异步任务到 {endpoint}...")
     result = http_post(endpoint, api_key, payload, timeout=30)
 
@@ -1033,18 +1010,17 @@ def run_async(base_url: str, api_key: str, payload: dict[str, Any],
         error = result.get("error", {})
         fail(f"提交失败（code={code}）：{error.get('message', json.dumps(result))}")
 
-    task_id = result.get("id") or result.get("task_id")
     data = result.get("data")
-    if not task_id and isinstance(data, list) and data:
-        task_id = data[0].get("task_id") or data[0].get("id")
+    if not isinstance(data, list) or not data:
+        fail(f"提交响应缺少 data 数组：{json.dumps(result)[:300]}")
+    task_id = data[0].get("task_id")
     if not task_id:
-        fail(f"提交响应缺少 task_id：{json.dumps(result)[:300]}")
+        fail(f"提交响应缺少 task_id：{json.dumps(data[0])[:300]}")
 
     log(label, f"任务已提交: {task_id}，等待 15s 后开始轮询...")
     time.sleep(15)
 
-    poll_url = f"{base_url}/images/tasks/{task_id}" if openai_task else f"{base_url}/tasks/{task_id}"
-    task_data = _poll_task(poll_url, api_key, task_id, poll_interval, timeout, label, openai_task)
+    task_data = _poll_task(base_url, api_key, task_id, poll_interval, timeout, label)
     try:
         cost = float(task_data.get("cost", 0) or 0)
     except (TypeError, ValueError):
@@ -1054,22 +1030,20 @@ def run_async(base_url: str, api_key: str, payload: dict[str, Any],
     return _save_async_images(task_data, output_dir, fmt, name_prefix, label)
 
 
-def _poll_task(url: str, api_key: str, task_id: str,
-               poll_interval: int, timeout: int, label: str = "async",
-               top_level: bool = False) -> dict[str, Any]:
+def _poll_task(base_url: str, api_key: str, task_id: str,
+               poll_interval: int, timeout: int, label: str = "async") -> dict[str, Any]:
+    url = f"{base_url}/tasks/{task_id}"
     start = time.time()
     while True:
         elapsed = time.time() - start
         if elapsed > timeout:
             fail(f"任务 {task_id} 超时（{timeout}s），请稍后手动查询。")
         result = http_get(url, api_key)
-        task_data = result if top_level else result.get("data", {})
-        if not isinstance(task_data, dict):
-            task_data = {}
+        task_data = result.get("data", {})
         status = task_data.get("status", "")
-        if status in {"completed", "succeeded", "success"}:
+        if status == "completed":
             return task_data
-        if status in {"failed", "cancelled", "error"}:
+        if status == "failed":
             error = task_data.get("error", {})
             fail(f"任务 {task_id} 失败：{error.get('message', json.dumps(task_data)[:300])}")
         progress = task_data.get("progress", 0)
@@ -1080,28 +1054,16 @@ def _poll_task(url: str, api_key: str, task_id: str,
 def _save_async_images(task_data: dict[str, Any], output_dir: Path, fmt: str,
                        name_prefix: str | None = None, label: str = "async") -> list[Path]:
     result = task_data.get("result", {})
-    images = result.get("images") if isinstance(result, dict) else None
-    urls: list[str] = []
-    if isinstance(images, list):
-        for img_item in images:
-            url_list = img_item.get("url") if isinstance(img_item, dict) else None
-            if isinstance(url_list, list) and url_list:
-                urls.append(url_list[0])
-            elif isinstance(url_list, str):
-                urls.append(url_list)
-    if not urls and isinstance(result, dict):
-        data = result.get("data")
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and isinstance(item.get("url"), str):
-                    urls.append(item["url"])
-    if not urls and isinstance(task_data.get("image_url"), str):
-        urls.append(task_data["image_url"])
-    if not urls:
-        fail(f"任务结果中缺少图片地址：{json.dumps(task_data)[:300]}")
+    images = result.get("images")
+    if not isinstance(images, list) or not images:
+        fail(f"任务结果中缺少 images 数组：{json.dumps(task_data)[:300]}")
     output_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
-    for index, image_url in enumerate(urls):
+    for index, img_item in enumerate(images):
+        url_list = img_item.get("url")
+        if not isinstance(url_list, list) or not url_list:
+            fail(f"图片结果缺少 url 数组：{json.dumps(img_item)[:300]}")
+        image_url = url_list[0]
         output_path = output_dir / output_name(name_prefix, index, _suffix_from_url(image_url, fmt))
         log(label, f"下载图片: {image_url}")
         download_to_path(image_url, output_path)
@@ -1506,7 +1468,7 @@ def build_check_report(
         if not urls or not str(urls[0]).startswith("data:image/"):
             fail("异步图生图试装失败：payload 没有 image_urls data URI")
         lines.append(f"参考图：异步 POST {base_url}/images/generations，image_urls 已带上 data URI")
-        lines.append(f"--size 仍传比例，gpt-image-2 翻译成像素。1:1 → {payload.get('size')}")
+        lines.append(f"--size 仍传比例。1:1 → {payload.get('size')}；16:9 → {size_to_ratio('16:9')}")
     else:
         lines.append(f"参考图：sync multipart POST {base_url}/images/edits 字段 image（已读入 {filename}）")
         lines.append(

@@ -8,8 +8,6 @@ import base64
 import json
 import os
 import sys
-import socket
-import ssl
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -29,6 +27,13 @@ MODEL = "grok-imagine-video-1.5"
 DEFAULT_BASE_URL = "https://api.x.ai"
 RESOLUTIONS = ("480p", "720p", "1080p")
 RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3")
+OUTPUT_PRICE_USD_PER_SECOND = {
+    "480p": Decimal("0.08"),
+    "720p": Decimal("0.14"),
+    "1080p": Decimal("0.25"),
+}
+IMAGE_INPUT_PRICE_USD = Decimal("0.01")
+PRICING_URL = "https://docs.x.ai/developers/pricing"
 IMAGE_MIME = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -76,19 +81,7 @@ def build_video_request(
     ratio: str = "16:9",
     image: str | None = None,
     generate_audio: bool = True,
-    reference_images: list[str] | None = None,
-    voice_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    reference_images = list(reference_images or [])
-    voice_ids = list(voice_ids or [])
-    if image and (reference_images or voice_ids):
-        raise ValueError('Single-frame and reference modes cannot be combined.')
-    if len(reference_images) > 7 or len(voice_ids) > 3:
-        raise ValueError('Reference mode supports up to 7 images and 3 preset voices.')
-    if (reference_images or voice_ids) and resolution == '1080p':
-        raise ValueError('Reference-to-video is capped at 720p.')
-    if voice_ids and not generate_audio:
-        raise ValueError('Preset voices require audio generation.')
     if not prompt.strip():
         raise ValueError("Grok video requires a non-empty prompt.")
     if resolution is None:
@@ -111,20 +104,27 @@ def build_video_request(
     }
     if image:
         payload["image"] = {"url": resolve_image(image)}
-    if reference_images:
-        payload['reference_images'] = [{'url': resolve_image(p)} for p in reference_images]
-    if voice_ids:
-        payload['reference_audios'] = [{'voice_id': v} for v in voice_ids]
     return payload
 
 
 def cost_quote(*, duration: int, image_count: int = 0) -> dict[str, Any]:
     if isinstance(duration, bool) or not isinstance(duration, int) or not 1 <= duration <= 15:
         raise ValueError("Grok video duration must be an integer from 1 to 15 seconds.")
-    if not 0 <= image_count <= 7:
-        raise ValueError("Supports at most 7 reference images.")
-    from model_catalog import video_quote
-    return video_quote(MODEL, duration, image_count)
+    if image_count not in (0, 1):
+        raise ValueError("This integration accepts zero or one source image.")
+    estimates = {
+        resolution: format(rate * duration + IMAGE_INPUT_PRICE_USD * image_count, ".2f")
+        for resolution, rate in OUTPUT_PRICE_USD_PER_SECOND.items()
+    }
+    return {
+        "model": MODEL,
+        "currency": "USD",
+        "duration_seconds": duration,
+        "image_count": image_count,
+        "estimated_cost": estimates,
+        "pricing_url": PRICING_URL,
+        "note": "Estimate from the current official rate card; final billing is determined by xAI.",
+    }
 
 
 def paid_request_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -133,7 +133,7 @@ def paid_request_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "resolution": payload.get("resolution"),
         "duration_seconds": payload.get("duration"),
         "aspect_ratio": payload.get("aspect_ratio"),
-        "mode": "reference-to-video" if payload.get('reference_images') or payload.get('reference_audios') else "image-to-video" if payload.get("image") else "text-to-video",
+        "mode": "image-to-video" if payload.get("image") else "text-to-video",
         "generate_audio": payload.get("generate_audio"),
     }
 
@@ -148,11 +148,7 @@ class GrokVideoClient:
 
     def create_video(self, payload: dict[str, Any]) -> str:
         response = self._request("POST", "/v1/videos/generations", payload)
-        # Common compatible gateways wrap the job under data or use id/task_id.
-        containers = [response] + ([response['data']] if isinstance(response.get('data'), dict) else [])
-        request_id = next((value.strip() for container in containers
-            for key in ('request_id', 'task_id', 'id')
-            if isinstance(value := container.get(key), str) and value.strip()), '')
+        request_id = str(response.get("request_id", "")).strip()
         if not request_id:
             raise ApiError("xAI accepted the request but returned no request_id.")
         return request_id
@@ -167,7 +163,7 @@ class GrokVideoClient:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         data = None
-        headers = {"Authorization": f"Bearer {self.api_key}", "User-Agent": "dsvideo-plugin/0.1", "Accept": "application/json"}
+        headers = {"Authorization": f"Bearer {self.api_key}"}
         if payload is not None:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -176,15 +172,9 @@ class GrokVideoClient:
             with urlopen(request, timeout=self.request_timeout) as response:
                 return _decode_json(response.read())
         except HTTPError as error:
-            try:
-                body = error.read()
-            finally:
-                error.close()
-            raise _api_error(body, error.code) from None
+            raise _api_error(error.read(), error.code) from None
         except URLError as error:
-            failure = ApiError("Network connection failed.")
-            failure.not_submitted = isinstance(error.reason, (ConnectionRefusedError, socket.gaierror, ssl.SSLCertVerificationError))
-            raise failure from None
+            raise ApiError(f"Network error: {error.reason}") from None
 
 
 def wait_for_video(
@@ -341,9 +331,6 @@ def _safe_request(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(image, dict) and str(image.get("url", "")).startswith("data:"):
         url = image["url"]
         image["url"] = f"<local-data-uri:{len(url.encode('utf-8'))} bytes>"
-    for ref in value.get('reference_images', []):
-        if str(ref.get('url', '')).startswith('data:'):
-            ref['url'] = '<local reference image>'
     return value
 
 
@@ -383,8 +370,6 @@ def _request_from_args(args: argparse.Namespace) -> dict[str, Any]:
         ratio=args.ratio,
         image=args.image,
         generate_audio=not args.no_audio,
-        reference_images=args.reference_image,
-        voice_ids=args.voice_id,
     )
 
 
@@ -405,7 +390,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     quote_parser = subparsers.add_parser("quote", help="estimate cost without a network request")
     quote_parser.add_argument("--duration", type=int, required=True)
-    quote_parser.add_argument("--image-count", type=int, choices=range(8), default=0)
+    quote_parser.add_argument("--image-count", type=int, choices=(0, 1), default=0)
 
     def add_request_arguments(command: argparse.ArgumentParser) -> None:
         command.add_argument("--prompt", required=True)
@@ -413,8 +398,6 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--duration", type=int, default=5)
         command.add_argument("--ratio", choices=RATIOS, default="16:9")
         command.add_argument("--image")
-        command.add_argument("--reference-image", action="append", default=[])
-        command.add_argument("--voice-id", action="append", default=[])
         command.add_argument("--no-audio", action="store_true")
         command.add_argument("--dry-run", action="store_true")
 

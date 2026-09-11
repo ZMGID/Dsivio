@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch, Mock
 
-SCRIPTS = Path(__file__).resolve().parents[1] / 'src-tauri/resources/plugins/dsvideo-plugin/scripts'
+SCRIPTS = Path(__file__).resolve().parents[1] / 'src-tauri/resources/video-studio/scripts'
 sys.path.insert(0, str(SCRIPTS))
 import studio
 
@@ -30,6 +30,55 @@ class WorkspaceTests(unittest.TestCase):
 
     def action(self, t, action, **kw):
         return studio.handle(action, dict(id=t['id'], revision=t['revision'], **kw))
+
+    def test_chat_template_file_is_visible_without_import_or_task(self):
+        template = {'id': 'chat-template', 'name': '对话总结', 'kind': 'reference', 'script': '展示商品后切换使用场景'}
+        path = self.root / 'templates/chat-template.json'
+        path.write_text(json.dumps(template, ensure_ascii=False), encoding='utf-8')
+        saved = next(t for t in studio.bootstrap()['templates'] if t['id'] == template['id'])
+        self.assertEqual(saved['script'], template['script'])
+        self.assertEqual(saved['name'], template['name'])
+        template['script'] = '按用户反馈调整后的镜头'
+        path.write_text(json.dumps(template, ensure_ascii=False), encoding='utf-8')
+        saved = next(t for t in studio.bootstrap()['templates'] if t['id'] == template['id'])
+        self.assertEqual(saved['script'], template['script'])
+        self.assertEqual(saved['name'], template['name'])
+        self.assertEqual(list((self.root / 'tasks').glob('*.json')), [])
+
+    def test_original_reference_template_is_read_without_rewriting_file(self):
+        source = SCRIPTS.parent.parent / 'plugins/dsvideo-plugin/skills/video-reference-analysis/templates/_template.json'
+        value = json.loads(source.read_text())
+        value.pop('id')
+        value['name'] = '产品近景'
+        value['full_video_prompt'] = '完整的原版提示词'
+        value['source'].update(duration_seconds=12, aspect_ratio='16:9')
+        path = self.root / 'templates/product-closeup.json'
+        path.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
+        original = path.read_bytes()
+        result = next(t for t in studio.bootstrap()['templates'] if t['name'] == value['name'])
+        self.assertEqual(result['id'], 'product-closeup')
+        self.assertEqual(result['script'], value['full_video_prompt'])
+        self.assertEqual(result['shots'][0]['action'], value['shot_breakdown'][0]['generation_prompt'])
+        self.assertEqual(result['spec'], {'duration_seconds': 12, 'aspect_ratio': '16:9'})
+        self.assertEqual(result['kind'], 'reference')
+        self.assertEqual(result['negative_prompt'], value['negative_prompt'])
+        self.assertEqual(path.read_bytes(), original)
+        imported = studio.handle('template_import', {'path': str(path)})
+        self.assertEqual(imported['script'], value['full_video_prompt'])
+        self.assertEqual(imported['kind'], 'reference')
+
+    def test_plain_script_and_upstream_verified_templates_need_no_new_schema(self):
+        plain = {'name': '聊天方案', 'script': '先远景再近景'}
+        result = studio.template_for_page(plain, 'my-plan.json')
+        self.assertEqual(result['id'], 'my-plan')
+        self.assertEqual(result['kind'], 'reference')
+        source = SCRIPTS.parent.parent / 'plugins/dsvideo-plugin/skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json'
+        original = json.loads(source.read_text())
+        result = studio.template_for_page(original, source.name)
+        self.assertEqual(result['script'], original['prompt_pattern'])
+        self.assertEqual(result['kind'], 'generation')
+        original['reference_template'] = True
+        self.assertEqual(studio.template_for_page(original, source.name)['kind'], 'reference')
 
     def draft(self):
         return studio.handle('create', {'brief': self.brief})

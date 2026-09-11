@@ -41,18 +41,6 @@ fn response(mut task: Value, state: &str, error: Option<String>) -> Value {
     task
 }
 
-pub(crate) fn with_next_action(mut task: Value, domain: &str) -> Value {
-    let wait_state = task["wait"]["state"].as_str();
-    if matches!(task["status"].as_str(), Some("running" | "submitting"))
-        && (wait_state.is_none() || wait_state == Some("timeout"))
-    {
-        task["nextAction"] = json!({"domain":domain,"action":"wait","input":{"id":task["id"]}});
-        task["waitingHint"] =
-            json!("调用 wait，完成会立即返回。不要用 sleep 定时，不要重复提交生成。");
-    }
-    task
-}
-
 type Poll = JoinHandle<Result<Value, String>>;
 async fn wait_for(
     domain: &str,
@@ -276,21 +264,5 @@ mod tests {
         tokio::time::advance(Duration::from_secs(6)).await;
         tokio::task::yield_now().await;
         assert!(done.load(std::sync::atomic::Ordering::SeqCst));
-    }
-    #[test]
-    fn waiting_hint_does_not_restart_failed_queries_or_finished_steps() {
-        let timeout = with_next_action(
-            json!({"id":"job","status":"running","wait":{"state":"timeout"}}),
-            "video",
-        );
-        assert_eq!(timeout["nextAction"]["action"], "wait");
-        for state in ["poll_error", "needs_attention"] {
-            let result =
-                with_next_action(json!({"status":"running","wait":{"state":state}}), "video");
-            assert!(result.get("nextAction").is_none());
-        }
-        assert!(with_next_action(json!({"status":"ready"}), "image")
-            .get("nextAction")
-            .is_none());
     }
 }

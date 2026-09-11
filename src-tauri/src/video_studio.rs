@@ -1,4 +1,4 @@
-//! Video UI and bundled chat plugin share the same Python workspace service.
+//! Video page runtime, independent of the bundled chat plugin.
 pub(crate) mod config;
 mod planning;
 use crate::{
@@ -137,7 +137,7 @@ fn image_url(path: &str) -> Result<String, String> {
 }
 
 async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, String> {
-    let script = source(app)?.join("scripts/studio.py");
+    let script = runtime::resource_directory(app)?.join("video-studio/scripts/studio.py");
     let environment = runtime::environment()?;
     let mut command = tokio::process::Command::new(&environment["DSVIDEO_PYTHON"]);
     command
@@ -283,7 +283,7 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
             }
         })
         .unwrap_or_default();
-    let root = source(app)?;
+    let root = runtime::resource_directory(app)?.join("video-studio");
     let mut images: Vec<(String, String)> = b["images"]
         .as_array()
         .into_iter()
@@ -605,40 +605,6 @@ mod tests {
         assert!(worker_result(br#"{"error":""}"#).is_err());
         assert!(worker_result(b"invalid JSON").is_err());
     }
-    #[test]
-    fn documented_chat_task_actions_reach_the_public_video_service() {
-        let guide = include_str!("../resources/plugins/dsvideo-plugin/STUDIO.md");
-        let shared_tasks = guide.split("## Shared tasks").nth(1).unwrap();
-        let supported = public_actions();
-        for line in shared_tasks.lines().filter(|line| line.starts_with('`')) {
-            let (heading, _) = line
-                .split_once(':')
-                .expect("documented action must have a description");
-            for action in heading.split('`').skip(1).step_by(2) {
-                assert!(
-                    supported.contains(&action),
-                    "documented action {action} is not exposed"
-                );
-            }
-        }
-        for action in ["plan_result", "analysis_result", "prompt_result"] {
-            assert!(
-                WORKER_ACTIONS.contains(&action),
-                "chat-authored results must reach the worker"
-            );
-        }
-        for internal in [
-            "comfy_workflow",
-            "comfy_submitted",
-            "comfy_complete",
-            "uncertain",
-        ] {
-            assert!(
-                !supported.contains(&internal),
-                "internal bookkeeping must stay host-owned"
-            );
-        }
-    }
 
     #[test]
     fn unknown_action_error_lists_recovery_options_without_sending_agents_to_source_code() {
@@ -647,17 +613,6 @@ mod tests {
         assert!(error.contains("prompt_result"));
         assert!(error.contains("prepare"));
         assert!(error.contains("不要搜索或修改安装目录"));
-    }
-
-    #[test]
-    fn studio_tool_advertises_all_public_video_operations() {
-        let tool = crate::mcp::types::native_studio_tool();
-        for action in public_actions() {
-            assert!(
-                tool.description.contains(action),
-                "tool does not advertise {action}"
-            );
-        }
     }
 
     #[test]

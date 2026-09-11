@@ -11,9 +11,9 @@
 
 ## 共用能力
 
-- `src-tauri/resources/plugins/dsvideo-plugin` 保留原插件六个 Skill、两个 MCP 和生成脚本。来源版本记录于 `STUDIO.md`。
+- `src-tauri/resources/plugins/dsvideo-plugin` 保留原插件六个 Skill、两个 MCP 和生成脚本。上游版本记录于 `docs/studio-chat-sync.md`。
 - 启动时注册为内置包，沿用现有插件发现和启用机制。保留用户启用状态，应用更新覆盖包内容，用户数据独立保存。
-- `scripts/studio.py` 是聊天和 UI 共用的工作区服务。使用 JSON stdin/stdout、跨进程锁、原子写入和乐观版本检查。
+- `resources/video-studio/scripts/studio.py` 是页面专用的工作区服务。聊天恢复上游 Skill、脚本和 MCP 流程，只共享模板。使用 JSON stdin/stdout、跨进程锁、原子写入和乐观版本检查。
 - 任务、素材、模板、结果：应用数据目录的 `video-studio`。API 配置仍使用原插件的 `dsvideo/providers.json`。
 - 助手编写和修改提示词复用应用 Agent loop，只使用所选助手的提示词与模型，不加载旧导演技能或外部工具；生成通过原 Python 客户端及现有 MCP 连接池执行。
 - Comfy MCP、视频分析 MCP、独立 Python / Node、FFmpeg / ffprobe 和 yt-dlp 随应用打包，启动使用应用资源绝对路径，不运行 npx 或现场安装依赖。ComfyUI 服务端与 H3 工作流节点仍由用户部署。

@@ -3,11 +3,6 @@ name: minimax-h3-api
 description: Generate, monitor, recover, and download MiniMax-H3 videos through MiniMax's official Video Generation V2 API. Use for paid H3 text-to-video, first/last-frame video, or multimodal reference video; do not use for local ComfyUI generation or legacy Hailuo models.
 ---
 
-## Dsivio 内置适配（优先于下文原插件路径约定）
-本插件已内置。不要在聊天中安装或更新插件。先阅读 `${PLUGIN_ROOT}/STUDIO.md`。
-聊天与视频页面共享模板、任务和供应商配置。模板的查找和保存必须使用共享工作区，禁止写入插件 skills/templates 或缓存目录；下文模板路径只作内置样例阅读。
-
-
 # MiniMax H3 Official API
 
 Use the bundled `scripts/minimax_h3.py` client. It has no third-party Python dependencies and fixes the model to `MiniMax-H3` on the official `/v2/video_generation` API.
@@ -79,3 +74,7 @@ V2 tasks remain queryable through the list endpoint for seven days. Retain the t
 ## Delivery
 
 For a completed request, verify that the reported local MP4 exists and is non-empty, then return its path, task ID, input mode, verified resolution, verified duration, ratio, and that the user selected the paid API route. Do not describe submission or a running task as a completed video.
+
+## Dsivio 内置版
+
+对话使用本 Skill 的原始脚本和 MCP。查找、保存或修改模板时读 [共享模板说明](../../TEMPLATES.md)，直接读写共享文件夹；不创建页面任务或同步草稿。运行环境由应用提供，内置副本随应用更新。

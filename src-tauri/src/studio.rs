@@ -1,7 +1,6 @@
-//! Shared chat/page entry points. All task mutations use the existing studio services.
+//! Page drafts and library organization; chat shares templates only.
 use serde_json::{json, Value};
 use std::sync::Mutex;
-use tauri::AppHandle;
 pub mod library;
 pub(crate) mod wait;
 static DRAFT_LOCK: Mutex<()> = Mutex::new(());
@@ -95,51 +94,6 @@ fn validate_draft(domain: &str, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn call(
-    app: AppHandle,
-    domain: String,
-    action: String,
-    input: Value,
-) -> Result<Value, String> {
-    if action == "wait" {
-        return wait::task(app, &domain, &input).await;
-    }
-    if action == "draft_get" || action == "draft_save" {
-        return studio_draft(
-            domain,
-            field(&input, "entry")?,
-            field(&input, "revision")?,
-            if action == "draft_save" {
-                Some(field(&input, "value")?)
-            } else {
-                None
-            },
-        );
-    }
-    if domain == "video" {
-        return crate::video_studio::video_studio(app, action, input).await;
-    }
-    if domain != "image" {
-        return Err("domain 必须为 image 或 video".into());
-    }
-    use crate::image_studio as s;
-    let value = match action.as_str() {
-        "bootstrap" => s::image_studio_bootstrap(app)?,
-        "get" => serde_json::to_value(s::image_studio_get(field(&input,"id")?)?).map_err(|e|e.to_string())?,
-        "save" => serde_json::to_value(s::image_studio_save(field(&input,"id")?,field(&input,"revision")?,field(&input,"brief")?)?).map_err(|e|e.to_string())?,
-        "save_plans" => serde_json::to_value(s::image_studio_save_plans(field(&input,"id")?,field(&input,"revision")?,field(&input,"plans")?)?).map_err(|e|e.to_string())?,
-        "import" => serde_json::to_value(s::image_studio_import(field(&input,"paths")?,input["asProducts"].as_bool().unwrap_or(true)).await?).map_err(|e|e.to_string())?,
-        "action" => serde_json::to_value(s::image_studio_action(app,field(&input,"id")?,field(&input,"revision")?,field(&input,"action")?)?).map_err(|e|e.to_string())?,
-        "config" => { s::image_studio_config(app, field(&input,"config")?)?; Value::Null },
-        "template_import" => serde_json::to_value(s::image_studio_template_import(field(&input,"path")?).await?).map_err(|e|e.to_string())?,
-        "freeze" => serde_json::to_value(s::image_studio_freeze(field(&input,"id")?,field(&input,"productId")?,field(&input,"name")?)?).map_err(|e|e.to_string())?,
-        "export" => json!(s::image_studio_export(field(&input,"id")?,field(&input,"destination")?,field(&input,"width")?,field(&input,"height")?,field(&input,"maxKb")?).await?),
-        "template_export" => json!(s::image_studio_template_export(field(&input,"id")?,field(&input,"destination")?).await?),
-        "template_save" => serde_json::to_value(s::image_studio_template_save(field(&input,"template")?)?).map_err(|e|e.to_string())?,
-        _ => return Err("未知图片操作；使用 bootstrap/get/save/import/save_plans/action/config/template_import/template_save".into()),
-    };
-    Ok(value)
-}
 
 #[cfg(test)]
 mod tests {

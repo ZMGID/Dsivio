@@ -1,42 +1,36 @@
-# 聊天与图片、视频页面互通
+# 聊天与图片、视频页面：仅共享模板
 
-核对日期：2026-09-10，包含当前工作区实现。
+核对日期：2026-09-11。
 
-图片和视频页面是工作流界面；内置聊天通过 `studio` 原生工具访问相同服务。
+## 使用边界
 
-- 图片：调用既有 `image_studio_*` 服务。任务 ID、版本、模板、模型配置、正反面处理、可选试品确认、执行与结果记录均与页面一致。聊天不再调用独立 gen/run 脚本创建新批次。
-- 视频：调用既有 `video_studio` 服务，包括配置更新后的 MCP 连接重建、ComfyUI 提交和结果查询。原有 Python 跨进程锁和版本检查继续生效。
-- 草稿：`studio_draft` 与聊天工具的 `draft_get/draft_save` 使用同一个存储，位于应用数据目录的 `image-studio/drafts/main.json` 和 `video-studio/drafts/{creation,analysis,remake}.json`。草稿与任务使用独立版本号；写入要求当前版本，采用原子替换。
-- 页面每秒检查共享草稿，编辑时立即尝试保存；localStorage 保留本地恢复副本。远端更新且本地也有编辑时，保留双方内容，提供“载入共享版本／保留本地版本”。切换流程不能把新流程内容写回上一流程。
-- 页面定期及窗口聚焦时更新模板、配置和任务列表；当前任务没有本地编辑时同步最新状态，有编辑时提示重新读取，保存端仍执行版本检查。
+dsimage 是随 Dsivio 打包的内置 Skill，dsvideo 是内置插件；启动时自动发现/注册，用户无需另行安装。
 
-## 生成完成后继续聊天
+聊天中的 dsimage 按原版 Skill 调用 gen/init/run 等脚本；dsvideo 按原版六个 Skill 使用生成脚本和 MCP。多轮讨论、分镜、提示词和生成结果留在对话工作目录，不创建页面任务，不同步页面草稿。页面仍保留自己的表单、任务与运行流程，历史任务和输出不迁移或删除。
 
-图片和视频的 `studio` 工具均支持 `action:"wait"`，input 为 `{id,timeoutMs?}`。默认最多等待 60 秒，完成或失败时提前返回；`timeoutMs:0` 只读取当前状态。运行中的工具结果附带 `nextAction`，引导 Agent 立即等待，不执行 `sleep`，也不反复自行调用 `get/poll`。
+聊天不提供 studio 或模板专用工具。Skill 和页面直接读写同一个模板目录。保存模板无需创建任务，也无需先生成成片。
 
-图片保存状态时发送完成通知；视频等待期间由宿主查询服务，页面和聊天共用同一任务的查询锁与约 3 秒查询间隔。等待还会每秒读取本地状态以接收外部 worker 写入。结果包含 `wait.state`：`finished` 表示当前步骤结束（仍需检查样张、审核等后续流程），`timeout` 可继续等待，`failed/stopped/needs_attention/poll_error` 按实际结果处理。超时或错误不会重新提交生成。
+## 模板共享
 
-停止聊天会退出等待，已提交的生成不因此取消，正在下载的结果仍可保存。这是当前工具调用的完成通知，不会自动唤醒已经结束的聊天。
+- 图片：dsimage 的 `template list/init/freeze` 使用应用数据目录 `image-studio/templates`，格式仍是 `template.json` 加参考图和 assets。页面扫描同一目录。模板直接保存到该目录即可。
+- 视频：每个 JSON 一个模板，直接保存为 `video-studio/templates/易读名称.json`。最少 name + script；兼容上游 reference_template/full_video_prompt/shot_breakdown 和 template/prompt_pattern/shots 格式。无需 UUID 或额外 kind。页面只在读取时适配展示字段，不重写文件。统一保存说明在插件根目录 TEMPLATES.md。
+- 所有 Agent 都按 Skill 中的平台路径读写同一个模板目录；不需要中间接口。
+- 两个页面在聚焦及定时刷新时读取模板。新任务使用模板快照，后续改模板不改写已有任务。
+- 凭据不进入模板。dsimage 恢复上游 `.env` 配置方式，可用工作目录 `.env` 和 `--env-file`；dsvideo 使用上游 providers.json。
 
-## 接入范围
+## 上游与应用适配
 
-本次统一的是 Dsivio 内置聊天与页面。没有宿主 `studio` 工具的外部 CLI 仍使用原插件脚本。历史图片 `_dsimage/batch.json` 不会自动改造成页面任务，也不会被覆盖；其模板继续可以共用。
+本次从 GitHub 重新拉取并固定：
 
-## 任务库与文件操作
+- https://github.com/ZMGID/dsimage — `bc83321d19cf51f694b1aa06efbc4cdcc7effd34`
+- https://github.com/ZMGID/dsvideo-plugin — `33af713d96d7d5d171080e23a618ed4fb37a6d8e`
 
-前端共用 `src/chat/studio/TaskLibrary.tsx`、`taskLibraryModel.ts` 和 `useTaskLibrary.ts`；图片/视频通过 `taskAdapters.ts` 映射状态。后端为 `src-tauri/src/studio/library.rs`，IPC 是 `studio_task_library` 和 `studio_task_file_action`。
+聊天生成脚本恢复上游。dsimage 只适配模板目录，并在 Skill 末尾追加宿主说明；dsvideo Skill 仅追加模板共享说明，保留可搬迁的 MCP 运行环境配置和启动器。页面定制过的视频客户端、worker、工作流资产在 `resources/video-studio`，不再覆盖聊天插件。应用升级删除旧内置包中的 STUDIO.md/studio.py 桥接文件，保留用户数据和启用状态。
 
-- 钉住等组织信息写入各域的 `task-library.json`，不改变生成任务版本。当前筛选为全部、进行中、需处理、草稿／待生成、已有结果；旧 `archived` 字段仍兼容读取，但不再隐藏记录或提供归档入口。
-- 定位文件：视频已有本地产物时定位成片，否则定位任务记录。删除通过共享 `TaskDeleteDialog` 明确确认；单个或批量操作均使用后端文件归属检查。
-- 删除先取得库、图片、共享草稿锁；视频还需取得与 Python worker 互通的文件锁。拒绝运行中、提交中、待核查或被 worker 占用的任务。
-- 删除任务专属输出与应用内专属素材副本，保留源目录中的原始导入文件，以及其他任务、共享草稿、模板仍引用的文件。自定义图片输出目录需符合任务 ID 归属规则；递归清理不跟随符号链接。
-- 文件清理成功后再删除组织信息和任务记录；中途失败保留记录以便处理。删除不是归档，没有回收站。前端清理被删视频任务的本地恢复副本。
+## 页面内部持久化
 
-## 草稿与任务切换
+`studio_draft`、`useSharedDraft` 的版本与恢复机制仍供页面使用。任务库、删除锁、后台执行和历史输出仍保持；这些不是聊天的共享接口。视频同一任务重新生成仍替换自己的 video.mp4。
 
-`useSharedDraft.ts` 管理页面与聊天的版本同步；`videoDrafts.ts` 除按入口保存外，还按任务 ID 保存未提交编辑。读取另一任务只恢复该任务的内容；异步规划、确认、提交结果按原任务 ID 入库，不能覆盖用户刚切换到的任务。输入校验与错误恢复不能清掉用户仍未提交的有效草稿。
+## 验证
 
-## 初次互通验证快照（2026-09-09）
-
-
-新增共享草稿往返、同时编辑冲突、离线草稿恢复、生成期间暂停同步、拒绝旧版本写入、跨流程隔离测试。后台测试验证原子草稿存取、版本拒绝、输入检查和入口隔离；原生工具注册测试验证曝光、派发和权限分类。本次提交快照的 72 项界面与同步测试、39 项 studio 后台测试、15 项原生工具注册测试通过，TypeScript 与相关 ESLint 检查通过，前端构建通过。未调用付费图片／视频服务。
+重点检查原版脚本测试、模板文件读写与页面发现、原生工具注册、图片/视频页面回归，以及内置 Python/MCP 启动。涉及付费生成的实际出图需单独验证，不能以静态或模拟测试替代。

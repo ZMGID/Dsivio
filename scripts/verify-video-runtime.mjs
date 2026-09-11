@@ -77,8 +77,8 @@ async function withMcp(command, args, check) {
 }
 try {
   assert.equal(JSON.parse(readFileSync(join(root, 'runtime.json'))).platform, `${process.platform}-${process.arch}`)
-  const bundledScripts = join(dirname(root), 'plugins/dsvideo-plugin/scripts')
-  const scripts = existsSync(bundledScripts) ? bundledScripts : join(repo, 'src-tauri/resources/plugins/dsvideo-plugin/scripts')
+  const bundledScripts = join(dirname(root), 'video-studio/scripts')
+  const scripts = existsSync(bundledScripts) ? bundledScripts : join(repo, 'src-tauri/resources/video-studio/scripts')
   const directImports = `import comfy_mcp, comfy_cli, yt_dlp${win ? ', pywintypes' : ''}`
   const directPython = spawnSync(python, ['-s', '-B', '-c', directImports], { cwd: scratch, env: { ...env, PYTHONPATH: '' }, encoding: 'utf8', timeout: 45000 })
   assert.equal(directPython.status, 0, `bundled Python must work without PYTHONPATH: ${directPython.stderr}`)

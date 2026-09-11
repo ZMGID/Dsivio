@@ -76,9 +76,16 @@ pub fn ensure_builtin(id: &str, source: &Path) -> Result<Resolved, String> {
     let dir = package_dir(id)?;
     fs::create_dir_all(dir.join("data")).map_err(|e| e.to_string())?;
     let previous = load(id).ok();
+    // Retired chat/page bridge files must not survive an in-place app upgrade.
+    if id == crate::video_studio::PACKAGE_ID {
+        for retired in ["STUDIO.md", "scripts/studio.py", "scripts/model_catalog.py"] {
+            let path = dir.join("content").join(retired);
+            if path.exists() { fs::remove_file(path).map_err(|e| e.to_string())?; }
+        }
+    }
     copy_tree(source, &dir.join("content"), &mut (100 * 1024 * 1024), 0)?;
     let package = Package {
-        id: id.into(), name: "dsvideo".into(), description: "内置视频工作台与聊天技能".into(),
+        id: id.into(), name: "dsvideo".into(), description: "内置视频 Skill 与 MCP 插件".into(),
         version: None, format: "codex".into(), source: "builtin:dsvideo".into(), revision: None,
         enabled: previous.map(|p| p.package.enabled).unwrap_or(true),
         components: BTreeMap::new(), diagnostics: vec![],

@@ -3,11 +3,6 @@ name: h3-prompt-writing
 description: Write MiniMax H3 video generation prompts for T2VA, I2VA, FL2VA, L2VA, and Ref2VA. Use when rewriting multimodal requests into H3 prompt structures, composing integrated_multimodal_description, overall_soundscape, and non_diegetic_music, aligning keyframes, or defining reference labels for images, videos, and audio.
 ---
 
-## Dsivio 内置适配（优先于下文原插件路径约定）
-本插件已内置。不要在聊天中安装或更新插件。先阅读 `${PLUGIN_ROOT}/STUDIO.md`。
-聊天与视频页面共享模板、任务和供应商配置。模板的查找和保存必须使用共享工作区，禁止写入插件 skills/templates 或缓存目录；下文模板路径只作内置样例阅读。
-
-
 # H3 Prompt Writing
 
 ## Workflow
@@ -38,3 +33,7 @@ Read `references/ref-en.txt` for label rules, retention analysis, and complete e
 - Write rewrite sections in English; preserve dialogue, lyrics, and visible scene text in their original language.
 - Describe each shot by composition, subjects, environment, actions, camera, sound, and the exact point where referenced content appears.
 - Avoid plot summaries, unresolved reference labels, and timing that does not match the requested duration.
+
+## Dsivio 内置版
+
+对话使用本 Skill 的原始脚本和 MCP。查找、保存或修改模板时读 [共享模板说明](../../TEMPLATES.md)，直接读写共享文件夹；不创建页面任务或同步草稿。运行环境由应用提供，内置副本随应用更新。
