@@ -210,7 +210,7 @@ describe('制作、试品、反馈和持续出图', () => {
     expect(screen.getByRole('radio', { name: '现成套图' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '商品图起步' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '成套样图起步' })).not.toBeInTheDocument()
-    expect(screen.getByLabelText('任务名称')).toHaveAttribute('placeholder', '通用电商 · 中国市场')
+    expect(screen.getByLabelText('任务名称')).toHaveAttribute('placeholder', '制作模板 · 中国市场')
     fireEvent.click(screen.getByRole('button', { name: '选择商品照片' }))
     await waitFor(() => expect(screen.getByText('1. 原始商品.png')).toBeInTheDocument())
     fireEvent.change(screen.getByLabelText('制作要求'), {
@@ -226,7 +226,7 @@ describe('制作、试品、反馈和持续出图', () => {
     expect(api.imageStudioSave).toHaveBeenCalledWith(
       expect.objectContaining({
         feature: 'workflow',
-        name: '通用电商 · 中国市场',
+        name: '制作模板 · 中国市场',
         products: [],
         workflowInput: { mode: 'smart', sources: [source] },
       }),

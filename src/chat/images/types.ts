@@ -214,14 +214,13 @@ const LANGUAGE_MARKET: Record<string, string> = {
   vi: '越南市场',
 }
 
-/** Empty names become `{platform or product} · {market}` on save, matching the field example. */
+/** Empty names become `{product or feature} · {market}` on save, matching the field example. */
 export function suggestImageTaskName(brief: ImageBrief): string {
   const named = brief.products
     .map((product) => product.name.trim())
     .find((name) => name && name !== '商品素材')
   const head =
     named ||
-    brief.platform.trim() ||
     FEATURES.find((feature) => feature.id === brief.feature)?.label ||
     '图片任务'
   const language = brief.language.trim()
@@ -235,7 +234,7 @@ export const emptyBrief = (feature: ImageFeature): ImageBrief => ({
   name: '',
   requirement: '',
   language: feature === 'gen' ? '无文字' : feature === 'replace' ? '跟随样图' : 'zh-CN',
-  platform: '通用电商',
+  platform: '',
   ratio: '1:1',
   resolution: '1k',
   count: feature === 'gen' ? 1 : 7,
