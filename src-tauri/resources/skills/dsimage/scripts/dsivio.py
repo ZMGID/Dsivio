@@ -43,6 +43,15 @@ def image_config():
     values = {"IMG_API_KEY": key, "IMG_MODEL": model,
               "IMG_BASE_URL": url, "IMG_PROVIDER": "custom"}
     mode = config.get("protocol", "")
+    # The image page used to mark every GPT image relay as async. Repair that
+    # stale inference when scripts run before the app has resaved the config.
+    from urllib.parse import urlsplit
+    host = (urlsplit(url).hostname or "").lower()
+    known_async = any(host == h or host.endswith("." + h) for h in ("apimart.ai", "ybw-ai.com"))
+    if mode == "async" and ("gpt-image" in model.lower() or "dall-e" in model.lower()) and not known_async:
+        mode = "sync"
+    if mode == "openai":
+        mode = "sync"
     if mode in ("sync", "async", "grok", "gemini", "gemini-chat"):
         values["IMG_API_MODE"] = mode
     return values

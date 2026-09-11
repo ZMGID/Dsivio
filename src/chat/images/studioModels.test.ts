@@ -3,6 +3,12 @@ import { makeProvider } from '../../settings/tabs/testFixtures'
 import { inferImageStudioProtocol, isImageGenerationModel, isVisionModel, reconcileImageStudioProtocol } from './studioModels'
 
 describe('studioModels', () => {
+  it('repairs the stale async inference for a synchronous GPT image relay', () => {
+    const provider = makeProvider({ baseUrl: 'https://img.hezu.ink/v1' })
+    expect(inferImageStudioProtocol(provider, 'gpt-image-2')).toBe('openai')
+    expect(reconcileImageStudioProtocol({ protocol: 'async', model: 'gpt-image-2' }, provider).protocol).toBe('openai')
+    expect(inferImageStudioProtocol(makeProvider({ baseUrl: 'https://relay.example/v1' }), 'gpt-image-1')).toBe('openai')
+  })
   it('keeps chat-only providers out of the image-generation list', () => {
     const deepseek = makeProvider({
       id: 'deepseek',

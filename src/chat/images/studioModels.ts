@@ -38,12 +38,11 @@ function hostMatches(base: string, domain: string): boolean {
   }
 }
 
-/** Official OpenAI can hold a sync images call. Compatible gateways time out; they need submit + poll. */
+/** Only gateways with a known task API use submit + poll. */
 function usesAsyncImageGateway(base: string, model: string): boolean {
-  if (base.includes('apimart')) return true
-  const officialOpenAI = base.includes('api.openai.com')
+  if (hostMatches(base, 'apimart.ai')) return true
   const imagesApiModel = model.includes('gpt-image') || model.startsWith('dall-e')
-  return imagesApiModel && !officialOpenAI
+  return imagesApiModel && hostMatches(base, 'ybw-ai.com')
 }
 
 /** Stale `openai` configs for relay image models must flip to async; do not clobber other saved protocols. */
@@ -52,6 +51,10 @@ export function reconcileImageStudioProtocol<T extends { protocol: string; model
   provider?: ModelProvider,
 ): T {
   const inferred = inferImageStudioProtocol(provider, config.model)
+  if (provider && config.protocol === 'async' && inferred === 'openai'
+      && /gpt-image|dall-e/i.test(config.model)) {
+    return { ...config, protocol: inferred }
+  }
   if (inferred === 'grok' || inferred === 'gemini' || inferred === 'gemini-chat') {
     return config.protocol === inferred ? config : { ...config, protocol: inferred }
   }
