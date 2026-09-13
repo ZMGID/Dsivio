@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import type { LensReplaceGroup, LensReplaceRenderSlot } from '../api/tauri'
 import { copyToClipboard } from '../utils/clipboard'
 import { DRAG_THRESHOLD } from './layout'
-import { layoutReplaceTextFlow, replaceTextVerticalOffset, selectedGroupsText, type ReplaceTextFlowSlotLayout } from './replaceTextLayout'
+import { layoutReplaceTextFlow, replaceSlotTextBounds, replaceTextVerticalOffset, selectedGroupsText, type ReplaceTextFlowSlotLayout } from './replaceTextLayout'
 import type { CapturedFrame } from './types'
 
 type ReplaceTranslateOverlayProps = {
@@ -73,7 +73,13 @@ function drawNormalSlotText(
   const x = anchoredTextX(slot, padding)
   let y = anchoredTextY(slot, innerHeight, layout.contentHeight, padding)
   for (const line of layout.lines) {
-    ctx.fillText(line, x, y)
+    // OCR anchors visible ink; Canvas `top` anchors the font's em box.
+    const metrics = ctx.measureText(line)
+    const left = Number.isFinite(metrics.actualBoundingBoxLeft) ? metrics.actualBoundingBoxLeft : 0
+    const right = Number.isFinite(metrics.actualBoundingBoxRight) ? metrics.actualBoundingBoxRight : 0
+    const offsetX = slot.align === 'left' ? left : slot.align === 'right' ? -right : (left - right) / 2
+    const ascent = Number.isFinite(metrics.actualBoundingBoxAscent) ? metrics.actualBoundingBoxAscent : 0
+    ctx.fillText(line, x + offsetX, y + ascent)
     y += lineHeight
   }
 }
@@ -87,32 +93,13 @@ function drawSafelyScaledSlotText(
   safeScale: number,
   padding: number,
 ) {
-  const offscreen = document.createElement('canvas')
-  offscreen.width = Math.max(1, Math.ceil(slot.bounds.width / safeScale))
-  offscreen.height = Math.max(1, Math.ceil(slot.bounds.height / safeScale))
-  const offscreenCtx = offscreen.getContext('2d')
-  if (!offscreenCtx) return
-  const virtualPadding = padding / safeScale
-  const innerHeight = Math.max(1, offscreen.height - virtualPadding * 2)
-  offscreenCtx.font = `${fontPx}px system-ui, "Segoe UI", sans-serif`
-  offscreenCtx.fillStyle = slot.sourceColor
-  offscreenCtx.textBaseline = 'top'
-  offscreenCtx.textAlign = slot.align
-  const anchorX = (slot.anchor.x - slot.bounds.x) / safeScale
-  const anchorY = (slot.anchor.y - slot.bounds.y) / safeScale
-  const x = slot.align === 'left'
-    ? anchorX
-    : slot.align === 'center'
-    ? offscreen.width / 2
-    : offscreen.width - virtualPadding
-  let y = slot.flow === 'exact_line' || slot.verticalAlign === 'top'
-    ? anchorY
-    : virtualPadding + replaceTextVerticalOffset(slot.kind, innerHeight, layout.contentHeight)
-  for (const line of layout.lines) {
-    offscreenCtx.fillText(line, x, y)
-    y += lineHeight
-  }
-  ctx.drawImage(offscreen, slot.bounds.x, slot.bounds.y, slot.bounds.width, slot.bounds.height)
+  // Rasterize glyphs at the final size; downsampling a bitmap blurs small text
+  // and can clip it before it reaches the destination canvas.
+  drawNormalSlotText(ctx, slot, {
+    ...layout,
+    contentWidth: layout.contentWidth * safeScale,
+    contentHeight: layout.contentHeight * safeScale,
+  }, fontPx * safeScale, lineHeight * safeScale, padding)
 }
 
 export function ReplaceTranslateOverlay({
@@ -184,14 +171,17 @@ export function ReplaceTranslateOverlay({
         const padding = Math.max(2, Math.min(6, sourceFontPx * 0.2))
         const layout = layoutReplaceTextFlow(
           text,
-          groupSlots.map(slot => ({
-            width: Math.max(1, slot.bounds.width - padding * 2),
-            height: Math.max(1, slot.bounds.height - padding * 2),
-          })),
+          groupSlots.map(slot => replaceSlotTextBounds(slot, padding)),
           sourceFontPx,
           (value, fontPx) => {
             context.font = `${fontPx}px system-ui, "Segoe UI", sans-serif`
-            return context.measureText(value).width
+            const metrics = context.measureText(value)
+            const inkWidth = metrics.actualBoundingBoxLeft + metrics.actualBoundingBoxRight
+            const inkHeight = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent
+            return {
+              width: Math.max(metrics.width, Number.isFinite(inkWidth) ? inkWidth : 0),
+              height: Number.isFinite(inkHeight) ? inkHeight : fontPx * 1.18,
+            }
           },
         )
         groupSlots.forEach((slot, index) => {

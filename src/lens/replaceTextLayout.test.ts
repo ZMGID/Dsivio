@@ -29,6 +29,38 @@ describe('replace text vertical placement', () => {
 })
 
 describe('replace text multi-slot flow', () => {
+  it('fits unusually tall glyph ink instead of relying only on an estimated line height', () => {
+    const layout = layoutReplaceTextFlow('a\u0301\u0302', [{ width: 60, height: 16 }], 16,
+      (text, size) => ({ width: text.length * size * 0.5, height: size * 2.5 }))
+    expect(layout.complete).toBe(true)
+    expect(layout.fontPx * layout.safeScale * 2.5).toBeLessThanOrEqual(16)
+  })
+
+  it('measures scaled glyphs at the font size that will actually be drawn', () => {
+    // Font hinting need not scale linearly. Keep a fixed pixel contribution.
+    const hintedMeasure = (text: string, size: number) => text.length * (size * 0.55 + 1)
+    const layout = layoutReplaceTextFlow('完整译文'.repeat(20), [{ width: 40, height: 16 }], 16, hintedMeasure)
+    expect(layout.complete).toBe(true)
+    expect(layout.safeScale).toBeLessThan(1)
+    for (const line of layout.slots[0].lines) {
+      expect(hintedMeasure(line, layout.fontPx * layout.safeScale)).toBeLessThanOrEqual(40)
+    }
+  })
+
+  it('fits the shortest occupied slot instead of sizing every line from the tallest', () => {
+    const layout = layoutReplaceTextFlow('译\n文', [{ width: 100, height: 8 }, { width: 100, height: 40 }], 24, measure)
+    expect(layout.complete).toBe(true)
+    layout.slots.forEach((slot, index) => {
+      expect(slot.contentHeight * layout.safeScale).toBeLessThanOrEqual([8, 40][index])
+    })
+  })
+
+  it('fits even a single glyph within a narrow slot before reporting complete', () => {
+    const layout = layoutReplaceTextFlow('译', [{ width: 2, height: 20 }], 16, measure)
+    expect(layout.complete).toBe(true)
+    expect(layout.slots[0].contentWidth * layout.safeScale).toBeLessThanOrEqual(2)
+  })
+
   it('keeps a translation group while preserving each source-line slot', () => {
     const text = '第一行译文和第二行译文必须按原来的两个位置流动'
     const layout = layoutReplaceTextFlow(

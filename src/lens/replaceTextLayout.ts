@@ -2,9 +2,27 @@ import type { LensReplaceGroup, LensReplaceRenderSlot } from '../api/tauri'
 
 export type TextBounds = { width: number; height: number }
 
-export type TextMeasure = (text: string, fontPx: number) => number
+export type TextMeasure = (text: string, fontPx: number) => number | TextBounds
+
+function measuredBounds(measure: TextMeasure, text: string, fontPx: number): TextBounds {
+  const result = measure(text, fontPx)
+  return typeof result === 'number' ? { width: result, height: fontPx * 1.18 } : result
+}
 
 export type ReplaceTextFlowSlot = TextBounds
+
+/** Space is measured from the same ink anchor used by the Canvas renderer. */
+export function replaceSlotTextBounds(slot: LensReplaceRenderSlot, padding: number): TextBounds {
+  const { bounds } = slot
+  return {
+    width: Math.max(1, slot.align === 'left'
+      ? bounds.x + bounds.width - slot.anchor.x - padding
+      : bounds.width - padding * 2),
+    height: Math.max(1, slot.flow === 'exact_line' || slot.verticalAlign === 'top'
+      ? bounds.y + bounds.height - slot.anchor.y - padding
+      : bounds.height - padding * 2),
+  }
+}
 
 export type ReplaceTextFlowSlotLayout = {
   lines: string[]
@@ -62,7 +80,7 @@ function takeReplaceFlowLine(
   tokens: string[],
   maxWidth: number,
   fontPx: number,
-  measure: TextMeasure,
+  measure: (text: string, fontPx: number) => number,
 ): string {
   let current = ''
   while (tokens.length > 0) {
@@ -110,18 +128,21 @@ function evaluateReplaceTextFlow(
   measure: TextMeasure,
 ): ReplaceTextFlowLayout {
   const tokens = tokenizeReplaceText(text)
-  const lineHeight = fontPx * 1.18
+  const lineHeight = Math.max(fontPx * 1.18, measuredBounds(measure, text, fontPx * safeScale).height / safeScale)
+  // The renderer draws at the final size. Hinting and fallback fonts need not
+  // scale linearly, so measure that size before converting to virtual units.
+  const scaledMeasure = (value: string, size: number) => measuredBounds(measure, value, size * safeScale).width / safeScale
   const layouts = slots.map(slot => {
     const virtualWidth = Math.max(1, slot.width / safeScale)
     const virtualHeight = Math.max(1, slot.height / safeScale)
     const lineCount = Math.max(1, Math.floor(virtualHeight / lineHeight))
     const lines: string[] = []
     for (let index = 0; index < lineCount && tokens.length > 0; index += 1) {
-      lines.push(takeReplaceFlowLine(tokens, virtualWidth, fontPx, measure))
+      lines.push(takeReplaceFlowLine(tokens, virtualWidth, fontPx, scaledMeasure))
     }
     return {
       lines,
-      contentWidth: Math.max(0, ...lines.map(line => measure(line, fontPx))),
+      contentWidth: Math.max(0, ...lines.map(line => scaledMeasure(line, fontPx))),
       contentHeight: lines.length * lineHeight,
     }
   })
@@ -130,7 +151,10 @@ function evaluateReplaceTextFlow(
     lineHeight,
     safeScale,
     slots: layouts,
-    complete: tokens.length === 0,
+    complete: tokens.length === 0 && layouts.every((layout, index) =>
+      layout.contentWidth * safeScale <= slots[index].width &&
+      layout.contentHeight * safeScale <= slots[index].height,
+    ),
   }
 }
 
