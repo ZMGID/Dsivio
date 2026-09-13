@@ -59,6 +59,11 @@ impl From<Result<(String, Option<Value>), String>> for WorkerOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Execution {
+    /// Unix milliseconds; absent on records saved before duration tracking.
+    #[serde(default)]
+    pub started_at: Option<i64>,
+    #[serde(default)]
+    pub finished_at: Option<i64>,
     #[serde(default)]
     pub recovery: Option<Value>,
     #[serde(default)]
@@ -384,6 +389,13 @@ impl Runtime {
             .copied()
             .unwrap_or(0)
     }
+    pub fn has_active(&self, conversation: &str, id: Option<&str>) -> bool {
+        self.lock()
+            .owners
+            .values()
+            .any(|(owner, child)| owner == conversation && id.is_none_or(|id| child == id))
+    }
+
     pub fn sequence(&self) -> u64 {
         *self.events.borrow()
     }
@@ -589,6 +601,8 @@ impl Runtime {
             }
             let next = execution(parent_run, text);
             record.runs.push(next);
+            record.preview.clear();
+            record.steps.clear();
             record.user_stopped = false;
         }
         self.save(&mut record)?;
@@ -794,6 +808,7 @@ impl Runtime {
             record.current().status == Status::Stopping || control.stopping.contains(run);
         record.user_stopped |= control.user_stops.contains(run);
         let current = record.current_mut();
+        current.finished_at = Some(chrono::Utc::now().timestamp_millis());
         current.recovery = output.recovery;
         current.result = output.partial.filter(|text| !text.trim().is_empty());
         current.usage = output.usage;
@@ -963,6 +978,8 @@ impl Runtime {
 
 fn execution(parent_run: &str, prompt: &str) -> Execution {
     Execution {
+        started_at: Some(chrono::Utc::now().timestamp_millis()),
+        finished_at: None,
         recovery: None,
         output_available: false,
         delivered: false,
@@ -1035,6 +1052,48 @@ mod tests {
             "timeout"
         );
         assert!(reopened.list("conv").unwrap()[0].current().has_output());
+    }
+
+    #[test]
+    fn execution_times_persist_and_continuation_starts_a_new_clock() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::open(dir.path().into()).unwrap();
+        let record = child(&runtime, "timing");
+        let start = record.current().started_at.unwrap();
+        assert!(record.current().finished_at.is_none());
+        let ended = runtime
+            .finish(
+                "conv_a",
+                &record.id,
+                &record.current().id,
+                Ok(("report".into(), None)),
+            )
+            .unwrap();
+        let finish = ended.current().finished_at.unwrap();
+        assert!(finish >= start);
+        drop(runtime);
+        let runtime = Runtime::open(dir.path().into()).unwrap();
+        let saved = runtime.get("conv_a", &record.id).unwrap();
+        assert_eq!(saved.current().started_at, Some(start));
+        assert_eq!(saved.current().finished_at, Some(finish));
+        let (continued, _) = runtime
+            .resume(
+                "conv_a",
+                &record.id,
+                "next",
+                "msg",
+                "main_agent",
+                "Follow up",
+            )
+            .unwrap();
+        assert!(continued.current().started_at.unwrap() >= finish);
+        assert!(continued.current().finished_at.is_none());
+        assert_eq!(continued.runs[0].finished_at, Some(finish));
+        let mut legacy = serde_json::to_value(saved.current()).unwrap();
+        legacy.as_object_mut().unwrap().remove("startedAt");
+        legacy.as_object_mut().unwrap().remove("finishedAt");
+        let legacy: Execution = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.started_at.is_none() && legacy.finished_at.is_none());
     }
 
     fn child(runtime: &Runtime, key: &str) -> Record {

@@ -152,7 +152,7 @@ fn bounded_output(text: &str) -> String {
                 output.push_str(&line[..end]);
             }
             output.push_str(
-                "\n[Output truncated. Full content remains in the sub-agent detail view.]\n",
+                "\n[Output truncated. Use agent_control get with this agent id and execution_id; follow next_offset to read all result pages. Full content also remains in the detail view.]\n",
             );
             break;
         }
@@ -311,7 +311,15 @@ pub async fn operate(
         "list" => Ok(
             json!({"sequence":runtime.result_sequence(conversation), "agents":runtime.list(conversation)?}),
         ),
-        "get" => Ok(json!(runtime.get(conversation, id)?)),
+        "get" => {
+            let record = runtime.get(conversation, id)?;
+            if let Some(execution_id) = args["execution_id"].as_str() {
+                if !record.runs.iter().any(|run| run.id == execution_id) {
+                    return Err("Unknown child execution".into());
+                }
+            }
+            Ok(json!(record))
+        }
         "message" => Ok(json!(runtime.send(conversation, id, key, sender, text)?)),
         "stop" => Ok(json!(runtime.stop(
             conversation,
@@ -341,6 +349,10 @@ pub async fn operate(
             Ok(json!(record))
         }
         "wait" => {
+            let target = (!id.is_empty()).then_some(id);
+            if target.is_some() {
+                runtime.get(conversation, id)?;
+            }
             let mut events = runtime.subscribe_results();
             let cursor = args["cursor"]
                 .as_u64()
@@ -350,15 +362,8 @@ pub async fn operate(
             let deadline = started + std::time::Duration::from_millis(timeout);
             let reason = loop {
                 events.borrow_and_update();
-                if runtime.result_sequence(conversation) != cursor {
-                    break "result_ready";
-                }
-                if !runtime
-                    .list(conversation)?
-                    .iter()
-                    .any(|r| r.current().status.active())
-                {
-                    break "all_finished";
+                if let Some(reason) = wait_reason(&runtime, conversation, target, cursor) {
+                    break reason;
                 }
                 if app.state::<AppState>().has_chat_pending_input(conversation) {
                     break "user_input";
@@ -372,12 +377,31 @@ pub async fn operate(
                 let _ = tokio::time::timeout(remaining, events.changed()).await;
             };
             Ok(
-                json!({"sequence":runtime.result_sequence(conversation), "agents":runtime.list(conversation)?, "reason":reason,"waited_ms":started.elapsed().as_millis() as u64,"timeout_ms":timeout}),
+                json!({"sequence":runtime.result_sequence(conversation), "agents":if target.is_some() { vec![runtime.get(conversation, id)?] } else { runtime.list(conversation)? }, "reason":reason,"waited_ms":started.elapsed().as_millis() as u64,"timeout_ms":timeout}),
             )
         }
 
         _ => Err("Unknown sub-agent operation".into()),
     }
+}
+
+fn wait_reason(
+    runtime: &Runtime,
+    conversation: &str,
+    target: Option<&str>,
+    cursor: u64,
+) -> Option<&'static str> {
+    if target.is_none() && runtime.result_sequence(conversation) != cursor {
+        return Some("result_ready");
+    }
+    if !runtime.has_active(conversation, target) {
+        return Some(if target.is_some() {
+            "result_ready"
+        } else {
+            "all_finished"
+        });
+    }
+    None
 }
 
 #[tauri::command]
@@ -393,12 +417,14 @@ pub async fn chat_subagent_control(
 pub fn definition() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__agent_control".into(), name: "agent_control".into(),
-        description: "Control children belonging to this conversation. You own task decisions and the final answer. Child outputs and execution diagnostics are information: use them, send corrections, continue the same child, delegate elsewhere, or handle the work yourself. No acceptance or disposition step is required. List/get results; message only adds information (idle children do not run); continue explicitly runs an idle child or supplements an active one; stop requires the current execution_id. Wait wakes on new ended executions, user input, or at most 60000 ms; timeout never stops children. Use the returned sequence as cursor; waited_ms is actual elapsed time. When a result is needed, wait rather than poll repeatedly. Model-turn completion does not stop children; stop unwanted work explicitly. Use stable message_id for retries. A user-stopped child requires a new explicit user instruction: only then set user_requested=true on continue. Never use it for automatic retries.".into(),
+        description: "Control this conversation's children. Guide them when their work drifts, follow up where needed, and keep each child's findings and uncertainties distinct in your summary. List shows identities and brief progress; get(id) reads one child. Use get with execution_id and next_offset as offset to read further result pages; offsets count Unicode characters. message adds information; continue runs an idle child or supplements an active one; stop needs the current execution_id. Wait accepts an optional id to wait only for that child. Wait for needed results instead of polling: it wakes on new results, user input or timeout (at most 60000 ms). Reuse sequence as cursor; waited_ms is elapsed time. Timeout and parent-turn completion do not stop children. Reuse message_id for retries. Continue a user-stopped child only on a new explicit user instruction, with user_requested=true.".into(),
         source: "native".into(), server_id: None, server_name: Some("Kivio".into()),
         input_schema: json!({"type":"object","properties":{
             "operation":{"type":"string","enum":["list","get","message","continue","stop","wait"]},
             "id":{"type":"string"}, "execution_id":{"type":"string"},
             "message_id":{"type":"string"}, "message":{"type":"string"},
+            "offset":{"type":"integer","minimum":0,"description":"Result character offset for get; use next_offset to continue."},
+            "limit":{"type":"integer","minimum":1,"maximum":4000,"description":"Maximum result characters per get page; defaults to 4000."},
             "cursor":{"type":"integer"}, "timeout_ms":{"type":"integer","minimum":0,"maximum":60000},
             "user_requested":{"type":"boolean","description":"Only true when the user explicitly instructed continuation after stopping this child; never for automatic retries."}
         },"required":["operation"]}),
@@ -446,7 +472,7 @@ fn model_view(args: &Value, value: Value) -> Value {
             .and_then(|runs| runs.last())
             .cloned()
             .unwrap_or(Value::Null);
-        json!({"id":record["id"],"name":record["name"],"execution_id":run["id"],"status":run["status"],"error":run["error"],"recovery":run["recovery"],"result_available":run["outputAvailable"] == true || run["result"].as_str().is_some_and(|s| !s.trim().is_empty()) || run["error"].as_str().is_some_and(|s| s.starts_with("recovered: "))})
+        json!({"id":record["id"],"name":record["name"],"execution_id":run["id"],"status":run["status"],"error":excerpt(&run["error"], 500),"result_available":run["outputAvailable"] == true || run["result"].as_str().is_some_and(|s| !s.is_empty()) || run["error"].as_str().is_some_and(|s| s.starts_with("recovered: ")),"progress":excerpt(&record["preview"], 160)})
     }
     if let Some(records) = value["agents"].as_array() {
         return json!({"sequence":value["sequence"],"agents":records.iter().map(summary).collect::<Vec<_>>(),"waited_ms":value["waited_ms"],"reason":value["reason"],"timeout_ms":value["timeout_ms"]});
@@ -456,18 +482,143 @@ fn model_view(args: &Value, value: Value) -> Value {
         result["accepted_message_id"] = args["message_id"].clone();
     }
     if args["operation"] == "get" {
-        if let Some(run) = value["runs"].as_array().and_then(|runs| runs.last()) {
-            result["result"] = run["result"].clone();
+        let runs = value["runs"].as_array();
+        let run = runs.and_then(|runs| match args["execution_id"].as_str() {
+            Some(id) => runs.iter().find(|run| run["id"] == id),
+            None => runs.last(),
+        });
+        if let Some(run) = run {
+            let text = run["result"]
+                .as_str()
+                .or_else(|| {
+                    run["error"]
+                        .as_str()
+                        .and_then(|s| s.strip_prefix("recovered: "))
+                })
+                .unwrap_or("");
+            let total = text.chars().count();
+            let offset = (args["offset"].as_u64().unwrap_or(0) as usize).min(total);
+            let limit = args["limit"].as_u64().unwrap_or(4000).clamp(1, 4000) as usize;
+            let page: String = text.chars().skip(offset).take(limit).collect();
+            let end = offset + page.chars().count();
+            result["execution_id"] = run["id"].clone();
+            result["status"] = run["status"].clone();
+            result["error"] = excerpt(&run["error"], 500);
+            result["result_available"] = json!(!text.is_empty());
+            result["result"] = json!(page);
+            result["offset"] = json!(offset);
+            result["next_offset"] = if end < total { json!(end) } else { Value::Null };
+            result["total_chars"] = json!(total);
             result["usage"] = run["usage"].clone();
+            result["recovery"] = json!({"outcome":run["recovery"]["outcome"], "kind":run["recovery"]["degraded"]["kind"], "reason":excerpt(&run["recovery"]["degraded"]["reason"], 500), "detail":excerpt(&run["recovery"]["degraded"]["detail"], 500)});
+            if value["runs"]
+                .as_array()
+                .and_then(|runs| runs.last())
+                .is_some_and(|latest| latest["id"] == run["id"])
+            {
+                result["progress"] = excerpt(&value["preview"], 1200);
+                result["tool_activity"] = value["steps"].clone();
+            } else {
+                result["progress"] = Value::Null;
+            }
         }
-        result["messages"] = value["messages"].clone();
+        result["messages"] = json!(value["messages"].as_array().map(|messages| messages.iter().rev().take(5).map(|m| json!({"id":m["id"],"sender":m["sender"],"text":excerpt(&m["text"],300),"consumedBy":m["consumedBy"]})).collect::<Vec<_>>()).unwrap_or_default());
     }
     result
+}
+
+fn excerpt(value: &Value, limit: usize) -> Value {
+    value
+        .as_str()
+        .map(|text| {
+            json!(text
+                .chars()
+                .rev()
+                .take(limit)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>())
+        })
+        .unwrap_or(Value::Null)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn targeted_wait_ignores_other_children_and_reads_active_state_without_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::open(directory.path().into()).unwrap();
+        let a = runtime
+            .start("conv", "parent", "a", "A", Profile::default(), "A")
+            .unwrap();
+        let b = runtime
+            .start("conv", "parent", "b", "B", Profile::default(), "B")
+            .unwrap();
+        let cursor = runtime.result_sequence("conv");
+        runtime
+            .finish(
+                "conv",
+                &a.id,
+                &a.current().id,
+                Ok(("A report".into(), None)),
+            )
+            .unwrap();
+        assert_eq!(wait_reason(&runtime, "conv", Some(&b.id), cursor), None);
+        assert_eq!(
+            wait_reason(&runtime, "conv", Some(&a.id), cursor),
+            Some("result_ready")
+        );
+        assert_eq!(
+            wait_reason(&runtime, "conv", None, cursor),
+            Some("result_ready")
+        );
+        let backup = directory.path().with_extension("wait-backup");
+        std::fs::rename(directory.path(), &backup).unwrap();
+        assert_eq!(wait_reason(&runtime, "conv", Some(&b.id), cursor), None);
+        std::fs::rename(backup, directory.path()).unwrap();
+        runtime
+            .finish(
+                "conv",
+                &b.id,
+                &b.current().id,
+                Ok(("B report".into(), None)),
+            )
+            .unwrap();
+        assert_eq!(
+            wait_reason(&runtime, "conv", Some(&b.id), cursor),
+            Some("result_ready")
+        );
+    }
+
+    #[test]
+    fn get_pages_preserve_unicode_and_pin_an_execution_after_continuation() {
+        let text = "中文😀\n\"".repeat(2000);
+        let record = json!({"id":"A","preview":"Latest actual output", "steps":["read · 1 running"], "runs":[{"id":"old","status":"returned","result":text},{"id":"new","status":"running"}]});
+        let mut offset = 0;
+        let mut combined = String::new();
+        loop {
+            let page = model_view(
+                &json!({"operation":"get","execution_id":"old","offset":offset}),
+                record.clone(),
+            );
+            assert_eq!(page["execution_id"], "old");
+            assert!(page["progress"].is_null());
+            let wire = serde_json::to_string(&page).unwrap();
+            assert!(!bounded_output(&wire).contains("Output truncated"));
+            combined.push_str(page["result"].as_str().unwrap());
+            match page["next_offset"].as_u64() {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert_eq!(combined, text);
+        let current = model_view(&json!({"operation":"get"}), record);
+        assert_eq!(current["progress"], "Latest actual output");
+        assert_eq!(current["tool_activity"][0], "read · 1 running");
+    }
 
     #[tokio::test]
     async fn reports_arrive_independently_and_late_output_reaches_next_parent_once() {

@@ -1,3 +1,4 @@
+import { refreshSubAgents } from './useSubAgents'
 import { SubAgentIndicator } from './SubAgentPanel'
 import { freezeCancelledStream, isLocallyCancelledPayload } from './streamCancellation'
 import { lazy, memo, Profiler, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ProfilerOnRenderCallback, type ReactNode, type Ref } from 'react'
@@ -2344,6 +2345,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   }, [])
 
   useTauriEvent(api.onChatTool, (payload) => {
+      if (['agent', 'agent_control', 'native__agent', 'native__agent_control'].includes(payload.name) && payload.status === 'success') refreshSubAgents(payload.conversationId)
       if (popoutConversationIdsRef.current.has(payload.conversationId)) return
       if (isLocallyCancelledPayload(
         payload,

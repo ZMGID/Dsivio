@@ -1932,6 +1932,7 @@ async function onChatProtocol(
 // ========== API 导出 ==========
 
 export type SubAgentExecution = {
+  startedAt?: number | null; finishedAt?: number | null
   id: string; status: string; prompt: string; result?: string; error?: string; usage?: unknown
   outputAvailable?: boolean
   recovery?: { outcome?: string; degraded?: { kind?: string; reason?: string; detail?: string } | null } | null
@@ -1944,7 +1945,7 @@ export type SubAgentRecord = {
   history: unknown[]; tools: unknown[]; preview?: string; steps?: string[]
 }
 export type SubAgentSnapshot = { sequence: number; agents: SubAgentRecord[] }
-export type SubAgentListRequest = { operation: 'list' | 'wait'; cursor?: number; timeout_ms?: number }
+export type SubAgentListRequest = { operation: 'list' | 'wait'; id?: string; cursor?: number; timeout_ms?: number }
 export type SubAgentRecordRequest =
   | { operation: 'get' | 'message' | 'continue' | 'stop'; id: string; execution_id?: string; message_id?: string; message?: string }
 export type SubAgentControlRequest = SubAgentListRequest | SubAgentRecordRequest

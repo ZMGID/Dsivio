@@ -1,3 +1,4 @@
+import { onDockSubAgentRequest } from './dock/dockPreview'
 import { updateSubAgent } from './useSubAgents'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
@@ -61,9 +62,13 @@ it('shows the running child avatar without mounting details in the composer', as
     return <><div data-testid="composer"><SubAgentIndicator conversationId="conv_a" onOpen={() => setOpen(true)} /></div>{open && <aside><SubAgentPanel conversationId="conv_a" /></aside>}</>
   }
   render(<Harness />)
+  const requested = vi.fn()
+  const unsubscribe = onDockSubAgentRequest(requested)
   const indicator = await screen.findByRole('button', { name: 'Research · 运行中' })
   expect(screen.queryByText('Research')).toBeNull()
   fireEvent.click(indicator)
+  expect(requested).toHaveBeenCalledWith({ conversationId: 'conv_a', agentId: 'child' })
+  unsubscribe()
   await screen.findByText('Research')
   expect(screen.getByTestId('composer')).not.toHaveTextContent('Research')
   expect(screen.queryByText('主代理')).toBeNull()

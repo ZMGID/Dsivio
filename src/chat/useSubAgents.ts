@@ -1,8 +1,9 @@
 import { useCallback, useSyncExternalStore } from 'react'
 import { api, type SubAgentRecord } from '../api/tauri'
+import { subAgentActive } from './subAgentStatus'
 
 type Snapshot = { agents: SubAgentRecord[]; error: string }
-type Entry = { snapshot: Snapshot; listeners: Set<() => void>; pending: boolean; version: number; timer?: ReturnType<typeof setTimeout> }
+type Entry = { snapshot: Snapshot; listeners: Set<() => void>; pending: boolean; refreshAgain?: boolean; version: number; timer?: ReturnType<typeof setTimeout> }
 const EMPTY: Snapshot = { agents: [], error: '' }
 const entries = new Map<string, Entry>()
 const notify = (entry: Entry) => entry.listeners.forEach(listener => listener())
@@ -10,6 +11,7 @@ const notify = (entry: Entry) => entry.listeners.forEach(listener => listener())
 async function refresh(id: string, entry: Entry) {
   if (entry.pending || !entry.listeners.size) return
   clearTimeout(entry.timer)
+  entry.timer = undefined
   entry.pending = true
   const version = entry.version
   try {
@@ -22,7 +24,10 @@ async function refresh(id: string, entry: Entry) {
     if (entries.get(id) === entry) { entry.snapshot = { ...entry.snapshot, error: String(error) }; notify(entry) }
   } finally {
     entry.pending = false
-    if (entries.get(id) === entry && entry.listeners.size) entry.timer = setTimeout(() => void refresh(id, entry), 2500)
+    if (entries.get(id) === entry && entry.listeners.size) {
+      if (entry.refreshAgain) { entry.refreshAgain = false; void refresh(id, entry) }
+      else if (entry.snapshot.error || entry.snapshot.agents.some(child => subAgentActive(child.runs.at(-1)))) entry.timer = setTimeout(() => void refresh(id, entry), 2500)
+    }
   }
 }
 
@@ -30,7 +35,7 @@ function subscribe(id: string, listener: () => void) {
   let entry = entries.get(id)
   if (!entry) { entry = { snapshot: EMPTY, listeners: new Set(), pending: false, version: 0 }; entries.set(id, entry) }
   entry.listeners.add(listener)
-  if (!entry.pending && !entry.timer) void refresh(id, entry)
+  if (entry.listeners.size === 1 && !entry.pending && !entry.timer) void refresh(id, entry)
   const subscribed = entry
   return () => {
     subscribed.listeners.delete(listener)
@@ -47,7 +52,12 @@ export function useSubAgents(conversationId: string | null) {
   return useSyncExternalStore(listen, snapshot, () => EMPTY)
 }
 
-export function refreshSubAgents(id: string) { const entry = entries.get(id); if (entry) void refresh(id, entry) }
+export function refreshSubAgents(id: string) {
+  const entry = entries.get(id)
+  if (!entry) return
+  if (entry.pending) entry.refreshAgain = true
+  else void refresh(id, entry)
+}
 export function updateSubAgent(id: string, child: SubAgentRecord) {
   const entry = entries.get(id)
   if (!entry) return

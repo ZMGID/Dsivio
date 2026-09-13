@@ -1,22 +1,29 @@
 import { memo } from 'react'
 import { bodyPoints, facePoints, polyPath, type BodyShape, type FaceName } from './kivioBlobShapes'
 
-const forms: { body: BodyShape; face: FaceName; color: string }[] = [
-  { body: 'cloud', face: 'dots', color: '#298fa8' },
-  { body: 'squircle', face: 'focus', color: '#8971cd' },
-  { body: 'egg', face: 'peek', color: '#d078a0' },
-  { body: 'bubble', face: 'wide', color: '#4885cc' },
-  { body: 'puddle', face: 'smirk', color: '#b38746' },
-  { body: 'burst', face: 'neutral', color: '#559b85' },
-]
+const bodies: BodyShape[] = ['cloud', 'squircle', 'egg', 'bubble', 'puddle', 'burst', 'circle']
+const faces: FaceName[] = ['dots', 'focus', 'peek', 'wide', 'smirk', 'neutral', 'happy', 'content', 'lookUp', 'tiny']
 
-/** Stable identity, using Lanlan's existing silhouette and eye vocabulary. */
+/** Derive each feature independently so identities are stable without repeating six presets. */
 export const SubAgentAvatar = memo(function SubAgentAvatar({ id, status = '', size = 26 }: { id: string; status?: string; size?: number }) {
-  const hash = Array.from(id).reduce((value, char) => (value * 31 + char.charCodeAt(0)) >>> 0, 0)
-  const form = id === 'main' ? { body: 'circle' as const, face: 'dots' as const, color: '#1d6bf0' } : forms[hash % forms.length]
-  const face = status === 'interrupted' ? 'sleepy' : form.face
-  return <svg aria-hidden="true" width={size} height={size} viewBox="20 20 200 200" className="shrink-0">
-    <path d={polyPath(bodyPoints(form.body))} fill={form.color} />
-    {facePoints(face).map((eye, index) => <path key={index} d={polyPath(eye)} fill="#fffaf1" />)}
+  let seed = 2166136261
+  for (const char of id) seed = Math.imul(seed ^ char.charCodeAt(0), 16777619) >>> 0
+  const next = () => {
+    seed ^= seed << 13
+    seed ^= seed >>> 17
+    seed ^= seed << 5
+    return (seed >>> 0) / 4294967296
+  }
+  const body = bodies[Math.floor(next() * bodies.length)]
+  const expression = faces[Math.floor(next() * faces.length)]
+  const color = `hsl(${Math.round(next() * 3600) / 10} ${48 + Math.floor(next() * 18)}% ${43 + Math.floor(next() * 12)}%)`
+  const tilt = Math.round(next() * 18 - 9)
+  const main = id === 'main'
+  const face = status === 'interrupted' ? 'sleepy' : main ? 'dots' : expression
+  return <svg aria-hidden="true" width={size} height={size} viewBox="24 24 192 192" className="shrink-0">
+    <g transform={`rotate(${main ? 0 : tilt} 120 120)`}>
+      <path d={polyPath(bodyPoints(main ? 'circle' : body))} fill={main ? '#1d6bf0' : color} />
+      {facePoints(face).map((eye, index) => <path key={index} d={polyPath(eye)} fill="#fffaf1" />)}
+    </g>
   </svg>
 })

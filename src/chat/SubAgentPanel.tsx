@@ -5,6 +5,8 @@ import { useSubAgents, refreshSubAgents } from './useSubAgents'
 import { Button, IconButton } from '../components/Button'
 import { SubAgentAvatar } from './SubAgentAvatar'
 import { SubAgentConversation } from './SubAgentConversation'
+import { SubAgentElapsed } from './SubAgentElapsed'
+import { requestDockSubAgent } from './dock/dockPreview'
 import { subAgentStatusLabel } from './subAgentStatus'
 
 const active = (status: string) => ['running', 'finishing', 'stopping'].includes(status)
@@ -13,13 +15,17 @@ export function SubAgentIndicator({ conversationId, onOpen, lang = 'zh' }: { con
   const { agents } = useSubAgents(conversationId)
   const running = agents.filter(child => active(child.runs.at(-1)?.status ?? ''))
   if (!running.length) return null
-  return <div className="custom-scrollbar ml-auto flex min-w-0 items-center justify-end gap-1 overflow-x-auto">
-    {running.map(child => {
-      const label = `${child.name} · ${subAgentStatusLabel(child.runs.at(-1), lang)}`
-      return <IconButton key={child.id} label={label} onClick={onOpen} size="md" variant="ghost" className="shrink-0">
-        <SubAgentAvatar id={child.id} status={child.runs.at(-1)?.status} size={22} />
-      </IconButton>
-    })}
+  return <div className="ml-auto flex h-5 min-w-0 items-center gap-1">
+    <div className="isolate flex h-5 min-w-0 max-w-[min(12rem,55vw)] items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {running.map(child => {
+        const label = `${child.name} · ${subAgentStatusLabel(child.runs.at(-1), lang)}`
+        return <button key={child.id} type="button" aria-label={label} title={label} onClick={() => { onOpen(); requestDockSubAgent({ conversationId, agentId: child.id }) }}
+          className="relative flex size-5 shrink-0 items-center justify-center rounded-full first:ml-0 -ml-2.5 hover:z-20 focus-visible:z-20 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-500">
+          <SubAgentAvatar id={child.id} status={child.runs.at(-1)?.status} size={18} />
+        </button>
+      })}
+    </div>
+    {running.length > 1 && <span aria-hidden="true" className="text-[10px] leading-none tabular-nums text-neutral-400">{running.length}</span>}
   </div>
 }
 
@@ -64,6 +70,7 @@ export function SubAgentPanel({ conversationId, lang = 'zh', revealAgent }: { co
         {group.items.map(child => <button key={child.id} type="button" onClick={() => { setError(''); setSelected(null); setSelectedId(child.id) }} className="flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left transition-colors hover:bg-neutral-500/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">
           <SubAgentAvatar id={child.id} status={child.runs.at(-1)?.status} />
           <span className="min-w-0 flex-1 truncate" title={child.name}>{child.name}</span>
+          <SubAgentElapsed run={child.runs.at(-1)} lang={lang} />
           <span className="shrink-0 text-[11px] text-neutral-400">{subAgentStatusLabel(child.runs.at(-1), lang)}</span>
         </button>)}
       </div>)}

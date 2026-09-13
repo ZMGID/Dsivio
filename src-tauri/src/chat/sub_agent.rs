@@ -184,6 +184,16 @@ fn generation_cascade_active(
         && state.is_chat_generation_active(parent_conversation_id, parent_generation)
 }
 
+fn progress_tail(text: &str, max_chars: usize) -> String {
+    let start = text
+        .char_indices()
+        .rev()
+        .nth(max_chars.saturating_sub(1))
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    text[start..].to_string()
+}
+
 impl SubAgentHost {
     fn emit_progress(&self, status: &str, force: bool) {
         let (text, steps) = {
@@ -197,7 +207,7 @@ impl SubAgentHost {
                 }
             }
             guard.last_emit = Some(now);
-            (clip(&guard.text, 1200), guard.aggregate_steps())
+            (progress_tail(&guard.text, 1200), guard.aggregate_steps())
         };
         if let Some((runtime, run)) = &self.managed {
             if let Err(error) = runtime.progress(
@@ -413,7 +423,9 @@ impl ToolExecutor for SubAgentToolExecutor {
             .await;
             if let Some((conversation, id, run)) = &self.managed {
                 let saved_result = match &result {
-                    Ok(value) => serde_json::json!({"content":value.content,"is_error":value.is_error,"structured_content":value.structured_content,"artifacts":value.artifacts}),
+                    Ok(value) => {
+                        serde_json::json!({"content":value.content,"is_error":value.is_error,"structured_content":value.structured_content,"artifacts":value.artifacts})
+                    }
                     Err(error) => serde_json::json!({"content":error,"is_error":true}),
                 };
                 control::runtime(&self.app)?.tool_record(conversation, id, run, serde_json::json!({"id":ctx.tool_call_id,"name":tool.name,"status":if result.is_ok() {"returned"} else {"failed"},"result":saved_result}))?;
@@ -708,7 +720,7 @@ pub fn agent_tool(defs: &[AgentDefinition]) -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__agent".to_string(),
         name: AGENT_TOOL_NAME.to_string(),
-        description: "Start a child task asynchronously and return its identity and execution receipt. Provide a complete task; fresh children do not inherit parent history. Continue independent work, collect results with agent_control, and wait for required child results before finishing. Ordinary messages supplement an active child; explicit continue starts an idle child. Children share the parent working directory: avoid concurrent edits to the same file.".to_string(),
+        description: "Start a child asynchronously and return its identity. Give it a focused task within the user's scope, plus the context it needs; fresh children do not inherit this conversation. Continue your own work and use agent_control to follow up. Children share your working directory; avoid overlapping edits.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -718,7 +730,7 @@ pub fn agent_tool(defs: &[AgentDefinition]) -> ChatToolDefinition {
                 "prompt": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Complete, self-contained task for the sub-agent (it has no access to this conversation). Ask for a useful answer in the user's language. Prefer natural prose or Markdown; do not add rigid schemas, exact paragraph counts, or per-sentence citation requirements unless the user explicitly needs them. Useful partial findings with clear limitations are acceptable."
+                    "description": "State the question, relevant context and desired output briefly. Ask for concise findings with useful references in the user's language. Add detail or formatting requirements only when the task needs them."
                 },
                 "subagent_type": {
                     "type": "string",
@@ -856,14 +868,6 @@ fn err_result(message: impl Into<String>) -> McpToolCallResult {
         structured_content: None,
         follow_up_user_messages: Vec::new(),
     }
-}
-
-fn clip(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let truncated: String = text.chars().take(max).collect();
-    format!("{truncated}…")
 }
 
 /// Resolve the child configuration, durably admit work, and return a receipt.
@@ -1150,6 +1154,15 @@ fn compose_persona_with_preloaded_skills(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_preview_keeps_latest_unicode_output() {
+        assert_eq!(
+            progress_tail("Old announcement. 正在读取文件😀", 5),
+            "读取文件😀"
+        );
+        assert_eq!(progress_tail("short", 1200), "short");
+    }
 
     #[test]
     fn sub_agent_tool_name_detection() {
