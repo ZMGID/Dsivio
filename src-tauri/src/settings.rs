@@ -1222,9 +1222,6 @@ pub const CHAT_TOOL_MIN_OUTPUT_CHARS: usize = 2_000;
 pub const CHAT_TOOL_MAX_OUTPUT_CHARS: usize = 200_000;
 /// 默认单条工具结果字符上限 ≈ 6K token（头 1/2 + 尾 1/4 保留约 3/4）。
 pub const DEFAULT_MAX_TOOL_OUTPUT_CHARS: usize = 24_000;
-/// Orchestrate 模式下的最低工具轮次预算：编排者主动 fan-out 子 agent + 先规划再分派，
-/// 单条用户消息内可能需要更多轮次，因此抬到 max(用户配置, 此值)，但不放开为无限。
-pub const ORCHESTRATE_MIN_TOOL_ROUNDS: u32 = 40;
 /// MCP 持久连接空闲超时下限：太小会让长连接频繁回收失去意义。
 pub const MCP_IDLE_TIMEOUT_MIN_MS: u64 = 60_000;
 /// MCP 持久连接空闲超时上限：避免死连接长期占用子进程。

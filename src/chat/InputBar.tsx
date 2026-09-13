@@ -204,7 +204,7 @@ const LOCAL_SLASH_COMMANDS: LocalSlashCommand[] = [
     id: 'orchestrate',
     slash: '/orchestrate',
     title: '/orchestrate',
-    description: 'Enter orchestrate mode (proactive subagents)',
+    description: 'Enter orchestrate mode (lead parallel collaboration)',
     category: 'Local',
     kind: 'action',
     keywords: ['orchestrate', 'agent', 'subagent', 'fanout', 'mode', '编排', 'subagents', '子代理', '模式', '切换'],

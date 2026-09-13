@@ -560,15 +560,6 @@ pub(super) async fn complete_assistant_reply_inner(
         let agent_defs = crate::agents::load_agent_definitions(app, project_root);
         crate::chat::sub_agent::append_tool_definitions(&mut tools, true, &agent_defs);
     }
-    // Orchestrate mode raises the autonomy budget: a single user message may
-    // need more tool rounds to plan, fan out sub-agents, and aggregate. We lift
-    // max_tool_rounds to max(configured, ORCHESTRATE_MIN_TOOL_ROUNDS) but keep
-    // unlimited (None) as-is rather than forcing a cap.
-    if orchestrate_mode {
-        effective_chat_tools.max_tool_rounds = effective_chat_tools
-            .max_tool_rounds
-            .map(|rounds| rounds.max(crate::settings::ORCHESTRATE_MIN_TOOL_ROUNDS));
-    }
     let runtime_tools_available = !tools.is_empty();
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
     let agent_todo_prompt = if chat_mode {

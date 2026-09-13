@@ -952,12 +952,8 @@ pub fn handle_agent_spawn<'a>(
             ));
         }
 
-        // Build the sub-agent's toolset: full enabled set, narrowed by the
-        // agent definition, with the `agent` tool ALWAYS stripped (acceptance
-        // #4). A sub-agent is a pure worker (orchestrator-worker model): it gets
-        // NO todo tools, so it can never read or mutate any todo list. Task
-        // delegation is top-down — the parent orchestrator owns the todos and
-        // marks them itself (owner = sub-agent name) before/after the spawn.
+        // Build the enabled toolset within the agent definition's scope.
+        // Child agents cannot spawn agents or access the parent's todo tools.
         let mut tools = crate::mcp::registry::list_enabled_tool_catalog(ctx.app, ctx.state)
             .await
             .tools;

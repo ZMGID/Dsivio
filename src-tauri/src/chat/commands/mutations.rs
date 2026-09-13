@@ -126,7 +126,7 @@ pub(super) fn prepare_reply_with_model(
     if crate::chat::plan::is_plan_mode(&conversation.agent_plan_state)
         || crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state)
     {
-        return Err("规划模式下无法换模型回答".to_string());
+        return Err("Plan 或 Orchestrate 模式下无法换模型回答".to_string());
     }
     let provider_id = provider_id.trim();
     let model = model.trim();
