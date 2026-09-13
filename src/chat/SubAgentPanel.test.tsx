@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { updateSubAgent } from './useSubAgents'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { api } from '../api/tauri'
 import { SubAgentPanel, SubAgentIndicator } from './SubAgentPanel'
@@ -42,21 +43,32 @@ it('shows task instructions as an assignment bubble', async () => {
   expect(screen.getByText('Inspect', { exact: true })).toBeVisible()
 })
 
-it('opens agent management from a compact count without mounting details in the composer', async () => {
+it('opens a child requested by a tool card and can reveal it again after returning', async () => {
+  const view = render(<SubAgentPanel conversationId="conv_a" revealAgent={{ agentId: 'child', nonce: 1 }} />)
+  await screen.findByText('Full result')
+  fireEvent.click(screen.getByRole('button', { name: '返回任务列表' }))
+  expect(screen.queryByText('Full result')).toBeNull()
+  view.rerender(<SubAgentPanel conversationId="conv_a" revealAgent={{ agentId: 'child', nonce: 2 }} />)
+  await screen.findByText('Full result')
+  expect(api.chatSubagentControl).toHaveBeenCalledWith('conv_a', { operation: 'get', id: 'child' })
+})
+
+it('shows the running child avatar without mounting details in the composer', async () => {
+  vi.mocked(api.chatSubagentControl).mockImplementation(async (_conversation, args) => args.operation === 'list' ? { sequence: 1, agents: [{ ...record, runs: [{ ...record.runs[0], status: 'running' }] }] } : record)
 
   function Harness() {
     const [open, setOpen] = useState(false)
     return <><div data-testid="composer"><SubAgentIndicator conversationId="conv_a" onOpen={() => setOpen(true)} /></div>{open && <aside><SubAgentPanel conversationId="conv_a" /></aside>}</>
   }
   render(<Harness />)
-  const indicator = await screen.findByRole('button', { name: '子代理 1 · 打开任务' })
+  const indicator = await screen.findByRole('button', { name: 'Research · 运行中' })
   expect(screen.queryByText('Research')).toBeNull()
   fireEvent.click(indicator)
   await screen.findByText('Research')
   expect(screen.getByTestId('composer')).not.toHaveTextContent('Research')
   expect(screen.queryByText('主代理')).toBeNull()
-  expect(screen.getByRole('heading', { name: '正在运行 · 0' })).toBeVisible()
-  expect(screen.getByRole('heading', { name: '已关闭 · 1' })).toBeVisible()
+  expect(screen.getByRole('heading', { name: '正在运行 · 1' })).toBeVisible()
+  expect(screen.getByRole('heading', { name: '已关闭 · 0' })).toBeVisible()
   expect(screen.queryByRole('textbox')).toBeNull()
 
   expect(vi.mocked(api.chatSubagentControl).mock.calls.filter(([, args]) => args.operation === 'list')).toHaveLength(1)
@@ -70,4 +82,24 @@ it('a failed connection can reload the durable snapshot without starting work', 
   fireEvent.click(await screen.findByText('Research'))
   await screen.findByText('Full result')
   expect(vi.mocked(api.chatSubagentControl).mock.calls.every(([, args]) => ['list', 'get', 'wait'].includes(args.operation))).toBe(true)
+})
+
+
+it('hides the composer indicator when all children have finished', async () => {
+  const { container } = render(<SubAgentIndicator conversationId="conv_a" onOpen={vi.fn()} />)
+  await vi.waitFor(() => expect(api.chatSubagentControl).toHaveBeenCalled())
+  expect(container).toBeEmptyDOMElement()
+})
+
+
+it('shows only active identities and removes an avatar when its execution ends', async () => {
+  const running = { ...record, runs: [{ ...record.runs[0], status: 'running' }] }
+  const finishing = { ...record, id: 'second', name: '工具权限', runs: [{ ...record.runs[0], status: 'finishing' }] }
+  vi.mocked(api.chatSubagentControl).mockResolvedValue({ sequence: 1, agents: [running, finishing, { ...record, id: 'closed' }] })
+  render(<SubAgentIndicator conversationId="conv_a" onOpen={vi.fn()} />)
+  await screen.findByRole('button', { name: 'Research · 运行中' })
+  expect(screen.getAllByRole('button')).toHaveLength(2)
+  act(() => updateSubAgent('conv_a', record))
+  expect(screen.queryByRole('button', { name: /Research/ })).toBeNull()
+  expect(screen.getByRole('button', { name: /工具权限/ })).toBeVisible()
 })

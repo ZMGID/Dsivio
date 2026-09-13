@@ -39,7 +39,43 @@ pub struct Profile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Resolution {
+    pub outcome: String,
+    pub reason: String,
+    pub successor: Option<String>,
+}
+
+/// The supervisor commits diagnostic metadata and partial output with the terminal state.
+#[derive(Clone)]
+pub struct WorkerOutput {
+    pub result: Result<(String, Option<Value>), String>,
+    pub partial: Option<String>,
+    pub usage: Option<Value>,
+    pub recovery: Option<Value>,
+}
+impl From<Result<(String, Option<Value>), String>> for WorkerOutput {
+    fn from(result: Result<(String, Option<Value>), String>) -> Self {
+        Self {
+            result,
+            partial: None,
+            usage: None,
+            recovery: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Execution {
+    /// Old records remain readable without inventing a historical acceptance.
+    #[serde(default)]
+    pub requires_review: bool,
+    #[serde(default)]
+    pub resolution: Option<Resolution>,
+    #[serde(default)]
+    pub recovery: Option<Value>,
+    #[serde(default)]
+    pub output_available: bool,
     #[serde(default)]
     pub delivered: bool,
     pub id: String,
@@ -86,6 +122,23 @@ impl Record {
     }
     fn current_mut(&mut self) -> &mut Execution {
         self.runs.last_mut().expect("validated execution")
+    }
+}
+
+impl Execution {
+    pub fn needs_review(&self) -> bool {
+        self.requires_review && !self.status.active() && self.resolution.is_none()
+    }
+    pub fn has_output(&self) -> bool {
+        self.output_available
+            || self
+                .result
+                .as_ref()
+                .is_some_and(|text| !text.trim().is_empty())
+            || self.error.as_ref().is_some_and(|text| {
+                text.strip_prefix("recovered: ")
+                    .is_some_and(|report| !report.trim().is_empty())
+            })
     }
 }
 
@@ -210,6 +263,7 @@ impl Runtime {
         summary.profile.system_prompt.clear();
         summary.profile.tool_names.clear();
         for run in &mut summary.runs {
+            run.output_available = run.has_output();
             run.result = None;
             run.prompt = run.prompt.chars().take(500).collect();
         }
@@ -332,6 +386,136 @@ impl Runtime {
     pub fn set_limit(&self, limit: usize) {
         self.lock().limit = limit.clamp(1, 64);
     }
+
+    /// Delivery acknowledges transport only. These obligations survive delivery and restart.
+    pub fn supervision_message(
+        &self,
+        conversation: &str,
+        parent: &str,
+    ) -> Result<Option<Value>, String> {
+        let pending: Vec<_> = self.list(conversation)?.into_iter().flat_map(|record| {
+            let name = record.name;
+            let id = record.id;
+            record.runs.into_iter().filter(move |run| run.parent_run == parent && run.needs_review())
+                .map(move |run| json!({"id":id,"name":name,"execution_id":run.id,"status":run.status,"has_output":run.has_output()}))
+        }).collect();
+        if pending.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            json!({"role":"system", "subagent_supervision":true, "content":format!(
+            "Child execution ended, but these assignments still need your decision: {}. Read results using agent_control(get). Accept usable findings with agent_control(resolve, outcome=accepted, execution_id, message=reason). If incomplete, continue the same child from saved history, or start a replacement and resolve with outcome=reassigned and successor_execution_id. If you completed the missing work yourself, resolve with outcome=completed_by_parent and describe evidence. If genuinely blocked, resolve with outcome=blocked and explain why. Do not mechanically retry unknown side effects, bypass budgets, or restart user-stopped work. Do not give a final answer before disposing of these assignments.", json!(pending))}),
+        ))
+    }
+
+    pub fn resolve(
+        &self,
+        conversation: &str,
+        id: &str,
+        run: &str,
+        outcome: &str,
+        reason: &str,
+        successor: Option<&str>,
+    ) -> Result<Record, String> {
+        if reason.trim().is_empty() || reason.len() > 10_000 {
+            return Err("A concise disposition reason is required".into());
+        }
+        if !matches!(
+            outcome,
+            "accepted" | "completed_by_parent" | "blocked" | "reassigned"
+        ) {
+            return Err("Invalid disposition".into());
+        }
+        let _guard = self.lock();
+        let mut record = self.scoped(conversation, id)?;
+        if record.current().id != run || record.current().status.active() {
+            return Err("Disposition requires the current ended execution".into());
+        }
+        if outcome == "accepted" && !record.current().has_output() {
+            return Err("No saved output to accept; continue, complete the work yourself, or explain the blocker".into());
+        }
+        if outcome == "reassigned" {
+            let target = successor.ok_or("successor_execution_id required")?;
+            let exists = self.summaries(conversation)?.iter().any(|other| {
+                other.id != id
+                    && other.runs.iter().any(|candidate| {
+                        candidate.id == target
+                            && candidate.parent_run == record.current().parent_run
+                            && candidate.requires_review
+                            && candidate.resolution.is_none()
+                    })
+            });
+            if !exists {
+                return Err(
+                    "Replacement must be an unresolved execution in this collaboration".into(),
+                );
+            }
+        } else if successor.is_some() {
+            return Err("Only reassignment accepts a successor".into());
+        }
+        if let Some(previous) = &record.current().resolution {
+            if previous.outcome == outcome
+                && previous.reason == reason
+                && previous.successor.as_deref() == successor
+            {
+                return Ok(record);
+            }
+            if previous.outcome != "blocked" {
+                return Err("Execution already has a disposition".into());
+            }
+        }
+        record.current_mut().resolution = Some(Resolution {
+            outcome: outcome.into(),
+            reason: reason.into(),
+            successor: successor.map(str::to_owned),
+        });
+        self.save(&mut record)?;
+        Ok(record)
+    }
+
+    /// Called only after the tool-capable decision opportunities are exhausted.
+    pub fn finalize_supervision(
+        &self,
+        conversation: &str,
+        parent: &str,
+    ) -> Result<Vec<String>, String> {
+        let _guard = self.lock();
+        let mut blockers = Vec::new();
+        for summary in self.summaries(conversation)? {
+            if !summary.runs.iter().any(|run| {
+                run.parent_run == parent
+                    && run.requires_review
+                    && (run.resolution.is_none()
+                        || run
+                            .resolution
+                            .as_ref()
+                            .is_some_and(|resolution| resolution.outcome == "blocked"))
+            }) {
+                continue;
+            }
+            let mut record = self.scoped(conversation, &summary.id)?;
+            let mut changed = false;
+            for run in &mut record.runs {
+                if run.parent_run != parent || !run.requires_review {
+                    continue;
+                }
+                if run.resolution.is_none() {
+                    run.resolution = Some(Resolution { outcome: "blocked".into(), reason: "主代理本轮未完成结果处理；已有成果保留，可继续处理。 / Parent turn ended before this assignment was resolved; saved work can be continued.".into(), successor: None });
+                    changed = true;
+                }
+                if let Some(resolution) = &run.resolution {
+                    if resolution.outcome == "blocked" {
+                        blockers.push(format!("{}: {}", record.name, resolution.reason));
+                    }
+                }
+            }
+            if changed {
+                self.save(&mut record)?;
+            }
+        }
+        Ok(blockers)
+    }
+
     pub fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
         self.events.subscribe()
     }
@@ -363,6 +547,13 @@ impl Runtime {
     where
         F: std::future::Future<Output = Result<(String, Option<Value>), String>> + Send + 'static,
     {
+        self.spawn_worker(record, async move { work.await.into() })
+    }
+
+    pub fn spawn_worker<F>(self: &std::sync::Arc<Self>, record: &Record, work: F) -> bool
+    where
+        F: std::future::Future<Output = WorkerOutput> + Send + 'static,
+    {
         let run = record.current().id.clone();
         if !self.claim_worker(&run) {
             return false;
@@ -375,9 +566,9 @@ impl Runtime {
             let outcome = std::panic::AssertUnwindSafe(work)
                 .catch_unwind()
                 .await
-                .unwrap_or_else(|_| Err("Sub-agent worker panicked".into()));
+                .unwrap_or_else(|_| WorkerOutput::from(Err("Sub-agent worker panicked".into())));
             loop {
-                match runtime.finish(&conversation, &id, &worker_run, outcome.clone()) {
+                match runtime.finish_output(&conversation, &id, &worker_run, outcome.clone()) {
                     Ok(_) => break,
                     Err(error) => {
                         runtime
@@ -541,7 +732,21 @@ impl Runtime {
             if !unknown.is_empty() {
                 record.history.push(json!({"role":"user", "content":format!("Previous execution was interrupted. These tool outcomes are unknown; inspect external state before retrying any operation: {}", json!(unknown))}));
             }
-            record.runs.push(execution(parent_run, text));
+            let next = execution(parent_run, text);
+            if record.current().resolution.is_none()
+                || record
+                    .current()
+                    .resolution
+                    .as_ref()
+                    .is_some_and(|resolution| resolution.outcome == "blocked")
+            {
+                record.current_mut().resolution = Some(Resolution {
+                    outcome: "continued".into(),
+                    reason: text.into(),
+                    successor: Some(next.id.clone()),
+                });
+            }
+            record.runs.push(next);
             record.user_stopped = false;
         }
         self.save(&mut record)?;
@@ -720,6 +925,16 @@ impl Runtime {
         run: &str,
         result: Result<(String, Option<Value>), String>,
     ) -> Result<Record, String> {
+        self.finish_output(conversation, id, run, result.into())
+    }
+
+    pub fn finish_output(
+        &self,
+        conversation: &str,
+        id: &str,
+        run: &str,
+        output: WorkerOutput,
+    ) -> Result<Record, String> {
         let mut control = self.lock();
         let mut record = self.scoped(conversation, id)?;
         if record.current().id != run {
@@ -732,7 +947,18 @@ impl Runtime {
             record.current().status == Status::Stopping || control.stopping.contains(run);
         record.user_stopped |= control.user_stops.contains(run);
         let current = record.current_mut();
-        match result {
+        current.recovery = output.recovery;
+        current.result = output.partial.filter(|text| !text.trim().is_empty());
+        current.usage = output.usage;
+        if stopping && current.resolution.is_none() {
+            current.resolution = Some(Resolution {
+                outcome: "cancelled".into(),
+                reason: "Execution was stopped; retained work is not automatically restarted"
+                    .into(),
+                successor: None,
+            });
+        }
+        match output.result {
             Ok((content, usage)) => {
                 current.result = Some(content);
                 current.usage = usage;
@@ -743,6 +969,11 @@ impl Runtime {
                 };
             }
             Err(error) => {
+                if current.recovery.is_none() {
+                    current.recovery = Some(
+                        json!({"outcome":"error", "kind":crate::chat::agent::recovery::classify(&error).wire_kind()}),
+                    );
+                }
                 current.error = Some(error);
                 current.status = if stopping {
                     Status::Interrupted
@@ -893,6 +1124,10 @@ impl Runtime {
 
 fn execution(parent_run: &str, prompt: &str) -> Execution {
     Execution {
+        requires_review: true,
+        resolution: None,
+        recovery: None,
+        output_available: false,
         delivered: false,
         id: uuid::Uuid::new_v4().to_string(),
         parent_run: parent_run.into(),
@@ -935,6 +1170,241 @@ fn enqueue(record: &mut Record, key: &str, sender: &str, text: &str) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delivered_error_still_requires_parent_disposition_and_continuation_links_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::open(dir.path().into()).unwrap();
+        let child = runtime
+            .start("conv", "parent", "k", "A", Profile::default(), "Inspect")
+            .unwrap();
+        runtime
+            .finish(
+                "conv",
+                &child.id,
+                &child.current().id,
+                Err("connection reset".into()),
+            )
+            .unwrap();
+        runtime
+            .acknowledge_result("conv", &child.id, &child.current().id)
+            .unwrap();
+        assert!(runtime
+            .supervision_message("conv", "parent")
+            .unwrap()
+            .is_some());
+        assert!(runtime
+            .resolve(
+                "conv",
+                &child.id,
+                &child.current().id,
+                "accepted",
+                "Looks good",
+                None
+            )
+            .is_err());
+        let (next, starts) = runtime
+            .resume(
+                "conv",
+                &child.id,
+                "parent",
+                "continue",
+                "main_agent",
+                "Continue from saved evidence",
+            )
+            .unwrap();
+        assert!(starts);
+        assert_eq!(
+            next.runs[0]
+                .resolution
+                .as_ref()
+                .unwrap()
+                .successor
+                .as_deref(),
+            Some(next.current().id.as_str())
+        );
+        assert!(runtime
+            .supervision_message("conv", "parent")
+            .unwrap()
+            .is_none());
+        runtime
+            .finish(
+                "conv",
+                &child.id,
+                &next.current().id,
+                Ok(("Findings".into(), None)),
+            )
+            .unwrap();
+        assert!(runtime
+            .supervision_message("conv", "parent")
+            .unwrap()
+            .is_some());
+        runtime
+            .resolve(
+                "conv",
+                &child.id,
+                &next.current().id,
+                "accepted",
+                "Verified findings answer the assignment",
+                None,
+            )
+            .unwrap();
+        assert!(runtime
+            .supervision_message("conv", "parent")
+            .unwrap()
+            .is_none());
+        let reopened = Runtime::open(dir.path().into()).unwrap();
+        assert!(reopened
+            .supervision_message("conv", "parent")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn supervision_budget_exit_preserves_result_and_records_blocker() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::open(dir.path().into()).unwrap();
+        let child = runtime
+            .start("conv", "parent", "k", "A", Profile::default(), "Inspect")
+            .unwrap();
+        runtime
+            .finish(
+                "conv",
+                &child.id,
+                &child.current().id,
+                Ok(("Partial evidence".into(), None)),
+            )
+            .unwrap();
+        let blocked = runtime.finalize_supervision("conv", "parent").unwrap();
+        assert_eq!(blocked.len(), 1);
+        let saved = runtime.get("conv", &child.id).unwrap();
+        assert_eq!(saved.current().result.as_deref(), Some("Partial evidence"));
+        assert_eq!(
+            saved.current().resolution.as_ref().unwrap().outcome,
+            "blocked"
+        );
+        assert!(runtime
+            .resolve(
+                "another",
+                &child.id,
+                &child.current().id,
+                "accepted",
+                "ok",
+                None
+            )
+            .is_err());
+        assert!(runtime
+            .resolve("conv", &child.id, "stale", "accepted", "ok", None)
+            .is_err());
+    }
+
+    #[test]
+    fn partial_output_and_recovery_survive_terminal_error_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::open(dir.path().into()).unwrap();
+        let child = runtime
+            .start("conv", "parent", "k", "A", Profile::default(), "Inspect")
+            .unwrap();
+        let output = WorkerOutput {
+            result: Err("response interrupted".into()),
+            partial: Some("Read evidence".into()),
+            usage: Some(json!({"input_tokens":12})),
+            recovery: Some(
+                json!({"degraded":{"kind":"timeout","reason":"Connection interrupted"}}),
+            ),
+        };
+        runtime
+            .finish_output("conv", &child.id, &child.current().id, output)
+            .unwrap();
+        let reopened = Runtime::open(dir.path().into()).unwrap();
+        let saved = reopened.get("conv", &child.id).unwrap();
+        assert_eq!(saved.current().result.as_deref(), Some("Read evidence"));
+        assert_eq!(saved.current().usage.as_ref().unwrap()["input_tokens"], 12);
+        assert_eq!(
+            saved.current().recovery.as_ref().unwrap()["degraded"]["kind"],
+            "timeout"
+        );
+        assert!(reopened.list("conv").unwrap()[0].current().has_output());
+        assert!(saved.current().needs_review());
+    }
+
+    #[test]
+    fn reassignment_requires_real_scoped_successor_and_acceptance_is_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::open(dir.path().into()).unwrap();
+        let a = runtime
+            .start("conv", "parent", "a", "A", Profile::default(), "Inspect")
+            .unwrap();
+        runtime
+            .finish("conv", &a.id, &a.current().id, Err("Unavailable".into()))
+            .unwrap();
+        assert!(runtime
+            .resolve(
+                "conv",
+                &a.id,
+                &a.current().id,
+                "reassigned",
+                "Use B",
+                Some("missing")
+            )
+            .is_err());
+        let b = runtime
+            .start(
+                "conv",
+                "parent",
+                "b",
+                "B",
+                Profile::default(),
+                "Inspect instead",
+            )
+            .unwrap();
+        runtime
+            .resolve(
+                "conv",
+                &a.id,
+                &a.current().id,
+                "reassigned",
+                "Use B",
+                Some(&b.current().id),
+            )
+            .unwrap();
+        runtime
+            .finish(
+                "conv",
+                &b.id,
+                &b.current().id,
+                Ok(("Verified findings".into(), None)),
+            )
+            .unwrap();
+        runtime
+            .resolve(
+                "conv",
+                &b.id,
+                &b.current().id,
+                "accepted",
+                "Meets assignment",
+                None,
+            )
+            .unwrap();
+        let (next, _) = runtime
+            .resume(
+                "conv",
+                &b.id,
+                "next-parent",
+                "new",
+                "user",
+                "Another question",
+            )
+            .unwrap();
+        assert_eq!(
+            next.runs[0].resolution.as_ref().unwrap().outcome,
+            "accepted"
+        );
+        assert_eq!(
+            next.runs[0].resolution.as_ref().unwrap().reason,
+            "Meets assignment"
+        );
+    }
 
     fn child(runtime: &Runtime, key: &str) -> Record {
         runtime

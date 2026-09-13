@@ -1,5 +1,5 @@
 import type { SubAgentRecord } from '../api/tauri'
-import type { ChatMessage } from './types'
+import type { ChatMessage, ToolCallRecord } from './types'
 
 const obj = (value: unknown): Record<string, unknown> => value != null && typeof value === 'object' ? value as Record<string, unknown> : {}
 const text = (value: unknown): string => typeof value === 'string' ? value : Array.isArray(value) ? value.map(part => obj(part).text).filter(part => typeof part === 'string').join('\n') : ''
@@ -41,7 +41,22 @@ export function subAgentMessages(child: SubAgentRecord): ChatMessage[] {
       const fn = obj(call.function)
       const saved = ledger.get(id)
       const output = outputs.get(id)
-      answer!.tool_calls!.push({ id, name: String(fn.name ?? call.name ?? saved?.name ?? 'Tool'), source: 'native', arguments: fn.arguments ?? saved?.arguments, status: output != null ? 'success' : saved?.status === 'unknown' ? 'error' : 'running', result_preview: output })
+      const result = obj(saved?.result)
+      const failed = saved?.status === 'failed' || result.is_error === true || result.isError === true
+      const unknown = saved?.status === 'unknown' && output == null
+      const preview = output ?? (typeof result.content === 'string' ? result.content : undefined)
+      const error = failed ? String(saved?.error ?? preview ?? 'Tool failed') : unknown ? 'Tool result unknown' : undefined
+      answer!.tool_calls!.push({
+        id, name: String(saved?.name ?? fn.name ?? call.name ?? 'Tool'),
+        source: typeof saved?.source === 'string' ? saved.source : 'native',
+        server_id: typeof saved?.server_id === 'string' ? saved.server_id : undefined,
+        server_name: typeof saved?.server_name === 'string' ? saved.server_name : undefined,
+        arguments: fn.arguments ?? saved?.arguments,
+        status: failed || unknown ? 'error' : preview != null || saved?.status === 'returned' ? 'success' : run && !['running', 'finishing', 'stopping'].includes(run.status) ? 'cancelled' : 'running',
+        result_preview: preview, error,
+        structured_content: result.structured_content ?? result.structuredContent,
+        artifacts: Array.isArray(result.artifacts) ? result.artifacts as ToolCallRecord['artifacts'] : undefined,
+      })
       answer!.segments!.push({ id: `${child.id}-tool-${id}`, kind: 'tool', phase: 'tool_loop', order: answer!.segments!.length, tool_call_id: id })
     })
   })

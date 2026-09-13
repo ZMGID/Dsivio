@@ -58,3 +58,13 @@
 同时复跑：SubAgent Rust 模块 50 项全过；协作终答补写的两项确定性测试通过；前端全量 201 文件 / 1537 项、TypeScript、相关 ESLint 全过。Playwright 在 900×700 验证任务页只出现“正在运行 / 已关闭”两组、不显示主代理，并人工查看截图。日志：`live-deepseek-loop.log`、`comprehensive-subagent-rust.log`、`comprehensive-frontend.log`、`comprehensive-types.log`、`comprehensive-lint.log`。
 
 实网测试覆盖 provider、共享循环、工具往返和结果汇总；supervisor/持久化由真实 Runtime 确定性测试覆盖。没有向用户对话库写入测试会话，也没有自动操作原生桌面窗口，因此本轮不宣称完成原生窗口级的全链路测试。
+
+## 主代理结果处置闭环（2026-09-13）
+
+依据用户后续要求和监督调查，新增执行级 requiresReview / resolution / recovery / outputAvailable。报告投递确认不再代表委派已处理；agent_control(resolve) 保存接受、自行补齐、阻塞或关联真实后继执行的改派。继续原代理时关联尚未处置的前次执行，不覆盖此前已经接受的成果。
+
+父方正常终答前发现未处置事项时返回有工具能力的规划入口；连续两次提示后仍直接终答或达到工具轮数上限时，保存阻塞原因并返回明确的协作未完成答复。用户停止仍优先，工具清理保持原有监督路径。结构化恢复信息、部分成果、用量与终态在同一次持久提交中保存；写入故障仅重试保存。
+
+卡片和只读详情区分等待验收、等待处理、已采用、已继续/改派、主代理已补齐及待继续。旧 recovered 记录显示有恢复结果，不重写历史验收。
+
+验证：Rust 子代理模块 54 项通过；主代理循环 62 项通过、1 项实网测试按原配置忽略。相关前端 66 项通过；TypeScript、修改组件 ESLint、git diff --check 通过。浏览器固定数据验证 900×700 的等待处理、主代理补齐、点击详情和已保存结果显示；截图 output/playwright/subagent-cards/supervision.png。本轮未调用真实 provider 或运行原生桌面端到端场景。

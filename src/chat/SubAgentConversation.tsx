@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import type { SubAgentRecord } from '../api/tauri'
 import { MessageBubble } from './MessageBubble'
 import { subAgentMessages } from './subAgentMessages'
+import { subAgentStatusLabel } from './subAgentStatus'
 
 export function SubAgentConversation({ child, lang }: { child: SubAgentRecord; lang: 'zh' | 'en' }) {
   const root = useRef<HTMLDivElement>(null)
@@ -21,6 +22,7 @@ export function SubAgentConversation({ child, lang }: { child: SubAgentRecord; l
     if (scroll && following.current) scroll.scrollTop = scroll.scrollHeight
   }, [messages])
   return <div ref={root} aria-label={lang === 'zh' ? '子代理对话' : 'Sub-agent conversation'} className="min-w-0 space-y-6 px-5 py-5">
+    {(run?.requiresReview || run?.resolution) && <div role="status" className="text-xs text-neutral-500"><p>{subAgentStatusLabel(run, lang)}</p>{run.resolution?.reason && <p className="mt-1 whitespace-pre-wrap break-words">{run.resolution.reason}</p>}</div>}
     {messages.map(message => <MessageBubble key={message.id} message={message} readOnly />)}
     {legacyRecovery ? <p role="status" className="text-xs text-amber-700 dark:text-amber-400">{lang === 'zh' ? '原执行标记为失败；上方保留当时的恢复答复。' : 'Originally marked failed; the saved recovery response is shown above.'}</p> : run?.error && <p role="status" className="whitespace-pre-wrap break-words text-xs text-red-600">{run.error}</p>}
     {run && ['running', 'finishing', 'stopping'].includes(run.status) && <p role="status" className="text-xs text-neutral-400">{lang === 'zh' ? '正在处理任务…' : 'Working…'}</p>}

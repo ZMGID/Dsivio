@@ -402,6 +402,7 @@ export interface InputBarProps {
   agentPlanState?: AgentPlanState | null
   agentTodoState?: AgentTodoState | null
   goalSlot?: ReactNode
+  subAgentSlot?: ReactNode
   onAgentPlanModeChange?: (mode: AgentPlanMode) => void | Promise<void>
   enabledSkills?: SlashSkill[]
   onOpenSkillSettings?: () => void
@@ -492,6 +493,7 @@ export const InputBar = memo(function InputBar({
   agentPlanState = null,
   agentTodoState = null,
   goalSlot,
+  subAgentSlot,
   onAgentPlanModeChange,
   enabledSkills = [],
   onOpenSkillSettings,
@@ -2014,7 +2016,7 @@ export const InputBar = memo(function InputBar({
           </div>
         )}
         {/* ① 状态条：「你在哪 + 在做什么 + 改了多少」—— 项目/集、当前 todo、diff 徽标。 */}
-        {(statusBarVisible || todoBarVisible || goalSlot || gitStatusEnabled) && (
+        {(statusBarVisible || todoBarVisible || goalSlot || subAgentSlot || gitStatusEnabled) && (
           <div className="chat-composer-status" data-tauri-drag-region="false">
             {statusBarVisible && effectiveProject && (
               <div className="relative min-w-0">
@@ -2074,6 +2076,7 @@ export const InputBar = memo(function InputBar({
                 onOpenGitPanel={onOpenGitPanel}
               />
             )}
+            {subAgentSlot}
           </div>
         )}
 

@@ -1,5 +1,6 @@
 import { type ComponentType, type ReactNode, memo, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatDisclosureBody } from './ChatDisclosureBody'
+import { SubAgentToolCard } from './SubAgentToolCard'
 import {
   AlertCircle,
   Bot,
@@ -391,6 +392,7 @@ function structuredSubagent(toolCall: ToolCallRecord): SubagentView | null {
 }
 
 function isSubAgentRecord(toolCall: ToolCallRecord): boolean {
+  if (objectValue(toolCall.structured_content ?? toolCall.structuredContent)?.type === 'subagent_started') return true
   if (structuredSubagent(toolCall)) return true
   // 外部 CLI 的子代理（claude 的 Agent/Task）没有 structured content，
   // 按 source+名字认，与内置 agent 同一张 SUBAGENT 卡。
@@ -568,10 +570,7 @@ function SubAgentCard({ toolCall }: ToolCallBlockProps) {
 
   const receipt = objectValue(toolCall.structured_content ?? toolCall.structuredContent)
   if (receipt?.type === 'subagent_started') {
-    return <div className="rounded border border-neutral-200 p-3 text-sm dark:border-neutral-700">
-      <div className="font-medium">{stringValue(receipt.name)} · 派工已受理</div>
-      <div className="text-neutral-500">在子代理面板查看执行状态和完整结果。</div>
-    </div>
+    return <SubAgentToolCard toolCall={toolCall} />
   }
 
   const agentType = subagentAgentType(view, args)
@@ -2093,6 +2092,9 @@ export function ImageReadCluster({ toolCalls }: { toolCalls: ToolCallRecord[] })
 }
 
 function ToolCallBlockComponent(props: ToolCallBlockProps) {
+  if ((props.toolCall.source === 'native' && toolRecordRawName(props.toolCall) === 'agent_control') || objectValue(props.toolCall.structured_content ?? props.toolCall.structuredContent)?.type === 'subagent_control') {
+    return <SubAgentToolCard toolCall={props.toolCall} />
+  }
   if (isAskUserTool(props.toolCall)) {
     return <AskUserBlock toolCall={props.toolCall} />
   }

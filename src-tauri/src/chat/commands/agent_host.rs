@@ -26,10 +26,24 @@ pub(super) struct ChatAgentHost<'a> {
 impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
     fn run_ended(&self, conversation_id: &str) {
         if let Ok(runtime) = crate::chat::sub_agent::control::runtime(&self.app) {
+            if self.state.has_chat_active_generation(conversation_id) {
+                if let Err(error) = runtime.finalize_supervision(conversation_id, &self.run_id) {
+                    eprintln!("Cannot record unresolved child assignments: {error}");
+                }
+            }
             if let Err(error) = runtime.stop_parent(conversation_id, Some(&self.run_id)) {
                 eprintln!("Cannot seal child collaboration: {error}");
             }
         }
+    }
+
+    fn finalize_collaboration(
+        &self,
+        conversation_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<String>, String> {
+        crate::chat::sub_agent::control::runtime(&self.app)?
+            .finalize_supervision(conversation_id, run_id)
     }
 
     fn checkpoint_runtime<'a>(
@@ -45,12 +59,19 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
             let mut events = runtime.subscribe();
             loop {
                 events.borrow_and_update();
-                let (incoming, pending) = crate::chat::sub_agent::control::collect_results(
+                let (mut incoming, pending) = crate::chat::sub_agent::control::collect_results(
                     &self.app,
                     conversation_id,
                     run_id,
                 )
                 .await?;
+                crate::chat::sub_agent::control::append_supervision(
+                    &runtime,
+                    conversation_id,
+                    run_id,
+                    finishing,
+                    &mut incoming,
+                )?;
                 if !incoming.is_empty()
                     || !finishing
                     || !pending

@@ -5,20 +5,27 @@ import { useSubAgents, refreshSubAgents } from './useSubAgents'
 import { Button, IconButton } from '../components/Button'
 import { SubAgentAvatar } from './SubAgentAvatar'
 import { SubAgentConversation } from './SubAgentConversation'
+import { subAgentStatusLabel, subAgentNeedsAttention } from './subAgentStatus'
 
 const active = (status: string) => ['running', 'finishing', 'stopping'].includes(status)
-const chineseLabels: Record<string, string> = { running: '运行中', finishing: '正在收尾', stopping: '正在停止', completed: '已完成', failed: '失败', interrupted: '已中断' }
 
 export function SubAgentIndicator({ conversationId, onOpen, lang = 'zh' }: { conversationId: string; onOpen: () => void; lang?: 'zh' | 'en' }) {
-  const { agents, error } = useSubAgents(conversationId)
-  if (!agents.length && !error) return null
-  const label = lang === 'zh' ? `子代理 ${agents.length} · 打开任务` : `Sub-agents ${agents.length} · Open tasks`
-  return <Button variant="ghost" size="sm" aria-label={label} title={label} onClick={onOpen}><SubAgentAvatar id="main" size={18} /><span className="tabular-nums">{error ? '!' : agents.length}</span></Button>
+  const { agents } = useSubAgents(conversationId)
+  const running = agents.filter(child => active(child.runs.at(-1)?.status ?? ''))
+  if (!running.length) return null
+  return <div className="ml-auto flex min-w-0 items-center justify-end gap-1 overflow-x-auto">
+    {running.map(child => {
+      const label = `${child.name} · ${subAgentStatusLabel(child.runs.at(-1), lang)}`
+      return <button key={child.id} type="button" aria-label={label} title={label} onClick={onOpen}
+        className="shrink-0 rounded-md p-1 hover:bg-neutral-500/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">
+        <SubAgentAvatar id={child.id} status={child.runs.at(-1)?.status} size={22} />
+      </button>
+    })}
+  </div>
 }
 
-export function SubAgentPanel({ conversationId, lang = 'zh' }: { conversationId: string; lang?: 'zh' | 'en' }) {
+export function SubAgentPanel({ conversationId, lang = 'zh', revealAgent }: { conversationId: string; lang?: 'zh' | 'en'; revealAgent?: { agentId: string; nonce: number } | null }) {
   const t = (zh: string, en: string) => lang === 'zh' ? zh : en
-  const labels = lang === 'zh' ? chineseLabels : { running: 'Running', finishing: 'Finishing', stopping: 'Stopping', completed: 'Completed', failed: 'Failed', interrupted: 'Interrupted' } as Record<string, string>
   const { agents: children, error: connectionError } = useSubAgents(conversationId)
   const [selected, setSelected] = useState<Child | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -30,6 +37,9 @@ export function SubAgentPanel({ conversationId, lang = 'zh' }: { conversationId:
     setSelected(null)
     setError('')
   }, [conversationId])
+  useEffect(() => {
+    if (revealAgent) { setSelected(null); setError(''); setSelectedId(revealAgent.agentId) }
+  }, [conversationId, revealAgent])
   const revision = children.find(child => child.id === selectedId)?.sequence
   useEffect(() => {
     if (!selectedId) return
@@ -43,7 +53,8 @@ export function SubAgentPanel({ conversationId, lang = 'zh' }: { conversationId:
 
   const groups = [
     { label: t('正在运行', 'Running'), items: children.filter(child => active(child.runs.at(-1)?.status ?? '')), empty: t('没有正在运行的子代理', 'No running sub-agents') },
-    { label: t('已关闭', 'Closed'), items: children.filter(child => !active(child.runs.at(-1)?.status ?? '')), empty: t('没有已关闭的子代理', 'No closed sub-agents') },
+    { label: t('待处理', 'Needs attention'), items: children.filter(child => subAgentNeedsAttention(child.runs.at(-1))), empty: '' },
+    { label: t('已关闭', 'Closed'), items: children.filter(child => !active(child.runs.at(-1)?.status ?? '') && !subAgentNeedsAttention(child.runs.at(-1))), empty: t('没有已关闭的子代理', 'No closed sub-agents') },
   ]
   const failure = error || connectionError
   return <section aria-label={t('子代理协作', 'Sub-agent collaboration')} className="flex shrink-0 flex-col text-[13px]">
@@ -55,7 +66,7 @@ export function SubAgentPanel({ conversationId, lang = 'zh' }: { conversationId:
         {group.items.map(child => <button key={child.id} type="button" onClick={() => { setError(''); setSelected(null); setSelectedId(child.id) }} className="flex w-full items-center gap-3 rounded-lg px-2 py-3 text-left transition-colors hover:bg-neutral-500/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">
           <SubAgentAvatar id={child.id} status={child.runs.at(-1)?.status} />
           <span className="min-w-0 flex-1 truncate" title={child.name}>{child.name}</span>
-          <span className="shrink-0 text-[11px] text-neutral-400">{active(child.runs.at(-1)?.status ?? '') ? t('运行中', 'Running') : t('已关闭', 'Closed')}</span>
+          <span className="shrink-0 text-[11px] text-neutral-400">{subAgentStatusLabel(child.runs.at(-1), lang)}</span>
         </button>)}
       </div>)}
     </div> : <div className="min-w-0">
@@ -63,7 +74,7 @@ export function SubAgentPanel({ conversationId, lang = 'zh' }: { conversationId:
         <IconButton label={t('返回任务列表', 'Back to tasks')} size="sm" variant="ghost" onClick={() => { setSelectedId(null); setSelected(null) }}><ChevronLeft size={15} /></IconButton>
         <SubAgentAvatar id={selectedId} size={24} />
         <span className="min-w-0 flex-1 truncate font-medium">{selected?.name ?? children.find(child => child.id === selectedId)?.name}</span>
-        <span className="max-w-[35%] truncate text-[11px] text-neutral-400" title={labels[selected?.runs.at(-1)?.status ?? '']}>{selected?.profile.model}</span>
+        <span className="max-w-[35%] truncate text-[11px] text-neutral-400" title={subAgentStatusLabel(selected?.runs.at(-1), lang)}>{selected?.profile.model}</span>
       </div>
       {selected ? <SubAgentConversation key={selected.id} child={selected} lang={lang} /> : <p role="status" className="p-5 text-xs text-neutral-400">{t('正在加载对话…', 'Loading conversation…')}</p>}
     </div>}

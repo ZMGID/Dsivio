@@ -129,7 +129,7 @@ import {
 import { RightDock, type DockPreviewRequest, type DockRevealRequest, type DockTab } from './dock/RightDock'
 import { dockApi } from './dock/api'
 import { insertTextIntoComposer } from './composerInsert'
-import { onDockDiffPreviewRequest, onDockMarkdownPreviewRequest, onDockPreviewRequest, requestDockMarkdownPreview } from './dock/dockPreview'
+import { onDockSubAgentRequest, onDockDiffPreviewRequest, onDockMarkdownPreviewRequest, onDockPreviewRequest, requestDockMarkdownPreview } from './dock/dockPreview'
 import { IconButton } from '../components/Button'
 import { isTauriRuntime } from './utils'
 import { hasEnabledNativeBuiltinTool, hasEnabledSkillRuntime } from '../utils/chatTools'
@@ -4511,6 +4511,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [dockWorkdir, setDockWorkdir] = useState('')
   const [treeExpanded, setTreeExpanded] = useState<string[]>([])
   const [dockReveal, setDockReveal] = useState<DockRevealRequest>(null)
+  const [subAgentRequest, setSubAgentRequest] = useState<{ conversationId: string; agentId: string; nonce: number } | null>(null)
   const [dockPreview, setDockPreview] = useState<DockPreviewRequest>(null)
   // 工作目录跟随当前会话 / 选中项目 / agent runtime 变化，由后端 dock_resolve_cwd 解析
   // （外部 agent 与内置 runtime 的实际写入目录不同，runtime 切换必须重解析）。
@@ -4573,6 +4574,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     setDockOpen(true)
     rememberDockOpen(true)
   }, [])
+
+  useEffect(() => onDockSubAgentRequest(target => {
+    if (target.conversationId !== currentConversationIdRef.current) return
+    handleOpenDockTasks()
+    setSubAgentRequest(previous => ({ ...target, nonce: (previous?.nonce ?? 0) + 1 }))
+  }), [handleOpenDockTasks])
 
   const handleDockWidthChange = useCallback((nextWidth: number) => {
     setDockWidth(nextWidth)
@@ -5517,7 +5524,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             onSelectConversation={handleSelectConversation}
             importedHistoryStale={importedHistoryStale}
             pendingSlot={pendingSlot}
-            goalSlot={<>{currentConversation?.id && <SubAgentIndicator key={currentConversation.id} conversationId={currentConversation.id} lang={uiLang} onOpen={handleOpenDockTasks} />}{visibleGoal ? (
+            subAgentSlot={currentConversation?.id && <SubAgentIndicator key={currentConversation.id} conversationId={currentConversation.id} lang={uiLang} onOpen={handleOpenDockTasks} />}
+            goalSlot={visibleGoal ? (
               <GoalCard
                 goal={visibleGoal}
                 onEdit={handleEditGoal}
@@ -5525,7 +5533,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
                 onResume={handleResumeGoal}
                 onCancel={handleCancelGoal}
               />
-            ) : null}</>}
+            ) : null}
             queuedMessages={currentQueuedMessages}
             canSteerQueuedMessages={canSteerCurrentConversation}
             onSteerQueuedMessage={handleSteerQueuedMessage}
@@ -5540,6 +5548,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         </ChatRouteKeepAlive>
         {chatView === 'conversation' && !usesChatRuntime && !conversationOccupied && (
           <RightDock
+            subAgentRequest={subAgentRequest}
             open={dockOpen}
             width={dockWidth}
             activeTab={dockTab}

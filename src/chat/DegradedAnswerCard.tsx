@@ -19,6 +19,7 @@ const KIND_META: Record<
   moderation: { Icon: Ban, label: '内容审核拦截', tone: 'red' },
   empty_response: { Icon: MessageSquareOff, label: '空响应', tone: 'amber' },
   unknown: { Icon: AlertTriangle, label: '调用失败', tone: 'red' },
+  collaboration_incomplete: { Icon: AlertTriangle, label: '协作待继续', tone: 'amber' },
 }
 
 const TONE_CLASS: Record<string, { border: string; icon: string; label: string }> = {

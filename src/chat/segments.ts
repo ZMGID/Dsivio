@@ -230,7 +230,7 @@ export function isStandaloneToolCard(toolCall: ToolCallRecord): boolean {
   const structured = toolCall.structured_content ?? toolCall.structuredContent
   if (structured && typeof structured === 'object') {
     const type = (structured as { type?: unknown }).type
-    if (type === 'subagent' || type === 'advisor') return true
+    if (type === 'subagent' || type === 'subagent_started' || type === 'advisor') return true
     // 问用户：载荷里是 `askUser`（没有 `type` 字段）。它记的是「问了什么 + 你选了什么」，
     // 折进「调用 N 次工具」里等于把一次人为决定藏起来 —— 那是这条对话里最该看见的东西。
     if (hasAskUserStructuredContent(structured)) return true

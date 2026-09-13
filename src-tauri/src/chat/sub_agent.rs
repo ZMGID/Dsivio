@@ -392,7 +392,7 @@ impl ToolExecutor for SubAgentToolExecutor {
     ) -> ToolExecutorFuture<'a> {
         Box::pin(async move {
             if let Some((conversation, id, run)) = &self.managed {
-                control::runtime(&self.app)?.tool_record(conversation, id, run, serde_json::json!({"id":ctx.tool_call_id,"name":tool.name,"arguments":arguments,"status":"unknown"}))?;
+                control::runtime(&self.app)?.tool_record(conversation, id, run, serde_json::json!({"id":ctx.tool_call_id,"name":tool.name,"source":tool.source,"server_id":tool.server_id,"server_name":tool.server_name,"arguments":arguments,"status":"unknown"}))?;
             }
             let native_ctx = crate::mcp::registry::NativeToolContext {
                 conversation_id: ctx.tool_conversation_id.to_string(),
@@ -412,7 +412,11 @@ impl ToolExecutor for SubAgentToolExecutor {
             )
             .await;
             if let Some((conversation, id, run)) = &self.managed {
-                control::runtime(&self.app)?.tool_record(conversation, id, run, serde_json::json!({"id":ctx.tool_call_id,"name":tool.name,"status":if result.is_ok() {"returned"} else {"failed"},"result":format!("{result:?}")}))?;
+                let saved_result = match &result {
+                    Ok(value) => serde_json::json!({"content":value.content,"is_error":value.is_error,"structured_content":value.structured_content,"artifacts":value.artifacts}),
+                    Err(error) => serde_json::json!({"content":error,"is_error":true}),
+                };
+                control::runtime(&self.app)?.tool_record(conversation, id, run, serde_json::json!({"id":ctx.tool_call_id,"name":tool.name,"status":if result.is_ok() {"returned"} else {"failed"},"result":saved_result}))?;
             }
             result
         })
@@ -723,7 +727,7 @@ pub fn agent_tool(defs: &[AgentDefinition]) -> ChatToolDefinition {
                 "name": {
                     "type": "string",
                     "maxLength": 80,
-                    "description": "Optional short label for this sub-agent run."
+                    "description": "Concise task name in the user's language: prefer 4-8 Chinese characters or 2-4 words, e.g. 聊天流程, 工具权限, Code review. No A/B prefixes, numbering, internal identifiers, or persona nicknames. Put detailed instructions in prompt. Reuse this name when referring to the child."
                 },
                 "system_prompt": {
                     "type": "string",

@@ -37,6 +37,7 @@ type RightDockProps = {
   lang: Lang
   /** 当前对话 id（任务页按对话隔离）。null = 还没有对话。 */
   conversationId: string | null
+  subAgentRequest?: { conversationId: string; agentId: string; nonce: number } | null
   treeExpanded: string[]
   revealRequest: DockRevealRequest
   previewRequest: DockPreviewRequest
@@ -55,6 +56,7 @@ export const RightDock = memo(function RightDock({
   workdir,
   lang,
   conversationId,
+  subAgentRequest,
   treeExpanded,
   revealRequest,
   previewRequest,
@@ -185,7 +187,7 @@ export const RightDock = memo(function RightDock({
       </div>
       <div data-task-scroll className="flex min-h-0 flex-1 flex-col overflow-y-auto custom-scrollbar" hidden={activeTab !== 'tasks'}>
         {open && activeTab === 'tasks' && conversationId && (
-          <SubAgentPanel key={conversationId} conversationId={conversationId} lang={lang} />
+          <SubAgentPanel key={conversationId} conversationId={conversationId} lang={lang} revealAgent={subAgentRequest?.conversationId === conversationId ? subAgentRequest : null} />
         )}
         <BackgroundTasksPanel
           hideEmpty={Boolean(conversationId)}

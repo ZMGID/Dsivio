@@ -45,6 +45,25 @@ pub fn runtime(app: &AppHandle) -> Result<Arc<Runtime>, String> {
     Ok(runtime)
 }
 
+pub fn append_supervision(
+    runtime: &Runtime,
+    conversation: &str,
+    parent_run: &str,
+    finishing: bool,
+    incoming: &mut Vec<Value>,
+) -> Result<(), String> {
+    if finishing
+        && !incoming
+            .iter()
+            .any(|message| message["subagent_supervision"] == true)
+    {
+        if let Some(message) = runtime.supervision_message(conversation, parent_run)? {
+            incoming.push(message);
+        }
+    }
+    Ok(())
+}
+
 /// The parent conversation is the receipt ledger. A stable message identity and
 /// its readable result are committed together; only then is the child outbox
 /// acknowledged. A crash between commits retries the idempotent parent upsert.
@@ -73,15 +92,7 @@ pub async fn collect_results(
                 .find(|r| r.id == run.id)
                 .ok_or("Missing completed execution")?;
             let message_id = format!("subagent-result-{}", run.id);
-            let content = format!(
-                "[Sub-agent: {} · {:?}]\n{}",
-                record.name,
-                run.status,
-                run.result
-                    .as_deref()
-                    .or(run.error.as_deref())
-                    .unwrap_or("No result")
-            );
+            let content = execution_report(&record.name, &record.id, run);
             let message: crate::chat::types::ChatMessage = serde_json::from_value(json!({"id":message_id,"role":"assistant","content":content,"timestamp":chrono::Local::now().timestamp()})).map_err(|e| e.to_string())?;
             let inserted = deliver_result(&runtime, conversation, &record.id, &run.id, async {
                 let mut inserted = false;
@@ -103,7 +114,28 @@ pub async fn collect_results(
             }
         }
     }
+    if !incoming.is_empty() {
+        if let Some(message) = runtime.supervision_message(conversation, parent_run)? {
+            incoming.push(message);
+        }
+    }
     Ok((incoming, pending))
+}
+
+fn execution_report(name: &str, id: &str, run: &super::runtime::Execution) -> String {
+    let legacy = run
+        .error
+        .as_deref()
+        .and_then(|error| error.strip_prefix("recovered: "));
+    let issue = if legacy.is_some() {
+        "Legacy status: execution was marked failed, but recovered output was saved."
+    } else {
+        run.error.as_deref().unwrap_or("none")
+    };
+    format!("[Sub-agent: {name} · {:?}]\nagent_id={id} execution_id={}\nExecution issue: {issue}\nRecovery: {}\nDisposition: {}\nSaved output:\n{}",
+        run.status, run.id, run.recovery.as_ref().unwrap_or(&Value::Null),
+        if run.needs_review() { "parent decision required" } else { "see saved disposition" },
+        run.result.as_deref().or(legacy).unwrap_or("No output was produced"))
 }
 
 fn bounded_output(text: &str) -> String {
@@ -173,7 +205,7 @@ pub fn launch(app: &AppHandle, mut request: SubAgentRequest, key: &str) -> Resul
 
 fn spawn(app: AppHandle, request: SubAgentRequest, runtime: Arc<Runtime>) {
     let record = request.managed.as_ref().expect("managed request").clone();
-    runtime.spawn_task(&record, async move {
+    runtime.spawn_worker(&record, async move {
         struct GenerationGuard {
             app: AppHandle,
             id: String,
@@ -190,13 +222,23 @@ fn spawn(app: AppHandle, request: SubAgentRequest, runtime: Arc<Runtime>) {
             id: format!("subagent-{}", request.task_id),
         };
         match super::run_sub_agent(app, request).await {
-            Ok(result) => worker_output(
-                &result.stream_outcome,
-                result.content,
-                result.usage.and_then(|u| serde_json::to_value(u).ok()),
-                result.degraded.is_some(),
-            ),
-            Err(error) => Err(error),
+            Ok(result) => {
+                let usage = result.usage.and_then(|u| serde_json::to_value(u).ok());
+                super::runtime::WorkerOutput {
+                    result: worker_output(
+                        &result.stream_outcome,
+                        result.content.clone(),
+                        usage.clone(),
+                        result.degraded.is_some(),
+                    ),
+                    partial: Some(result.content),
+                    usage,
+                    recovery: Some(
+                        json!({"outcome":result.stream_outcome,"degraded":result.degraded}),
+                    ),
+                }
+            }
+            Err(error) => super::runtime::WorkerOutput::from(Err(error)),
         }
     });
 }
@@ -215,7 +257,7 @@ fn worker_output(
             usage,
         ))
     } else {
-        Err(format!("{outcome}: {content}"))
+        Err(format!("Child execution ended with outcome: {outcome}; inspect saved output and recovery details before deciding how to continue"))
     }
 }
 
@@ -295,6 +337,16 @@ pub async fn operate(
         ),
         "get" => Ok(json!(runtime.get(conversation, id)?)),
         "message" => Ok(json!(runtime.send(conversation, id, key, sender, text)?)),
+        "resolve" => Ok(json!(runtime.resolve(
+            conversation,
+            id,
+            args["execution_id"]
+                .as_str()
+                .ok_or("execution_id required")?,
+            args["outcome"].as_str().ok_or("outcome required")?,
+            text,
+            args["successor_execution_id"].as_str()
+        )?)),
         "stop" => Ok(json!(runtime.stop(
             conversation,
             id,
@@ -335,6 +387,12 @@ pub async fn operate(
                 if runtime.result_sequence(conversation) != cursor {
                     break "result_ready";
                 }
+                if runtime
+                    .supervision_message(conversation, parent_run)?
+                    .is_some()
+                {
+                    break "needs_review";
+                }
                 if !runtime
                     .list(conversation)?
                     .iter()
@@ -373,7 +431,7 @@ pub async fn chat_subagent_control(
 }
 
 pub fn definition() -> ChatToolDefinition {
-    ChatToolDefinition { id: "native__agent_control".into(), name: "agent_control".into(), description: "Control children belonging to this conversation. List/get results; message only adds information (idle children do not run); continue explicitly runs an idle child or supplements an active one; stop requires the current execution_id; wait wakes for completed/failed/interrupted results, user input, or at most 60000 ms; progress alone does not wake it. Use the returned sequence as cursor. waited_ms is actual elapsed time; never infer elapsed time or a stall from the requested timeout. When all children have ended, summarize their results now; do not keep waiting or announce a future summary. Use stable message_id for retries. A user-stopped child requires a new explicit user instruction: only then set user_requested=true on continue. Never set it for automatic retries. The message retains main-agent provenance.".into(), source:"native".into(), server_id: None, server_name:Some("Kivio".into()), input_schema:json!({"type":"object","properties":{"operation":{"type":"string","enum":["list","get","message","continue","stop","wait"]},"id":{"type":"string"},"execution_id":{"type":"string"},"message_id":{"type":"string"},"message":{"type":"string"},"cursor":{"type":"integer"},"timeout_ms":{"type":"integer","minimum":0,"maximum":60000},"user_requested":{"type":"boolean","description":"Only true when the user explicitly instructed continuation after stopping this child; never for automatic retries."}},"required":["operation"]}), sensitive:false, annotations:None, output_schema:None }
+    ChatToolDefinition { id: "native__agent_control".into(), name: "agent_control".into(), description: "Control children belonging to this conversation. List/get results; message only adds information (idle children do not run); continue explicitly runs an idle child or supplements an active one; stop requires the current execution_id; wait wakes for completed/failed/interrupted results, user input, or at most 60000 ms; progress alone does not wake it. Use the returned sequence as cursor. waited_ms is actual elapsed time; never infer elapsed time or a stall from the requested timeout. Ended executions are not accepted assignments. Read each result, then use resolve with execution_id, outcome and message (evidence/reason): accepted, completed_by_parent, blocked, or reassigned with successor_execution_id. Continue incomplete children from saved history; continue links the previous attempt automatically. Only summarize after dispositions are recorded. Do not retry blindly or bypass user stops/budgets. Use stable message_id for retries. A user-stopped child requires a new explicit user instruction: only then set user_requested=true on continue. Never set it for automatic retries. The message retains main-agent provenance.".into(), source:"native".into(), server_id: None, server_name:Some("Kivio".into()), input_schema:json!({"type":"object","properties":{"operation":{"type":"string","enum":["list","get","message","continue","stop","wait","resolve"]},"id":{"type":"string"},"execution_id":{"type":"string"},"message_id":{"type":"string"},"message":{"type":"string"},"outcome":{"type":"string","enum":["accepted","completed_by_parent","blocked","reassigned"]},"successor_execution_id":{"type":"string"},"cursor":{"type":"integer"},"timeout_ms":{"type":"integer","minimum":0,"maximum":60000},"user_requested":{"type":"boolean","description":"Only true when the user explicitly instructed continuation after stopping this child; never for automatic retries."}},"required":["operation"]}), sensitive:false, annotations:None, output_schema:None }
 }
 
 pub fn dispatch(
@@ -393,10 +451,13 @@ pub fn dispatch(
         .await?;
         let value = model_view(ctx.arguments, value);
         let content = bounded_output(&serde_json::to_string(&value).map_err(|e| e.to_string())?);
+        let mut receipt = value;
+        receipt["type"] = json!("subagent_control");
+        receipt["conversation_id"] = json!(ctx.native_ctx.conversation_id);
         Ok(McpToolCallResult {
             content,
             is_error: false,
-            structured_content: None,
+            structured_content: Some(receipt),
             raw: Value::Null,
             artifacts: Vec::new(),
             follow_up_user_messages: Vec::new(),
@@ -413,7 +474,7 @@ fn model_view(args: &Value, value: Value) -> Value {
             .and_then(|runs| runs.last())
             .cloned()
             .unwrap_or(Value::Null);
-        json!({"id":record["id"],"name":record["name"],"execution_id":run["id"],"status":run["status"],"error":run["error"],"result_available":!run["status"].as_str().is_some_and(|s| matches!(s,"running"|"finishing"|"stopping"))})
+        json!({"id":record["id"],"name":record["name"],"execution_id":run["id"],"status":run["status"],"error":run["error"],"requiresReview":run["requiresReview"],"resolution":run["resolution"],"recovery":run["recovery"],"result_available":run["outputAvailable"] == true || run["result"].as_str().is_some_and(|s| !s.trim().is_empty()) || run["error"].as_str().is_some_and(|s| s.starts_with("recovered: "))})
     }
     if let Some(records) = value["agents"].as_array() {
         return json!({"sequence":value["sequence"],"agents":records.iter().map(summary).collect::<Vec<_>>(),"waited_ms":value["waited_ms"],"reason":value["reason"],"timeout_ms":value["timeout_ms"]});
