@@ -60,11 +60,11 @@ describe('ReplaceTranslateOverlay status', () => {
       flow: 'exact_line', kind: 'line', align: 'left', verticalAlign: 'top',
       sourceFontPx: 16, sourceColor: '#111827',
     }, 2)
-    expect(available).toEqual({ width: 73, height: 18 })
+    expect(available).toEqual({ width: 73, height: 20, maxLines: 1 })
     const layout = layoutReplaceTextFlow('这是一段完整译文', [available], 16, (text, size) => text.length * size)
     expect(layout.complete).toBe(true)
     expect(layout.slots[0].contentWidth * layout.safeScale + 35).toBeLessThanOrEqual(108)
-    expect(layout.slots[0].contentHeight * layout.safeScale + 20).toBeLessThanOrEqual(38)
+    expect(layout.slots[0].contentHeight * layout.safeScale + 20).toBeLessThanOrEqual(40)
   })
 
   it('renders the localized status label instead of an internal error code', () => {
@@ -128,7 +128,7 @@ describe('ReplaceTranslateOverlay status', () => {
     const context = {
       clearRect: vi.fn(),
       drawImage: vi.fn(),
-      measureText: (text: string) => ({ width: text.length * 8, actualBoundingBoxAscent: -3 }),
+      measureText: (text: string) => ({ width: text.length * 8, actualBoundingBoxAscent: 12 }),
       save: vi.fn(),
       beginPath: vi.fn(),
       rect: vi.fn(),
@@ -177,8 +177,8 @@ describe('ReplaceTranslateOverlay status', () => {
       />,
     )
 
-    // Canvas top baseline is 3px above the visible ink for this font.
-    expect(fillText).toHaveBeenCalledWith('短译文', 12, 17)
+    // The alphabetic baseline is 12px below the visible ink's top anchor.
+    expect(fillText).toHaveBeenCalledWith('短译文', 12, 32)
     globalThis.Image = originalImage
     getContext.mockRestore()
   })

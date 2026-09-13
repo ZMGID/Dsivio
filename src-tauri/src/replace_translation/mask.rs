@@ -9,13 +9,15 @@
 //! - **盖板按翻译组聚块，不按 OCR 行**。逐行小条带在深色卡片上是一排可见的
 //!   "灰条"，行间还漏出原背景；同组多行共用一块连续矩形面（含行间隙、含短行
 //!   行尾），才是有道那种整段一体的观感。单行组保持贴合多边形的窄条。
-//! - **环带不能贴着盖板边采**。边缘 1px 处常有字形反锯齿残边/阴影，实测把
+//! - **默认环带避开相邻 1px**。边缘 1px 处常有字形反锯齿残边/阴影，实测把
 //!   深色卡片 (22,26,33) 的盖板采成了 (47,53,60)。现在环带从盖板外推 2~5px
 //!   取多行/列，块内再加行间隙内部采样（离任何 OCR 多边形 >2px 的原图像素，
-//!   这是最可信的同表面背景色），全部并入中位数。
+//!   这是最可信的同表面背景色），全部并入中位数。例外仅限非线性背景兜底：
+//!   BoundarySurface 可补充扩展盖板外 1px 的上下采样，排除所有文字覆盖后，
+//!   经过局部中位数窗口再插值；它不参与默认纯色/平面估计。
 //!
 //! 优先使用框内和近邻共同确认的纯色背景；否则按采样拟合二维渐变，拟合不可靠
-//! 时回退环带中位色/上下渐变。`protect_separators` 把盖板压过
+//! 时尝试逐列上下边界插值，采样不足再回退环带中位色/上下渐变。`protect_separators` 把盖板压过
 //! 的表格线按线色回补；覆盖区保持完全不透明，避免羽化把浅色原字混回。
 
 use std::collections::HashMap;
@@ -81,6 +83,43 @@ pub fn plate_fill(image: &RgbImage, blocks: &[Vec<RapidOcrLine>]) -> RgbImage {
     }
     // Never blend source pixels into erased coverage: even faint ink must stay erased.
     output
+}
+
+/// Translation runs in parallel with plate filling. Once its result arrives,
+/// retain the exact original pixels for unchanged text (brands, numbers, or a
+/// missing translation), including its font and decoration.
+pub fn restore_unchanged_groups(
+    source: &RgbImage,
+    cleaned: &mut RgbImage,
+    groups: &[TranslationGroup],
+    spans: &[RapidOcrLine],
+) {
+    let (width, height) = source.dimensions();
+    let mut keep = vec![0u8; width as usize * height as usize];
+    let mut changed = vec![0u8; keep.len()];
+    let by_id: HashMap<&str, &RapidOcrLine> =
+        spans.iter().map(|span| (span.id.as_str(), span)).collect();
+    for group in groups {
+        let leaves: Vec<_> = group
+            .leaf_ids
+            .iter()
+            .filter_map(|id| by_id.get(id.as_str()).map(|span| (*span).clone()))
+            .collect();
+        if let Some(region) = BlockRegion::build(source, &leaves) {
+            let unchanged = group.translated.trim().is_empty()
+                || group.translated.trim() == group.source_text.trim();
+            region.rasterize(
+                if unchanged { &mut keep } else { &mut changed },
+                width,
+                height,
+            );
+        }
+    }
+    for (index, (target, original)) in cleaned.pixels_mut().zip(source.pixels()).enumerate() {
+        if keep[index] != 0 && changed[index] == 0 {
+            *target = *original;
+        }
+    }
 }
 
 /// 盖板相对 OCR 多边形的各向外扩：盖住字形反锯齿与轻微阴影。
@@ -238,25 +277,87 @@ fn protect_separators(image: &RgbImage, mut data: Vec<u8>, width: u32, height: u
     };
     for line_y in &separators.horizontal {
         let center = line_y.round() as i64;
+        let runs = rule_runs(image, true, center);
         for y in center - 1..=center + 1 {
             if y < 0 || y >= height as i64 {
                 continue;
             }
-            let pixels: Vec<(u32, u32)> = (0..width).map(|x| (x, y as u32)).collect();
-            restore_line(&pixels);
+            for &(start, end) in &runs {
+                let pixels: Vec<_> = (start..end).map(|x| (x, y as u32)).collect();
+                restore_line(&pixels);
+            }
         }
     }
     for line_x in &separators.vertical {
         let center = line_x.round() as i64;
+        let runs = rule_runs(image, false, center);
         for x in center - 1..=center + 1 {
             if x < 0 || x >= width as i64 {
                 continue;
             }
-            let pixels: Vec<(u32, u32)> = (0..height).map(|y| (x as u32, y)).collect();
-            restore_line(&pixels);
+            for &(start, end) in &runs {
+                let pixels: Vec<_> = (start..end).map(|y| (x as u32, y)).collect();
+                restore_line(&pixels);
+            }
+        }
+    }
+    // Short cell edges only exist inside their table, never through body text
+    // above or below it.
+    for cell in &separators.cells {
+        for edge in [cell.x, cell.x + cell.width] {
+            for x in edge.round() as i64 - 1..=edge.round() as i64 + 1 {
+                if x < 0 || x >= width as i64 {
+                    continue;
+                }
+                let pixels: Vec<_> = (cell.y.max(0.0) as u32
+                    ..=((cell.y + cell.height) as u32).min(height - 1))
+                    .map(|y| (x as u32, y))
+                    .collect();
+                restore_line(&pixels);
+            }
         }
     }
     data
+}
+
+/// Only protect the part where the rule actually exists. A card edge at x
+/// must not protect glyph pixels at the same x in a banner above the card.
+fn rule_runs(image: &RgbImage, horizontal: bool, center: i64) -> Vec<(u32, u32)> {
+    let (length, cross) = if horizontal {
+        image.dimensions()
+    } else {
+        (image.height(), image.width())
+    };
+    let gray = |along: u32, across: u32| {
+        let p = if horizontal {
+            image.get_pixel(along, across)
+        } else {
+            image.get_pixel(across, along)
+        };
+        (p[0] as i32 * 299 + p[1] as i32 * 587 + p[2] as i32 * 114) / 1000
+    };
+    let mut runs = Vec::new();
+    let mut start = None;
+    let mut end = 0;
+    for along in 0..=length {
+        let edge = along < length
+            && (center - 1..=center + 1).any(|q| {
+                q > 0
+                    && q + 1 < cross as i64
+                    && (gray(along, q as u32 + 1) - gray(along, q as u32 - 1)).abs() >= 10
+            });
+        if edge {
+            start.get_or_insert(along);
+            end = along + 1;
+        } else if along == length || along >= end + 2 {
+            if let Some(begin) = start.take() {
+                if end - begin >= (length / 4).max(4) {
+                    runs.push((begin, end));
+                }
+            }
+        }
+    }
+    runs
 }
 
 /// 四边外推环带和行间隙提供带位置的背景采样。框内与近邻一致时优先保留局部
@@ -318,6 +419,18 @@ fn fill_block_plate(
         .is_none()
         .then(|| BackgroundPlane::fit(&pool, region.rect))
         .flatten();
+    let boundary = (local_flat.is_none() && plane.is_none())
+        .then(|| {
+            // Closely stacked captions can occupy the entire outer ring.
+            // The one-pixel collar is still outside the expanded erase mask;
+            // include it only here, with all other text coverage excluded.
+            let mut near_top = top.clone();
+            let mut near_bottom = bottom.clone();
+            collect_row(image, coverage, x0, x1, y0 - 1, &mut near_top);
+            collect_row(image, coverage, x0, x1, y1, &mut near_bottom);
+            BoundarySurface::fit(&near_top, &near_bottom, region)
+        })
+        .flatten();
     let (start, end) = match (local_flat, top_color, bottom_color) {
         (Some(color), _, _) => (color, color),
         (_, Some(top_color), Some(bottom_color))
@@ -337,10 +450,77 @@ fn fill_block_plate(
         for x in x0..x1 {
             let index = y as usize * width as usize + x as usize;
             if coverage[index] != 0 {
-                let color = plane.as_ref().map_or(color, |plane| plane.color(x, y));
+                let color = plane.as_ref().map_or_else(
+                    || {
+                        boundary
+                            .as_ref()
+                            .map_or(color, |surface| surface.color(x, y))
+                    },
+                    |plane| plane.color(x, y),
+                );
                 output.put_pixel(x as u32, y as u32, image::Rgb(color));
             }
         }
+    }
+}
+
+/// A smooth glow is not an affine plane. Interpolate local, unmasked samples
+/// above and below each column instead of flattening the entire text block.
+/// Median windows suppress isolated antialias/texture pixels; erased source
+/// pixels are never blended back into the result.
+struct BoundarySurface {
+    x0: i32,
+    top_y: f64,
+    bottom_y: f64,
+    columns: Vec<([u8; 3], [u8; 3])>,
+}
+
+impl BoundarySurface {
+    fn fit(
+        top: &[(u32, u32, [u8; 3])],
+        bottom: &[(u32, u32, [u8; 3])],
+        region: &BlockRegion,
+    ) -> Option<Self> {
+        let (x0, _, x1, _) = region.rect;
+        let width = (x1 - x0) as usize;
+        if top.len() < width || bottom.len() < width {
+            return None;
+        }
+        let sample_columns = |samples: &[(u32, u32, [u8; 3])]| {
+            let mut columns = vec![Vec::new(); width];
+            for &(x, _, color) in samples {
+                if x as i32 >= x0 && (x as i32) < x1 {
+                    columns[(x as i32 - x0) as usize].push(color);
+                }
+            }
+            columns
+        };
+        let above = sample_columns(top);
+        let below = sample_columns(bottom);
+        let radius = (region.rep_height * 0.35).clamp(3.0, 12.0) as usize;
+        let local = |columns: &[Vec<[u8; 3]>], x: usize| {
+            let values: Vec<_> = columns[x.saturating_sub(radius)..(x + radius + 1).min(width)]
+                .iter()
+                .flatten()
+                .copied()
+                .collect();
+            (values.len() >= PLATE_MIN_SAMPLES).then(|| median_pixels(&values))
+        };
+        let columns: Option<Vec<_>> = (0..width)
+            .map(|x| Some((local(&above, x)?, local(&below, x)?)))
+            .collect();
+        Some(Self {
+            x0,
+            top_y: top.iter().map(|p| p.1 as f64).sum::<f64>() / top.len() as f64,
+            bottom_y: bottom.iter().map(|p| p.1 as f64).sum::<f64>() / bottom.len() as f64,
+            columns: columns?,
+        })
+    }
+
+    fn color(&self, x: i32, y: i32) -> [u8; 3] {
+        let (above, below) = self.columns[(x - self.x0) as usize];
+        let t = ((y as f64 - self.top_y) / (self.bottom_y - self.top_y).max(1.0)).clamp(0.0, 1.0);
+        lerp_color(above, below, t)
     }
 }
 
@@ -748,6 +928,87 @@ mod tests {
 
     fn single(item: RapidOcrLine) -> Vec<Vec<RapidOcrLine>> {
         vec![vec![item]]
+    }
+
+    #[test]
+    fn curved_banner_background_does_not_become_a_flat_gray_plate() {
+        let clean = RgbImage::from_fn(220, 100, |x, y| {
+            let glow = 50.0 * (-((x as f64 - 125.0) / 45.0).powi(2)).exp();
+            let value = (20.0 + glow + y as f64 * 0.15).round() as u8;
+            image::Rgb([value, value + 8, value + 16])
+        });
+        let mut source = clean.clone();
+        for y in 38..53 {
+            for x in (28..192).step_by(9) {
+                for dx in 0..3 {
+                    source.put_pixel(x + dx, y, image::Rgb([210, 220, 230]));
+                }
+            }
+        }
+        let output = plate_fill(&source, &single(rect_span("body", 25.0, 35.0, 172.0, 22.0)));
+        let error: f64 = (30..190)
+            .map(|x| color_distance(output.get_pixel(x, 45).0, clean.get_pixel(x, 45).0))
+            .sum::<f64>()
+            / 160.0;
+        assert!(error < 5.0, "background error {error}");
+    }
+
+    #[test]
+    fn a_card_edge_does_not_preserve_text_at_the_same_x_above_the_card() {
+        let mut source = RgbImage::from_pixel(160, 180, image::Rgb([30, 40, 50]));
+        for y in 90..170 {
+            source.put_pixel(60, y, image::Rgb([45, 55, 65]));
+        }
+        for y in 30..44 {
+            for x in 59..63 {
+                source.put_pixel(x, y, image::Rgb([48, 58, 68]));
+            }
+        }
+        let output = plate_fill(&source, &single(rect_span("text", 55.0, 27.0, 15.0, 20.0)));
+        assert_eq!(output.get_pixel(60, 35).0, [30, 40, 50]);
+        assert_eq!(output.get_pixel(60, 100), source.get_pixel(60, 100));
+    }
+
+    #[test]
+    fn unchanged_logo_pixels_are_restored_while_translated_body_stays_erased() {
+        let mut source = RgbImage::from_pixel(240, 100, image::Rgb([255, 255, 255]));
+        for y in 30..50 {
+            for x in 20..70 {
+                source.put_pixel(x, y, image::Rgb([235, 65, 10]));
+            }
+            for x in 100..210 {
+                source.put_pixel(x, y, image::Rgb([50, 50, 50]));
+            }
+        }
+        let spans = vec![
+            rect_span("logo", 18.0, 28.0, 55.0, 24.0),
+            rect_span("body", 98.0, 28.0, 115.0, 24.0),
+        ];
+        for translated in ["Hezubus", "", " Hezubus "] {
+            let groups = vec![
+                TranslationGroup {
+                    id: "logo".into(),
+                    leaf_ids: vec!["logo".into()],
+                    source_text: "Hezubus".into(),
+                    translated: translated.into(),
+                },
+                TranslationGroup {
+                    id: "body".into(),
+                    leaf_ids: vec!["body".into()],
+                    source_text: "Thanks".into(),
+                    translated: "感谢".into(),
+                },
+            ];
+            let mut cleaned = plate_fill(&source, &blocks_from_groups(&groups, &spans));
+            assert_ne!(cleaned.get_pixel(30, 35), source.get_pixel(30, 35));
+            restore_unchanged_groups(&source, &mut cleaned, &groups, &spans);
+            for y in 0..100 {
+                for x in 0..90 {
+                    assert_eq!(cleaned.get_pixel(x, y), source.get_pixel(x, y));
+                }
+            }
+            assert_eq!(cleaned.get_pixel(120, 35).0, [255, 255, 255]);
+        }
     }
 
     #[test]
