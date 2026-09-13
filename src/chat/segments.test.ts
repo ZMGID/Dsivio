@@ -73,6 +73,19 @@ function tool(partial: Partial<ToolCallRecord> & Pick<ToolCallRecord, 'id'>): To
 }
 
 describe('groupTimelineSegments', () => {
+  it('keeps deliveries in answer order without splitting the one process', () => {
+    const items = groupTimelineSegments([
+      toolSegment('read', 0, 'read'),
+      segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Working' }),
+      toolSegment('present-a', 2, 'present-a'),
+      toolSegment('check', 3, 'check'),
+      segment({ id: 'answer', kind: 'text', phase: 'plain', order: 4, text: 'Done' }),
+      toolSegment('present-b', 5, 'present-b'),
+    ], 'completed', s => s.id.startsWith('present-'))
+    expect(items.map(item => item.type)).toEqual(['group', 'presentation', 'text', 'presentation'])
+    expect(items[0].type === 'group' && items[0].segments.map(s => s.id)).toEqual(['read', 'note', 'check'])
+  })
+
   it('folds progress and CLI agent cards into the same process', () => {
     const items = groupTimelineSegments([
       segment({ id: 'note', kind: 'text', phase: 'plain', order: 1, text: 'Delegating a check' }),

@@ -398,6 +398,7 @@ function segmentHasContent(segment: ChatMessageSegment): boolean {
 
 export type TimelineGroupItem =
   | { type: 'text'; segment: ChatMessageSegment }
+  | { type: 'presentation'; segment: ChatMessageSegment }
   | { type: 'group'; segments: ChatMessageSegment[] }
 
 /** 一条主代理答复只有一个过程容器，卡片和进度不再切断它。
@@ -407,9 +408,14 @@ export type TimelineGroupItem =
 export function groupTimelineSegments(
   orderedSegments: ChatMessageSegment[],
   state: 'running' | 'completed' | 'stopped' = 'completed',
+  isPresentation?: (segment: ChatMessageSegment) => boolean,
 ): TimelineGroupItem[] {
+  // 交付卡属于结果，不应切分 Work，也不应成为隐藏前面正文的过程边界。
+  const presentations = new Set(orderedSegments.filter(segment =>
+    segment.kind === 'tool' && isPresentation?.(segment)))
   let lastProcessIndex = -1
   orderedSegments.forEach((segment, index) => {
+    if (presentations.has(segment)) return
     if (segmentHasContent(segment) && (segment.kind !== 'text'
       || segment.phase === 'tool_loop' || segment.phase === 'auxiliary')) {
       lastProcessIndex = index
@@ -423,6 +429,10 @@ export function groupTimelineSegments(
   const body: TimelineGroupItem[] = []
   orderedSegments.forEach((segment, index) => {
     if (!segmentHasContent(segment)) return
+    if (presentations.has(segment)) {
+      body.push({ type: 'presentation', segment })
+      return
+    }
     const foldText = state === 'running'
       ? index <= lastProcessIndex
       : state === 'completed' && hasFinalAnswer && index <= lastProcessIndex

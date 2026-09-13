@@ -860,6 +860,83 @@ describe('MessageBubble 建分支', () => {
 
 
 describe('MessageBubble explicit artifact presentation', () => {
+  it.each(['completed', 'cancelled', 'error', 'interrupted'])('keeps late deliveries visible with Work manually closed after %s', outcome => {
+    const message: ChatMessage = {
+      id: 'late-delivery', role: 'assistant', timestamp: 1, content: '动画已完成。',
+      segments: [
+        { id: 'read', kind: 'tool', phase: 'tool_loop', order: 0, tool_call_id: 'read' },
+        { id: 'answer', kind: 'text', phase: 'plain', order: 1, text: '动画已完成。' },
+        { id: 'present', kind: 'tool', phase: 'tool_loop', order: 2, tool_call_id: 'present' },
+      ],
+      toolCalls: [
+        { id: 'read', name: 'read_file', source: 'native', status: 'completed' },
+        { id: 'present', toolName: 'present_artifacts', source: 'native', status: 'running' },
+      ],
+    }
+    const { container, rerender } = render(<MessageBubble message={message} messageStreaming />)
+    const work = screen.getByRole('button', { name: 'Working' })
+    fireEvent.click(work)
+    const presented: ChatMessage = { ...message, toolCalls: [message.toolCalls![0], {
+      ...message.toolCalls![1], status: 'completed',
+      structuredContent: { type: 'artifact_presentation', artifact_ids: ['preview', 'html'], caption: '动画与预览' },
+    }] }
+    rerender(<MessageBubble message={presented} messageStreaming />)
+    expect(screen.getByLabelText('展示文件')).toHaveTextContent('2 个文件不可用')
+    const delivered: ChatMessage = { ...presented, artifacts: [
+      { id: 'preview', name: 'preview.png', mime_type: 'image/png', data_url: 'data:image/png;base64,aA==' },
+      { id: 'html', name: 'pelican-bike.html', mime_type: 'text/html', path: 'C:/workspace/pelican-bike.html' },
+    ] }
+    rerender(<MessageBubble message={delivered} messageStreaming />)
+    expect(work).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByLabelText('展示文件').closest('[aria-label="过程分组"]')).toBeNull()
+    expect(screen.getByRole('button', { name: /pelican-bike\.html/ })).toBeVisible()
+    expect(screen.getByText('动画已完成。')).toBeVisible()
+    expect(screen.queryByText(/个文件不可用/)).not.toBeInTheDocument()
+    rerender(<MessageBubble message={{ ...delivered, streamOutcome: outcome }} />)
+    expect(screen.getByRole('button', { name: /^Worked/ })).toBe(work)
+    expect(work).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByText('动画已完成。')).toBeVisible()
+    expect(screen.getByRole('button', { name: /pelican-bike\.html/ })).toBeVisible()
+    expect(container.querySelector('img')).toBeVisible()
+    fireEvent.click(work)
+    expect(screen.getAllByLabelText('展示文件')).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: /pelican-bike\.html/ })).toHaveLength(1)
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+  })
+
+  it.each(['timeline', 'orphan', 'legacy'])('keeps delivered preview and HTML outside the single Work (%s)', shape => {
+    const message: ChatMessage = {
+      id: 'delivered-html', role: 'assistant', timestamp: 1, content: '动画已完成。',
+      artifacts: [
+        { id: 'preview', name: 'preview.png', mime_type: 'image/png', data_url: 'data:image/png;base64,aA==' },
+        { id: 'html', name: 'pelican-bike.html', mime_type: 'text/html', data_url: 'data:text/html;base64,aA==' },
+      ],
+      tool_calls: [
+        { id: 'read', name: 'read_file', source: 'native', status: 'completed' },
+        { id: 'present', name: 'present_artifacts', source: 'native', status: 'completed',
+          structured_content: { type: 'artifact_presentation', artifactIds: ['preview', 'html'], caption: '动画与预览' } },
+      ],
+      segments: shape === 'legacy' ? undefined : [
+        { id: 'read', kind: 'tool', phase: 'tool_loop', order: 0, tool_call_id: 'read' },
+        ...(shape === 'timeline' ? [{ id: 'present', kind: 'tool' as const, phase: 'tool_loop' as const, order: 1, tool_call_id: 'present' }] : []),
+        { id: 'final', kind: 'text', phase: 'plain', order: 2, text: '动画已完成。' },
+      ],
+    }
+    const { container, rerender } = render(<MessageBubble message={message} messageStreaming />)
+    const file = screen.getByRole('button', { name: /pelican-bike\.html/ })
+    expect(file.closest('[aria-label="过程分组"]')).toBeNull()
+    rerender(<MessageBubble message={message} />)
+    expect(screen.getByRole('button', { name: /pelican-bike\.html/ })).toBeVisible()
+    expect(container.querySelector('img')).toBeVisible()
+    expect(screen.getByText('动画与预览')).toBeVisible()
+    const worked = screen.getByRole('button', { name: /^Worked/ })
+    expect(worked).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(worked)
+    expect(screen.getAllByRole('button', { name: /pelican-bike\.html/ })).toHaveLength(1)
+    expect(container.querySelectorAll('img')).toHaveLength(1)
+    expect(screen.getAllByLabelText('过程分组')).toHaveLength(1)
+  })
+
   const artifact = {
     id: 'art_report',
     name: 'report.txt',
@@ -914,8 +991,6 @@ describe('MessageBubble explicit artifact presentation', () => {
 
     render(<MessageBubble message={message} />)
 
-    expect(screen.queryByRole('button', { name: /report\.txt/ })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /^Worked/ }))
     const file = screen.getByRole('button', { name: /report\.txt/ })
     const after = screen.getByText('after')
     expect(file).toBeVisible()
@@ -949,7 +1024,6 @@ describe('MessageBubble explicit artifact presentation', () => {
     }
 
     render(<MessageBubble message={message} />)
-    fireEvent.click(screen.getByRole('button', { name: /^Worked/ }))
 
     expect(screen.getByRole('button', { name: /report\.txt/ })).toBeInTheDocument()
   })
@@ -979,7 +1053,6 @@ describe('MessageBubble explicit artifact presentation', () => {
     }
 
     render(<MessageBubble message={message} />)
-    fireEvent.click(screen.getByRole('button', { name: /^Worked/ }))
 
     expect(screen.getByText(/^1 /)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /report\.txt/ })).not.toBeInTheDocument()
@@ -1051,7 +1124,6 @@ describe('MessageBubble explicit artifact presentation', () => {
     }
 
     const { container } = render(<MessageBubble message={message} />)
-    fireEvent.click(screen.getByRole('button', { name: /^Worked/ }))
 
     const images = container.querySelectorAll('img')
     expect(images).toHaveLength(2)

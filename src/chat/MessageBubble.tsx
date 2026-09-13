@@ -855,18 +855,20 @@ function TimelineSegments({
         return leftStarted - rightStarted
       })
 
-    const groupItems = groupTimelineSegments(ordered, messageStreaming ? 'running' : completed ? 'completed' : 'stopped')
     // Older histories can contain tool records without timeline segments.
     // They still belong to this Work, never a second tool list after the answer.
     const orphanSegments: ChatMessageSegment[] = orphanTools.map((tool, index) => ({
       id: `orphan-tool-${toolRecordId(tool)}`, kind: 'tool', phase: 'tool_loop',
       order: index, tool_call_id: toolRecordId(tool),
     }))
-    if (orphanSegments.length) {
-      const group = groupItems.find(item => item.type === 'group')
-      if (group?.type === 'group') group.segments.push(...orphanSegments)
-      else groupItems.unshift({ type: 'group', segments: orphanSegments })
-    }
+    const groupItems = groupTimelineSegments(
+      [...orphanSegments, ...ordered],
+      messageStreaming ? 'running' : completed ? 'completed' : 'stopped',
+      segment => {
+        const tool = toolCallById.get(segmentToolCallId(segment))
+        return Boolean(tool && isArtifactPresentationToolCall(tool))
+      },
+    )
     return { toolCallById, citations, reasoningSegmentCount, groupItems }
   }, [segments, toolCalls, completed, messageStreaming])
 
@@ -874,6 +876,15 @@ function TimelineSegments({
   return (
     <section aria-label="回答时间线" className="space-y-1.5">
       {groupItems.map((item: TimelineGroupItem) => {
+        if (item.type === 'presentation') {
+          return <TimelineToolSegment
+            key={item.segment.id}
+            segment={item.segment}
+            toolCallById={toolCallById}
+            artifacts={artifacts}
+            conversationId={conversationId}
+          />
+        }
         if (item.type === 'text') {
           if (!segmentText(item.segment).trim()) return null
           // Segments can be regrouped as tools arrive; entrance fades would
