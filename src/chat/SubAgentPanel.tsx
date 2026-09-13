@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, type SubAgentRecord as Child } from '../api/tauri'
 import { ChevronLeft } from 'lucide-react'
 import { useSubAgents, refreshSubAgents } from './useSubAgents'
@@ -29,7 +29,7 @@ export function SubAgentIndicator({ conversationId, onOpen, lang = 'zh' }: { con
   </div>
 }
 
-export function SubAgentPanel({ conversationId, lang = 'zh', revealAgent }: { conversationId: string; lang?: 'zh' | 'en'; revealAgent?: { agentId: string; nonce: number } | null }) {
+export function SubAgentPanel({ conversationId, lang = 'zh', revealAgent, listFooter }: { conversationId: string; lang?: 'zh' | 'en'; revealAgent?: { agentId: string; nonce: number } | null; listFooter?: ReactNode }) {
   const t = (zh: string, en: string) => lang === 'zh' ? zh : en
   const { agents: children, error: connectionError } = useSubAgents(conversationId)
   const [selected, setSelected] = useState<Child | null>(null)
@@ -83,5 +83,6 @@ export function SubAgentPanel({ conversationId, lang = 'zh', revealAgent }: { co
       </div>
       {selected ? <SubAgentConversation key={selected.id} child={selected} lang={lang} /> : <p role="status" className="p-5 text-xs text-neutral-400">{t('正在加载对话…', 'Loading conversation…')}</p>}
     </div>}
+    {!selectedId && listFooter}
   </section>
 }

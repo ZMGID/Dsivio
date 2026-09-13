@@ -423,7 +423,8 @@ pub fn definition() -> ChatToolDefinition {
             "operation":{"type":"string","enum":["list","get","message","continue","stop","wait"]},
             "id":{"type":"string"}, "execution_id":{"type":"string"},
             "message_id":{"type":"string"}, "message":{"type":"string"},
-            "offset":{"type":"integer","minimum":0,"description":"Result character offset for get; use next_offset to continue."},
+            "view":{"type":"string","enum":["result","tools"],"description":"For get, defaults to result. Use tools to read saved tool calls and outputs, including interrupted work, before repeating investigations. The result field contains paged JSON text; concatenate pages before parsing. Pin execution_id when paging."},
+            "offset":{"type":"integer","minimum":0,"description":"Character offset in the selected get view; use next_offset to continue."},
             "limit":{"type":"integer","minimum":1,"maximum":4000,"description":"Maximum result characters per get page; defaults to 4000."},
             "cursor":{"type":"integer"}, "timeout_ms":{"type":"integer","minimum":0,"maximum":60000},
             "user_requested":{"type":"boolean","description":"Only true when the user explicitly instructed continuation after stopping this child; never for automatic retries."}
@@ -488,7 +489,19 @@ fn model_view(args: &Value, value: Value) -> Value {
             None => runs.last(),
         });
         if let Some(run) = run {
-            let text = run["result"]
+            let tools: Vec<_> = value["tools"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|tool| tool["executionId"] == run["id"])
+                .collect();
+            let tools_view = args["view"] == "tools";
+            let tool_text = if tools_view {
+                serde_json::to_string(&tools).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let final_text = run["result"]
                 .as_str()
                 .or_else(|| {
                     run["error"]
@@ -496,6 +509,11 @@ fn model_view(args: &Value, value: Value) -> Value {
                         .and_then(|s| s.strip_prefix("recovered: "))
                 })
                 .unwrap_or("");
+            let text = if tools_view {
+                tool_text.as_str()
+            } else {
+                final_text
+            };
             let total = text.chars().count();
             let offset = (args["offset"].as_u64().unwrap_or(0) as usize).min(total);
             let limit = args["limit"].as_u64().unwrap_or(4000).clamp(1, 4000) as usize;
@@ -504,7 +522,9 @@ fn model_view(args: &Value, value: Value) -> Value {
             result["execution_id"] = run["id"].clone();
             result["status"] = run["status"].clone();
             result["error"] = excerpt(&run["error"], 500);
-            result["result_available"] = json!(!text.is_empty());
+            result["result_available"] = json!(!final_text.is_empty());
+            result["view"] = json!(if tools_view { "tools" } else { "result" });
+            result["tool_count"] = json!(tools.len());
             result["result"] = json!(page);
             result["offset"] = json!(offset);
             result["next_offset"] = if end < total { json!(end) } else { Value::Null };
@@ -546,6 +566,45 @@ fn excerpt(value: &Value, limit: usize) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn get_tools_pages_read_saved_results_without_mixing_executions() {
+        let output = "目录为空😀\n".repeat(1000);
+        let record = json!({"id":"A", "runs":[{"id":"old","status":"interrupted","result":"Stopped"},{"id":"new","status":"running"}],
+            "tools":[{"id":"t1","executionId":"old","name":"bash","arguments":{"command":"ls"},"status":"returned","result":{"content":output}},
+                     {"id":"t2","executionId":"new","name":"write","status":"unknown"}]});
+        let normal = model_view(
+            &json!({"operation":"get","execution_id":"old"}),
+            record.clone(),
+        );
+        assert_eq!(normal["result"], "Stopped");
+        assert_eq!(normal["tool_count"], 1);
+        let mut combined = String::new();
+        let mut offset = 0;
+        loop {
+            let page = model_view(
+                &json!({"operation":"get","execution_id":"old","view":"tools","offset":offset,"limit":257}),
+                record.clone(),
+            );
+            assert_eq!(page["view"], "tools");
+            assert_eq!(page["status"], "interrupted");
+            assert!(!bounded_output(&serde_json::to_string(&page).unwrap())
+                .contains("Output truncated"));
+            combined.push_str(page["result"].as_str().unwrap());
+            match page["next_offset"].as_u64() {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        let tools: Value = serde_json::from_str(&combined).unwrap();
+        assert_eq!(tools.as_array().unwrap().len(), 1);
+        assert_eq!(tools[0]["result"]["content"], output);
+        assert_eq!(tools[0]["arguments"]["command"], "ls");
+        let current = model_view(&json!({"operation":"get","view":"tools"}), record);
+        let tools: Value = serde_json::from_str(current["result"].as_str().unwrap()).unwrap();
+        assert_eq!(tools[0]["id"], "t2");
+        assert_eq!(tools[0]["status"], "unknown");
+    }
 
     #[test]
     fn targeted_wait_ignores_other_children_and_reads_active_state_without_disk() {

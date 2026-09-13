@@ -33,7 +33,13 @@ vi.mock('./TerminalPanel', () => {
     ),
   }
 })
-vi.mock('./BackgroundTasksPanel', () => ({ BackgroundTasksPanel: () => <div /> }))
+vi.mock('./BackgroundTasksPanel', () => ({ BackgroundTasksPanel: () => <div>node server.js</div> }))
+vi.mock('../../api/tauri', () => ({ api: { chatSubagentControl: vi.fn(async (_id, args) => {
+  const child = { id: 'child', name: 'Environment', sequence: 1, profile: { model: 'test' }, runs: [], history: [], messages: [], tools: [] }
+  if (args.operation === 'list') return { sequence: 1, agents: [child] }
+  if (args.operation === 'wait') return new Promise(() => {})
+  return child
+}) } }))
 
 function dockProps(overrides: Partial<ComponentProps<typeof RightDock>> = {}): ComponentProps<typeof RightDock> {
   return {
@@ -56,6 +62,24 @@ function dockProps(overrides: Partial<ComponentProps<typeof RightDock>> = {}): C
 }
 
 describe('RightDock tabs', () => {
+  it('shows parent commands only in the task list, never inside a child detail', async () => {
+    render(<RightDock {...dockProps({ activeTab: 'tasks' })} />)
+    expect(screen.getByText('node server.js')).toBeVisible()
+    fireEvent.click(await screen.findByText('Environment'))
+    expect(screen.queryByText('node server.js')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '返回任务列表' }))
+    expect(screen.getByText('node server.js')).toBeVisible()
+  })
+
+  it('keeps parent commands out of direct child reveals and restores the list on conversation changes', async () => {
+    const props = dockProps({ activeTab: 'tasks', subAgentRequest: { conversationId: 'conv-1', agentId: 'child', nonce: 1 } })
+    const view = render(<RightDock {...props} />)
+    await screen.findByRole('button', { name: '返回任务列表' })
+    expect(screen.queryByText('node server.js')).toBeNull()
+    view.rerender(<RightDock {...props} conversationId="conv-2" />)
+    expect(screen.queryByRole('button', { name: '返回任务列表' })).toBeNull()
+    expect(screen.getByText('node server.js')).toBeVisible()
+  })
   it('renders panels immediately on opening without waiting for hover or an import', () => {
     const props = dockProps({ open: false })
     const { rerender } = render(<RightDock {...props} />)

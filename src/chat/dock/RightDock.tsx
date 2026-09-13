@@ -187,14 +187,14 @@ export const RightDock = memo(function RightDock({
       </div>
       <div data-task-scroll className="flex min-h-0 flex-1 flex-col overflow-y-auto custom-scrollbar" hidden={activeTab !== 'tasks'}>
         {open && activeTab === 'tasks' && conversationId && (
-          <SubAgentPanel key={conversationId} conversationId={conversationId} lang={lang} revealAgent={subAgentRequest?.conversationId === conversationId ? subAgentRequest : null} />
+          <SubAgentPanel key={conversationId} conversationId={conversationId} lang={lang} revealAgent={subAgentRequest?.conversationId === conversationId ? subAgentRequest : null}
+            listFooter={<BackgroundTasksPanel hideEmpty active lang={lang} conversationId={conversationId} />} />
         )}
-        <BackgroundTasksPanel
-          hideEmpty={Boolean(conversationId)}
+        {!conversationId && <BackgroundTasksPanel
           active={open && activeTab === 'tasks'}
           lang={lang}
           conversationId={conversationId}
-        />
+        />}
       </div>
     </aside>
   )
