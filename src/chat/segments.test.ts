@@ -73,7 +73,44 @@ function tool(partial: Partial<ToolCallRecord> & Pick<ToolCallRecord, 'id'>): To
 }
 
 describe('groupTimelineSegments', () => {
-  it('keeps present_artifacts outside collapsed process groups', () => {
+  it('folds progress and CLI agent cards into the same process', () => {
+    const items = groupTimelineSegments([
+      segment({ id: 'note', kind: 'text', phase: 'plain', order: 1, text: 'Delegating a check' }),
+      toolSegment('agent', 2, 'agent-call'),
+      segment({ id: 'final', kind: 'text', phase: 'synthesis', order: 3, text: 'Final answer' }),
+    ], 'completed')
+    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+  })
+
+  it('does not treat a persisted cancellation notice as a final answer', () => {
+    const items = groupTimelineSegments([
+      segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Partial findings' }),
+      toolSegment('t', 2, 'call'),
+      segment({ id: 'seg_3_cancelled_synthesis', kind: 'text', phase: 'synthesis', order: 3, text: '已停止生成。' }),
+    ], 'completed')
+    expect(items.map(item => item.type)).toEqual(['group', 'text', 'text'])
+  })
+
+  it('preserves all body text when a stopped run has no final answer', () => {
+    const items = groupTimelineSegments([
+      segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Progress so far' }),
+      toolSegment('t', 2, 'call'),
+    ], 'completed')
+    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+  })
+
+  it('keeps every trailing final-answer segment and folds earlier commentary', () => {
+    const items = groupTimelineSegments([
+      segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Searching' }),
+      toolSegment('t', 2, 'call'),
+      segment({ id: 'a', kind: 'text', phase: 'plain', order: 3, text: 'Answer one' }),
+      segment({ id: 'b', kind: 'text', phase: 'synthesis', order: 4, text: 'Answer two' }),
+    ], 'completed')
+    expect(items.map(item => item.type)).toEqual(['group', 'text', 'text'])
+    expect(items[0].type === 'group' && items[0].segments.map(s => s.id)).toEqual(['note', 't'])
+  })
+
+  it('keeps presentation cards inside the single process', () => {
     const present = tool({
       id: 'present-1',
       name: 'present_artifacts',
@@ -88,10 +125,9 @@ describe('groupTimelineSegments', () => {
         toolSegment('present-segment', 2, 'present-1'),
         toolSegment('write-segment', 3, 'write-1'),
       ],
-      (item) => item.kind === 'tool' && item.tool_call_id === present.id,
     )
 
-    expect(items.map((item) => item.type)).toEqual(['group', 'standaloneTool', 'group'])
+    expect(items.map((item) => item.type)).toEqual(['group'])
   })
 
   it('keeps image reads inside the process group so they do not split Worked', () => {
@@ -284,13 +320,13 @@ describe('groupTimelineSegments', () => {
     expect(items[0].type === 'group' && items[0].segments.map((s) => s.id)).toEqual(['r', 't1', 't2'])
   })
 
-  it('keeps text between tools outside both process groups', () => {
+  it('preserves partial text outside one process when no final answer exists', () => {
     const items = groupTimelineSegments([
       toolSegment('t1', 1, 'call-1'),
       segment({ id: 'txt', kind: 'text', order: 2, text: 'between' }),
       toolSegment('t2', 3, 'call-2'),
     ])
-    expect(items.map(item => item.type)).toEqual(['group', 'text', 'group'])
+    expect(items.map(item => item.type)).toEqual(['group', 'text'])
     expect(items[1].type === 'text' && items[1].segment.id).toBe('txt')
   })
 
@@ -303,26 +339,25 @@ describe('groupTimelineSegments', () => {
     expect(items[1].type === 'text' && items[1].segment.id).toBe('txt')
   })
 
-  it('keeps tool_loop text and the final answer outside the group', () => {
+  it('folds tool-loop text and leaves the final answer outside', () => {
     const items = groupTimelineSegments([
       toolSegment('t1', 1, 'call-1'),
       segment({ id: 'note', kind: 'text', order: 2, phase: 'tool_loop', text: 'looking around' }),
       segment({ id: 'ans', kind: 'text', order: 3, phase: 'synthesis', text: 'done' }),
     ])
-    expect(items.map(item => item.type)).toEqual(['group', 'text', 'text'])
-    expect(items[1].type === 'text' && items[1].segment.id).toBe('note')
-    expect(items[2].type === 'text' && items[2].segment.id).toBe('ans')
+    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    expect(items[1].type === 'text' && items[1].segment.id).toBe('ans')
   })
 
-  it('keeps leading plain text visible when tools follow it', () => {
+  it('folds leading plain text once a final answer exists', () => {
     const items = groupTimelineSegments([
       segment({ id: 'intro', kind: 'text', order: 1, text: 'I will read the file' }),
       toolSegment('t1', 2, 'call-1'),
       segment({ id: 'ans', kind: 'text', order: 3, phase: 'synthesis', text: 'done' }),
     ])
-    expect(items.map(item => item.type)).toEqual(['text', 'group', 'text'])
-    expect(items[0].type === 'text' && items[0].segment.id).toBe('intro')
-    expect(items[2].type === 'text' && items[2].segment.id).toBe('ans')
+    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    expect(items[0].type === 'group' && items[0].segments[0].id).toBe('intro')
+    expect(items[1].type === 'text' && items[1].segment.id).toBe('ans')
   })
 
   it('groups a pure reasoning run', () => {

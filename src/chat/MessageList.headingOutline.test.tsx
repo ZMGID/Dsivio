@@ -63,7 +63,7 @@ describe('MessageList heading outline', () => {
     expect(screen.queryByRole('button', { name: 'bbb' })).not.toBeInTheDocument()
   })
 
-  it('includes tool-loop body headings but excludes reasoning from the settled outline', async () => {
+  it('includes only final answer headings in the settled outline', async () => {
     const { container } = render(
       <MessageList
         conversationId="outline-current-message"
@@ -92,7 +92,7 @@ describe('MessageList heading outline', () => {
     await waitFor(() => expect(screen.getByLabelText('回答标题目录')).toBeInTheDocument())
     fireEvent.pointerEnter(screen.getByLabelText('回答标题目录'))
     expect(screen.getByRole('button', { name: 'Final one' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Questions' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Questions' })).not.toBeInTheDocument()
     expect(screen.queryByText('Process heading')).not.toBeInTheDocument()
 
     // With only one turn, scrolling away must still clear the answer outline.
