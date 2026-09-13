@@ -5,7 +5,7 @@ import { useSubAgents, refreshSubAgents } from './useSubAgents'
 import { Button, IconButton } from '../components/Button'
 import { SubAgentAvatar } from './SubAgentAvatar'
 import { SubAgentConversation } from './SubAgentConversation'
-import { subAgentStatusLabel, subAgentNeedsAttention } from './subAgentStatus'
+import { subAgentStatusLabel } from './subAgentStatus'
 
 const active = (status: string) => ['running', 'finishing', 'stopping'].includes(status)
 
@@ -52,8 +52,7 @@ export function SubAgentPanel({ conversationId, lang = 'zh', revealAgent }: { co
 
   const groups = [
     { label: t('正在运行', 'Running'), items: children.filter(child => active(child.runs.at(-1)?.status ?? '')), empty: t('没有正在运行的子代理', 'No running sub-agents') },
-    { label: t('待处理', 'Needs attention'), items: children.filter(child => subAgentNeedsAttention(child.runs.at(-1))), empty: '' },
-    { label: t('已关闭', 'Closed'), items: children.filter(child => !active(child.runs.at(-1)?.status ?? '') && !subAgentNeedsAttention(child.runs.at(-1))), empty: t('没有已关闭的子代理', 'No closed sub-agents') },
+    { label: t('历史', 'History'), items: children.filter(child => !active(child.runs.at(-1)?.status ?? '')), empty: t('暂无子代理历史', 'No sub-agent history') },
   ]
   const failure = error || connectionError
   return <section aria-label={t('子代理协作', 'Sub-agent collaboration')} className="flex shrink-0 flex-col text-[13px]">

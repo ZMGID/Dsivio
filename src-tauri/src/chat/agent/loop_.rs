@@ -336,7 +336,6 @@ pub async fn run_agent_loop(
     };
     if tool_loop_ran {
         let mut round = 0u32;
-        let mut unanswered_reviews = 0u32;
         loop {
             round = round.saturating_add(1);
             state.step_number = state.step_number.saturating_add(1);
@@ -370,12 +369,11 @@ pub async fn run_agent_loop(
                 )
                 .await?;
             state.runtime_messages.extend(incoming.iter().cloned());
-            state
-                .generated_api_messages
-                .extend(incoming.into_iter().filter(|message| {
-                    message["subagent_parent_persisted"] != true
-                        && message["subagent_supervision"] != true
-                }));
+            state.generated_api_messages.extend(
+                incoming
+                    .into_iter()
+                    .filter(|message| message["subagent_parent_persisted"] != true),
+            );
 
             let planned = match planning_step(&env, &mut state, round).await? {
                 PlanningStepOutcome::FinalAnswer => {
@@ -388,32 +386,15 @@ pub async fn run_agent_loop(
                         )
                         .await?;
                     if !incoming.is_empty() {
-                        if incoming
-                            .iter()
-                            .any(|message| message["subagent_supervision"] == true)
-                        {
-                            unanswered_reviews += 1;
-                            if unanswered_reviews > 2
-                                || super::rounds::tool_round_limit_reached(
-                                    config.effective_chat_tools.max_tool_rounds,
-                                    round,
-                                )
-                            {
-                                state.planning_final_message.take();
-                                state.runtime_messages.extend(incoming);
-                                break;
-                            }
-                        }
                         if let Some(message) = state.planning_final_message.take() {
                             absorb_final_answer(&mut state, message);
                         }
                         state.runtime_messages.extend(incoming.iter().cloned());
-                        state
-                            .generated_api_messages
-                            .extend(incoming.into_iter().filter(|message| {
-                                message["subagent_parent_persisted"] != true
-                                    && message["subagent_supervision"] != true
-                            }));
+                        state.generated_api_messages.extend(
+                            incoming
+                                .into_iter()
+                                .filter(|message| message["subagent_parent_persisted"] != true),
+                        );
                         continue;
                     }
                     // 立刻引导：终答时还有没送达的插话 ⇒ 吸收终答、下一轮轮首注入。
@@ -450,7 +431,6 @@ pub async fn run_agent_loop(
                 }
                 PlanningStepOutcome::ToolCalls(planned) => planned,
             };
-            unanswered_reviews = 0;
             // 消息（含工具调用决策）到此产出完毕，但本轮要等工具跑完才算结束。
             turn.end_message();
 
@@ -491,12 +471,11 @@ pub async fn run_agent_loop(
                 )
                 .await?;
             state.runtime_messages.extend(incoming.iter().cloned());
-            state
-                .generated_api_messages
-                .extend(incoming.into_iter().filter(|message| {
-                    message["subagent_parent_persisted"] != true
-                        && message["subagent_supervision"] != true
-                }));
+            state.generated_api_messages.extend(
+                incoming
+                    .into_iter()
+                    .filter(|message| message["subagent_parent_persisted"] != true),
+            );
         }
     }
 
@@ -515,15 +494,11 @@ pub async fn run_agent_loop(
         )
         .await?;
     state.runtime_messages.extend(incoming.iter().cloned());
-    state
-        .generated_api_messages
-        .extend(incoming.into_iter().filter(|message| {
-            message["subagent_parent_persisted"] != true && message["subagent_supervision"] != true
-        }));
-
-    if let Some(blocked) = collaboration_blocked_result(&env, &mut state)? {
-        return Ok(attach_usage(blocked, &mut state));
-    }
+    state.generated_api_messages.extend(
+        incoming
+            .into_iter()
+            .filter(|message| message["subagent_parent_persisted"] != true),
+    );
 
     if state.provider_tools_unsupported {
         patch_system_message(
@@ -550,58 +525,6 @@ pub async fn run_agent_loop(
             Ok(attach_usage(result, &mut state))
         }
     }
-}
-
-pub(crate) fn collaboration_blocked_result(
-    env: &LoopEnv<'_>,
-    state: &mut RunState,
-) -> Result<Option<AgentRunResult>, String> {
-    let blockers = env
-        .host
-        .finalize_collaboration(&env.config.conversation_id, &env.config.run_id)?;
-    if blockers.is_empty() {
-        return Ok(None);
-    }
-    let reason = if env.config.language.starts_with("zh") {
-        "协作尚未完成，已有成果已保留。以下事项需要继续处理："
-    } else {
-        "Collaboration is incomplete. Saved work is retained; these assignments still need attention:"
-    };
-    let content = format!(
-        "{}\n\n{}",
-        reason,
-        blockers
-            .iter()
-            .map(|item| format!("- {item}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    let segment = state.segment_builder.reserve(
-        crate::chat::types::ChatMessageSegmentKind::Text,
-        crate::chat::types::ChatMessageSegmentPhase::Synthesis,
-        None,
-        None,
-        "collaboration_incomplete",
-    );
-    let result = super::finalize::RunResultBuilder::new(env.host, env.ids(), content.clone())
-        .segment(&segment)
-        .emit_done("done")
-        .push_api_always()
-        .outcome("recovered")
-        .degraded(Some(super::recovery::DegradedAnswer {
-            kind: "collaboration_incomplete".into(),
-            reason: reason.into(),
-            detail: None,
-            tool_summaries: vec![],
-            text: content,
-        }))
-        .finish(
-            std::mem::take(&mut state.segment_builder),
-            &state.planning_reasoning_parts,
-            std::mem::take(&mut state.tool_records),
-            std::mem::take(&mut state.generated_api_messages),
-        );
-    Ok(Some(result))
 }
 
 /// 把本轮累计的 provider usage 挂到运行结果上（finalize 构造器们不感知 usage）。

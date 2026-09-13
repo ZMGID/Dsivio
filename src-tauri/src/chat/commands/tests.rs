@@ -2027,6 +2027,28 @@ fn token_split_returns_none_when_recent_window_covers_all() {
 }
 
 #[test]
+fn build_chat_api_messages_replays_saved_child_report_as_external_input() {
+    let mut conversation = test_conversation_with_summary(false);
+    conversation.context_state = Default::default();
+    conversation.messages = vec![test_chat_message(
+        "subagent-result-execution",
+        "assistant",
+        "[Sub-agent: A · Completed]\nSaved output: React",
+        1,
+    )];
+    let messages = build_chat_api_messages(None, "system", &conversation, None, None, &[]).unwrap();
+    assert_eq!(messages[1]["role"], "user");
+    assert!(messages[1]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Sub-agent"));
+    assert_eq!(
+        conversation.messages[0].role, "assistant",
+        "UI provenance remains unchanged"
+    );
+}
+
+#[test]
 fn build_chat_api_messages_injects_summary_and_skips_old_raw_messages() {
     let conversation = test_conversation_with_summary(false);
     let messages = build_chat_api_messages(None, "system", &conversation, None, None, &[])

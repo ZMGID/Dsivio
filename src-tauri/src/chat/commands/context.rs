@@ -1314,6 +1314,13 @@ pub(super) fn build_chat_api_messages(
             message.content.as_str()
         };
         let sanitized_content = sanitize_image_payloads_for_model(content);
+        if message.role == "assistant" && message.id.starts_with("subagent-result-") {
+            messages.push(tag_ui_message_id(
+                crate::chat::sub_agent::control::report_input(&sanitized_content),
+                &message.id,
+            ));
+            continue;
+        }
         let mut parts = Vec::new();
         if message.role == "user" {
             if let Some(app) = app {

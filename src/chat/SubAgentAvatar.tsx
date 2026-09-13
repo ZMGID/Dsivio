@@ -14,7 +14,7 @@ const forms: { body: BodyShape; face: FaceName; color: string }[] = [
 export const SubAgentAvatar = memo(function SubAgentAvatar({ id, status = '', size = 26 }: { id: string; status?: string; size?: number }) {
   const hash = Array.from(id).reduce((value, char) => (value * 31 + char.charCodeAt(0)) >>> 0, 0)
   const form = id === 'main' ? { body: 'circle' as const, face: 'dots' as const, color: '#1d6bf0' } : forms[hash % forms.length]
-  const face = status === 'completed' ? 'happy' : status === 'failed' ? 'worry' : status === 'interrupted' ? 'sleepy' : form.face
+  const face = status === 'interrupted' ? 'sleepy' : form.face
   return <svg aria-hidden="true" width={size} height={size} viewBox="20 20 200 200" className="shrink-0">
     <path d={polyPath(bodyPoints(form.body))} fill={form.color} />
     {facePoints(face).map((eye, index) => <path key={index} d={polyPath(eye)} fill="#fffaf1" />)}

@@ -24,68 +24,22 @@ pub(super) struct ChatAgentHost<'a> {
 }
 
 impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
-    fn run_ended(&self, conversation_id: &str) {
+    fn run_ended(&self, _conversation_id: &str) {
         if let Ok(runtime) = crate::chat::sub_agent::control::runtime(&self.app) {
-            if self.state.has_chat_active_generation(conversation_id) {
-                if let Err(error) = runtime.finalize_supervision(conversation_id, &self.run_id) {
-                    eprintln!("Cannot record unresolved child assignments: {error}");
-                }
-            }
-            if let Err(error) = runtime.stop_parent(conversation_id, Some(&self.run_id)) {
-                eprintln!("Cannot seal child collaboration: {error}");
-            }
+            runtime.release_parent(&self.run_id);
         }
     }
 
-    fn finalize_collaboration(
-        &self,
-        conversation_id: &str,
-        run_id: &str,
-    ) -> Result<Vec<String>, String> {
-        crate::chat::sub_agent::control::runtime(&self.app)?
-            .finalize_supervision(conversation_id, run_id)
-    }
-
-    fn checkpoint_runtime<'a>(
-        &'a self,
-        conversation_id: &'a str,
-        run_id: &'a str,
-        _history: &'a [serde_json::Value],
-        finishing: bool,
-    ) -> crate::chat::agent::AgentHostFuture<'a, Result<Vec<serde_json::Value>, String>> {
+    fn checkpoint_runtime<'b>(
+        &'b self,
+        conversation_id: &'b str,
+        run_id: &'b str,
+        _history: &'b [Value],
+        _finishing: bool,
+    ) -> crate::chat::agent::AgentHostFuture<'b, Result<Vec<Value>, String>> {
         Box::pin(async move {
-            let runtime = crate::chat::sub_agent::control::runtime(&self.app)?;
-            runtime.register_parent(run_id);
-            let mut events = runtime.subscribe();
-            loop {
-                events.borrow_and_update();
-                let (mut incoming, pending) = crate::chat::sub_agent::control::collect_results(
-                    &self.app,
-                    conversation_id,
-                    run_id,
-                )
-                .await?;
-                crate::chat::sub_agent::control::append_supervision(
-                    &runtime,
-                    conversation_id,
-                    run_id,
-                    finishing,
-                    &mut incoming,
-                )?;
-                if !incoming.is_empty()
-                    || !finishing
-                    || !pending
-                    || self.state.has_chat_pending_input(conversation_id)
-                {
-                    return Ok(incoming);
-                }
-                if !self.state.has_chat_active_generation(conversation_id) {
-                    return Err("cancelled".into());
-                }
-                let _ =
-                    tokio::time::timeout(std::time::Duration::from_millis(100), events.changed())
-                        .await;
-            }
+            crate::chat::sub_agent::control::collect_results(&self.app, conversation_id, run_id)
+                .await
         })
     }
     fn workflow_hooks(&self) -> Option<&crate::chat::workflow_hooks::Runtime> {
@@ -266,12 +220,31 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
 /// 消息内联读取，不靠事件）。generation 相关沿用标准机制，保证超时/取消能生效。
 #[cfg(debug_assertions)]
 pub(super) struct ProbeAgentHost<'a> {
+    pub(super) run_id: String,
     pub(super) app: AppHandle,
     pub(super) state: &'a AppState,
 }
 
 #[cfg(debug_assertions)]
 impl crate::chat::agent::AgentHost for ProbeAgentHost<'_> {
+    fn run_ended(&self, _conversation_id: &str) {
+        if let Ok(runtime) = crate::chat::sub_agent::control::runtime(&self.app) {
+            runtime.release_parent(&self.run_id);
+        }
+    }
+
+    fn checkpoint_runtime<'b>(
+        &'b self,
+        conversation_id: &'b str,
+        run_id: &'b str,
+        _history: &'b [Value],
+        _finishing: bool,
+    ) -> crate::chat::agent::AgentHostFuture<'b, Result<Vec<Value>, String>> {
+        Box::pin(async move {
+            crate::chat::sub_agent::control::collect_results(&self.app, conversation_id, run_id)
+                .await
+        })
+    }
     fn emit_stream_delta(
         &self,
         _conversation_id: &str,

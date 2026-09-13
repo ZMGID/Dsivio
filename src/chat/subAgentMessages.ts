@@ -12,7 +12,7 @@ export function subAgentMessages(child: SubAgentRecord): ChatMessage[] {
     history.push({ role: 'user', content: item.prompt })
     if (item.result) history.push({ role: 'assistant', content: item.result })
   })
-  const result = run?.result ?? (run?.status === 'failed' && run.error?.startsWith('recovered: ') ? run.error.slice(11) : null)
+  const result = run?.result ?? (run?.error?.startsWith('recovered: ') ? run.error.slice(11) : null)
   if (result && !history.some(message => message.role === 'assistant' && text(message.content).trim() === result.trim())) history.push({ role: 'assistant', content: result })
   const outputs = new Map(history.filter(message => message.role === 'tool').map(message => [message.tool_call_id, text(message.content)]))
   const ledger = new Map(child.tools.map(obj).map(tool => [tool.id, tool]))

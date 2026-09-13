@@ -27,7 +27,7 @@ struct RecordedDelta {
 
 #[derive(Default)]
 struct TestHost {
-    supervision: Option<Arc<crate::chat::sub_agent::runtime::Runtime>>,
+    children: Option<Arc<crate::chat::sub_agent::runtime::Runtime>>,
     managed: Option<(
         Arc<crate::chat::sub_agent::runtime::Runtime>,
         crate::chat::sub_agent::runtime::Record,
@@ -135,10 +135,9 @@ impl TestHost {
 }
 
 impl AgentHost for TestHost {
-    fn finalize_collaboration(&self, conversation: &str, run: &str) -> Result<Vec<String>, String> {
-        match &self.supervision {
-            Some(runtime) => runtime.finalize_supervision(conversation, run),
-            None => Ok(vec![]),
+    fn run_ended(&self, _conversation: &str) {
+        if let Some(runtime) = &self.children {
+            runtime.release_parent("run");
         }
     }
     fn close_runtime_input(&self) -> Result<(), String> {
@@ -159,16 +158,14 @@ impl AgentHost for TestHost {
         finishing: bool,
     ) -> super::super::host::AgentHostFuture<'a, Result<Vec<Value>, String>> {
         Box::pin(async move {
-            if let Some(runtime) = &self.supervision {
-                let mut incoming = vec![];
-                crate::chat::sub_agent::control::append_supervision(
+            if let Some(runtime) = &self.children {
+                return crate::chat::sub_agent::control::collect_results_with(
                     runtime,
                     _conversation,
                     _run,
-                    finishing,
-                    &mut incoming,
-                )?;
-                return Ok(incoming);
+                    |_, _| async { Ok(true) },
+                )
+                .await;
             }
             match &self.managed {
                 Some((runtime, record)) => runtime.checkpoint(
@@ -325,7 +322,6 @@ impl AgentHost for TestHost {
 
 #[derive(Default)]
 struct RecordingExecutor {
-    supervision: Option<Arc<crate::chat::sub_agent::runtime::Runtime>>,
     active: AtomicUsize,
     max_active: AtomicUsize,
     events: Arc<Mutex<Vec<String>>>,
@@ -355,22 +351,6 @@ impl ToolExecutor for RecordingExecutor {
         let name = tool.name.clone();
         let events = self.events.clone();
         Box::pin(async move {
-            if name == "agent_control" {
-                if let Some(runtime) = &self.supervision {
-                    let record = runtime.resolve(
-                        &_ctx.conversation_id,
-                        _arguments["id"].as_str().unwrap(),
-                        _arguments["execution_id"].as_str().unwrap(),
-                        _arguments["outcome"].as_str().unwrap(),
-                        _arguments["message"].as_str().unwrap(),
-                        None,
-                    )?;
-                    return Ok(McpToolCallResult {
-                        content: serde_json::to_string(&record).unwrap(),
-                        ..Default::default()
-                    });
-                }
-            }
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.max_active.fetch_max(active, Ordering::SeqCst);
             events
@@ -3913,7 +3893,7 @@ async fn run_loop_smoke_tool_then_final_answer_round_trips() {
 }
 
 #[tokio::test]
-async fn collaboration_final_answer_is_not_a_promise_to_summarize_later() {
+async fn collaboration_preserves_parent_answer_without_text_grading() {
     let server = MockModelServer::start(vec![
         MockResponse::Sse(vec![r#"{"choices":[{"delta":{"content":"两边的报告都回来了。我先核一下最关键的几行，再给你结论。"}}]}"#.into(), "[DONE]".into()]),
         MockResponse::Sse(vec![r#"{"choices":[{"delta":{"content":"综合结论：聊天流程与权限控制均缺少取消后的清理确认。"}}]}"#.into(), "[DONE]".into()]),
@@ -3926,20 +3906,87 @@ async fn collaboration_final_answer_is_not_a_promise_to_summarize_later() {
     let result = run_agent_loop(config, &host, &RecordingExecutor::default())
         .await
         .unwrap();
-    assert!(
-        result.content.contains("综合结论"),
-        "a preparatory sentence is not a completed collaboration: {}",
-        result.content
-    );
     assert_eq!(
-        server.captured_bodies().len(),
-        2,
-        "only the final model answer is repaired, no tool work is restarted"
+        result.content,
+        "两边的报告都回来了。我先核一下最关键的几行，再给你结论。"
     );
+    assert_eq!(server.captured_bodies().len(), 1);
 }
 
 #[tokio::test]
-async fn supervision_planning_recovery_preserves_completed_tool_history() {
+async fn parent_can_answer_without_resolve_while_another_child_keeps_working() {
+    use crate::chat::sub_agent::runtime::{Profile, Runtime, Status};
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(Runtime::open(directory.path().into()).unwrap());
+    runtime.register_parent("run");
+    let a = runtime
+        .start(
+            "conversation",
+            "run",
+            "a",
+            "A",
+            Profile::default(),
+            "Inspect",
+        )
+        .unwrap();
+    let b = runtime
+        .start(
+            "conversation",
+            "run",
+            "b",
+            "B",
+            Profile::default(),
+            "Investigate",
+        )
+        .unwrap();
+    runtime
+        .finish(
+            "conversation",
+            &a.id,
+            &a.current().id,
+            Ok(("The file does not exist".into(), None)),
+        )
+        .unwrap();
+    let response = || {
+        MockResponse::Sse(sse_from_completion_json(
+        &serde_json::json!({"choices":[{"message":{"role":"assistant","content":"A found no file. B is continuing its investigation."},"finish_reason":"stop"}]}).to_string()
+    ))
+    };
+    let server = MockModelServer::start(vec![response(), response(), response()]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.effective_chat_tools.max_tool_rounds = None;
+    config
+        .runtime_messages
+        .push(crate::chat::sub_agent::control::report_input(
+            "[Sub-agent: A]\nThe file does not exist",
+        ));
+    runtime
+        .acknowledge_result("conversation", &a.id, &a.current().id)
+        .unwrap();
+    let host = TestHost {
+        children: Some(runtime.clone()),
+        ..Default::default()
+    };
+    let result = run_agent_loop(config, &host, &RecordingExecutor::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        result.content,
+        "A found no file. B is continuing its investigation."
+    );
+    assert!(result.degraded.is_none());
+    assert_eq!(
+        runtime.get("conversation", &b.id).unwrap().current().status,
+        Status::Running
+    );
+    assert!(runtime.can_collect("run", "next-run"));
+    assert_eq!(server.captured_bodies().len(), 1);
+    assert!(result.tool_records.is_empty());
+}
+
+#[tokio::test]
+async fn child_output_does_not_hide_parent_provider_error() {
     use crate::chat::sub_agent::runtime::{Profile, Runtime};
     let directory = tempfile::tempdir().unwrap();
     let runtime = Arc::new(Runtime::open(directory.path().into()).unwrap());
@@ -3963,21 +4010,27 @@ async fn supervision_planning_recovery_preserves_completed_tool_history() {
         .unwrap();
     let server = MockModelServer::start(vec![
         MockResponse::Sse(planning_tool_call_sse_events()),
-        MockResponse::Status(401, r#"{"error":"mock planning failure"}"#.into()),
+        MockResponse::Status(400, r#"{"error":{"message":"The `reasoning_text` in the thinking mode must be passed back to the API."}}"#.into()),
     ]);
     let state = test_app_state();
     let mut config = test_run_config(&state, &server.base_url);
     config.effective_chat_tools.max_tool_rounds = Some(6);
     let host = TestHost {
-        supervision: Some(runtime),
+        children: Some(runtime),
         ..Default::default()
     };
     let executor = RecordingExecutor::default();
     let result = run_agent_loop(config, &host, &executor).await.unwrap();
-    assert_eq!(
-        result.degraded.as_ref().unwrap().kind,
-        "collaboration_incomplete"
-    );
+    assert_eq!(result.degraded.as_ref().unwrap().kind, "unknown");
+    assert!(result
+        .degraded
+        .as_ref()
+        .unwrap()
+        .detail
+        .as_deref()
+        .unwrap()
+        .contains("reasoning_text"));
+    assert!(!result.content.contains("协作尚未完成"));
     assert_eq!(result.tool_records.len(), 1);
     assert_eq!(result.tool_records[0].id, "call_read");
     assert!(matches!(
@@ -4001,153 +4054,10 @@ async fn supervision_planning_recovery_preserves_completed_tool_history() {
 }
 
 #[tokio::test]
-async fn supervision_returns_parent_to_tools_before_accepting_recovered_work() {
-    use crate::chat::sub_agent::runtime::{Profile, Runtime};
-    let directory = tempfile::tempdir().unwrap();
-    let runtime = Arc::new(Runtime::open(directory.path().into()).unwrap());
-    let child = runtime
-        .start(
-            "conversation",
-            "run",
-            "start",
-            "A",
-            Profile::default(),
-            "Inspect",
-        )
-        .unwrap();
-    runtime
-        .finish(
-            "conversation",
-            &child.id,
-            &child.current().id,
-            Err("recovered: useful findings".into()),
-        )
-        .unwrap();
-    runtime
-        .acknowledge_result("conversation", &child.id, &child.current().id)
-        .unwrap();
-    let completion = |message: Value| {
-        MockResponse::Sse(sse_from_completion_json(
-            &serde_json::json!({"choices":[{"message":message,"finish_reason":"stop"}]})
-                .to_string(),
-        ))
-    };
-    let args = serde_json::json!({"operation":"resolve","id":child.id,"execution_id":child.current().id,"outcome":"accepted","message":"Checked restored evidence against assignment"});
-    let server = MockModelServer::start(vec![
-        completion(serde_json::json!({"role":"assistant","content":"Everything done"})),
-        completion(
-            serde_json::json!({"role":"assistant","tool_calls":[{"id":"accept","type":"function","function":{"name":"agent_control","arguments":args.to_string()}}]}),
-        ),
-        completion(
-            serde_json::json!({"role":"assistant","content":"Verified findings answer the question."}),
-        ),
-    ]);
-    let state = test_app_state();
-    let mut config = test_run_config(&state, &server.base_url);
-    config.tools = vec![crate::chat::sub_agent::control::definition()];
-    config.effective_chat_tools.max_tool_rounds = Some(6);
-    let host = TestHost {
-        supervision: Some(runtime.clone()),
-        ..Default::default()
-    };
-    let executor = RecordingExecutor {
-        supervision: Some(runtime.clone()),
-        ..Default::default()
-    };
-    let result = run_agent_loop(config, &host, &executor).await.unwrap();
-    assert!(
-        result.content.contains("Verified findings"),
-        "content={} tools={:?}",
-        result.content,
-        result.tool_records
-    );
-    assert!(result.degraded.is_none());
-    assert_eq!(
-        runtime
-            .get("conversation", &child.id)
-            .unwrap()
-            .current()
-            .resolution
-            .as_ref()
-            .unwrap()
-            .outcome,
-        "accepted"
-    );
-    assert_eq!(server.captured_bodies().len(), 3);
-    assert!(!result
-        .api_messages
-        .iter()
-        .any(|message| message["subagent_supervision"] == true));
-}
-
-#[tokio::test]
-async fn supervision_refusal_is_bounded_and_cannot_become_a_successful_final() {
-    use crate::chat::sub_agent::runtime::{Profile, Runtime};
-    for limit in [None, Some(1)] {
-        let directory = tempfile::tempdir().unwrap();
-        let runtime = Arc::new(Runtime::open(directory.path().into()).unwrap());
-        let child = runtime
-            .start(
-                "conversation",
-                "run",
-                "start",
-                "A",
-                Profile::default(),
-                "Inspect",
-            )
-            .unwrap();
-        runtime
-            .finish(
-                "conversation",
-                &child.id,
-                &child.current().id,
-                Err("API unavailable".into()),
-            )
-            .unwrap();
-        let events = vec![
-            serde_json::json!({"choices":[{"delta":{"content":"All done."}}]}).to_string(),
-            "[DONE]".into(),
-        ];
-        let server =
-            MockModelServer::start((0..3).map(|_| MockResponse::Sse(events.clone())).collect());
-        let state = test_app_state();
-        let mut config = test_run_config(&state, &server.base_url);
-        config.effective_chat_tools.max_tool_rounds = limit;
-        let host = TestHost {
-            supervision: Some(runtime.clone()),
-            ..Default::default()
-        };
-        let result = run_agent_loop(config, &host, &RecordingExecutor::default())
-            .await
-            .unwrap();
-        assert_eq!(
-            result.degraded.as_ref().unwrap().kind,
-            "collaboration_incomplete"
-        );
-        assert!(!result.content.contains("All done."));
-        assert_eq!(
-            runtime
-                .get("conversation", &child.id)
-                .unwrap()
-                .current()
-                .resolution
-                .as_ref()
-                .unwrap()
-                .outcome,
-            "blocked"
-        );
-        assert_eq!(
-            server.captured_bodies().len(),
-            if limit.is_some() { 1 } else { 3 }
-        );
-    }
-}
-
-#[tokio::test]
-async fn collaboration_summary_repair_is_bounded_and_accepts_short_findings() {
+async fn collaboration_returns_each_parent_answer_directly() {
     for (answer, expected_calls, succeeds) in [
         ("结论：未发现取消处理。", 1, true),
-        ("我先核对，再给你结论。", 2, false),
+        ("我先核对，再给你结论。", 1, true),
     ] {
         let events = vec![
             serde_json::json!({"choices":[{"delta":{"content":answer}}]}).to_string(),

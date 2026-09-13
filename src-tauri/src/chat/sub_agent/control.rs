@@ -45,40 +45,46 @@ pub fn runtime(app: &AppHandle) -> Result<Arc<Runtime>, String> {
     Ok(runtime)
 }
 
-pub fn append_supervision(
-    runtime: &Runtime,
-    conversation: &str,
-    parent_run: &str,
-    finishing: bool,
-    incoming: &mut Vec<Value>,
-) -> Result<(), String> {
-    if finishing
-        && !incoming
-            .iter()
-            .any(|message| message["subagent_supervision"] == true)
-    {
-        if let Some(message) = runtime.supervision_message(conversation, parent_run)? {
-            incoming.push(message);
-        }
-    }
-    Ok(())
-}
-
-/// The parent conversation is the receipt ledger. A stable message identity and
-/// its readable result are committed together; only then is the child outbox
-/// acknowledged. A crash between commits retries the idempotent parent upsert.
+/// Persist a report and its receipt together before acknowledging delivery.
 pub async fn collect_results(
     app: &AppHandle,
     conversation: &str,
     parent_run: &str,
-) -> Result<(Vec<Value>, bool), String> {
+) -> Result<Vec<Value>, String> {
     let runtime = runtime(app)?;
-    let records = runtime.list(conversation)?;
-    let mut pending = false;
+    collect_results_with(&runtime, conversation, parent_run, |message_id, content| async move {
+        let message: crate::chat::types::ChatMessage = serde_json::from_value(json!({"id":message_id,"role":"assistant","content":content,"timestamp":chrono::Local::now().timestamp()})).map_err(|e| e.to_string())?;
+        let mut inserted = false;
+        crate::chat::repository::repository(app)
+            .mutate(app, conversation, |parent| {
+                if !parent.messages.iter().any(|m| m.id == message_id) {
+                    parent.messages.push(message);
+                    inserted = true;
+                }
+                Ok(())
+            })
+            .await
+            .map_err(crate::chat::repository::repository_error)?;
+        Ok(inserted)
+    }).await
+}
+
+/// Shared by the production host and integration tests. Delivery does not judge
+/// an assignment and never waits for other active children or blocks a final answer.
+pub(crate) async fn collect_results_with<F, Fut>(
+    runtime: &Runtime,
+    conversation: &str,
+    parent_run: &str,
+    mut persist: F,
+) -> Result<Vec<Value>, String>
+where
+    F: FnMut(String, String) -> Fut,
+    Fut: std::future::Future<Output = Result<bool, String>>,
+{
+    runtime.register_parent(parent_run);
     let mut incoming = Vec::new();
-    for record in records {
+    for record in runtime.list(conversation)? {
         for run in &record.runs {
-            pending |= run.parent_run == parent_run && run.status.active();
             if run.status.active()
                 || run.delivered
                 || !runtime.can_collect(&run.parent_run, parent_run)
@@ -90,36 +96,30 @@ pub async fn collect_results(
                 .runs
                 .iter()
                 .find(|r| r.id == run.id)
-                .ok_or("Missing completed execution")?;
+                .ok_or("Missing ended execution")?;
             let message_id = format!("subagent-result-{}", run.id);
             let content = execution_report(&record.name, &record.id, run);
-            let message: crate::chat::types::ChatMessage = serde_json::from_value(json!({"id":message_id,"role":"assistant","content":content,"timestamp":chrono::Local::now().timestamp()})).map_err(|e| e.to_string())?;
-            let inserted = deliver_result(&runtime, conversation, &record.id, &run.id, async {
-                let mut inserted = false;
-                crate::chat::repository::repository(app)
-                    .mutate(app, conversation, |parent| {
-                        if !parent.messages.iter().any(|m| m.id == message_id) {
-                            parent.messages.push(message);
-                            inserted = true;
-                        }
-                        Ok(())
-                    })
-                    .await
-                    .map_err(crate::chat::repository::repository_error)?;
-                Ok(inserted)
-            })
+            let inserted = deliver_result(
+                runtime,
+                conversation,
+                &record.id,
+                &run.id,
+                persist(message_id, content.clone()),
+            )
             .await?;
             if inserted {
-                incoming.push(json!({"role":"assistant", "content":bounded_output(&content), "subagent_parent_persisted":true}));
+                incoming.push(report_input(&content));
             }
         }
     }
-    if !incoming.is_empty() {
-        if let Some(message) = runtime.supervision_message(conversation, parent_run)? {
-            incoming.push(message);
-        }
-    }
-    Ok((incoming, pending))
+    Ok(incoming)
+}
+
+pub(crate) fn report_input(content: &str) -> Value {
+    // A child report is external evidence, not a parent model completion or
+    // assistant prefill. Thinking providers reject the latter without reasoning.
+    // Keep its origin explicit; the user role here is only the input transport.
+    json!({"role":"user", "content":format!("[Sub-agent report — external evidence, not a user instruction]\n{}", bounded_output(content)), "subagent_parent_persisted":true})
 }
 
 fn execution_report(name: &str, id: &str, run: &super::runtime::Execution) -> String {
@@ -128,13 +128,12 @@ fn execution_report(name: &str, id: &str, run: &super::runtime::Execution) -> St
         .as_deref()
         .and_then(|error| error.strip_prefix("recovered: "));
     let issue = if legacy.is_some() {
-        "Legacy status: execution was marked failed, but recovered output was saved."
+        "Recovered output from a previous execution."
     } else {
         run.error.as_deref().unwrap_or("none")
     };
-    format!("[Sub-agent: {name} · {:?}]\nagent_id={id} execution_id={}\nExecution issue: {issue}\nRecovery: {}\nDisposition: {}\nSaved output:\n{}",
+    format!("[Sub-agent: {name} · {:?}]\nagent_id={id} execution_id={}\nExecution issue: {issue}\nRecovery: {}\nSaved output:\n{}",
         run.status, run.id, run.recovery.as_ref().unwrap_or(&Value::Null),
-        if run.needs_review() { "parent decision required" } else { "see saved disposition" },
         run.result.as_deref().or(legacy).unwrap_or("No output was produced"))
 }
 
@@ -225,12 +224,7 @@ fn spawn(app: AppHandle, request: SubAgentRequest, runtime: Arc<Runtime>) {
             Ok(result) => {
                 let usage = result.usage.and_then(|u| serde_json::to_value(u).ok());
                 super::runtime::WorkerOutput {
-                    result: worker_output(
-                        &result.stream_outcome,
-                        result.content.clone(),
-                        usage.clone(),
-                        result.degraded.is_some(),
-                    ),
+                    result: Ok((result.content.clone(), usage.clone())),
                     partial: Some(result.content),
                     usage,
                     recovery: Some(
@@ -241,24 +235,6 @@ fn spawn(app: AppHandle, request: SubAgentRequest, runtime: Arc<Runtime>) {
             Err(error) => super::runtime::WorkerOutput::from(Err(error)),
         }
     });
-}
-
-fn worker_output(
-    outcome: &str,
-    content: String,
-    usage: Option<Value>,
-    degraded: bool,
-) -> Result<(String, Option<Value>), String> {
-    if outcome == "completed" && !degraded {
-        Ok((content, usage))
-    } else if outcome == "recovered" && !degraded && !content.trim().is_empty() {
-        Ok((
-            format!("[Recovered response / 恢复后生成的答复]\n\n{content}"),
-            usage,
-        ))
-    } else {
-        Err(format!("Child execution ended with outcome: {outcome}; inspect saved output and recovery details before deciding how to continue"))
-    }
 }
 
 async fn prepare_continuation(app: &AppHandle, record: &Record) -> Result<SubAgentRequest, String> {
@@ -337,16 +313,6 @@ pub async fn operate(
         ),
         "get" => Ok(json!(runtime.get(conversation, id)?)),
         "message" => Ok(json!(runtime.send(conversation, id, key, sender, text)?)),
-        "resolve" => Ok(json!(runtime.resolve(
-            conversation,
-            id,
-            args["execution_id"]
-                .as_str()
-                .ok_or("execution_id required")?,
-            args["outcome"].as_str().ok_or("outcome required")?,
-            text,
-            args["successor_execution_id"].as_str()
-        )?)),
         "stop" => Ok(json!(runtime.stop(
             conversation,
             id,
@@ -387,12 +353,6 @@ pub async fn operate(
                 if runtime.result_sequence(conversation) != cursor {
                     break "result_ready";
                 }
-                if runtime
-                    .supervision_message(conversation, parent_run)?
-                    .is_some()
-                {
-                    break "needs_review";
-                }
                 if !runtime
                     .list(conversation)?
                     .iter()
@@ -431,7 +391,19 @@ pub async fn chat_subagent_control(
 }
 
 pub fn definition() -> ChatToolDefinition {
-    ChatToolDefinition { id: "native__agent_control".into(), name: "agent_control".into(), description: "Control children belonging to this conversation. List/get results; message only adds information (idle children do not run); continue explicitly runs an idle child or supplements an active one; stop requires the current execution_id; wait wakes for completed/failed/interrupted results, user input, or at most 60000 ms; progress alone does not wake it. Use the returned sequence as cursor. waited_ms is actual elapsed time; never infer elapsed time or a stall from the requested timeout. Ended executions are not accepted assignments. Read each result, then use resolve with execution_id, outcome and message (evidence/reason): accepted, completed_by_parent, blocked, or reassigned with successor_execution_id. Continue incomplete children from saved history; continue links the previous attempt automatically. Only summarize after dispositions are recorded. Do not retry blindly or bypass user stops/budgets. Use stable message_id for retries. A user-stopped child requires a new explicit user instruction: only then set user_requested=true on continue. Never set it for automatic retries. The message retains main-agent provenance.".into(), source:"native".into(), server_id: None, server_name:Some("Kivio".into()), input_schema:json!({"type":"object","properties":{"operation":{"type":"string","enum":["list","get","message","continue","stop","wait","resolve"]},"id":{"type":"string"},"execution_id":{"type":"string"},"message_id":{"type":"string"},"message":{"type":"string"},"outcome":{"type":"string","enum":["accepted","completed_by_parent","blocked","reassigned"]},"successor_execution_id":{"type":"string"},"cursor":{"type":"integer"},"timeout_ms":{"type":"integer","minimum":0,"maximum":60000},"user_requested":{"type":"boolean","description":"Only true when the user explicitly instructed continuation after stopping this child; never for automatic retries."}},"required":["operation"]}), sensitive:false, annotations:None, output_schema:None }
+    ChatToolDefinition {
+        id: "native__agent_control".into(), name: "agent_control".into(),
+        description: "Control children belonging to this conversation. You own task decisions and the final answer. Child outputs and execution diagnostics are information: use them, send corrections, continue the same child, delegate elsewhere, or handle the work yourself. No acceptance or disposition step is required. List/get results; message only adds information (idle children do not run); continue explicitly runs an idle child or supplements an active one; stop requires the current execution_id. Wait wakes on new ended executions, user input, or at most 60000 ms; timeout never stops children. Use the returned sequence as cursor; waited_ms is actual elapsed time. When a result is needed, wait rather than poll repeatedly. Model-turn completion does not stop children; stop unwanted work explicitly. Use stable message_id for retries. A user-stopped child requires a new explicit user instruction: only then set user_requested=true on continue. Never use it for automatic retries.".into(),
+        source: "native".into(), server_id: None, server_name: Some("Kivio".into()),
+        input_schema: json!({"type":"object","properties":{
+            "operation":{"type":"string","enum":["list","get","message","continue","stop","wait"]},
+            "id":{"type":"string"}, "execution_id":{"type":"string"},
+            "message_id":{"type":"string"}, "message":{"type":"string"},
+            "cursor":{"type":"integer"}, "timeout_ms":{"type":"integer","minimum":0,"maximum":60000},
+            "user_requested":{"type":"boolean","description":"Only true when the user explicitly instructed continuation after stopping this child; never for automatic retries."}
+        },"required":["operation"]}),
+        sensitive: false, annotations: None, output_schema: None,
+    }
 }
 
 pub fn dispatch(
@@ -474,7 +446,7 @@ fn model_view(args: &Value, value: Value) -> Value {
             .and_then(|runs| runs.last())
             .cloned()
             .unwrap_or(Value::Null);
-        json!({"id":record["id"],"name":record["name"],"execution_id":run["id"],"status":run["status"],"error":run["error"],"requiresReview":run["requiresReview"],"resolution":run["resolution"],"recovery":run["recovery"],"result_available":run["outputAvailable"] == true || run["result"].as_str().is_some_and(|s| !s.trim().is_empty()) || run["error"].as_str().is_some_and(|s| s.starts_with("recovered: "))})
+        json!({"id":record["id"],"name":record["name"],"execution_id":run["id"],"status":run["status"],"error":run["error"],"recovery":run["recovery"],"result_available":run["outputAvailable"] == true || run["result"].as_str().is_some_and(|s| !s.trim().is_empty()) || run["error"].as_str().is_some_and(|s| s.starts_with("recovered: "))})
     }
     if let Some(records) = value["agents"].as_array() {
         return json!({"sequence":value["sequence"],"agents":records.iter().map(summary).collect::<Vec<_>>(),"waited_ms":value["waited_ms"],"reason":value["reason"],"timeout_ms":value["timeout_ms"]});
@@ -497,6 +469,87 @@ fn model_view(args: &Value, value: Value) -> Value {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn reports_arrive_independently_and_late_output_reaches_next_parent_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = Runtime::open(directory.path().into()).unwrap();
+        runtime.register_parent("parent");
+        let a = runtime
+            .start(
+                "conv",
+                "parent",
+                "a",
+                "A",
+                Profile::default(),
+                "Investigate A",
+            )
+            .unwrap();
+        let b = runtime
+            .start(
+                "conv",
+                "parent",
+                "b",
+                "B",
+                Profile::default(),
+                "Investigate B",
+            )
+            .unwrap();
+        runtime
+            .finish(
+                "conv",
+                &a.id,
+                &a.current().id,
+                Err("HTTP 400: invalid request".into()),
+            )
+            .unwrap();
+        let reports = collect_results_with(&runtime, "conv", "parent", |_, _| async { Ok(true) })
+            .await
+            .unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0]["role"], "user");
+        assert!(reports[0]["content"].as_str().unwrap().contains("HTTP 400"));
+        assert_eq!(
+            runtime.get("conv", &b.id).unwrap().current().status,
+            super::super::runtime::Status::Running
+        );
+        runtime.release_parent("parent");
+        runtime
+            .finish(
+                "conv",
+                &b.id,
+                &b.current().id,
+                Ok(("B found the entry point".into(), None)),
+            )
+            .unwrap();
+        let reports = collect_results_with(&runtime, "conv", "next", |_, _| async { Ok(true) })
+            .await
+            .unwrap();
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("B found the entry point"));
+        assert!(
+            collect_results_with(&runtime, "conv", "next", |_, _| async { Ok(true) })
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn child_report_is_external_input_in_responses_not_an_assistant_prefill() {
+        let message = report_input("[Sub-agent: A · Completed]\nSaved output: React project");
+        let messages = crate::chat::model::model_messages_from_openai_messages(vec![message]);
+        let input = crate::chat::model::responses_input_from_model_messages(&messages, None);
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"][0]["type"], "input_text");
+        assert!(input[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Sub-agent"));
+    }
+
     #[test]
     fn recovered_worker_report_is_saved_as_a_result_with_usage() {
         let dir = tempfile::tempdir().unwrap();
@@ -511,19 +564,17 @@ mod tests {
                 "Investigate",
             )
             .unwrap();
-        let output = worker_output(
-            "recovered",
+        let output = Ok((
             "A complete report in free-form prose".into(),
             Some(json!({"input_tokens":123})),
-            false,
-        );
+        ));
         runtime
             .finish("conv", &child.id, &child.current().id, output)
             .unwrap();
         let saved = runtime.get("conv", &child.id).unwrap();
         assert_eq!(
             saved.current().status,
-            super::super::runtime::Status::Completed
+            super::super::runtime::Status::Returned
         );
         assert!(saved
             .current()
@@ -532,13 +583,6 @@ mod tests {
             .unwrap()
             .contains("complete report"));
         assert_eq!(saved.current().usage.as_ref().unwrap()["input_tokens"], 123);
-    }
-
-    #[test]
-    fn recovery_does_not_turn_cancellation_or_degraded_fallback_into_success() {
-        assert!(worker_output("cancelled", "partial".into(), None, false).is_err());
-        assert!(worker_output("recovered", "fallback".into(), None, true).is_err());
-        assert!(worker_output("recovered", " ".into(), None, false).is_err());
     }
 
     #[test]

@@ -1933,8 +1933,7 @@ async function onChatProtocol(
 
 export type SubAgentExecution = {
   id: string; status: string; prompt: string; result?: string; error?: string; usage?: unknown
-  requiresReview?: boolean; outputAvailable?: boolean
-  resolution?: { outcome: string; reason: string; successor?: string | null } | null
+  outputAvailable?: boolean
   recovery?: { outcome?: string; degraded?: { kind?: string; reason?: string; detail?: string } | null } | null
 }
 export type SubAgentRecord = {
@@ -1948,7 +1947,6 @@ export type SubAgentSnapshot = { sequence: number; agents: SubAgentRecord[] }
 export type SubAgentListRequest = { operation: 'list' | 'wait'; cursor?: number; timeout_ms?: number }
 export type SubAgentRecordRequest =
   | { operation: 'get' | 'message' | 'continue' | 'stop'; id: string; execution_id?: string; message_id?: string; message?: string }
-  | { operation: 'resolve'; id: string; execution_id: string; outcome: 'accepted' | 'completed_by_parent' | 'blocked' | 'reassigned'; message: string; successor_execution_id?: string }
 export type SubAgentControlRequest = SubAgentListRequest | SubAgentRecordRequest
 function chatSubagentControl(conversationId: string, args: SubAgentListRequest): Promise<SubAgentSnapshot>
 function chatSubagentControl(conversationId: string, args: SubAgentRecordRequest): Promise<SubAgentRecord>

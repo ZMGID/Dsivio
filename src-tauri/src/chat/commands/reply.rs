@@ -791,6 +791,7 @@ pub(super) async fn complete_assistant_reply_inner(
     // 否则模型调用敏感工具或 ask_user 会 await GUI 应答而永久挂起。
     #[cfg(debug_assertions)]
     let probe_host = ProbeAgentHost {
+        run_id: run_id.clone(),
         app: app.clone(),
         state: state.inner(),
     };

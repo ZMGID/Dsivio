@@ -68,7 +68,7 @@ it('shows the running child avatar without mounting details in the composer', as
   expect(screen.getByTestId('composer')).not.toHaveTextContent('Research')
   expect(screen.queryByText('主代理')).toBeNull()
   expect(screen.getByRole('heading', { name: '正在运行 · 1' })).toBeVisible()
-  expect(screen.getByRole('heading', { name: '已关闭 · 0' })).toBeVisible()
+  expect(screen.getByRole('heading', { name: '历史 · 0' })).toBeVisible()
   expect(screen.queryByRole('textbox')).toBeNull()
 
   expect(vi.mocked(api.chatSubagentControl).mock.calls.filter(([, args]) => args.operation === 'list')).toHaveLength(1)

@@ -15,15 +15,6 @@ pub trait AgentHost: Send + Sync {
         false
     }
     fn run_ended(&self, _conversation_id: &str) {}
-    /// Final gate after tool-capable decisions. Unresolved collaboration must be
-    /// explicitly reported as incomplete rather than silently synthesized as success.
-    fn finalize_collaboration(
-        &self,
-        _conversation_id: &str,
-        _run_id: &str,
-    ) -> Result<Vec<String>, String> {
-        Ok(Vec::new())
-    }
     /// Failed workers preserve pending input for an explicit continuation.
     fn close_runtime_input(&self) -> Result<(), String> {
         Ok(())

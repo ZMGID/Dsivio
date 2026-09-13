@@ -2092,7 +2092,7 @@ export function ImageReadCluster({ toolCalls }: { toolCalls: ToolCallRecord[] })
 }
 
 function ToolCallBlockComponent(props: ToolCallBlockProps) {
-  if ((props.toolCall.source === 'native' && toolRecordRawName(props.toolCall) === 'agent_control') || objectValue(props.toolCall.structured_content ?? props.toolCall.structuredContent)?.type === 'subagent_control') {
+  if ((props.toolCall.source === 'native' && ['agent', 'agent_control'].includes(toolRawName(props.toolCall))) || objectValue(props.toolCall.structured_content ?? props.toolCall.structuredContent)?.type === 'subagent_control') {
     return <SubAgentToolCard toolCall={props.toolCall} />
   }
   if (isAskUserTool(props.toolCall)) {

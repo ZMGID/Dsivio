@@ -6,6 +6,31 @@ import { onDockSubAgentRequest } from './dock/dockPreview'
 
 vi.mock('../api/tauri', () => ({ api: { chatSubagentControl: vi.fn(async () => ({ agents: [{ id: 'child', name: 'Research', sequence: 1, profile: { model: 'test', agentType: 'research' }, runs: [{ id: 'run', status: 'running', prompt: 'Inspect' }], history: [], tools: [], messages: [] }] })) } }))
 
+it('keeps a rejected native launch in the current UI without claiming an execution ran', () => {
+  render(<ToolCallBlock toolCall={{ id: 'rejected', source: 'native', name: 'agent', status: 'error', arguments: { name: '脚本分析', prompt: 'Read package.json' }, error: 'arguments.description is not allowed' }} />)
+  expect(screen.queryByText('SUBAGENT')).toBeNull()
+  expect(screen.getByText('未启动')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: /脚本分析/ }))
+  expect(screen.getByRole('alert')).toHaveTextContent('arguments.description is not allowed')
+  expect(screen.getByText('Read package.json')).toBeVisible()
+})
+
+it('uses the current UI before a native launch has a receipt', () => {
+  render(<ToolCallBlock toolCall={{ id: 'pending', source: 'native', name: 'agent', status: 'running', arguments: { name: '调用链' } }} />)
+  expect(screen.queryByText('SUBAGENT')).toBeNull()
+  expect(screen.getByText('正在启动…')).toBeVisible()
+})
+
+it('retains a legacy failed execution as history rather than claiming it never started', () => {
+  render(<ToolCallBlock toolCall={{ id: 'legacy', source: 'native', name: 'agent', status: 'error', arguments: { name: '调查' }, structured_content: { type: 'subagent', result: '已完成的部分调查', error: '执行中断' } }} />)
+  expect(screen.queryByText('SUBAGENT')).toBeNull()
+  expect(screen.queryByText('未启动')).toBeNull()
+  expect(screen.getByText('历史记录')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: /调查/ }))
+  expect(screen.getByText('已完成的部分调查')).toBeVisible()
+  expect(screen.getByRole('alert')).toHaveTextContent('执行中断')
+})
+
 it('tracks the launched execution and opens that child directly', async () => {
   const open = vi.fn()
   const unsubscribe = onDockSubAgentRequest(open)
@@ -14,7 +39,7 @@ it('tracks the launched execution and opens that child directly', async () => {
   expect(screen.queryByText('任务说明')).toBeNull()
   expect(screen.queryByText('research · test')).toBeNull()
   act(() => updateSubAgent('conv', { id: 'child', name: 'Research', sequence: 2, profile: { model: 'test', agentType: 'research' }, runs: [{ id: 'run', status: 'completed', prompt: 'Inspect' }, { id: 'next', status: 'running', prompt: 'Next' }], history: [], tools: [], messages: [] }))
-  expect(screen.getByText('已完成')).toBeVisible()
+  expect(screen.getByText('已返回')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: /Research/ }))
   expect(open).toHaveBeenCalledWith({ conversationId: 'conv', agentId: 'child' })
   unsubscribe()
@@ -23,7 +48,7 @@ it('tracks the launched execution and opens that child directly', async () => {
 it('summarizes legacy result receipts with the child status', () => {
   render(<ToolCallBlock toolCall={{ id: 'wait', source: 'native', name: 'agent_control', status: 'success', arguments: { operation: 'wait' }, result_preview: JSON.stringify({ reason: 'result_ready', waited_ms: 1250, agents: [{ id: 'child', name: 'Research', status: 'completed' }] }) }} />)
   expect(screen.getByText('子代理结果 · Research')).toBeVisible()
-  expect(screen.getByText('已完成')).toBeVisible()
+  expect(screen.getByText('已返回')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: /子代理结果/ }))
   expect(screen.getByText('Research')).toBeVisible()
   expect(screen.queryByText(/"waited_ms"/)).toBeNull()
@@ -55,7 +80,7 @@ it('collapses message contents and opens the addressed child from details', () =
 it('does not claim a failed message was sent and keeps the error inspectable', () => {
   render(<ToolCallBlock toolCall={{ id: 'message-error', source: 'native', name: 'agent_control', status: 'error', arguments: { operation: 'message', id: 'child' }, error: '连接中断' }} />)
   expect(screen.queryByText(/已向/)).toBeNull()
-  expect(screen.getByText('操作未完成')).toBeVisible()
+  expect(screen.getByText('操作异常')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: /发送消息/ }))
   expect(screen.getByRole('alert')).toHaveTextContent('连接中断')
 })
@@ -85,7 +110,7 @@ it('also hides historical waits stored as JSON', () => {
 
 it('retains actual wait errors even when the receipt mentions timeout', () => {
   render(<ToolCallBlock toolCall={{ id: 'wait-error', source: 'native', name: 'agent_control', status: 'error', arguments: { operation: 'wait' }, error: '无法读取子代理状态', structured_content: { type: 'subagent_control', reason: 'timeout' } }} />)
-  expect(screen.getByText('操作未完成')).toBeVisible()
+  expect(screen.getByText('操作异常')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: /等待子代理/ }))
   expect(screen.getByRole('alert')).toHaveTextContent('无法读取子代理状态')
 })
