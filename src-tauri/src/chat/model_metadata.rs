@@ -1054,7 +1054,7 @@ mod tests {
         );
         assert_eq!(
             db_display_name("deepseek-v4-flash-vision-exp").as_deref(),
-            Some("DeepSeek V4 Flash Vision Exp")
+            Some("DeepSeek V4.1 Flash (Legacy Vision Alias)")
         );
         assert_eq!(
             db_display_name("qwen3.5-plus").as_deref(),
