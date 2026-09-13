@@ -218,6 +218,7 @@ impl AgentHost for TestHost {
         &self,
         _conversation_id: &str,
         used_tokens: u64,
+        _token_count_source: Option<&str>,
         context_window_tokens: Option<u64>,
     ) {
         self.context_ticks
@@ -2161,6 +2162,31 @@ async fn run_loop_no_anchor_skips_compaction_when_estimate_below_budget() {
 /// 且已经按权威口径算出了分子（`effective_context_tokens`）与分母
 /// （`context_window_for_model`），所以实时通道零额外计算。这条断言两件事：
 /// 一轮里**多次**上报（多次工具往返 ⇒ 多轮 ⇒ 多次上报），且数字单调不减。
+#[tokio::test]
+async fn run_loop_context_reported_anchor_wins_then_missing_usage_falls_back() {
+    let server = MockModelServer::start(vec![
+        MockResponse::Sse(planning_tool_call_sse_events()),
+        MockResponse::Sse(vec![
+            r#"{"choices":[{"delta":{"content":"done"}}]}"#.to_string(),
+            "[DONE]".to_string(),
+        ]),
+    ]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.effective_chat_tools.max_tool_rounds = Some(2);
+    config.initial_anchor_total_tokens = Some(10);
+    config.initial_anchor_trailing_estimate = 0;
+    let host = TestHost::default();
+    let result = run_agent_loop(config, &host, &RecordingExecutor::default())
+        .await
+        .expect("run completes");
+    let ticks = host.recorded_context_ticks();
+    assert!(ticks.len() >= 2, "{ticks:?}");
+    assert_eq!(ticks[0].0, 10, "larger estimate must not override reported usage");
+    assert!(ticks[1].0 > 10, "missing usage must not retain a stale anchor: {ticks:?}");
+    assert!(result.last_step_usage.is_none());
+}
+
 #[tokio::test]
 async fn run_loop_reports_live_context_usage_each_round() {
     let server = MockModelServer::start(vec![

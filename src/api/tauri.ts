@@ -157,6 +157,8 @@ export type ChatContextState = {
 export type ChatContextLiveUsage = {
   /** 此刻已用（分子）。口径与轮末权威值一致，真源在 Rust 侧。 */
   usedTokens: number
+  /** 实报、实报加新增估算或无实报；不能继承上一条快照的来源。 */
+  tokenCountSource?: string | null
   /** 上下文窗口（分母）。`null` = 本次上报没带窗口，前端必须保留已知的旧值（分母粘滞）。 */
   contextWindowTokens?: number | null
 }
@@ -164,8 +166,7 @@ export type ChatContextLiveUsage = {
 /**
  * 上下文状态更新。两种形态共用这一条通道：
  * - `contextState` —— 轮末/手动刷新的**权威快照**（含分段、压缩计数、来源标签）。
- * - `live` —— 生成过程中的**活数**（只有分子 + 分母）。权威快照那次要读磁盘、列工具、算分段，
- *   不能放在每个增量上，所以实时这条刻意只带两个数。
+ * - `live` —— 生成过程中的**活数**（分子 + 分母 + 来源）。完整快照的分段计算不在增量通道执行。
  */
 export type ChatContextPayload = {
   conversationId: string

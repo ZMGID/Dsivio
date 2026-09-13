@@ -802,6 +802,43 @@ pub(crate) const IMAGE_PART_TYPES: [&str; 3] = ["image_url", "input_image", "ima
 /// content-part `type` 值：文本部件（按其 `text` 字段估算）。
 pub(crate) const TEXT_PART_TYPES: [&str; 2] = ["text", "input_text"];
 
+/// 原生推理项的可读正文（无正文时用摘要）；密文不是 tokenizer 输入，不能按 base64 长度计数。
+pub(crate) fn estimate_reasoning_item_tokens(item: &Value) -> usize {
+    let text_tokens = |key: &str| -> Option<usize> {
+        let parts = item.get(key)?.as_array()?;
+        let texts: Vec<&str> = parts
+            .iter()
+            .filter_map(|p| p.get("text")?.as_str())
+            .filter(|text| !text.is_empty())
+            .collect();
+        (!texts.is_empty()).then(|| texts.into_iter().map(estimate_tokens).sum())
+    };
+    text_tokens("content")
+        .or_else(|| text_tokens("summary"))
+        .unwrap_or(0)
+}
+
+/// 同一推理可能同时保存在 reasoning_items 和 reasoning_content 中，只计算一份。
+pub(crate) fn estimate_message_reasoning_tokens(message: &Value) -> usize {
+    let native: usize = message
+        .get("reasoning_items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items.iter().map(|entry| {
+                estimate_reasoning_item_tokens(entry.get("item").unwrap_or(entry))
+            }).sum()
+        })
+        .unwrap_or(0);
+    if native > 0 {
+        return native;
+    }
+    message.get("reasoning_content")
+        .or_else(|| message.get("reasoning"))
+        .and_then(Value::as_str)
+        .map(estimate_tokens)
+        .unwrap_or(0)
+}
+
 /// 估算任意 `Value`（含多模态数组 content）的 token 数。**图片部件记 0**、文本部件按文本、
 /// 对象按 key+value 递归、字符串按 `estimate_tokens`。压缩侧（estimate_message_tokens /
 /// serialize）与上下文用量条（commands.rs::count_tokens_in_value 委托本函数）**共用同一口径**，
@@ -811,7 +848,16 @@ pub(crate) fn estimate_value_tokens(value: &Value) -> usize {
         Value::String(text) => estimate_tokens(text),
         Value::Array(items) => items.iter().map(estimate_value_tokens).sum(),
         Value::Object(map) => {
+            if map.contains_key("reasoning_items") {
+                return map.iter()
+                    .filter(|(key, _)| !matches!(key.as_str(), "reasoning_items" | "reasoning_content" | "reasoning"))
+                    .map(|(key, value)| estimate_tokens(key) + estimate_value_tokens(value))
+                    .sum::<usize>() + estimate_message_reasoning_tokens(value);
+            }
             if let Some(kind) = map.get("type").and_then(Value::as_str) {
+                if kind == "reasoning" && (map.contains_key("content") || map.contains_key("summary")) {
+                    return estimate_reasoning_item_tokens(value);
+                }
                 if kind == "video_url" { return 0; }
                 if IMAGE_PART_TYPES.contains(&kind) {
                     return 0;

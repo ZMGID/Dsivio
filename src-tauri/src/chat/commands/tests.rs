@@ -2751,6 +2751,23 @@ fn resolve_usage_anchor_none_without_usage() {
 }
 
 #[test]
+fn context_estimate_counts_native_reasoning_and_display_copy_once() {
+    let native = serde_json::json!({
+        "role": "assistant", "content": "Done",
+        "reasoning_items": [{"model": "deepseek-flash", "item": {
+            "type": "reasoning", "content": [{"type": "reasoning_text", "text": "think ".repeat(100)}],
+            "summary": [], "encrypted_content": "opaque".repeat(1000)
+        }}]
+    });
+    let mut mirrored = native.clone();
+    mirrored["reasoning_content"] = serde_json::json!("think ".repeat(100));
+    assert_eq!(count_tokens_in_value(&mirrored), count_tokens_in_value(&native));
+    let mut different_ciphertext = native.clone();
+    different_ciphertext["reasoning_items"][0]["item"]["encrypted_content"] = serde_json::json!("x");
+    assert_eq!(count_tokens_in_value(&native), count_tokens_in_value(&different_ciphertext));
+}
+
+#[test]
 fn resolve_usage_anchor_invalidated_on_provider_switch() {
     let conv = test_conversation_with_messages(vec![
         test_chat_message("u1", "user", "hi", 1),

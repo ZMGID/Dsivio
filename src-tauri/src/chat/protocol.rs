@@ -220,6 +220,8 @@ impl ChatToolPayload {
 pub struct ChatContextUsagePayload {
     pub used_tokens: u64,
     pub context_window_tokens: Option<u64>,
+    #[serde(default)]
+    pub token_count_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS, PartialEq, Eq)]
@@ -2244,7 +2246,7 @@ mod tests {
             }),
             serde_json::json!({
                 "type": "context_usage_updated",
-                "usage": {"usedTokens": 10, "contextWindowTokens": 100}
+                "usage": {"usedTokens": 10, "contextWindowTokens": 100, "tokenCountSource": "provider_reported"}
             }),
             serde_json::json!({
                 "type": "compaction_updated", "phase": "started", "trigger": null,

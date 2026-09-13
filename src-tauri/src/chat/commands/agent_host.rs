@@ -88,6 +88,7 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         &self,
         conversation_id: &str,
         used_tokens: u64,
+        token_count_source: Option<&str>,
         context_window_tokens: Option<u64>,
     ) {
         emit_chat_context_usage_live(
@@ -95,6 +96,7 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
             conversation_id,
             &self.run_id,
             used_tokens,
+            token_count_source,
             context_window_tokens,
         );
     }
