@@ -13,13 +13,12 @@ export function SubAgentIndicator({ conversationId, onOpen, lang = 'zh' }: { con
   const { agents } = useSubAgents(conversationId)
   const running = agents.filter(child => active(child.runs.at(-1)?.status ?? ''))
   if (!running.length) return null
-  return <div className="ml-auto flex min-w-0 items-center justify-end gap-1 overflow-x-auto">
+  return <div className="custom-scrollbar ml-auto flex min-w-0 items-center justify-end gap-1 overflow-x-auto">
     {running.map(child => {
       const label = `${child.name} · ${subAgentStatusLabel(child.runs.at(-1), lang)}`
-      return <button key={child.id} type="button" aria-label={label} title={label} onClick={onOpen}
-        className="shrink-0 rounded-md p-1 hover:bg-neutral-500/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500">
+      return <IconButton key={child.id} label={label} onClick={onOpen} size="md" variant="ghost" className="shrink-0">
         <SubAgentAvatar id={child.id} status={child.runs.at(-1)?.status} size={22} />
-      </button>
+      </IconButton>
     })}
   </div>
 }

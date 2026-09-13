@@ -96,6 +96,9 @@ pub(crate) async fn planning_step(
     // 不要再用必然超窗的发送视图去打规划调用、再失败——而是用已收集的工具结果优雅收尾。
     // 复用 recovery 的确定性降级路径（`assemble_results_from_tool_records`），不另造终止通道。
     if state.compaction_unresolved_rounds >= super::loop_::COMPACTION_THRASH_LIMIT {
+        if let Some(blocked) = super::loop_::collaboration_blocked_result(env, state)? {
+            return Ok(PlanningStepOutcome::Recovered(blocked));
+        }
         eprintln!(
             "Chat context compaction could not reduce context after {} rounds; ending turn with gathered results (anti-thrashing)",
             state.compaction_unresolved_rounds
@@ -342,6 +345,11 @@ pub(crate) async fn planning_step(
                 let content = super::synthesis::recover_synthesis(env, state, &err).await;
                 if !content.trim().is_empty() {
                     eprintln!("Chat planning call failed mid-run; recovered: {err}");
+                    // Check before the result builder drains the tool ledger,
+                    // transcript and segments out of state.
+                    if let Some(blocked) = super::loop_::collaboration_blocked_result(env, state)? {
+                        return Ok(PlanningStepOutcome::Recovered(blocked));
+                    }
                     // 降级文案是本轮的**正文**，段 phase 必须是 Synthesis（不能留 ToolLoop）：
                     // content_from_segments 只认 Plain|Synthesis，留 ToolLoop 会让
                     // normalize_assistant_segments 以为正文没落段而再补一条，正文渲染两遍。

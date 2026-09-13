@@ -946,11 +946,14 @@ impl Runtime {
         let stopping =
             record.current().status == Status::Stopping || control.stopping.contains(run);
         record.user_stopped |= control.user_stops.contains(run);
+        let user_stopped = record.user_stopped;
         let current = record.current_mut();
         current.recovery = output.recovery;
         current.result = output.partial.filter(|text| !text.trim().is_empty());
         current.usage = output.usage;
-        if stopping && current.resolution.is_none() {
+        // Only a user cancellation releases the assignment. A parent's stop
+        // still needs an explicit decision about the unfinished work.
+        if stopping && user_stopped && current.resolution.is_none() {
             current.resolution = Some(Resolution {
                 outcome: "cancelled".into(),
                 reason: "Execution was stopped; retained work is not automatically restarted"
@@ -1170,6 +1173,59 @@ fn enqueue(record: &mut Record, key: &str, sender: &str, text: &str) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supervision_agent_stop_retains_assignment_but_user_stop_cancels_it() {
+        for user in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let runtime = Runtime::open(dir.path().into()).unwrap();
+            let child = runtime
+                .start(
+                    "conv",
+                    "parent",
+                    "start",
+                    "A",
+                    Profile::default(),
+                    "Inspect",
+                )
+                .unwrap();
+            runtime
+                .stop("conv", &child.id, &child.current().id, user)
+                .unwrap();
+            runtime
+                .finish_output(
+                    "conv",
+                    &child.id,
+                    &child.current().id,
+                    WorkerOutput {
+                        result: Err("cancelled".into()),
+                        partial: Some("Partial findings".into()),
+                        usage: None,
+                        recovery: None,
+                    },
+                )
+                .unwrap();
+            let runtime = Runtime::open(dir.path().into()).unwrap();
+            let saved = runtime.get("conv", &child.id).unwrap();
+            assert_eq!(saved.current().status, Status::Interrupted);
+            assert_eq!(saved.current().result.as_deref(), Some("Partial findings"));
+            assert_eq!(saved.current().needs_review(), !user);
+            assert_eq!(
+                runtime
+                    .supervision_message("conv", "parent")
+                    .unwrap()
+                    .is_some(),
+                !user
+            );
+            assert_eq!(
+                runtime
+                    .finalize_supervision("conv", "parent")
+                    .unwrap()
+                    .is_empty(),
+                user
+            );
+        }
+    }
 
     #[test]
     fn delivered_error_still_requires_parent_disposition_and_continuation_links_attempts() {

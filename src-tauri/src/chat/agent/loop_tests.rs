@@ -3939,6 +3939,68 @@ async fn collaboration_final_answer_is_not_a_promise_to_summarize_later() {
 }
 
 #[tokio::test]
+async fn supervision_planning_recovery_preserves_completed_tool_history() {
+    use crate::chat::sub_agent::runtime::{Profile, Runtime};
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = Arc::new(Runtime::open(directory.path().into()).unwrap());
+    let child = runtime
+        .start(
+            "conversation",
+            "run",
+            "start",
+            "A",
+            Profile::default(),
+            "Inspect",
+        )
+        .unwrap();
+    runtime
+        .finish(
+            "conversation",
+            &child.id,
+            &child.current().id,
+            Err("API unavailable".into()),
+        )
+        .unwrap();
+    let server = MockModelServer::start(vec![
+        MockResponse::Sse(planning_tool_call_sse_events()),
+        MockResponse::Status(401, r#"{"error":"mock planning failure"}"#.into()),
+    ]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.effective_chat_tools.max_tool_rounds = Some(6);
+    let host = TestHost {
+        supervision: Some(runtime),
+        ..Default::default()
+    };
+    let executor = RecordingExecutor::default();
+    let result = run_agent_loop(config, &host, &executor).await.unwrap();
+    assert_eq!(
+        result.degraded.as_ref().unwrap().kind,
+        "collaboration_incomplete"
+    );
+    assert_eq!(result.tool_records.len(), 1);
+    assert_eq!(result.tool_records[0].id, "call_read");
+    assert!(matches!(
+        result.tool_records[0].status,
+        ToolCallStatus::Success
+    ));
+    assert!(result
+        .segments
+        .iter()
+        .any(|segment| segment.tool_call_id.as_deref() == Some("call_read")));
+    assert!(result
+        .api_messages
+        .iter()
+        .any(|message| message["role"] == "tool" && message["tool_call_id"] == "call_read"));
+    assert_eq!(
+        result.api_messages.last().unwrap()["content"],
+        result.content
+    );
+    assert_eq!(result.api_messages.len(), 3);
+    assert_eq!(server.captured_bodies().len(), 2);
+}
+
+#[tokio::test]
 async fn supervision_returns_parent_to_tools_before_accepting_recovered_work() {
     use crate::chat::sub_agent::runtime::{Profile, Runtime};
     let directory = tempfile::tempdir().unwrap();

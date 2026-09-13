@@ -440,9 +440,6 @@ pub async fn run_agent_loop(
                     return Ok(attach_usage(result, &mut state))
                 }
                 PlanningStepOutcome::Recovered(result) => {
-                    if let Some(blocked) = collaboration_blocked_result(&env, &mut state)? {
-                        return Ok(attach_usage(blocked, &mut state));
-                    }
                     return Ok(attach_usage(result, &mut state));
                 }
                 PlanningStepOutcome::Cancelled(result) => {
@@ -555,7 +552,7 @@ pub async fn run_agent_loop(
     }
 }
 
-fn collaboration_blocked_result(
+pub(crate) fn collaboration_blocked_result(
     env: &LoopEnv<'_>,
     state: &mut RunState,
 ) -> Result<Option<AgentRunResult>, String> {
