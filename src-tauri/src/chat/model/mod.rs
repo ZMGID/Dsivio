@@ -8,6 +8,7 @@ pub mod gemini;
 pub mod openai;
 pub mod responses;
 pub mod types;
+pub mod usage_anchor;
 
 pub use anthropic::AnthropicMessagesProvider;
 pub use gemini::GeminiProvider;
@@ -97,6 +98,21 @@ pub(crate) async fn generate_with_chat_provider(
 
 /// `generate_with_chat_provider` 的流式版本。同为全 crate 统一分发入口。
 pub(crate) async fn stream_with_chat_provider(
+    state: &crate::state::AppState,
+    provider: &crate::settings::ModelProvider,
+    retry_attempts: usize,
+    request: GenerateRequest,
+    sink: &mut (dyn StreamSink + Send),
+) -> Result<GenerateOutput, ModelError> {
+    let identity = usage_anchor::UsageRequestIdentity::from_request(provider, &request);
+    let mut output = stream_with_chat_provider_inner(state, provider, retry_attempts, request, sink).await?;
+    if let Some(usage) = output.usage.as_mut() {
+        usage.request_identity = identity;
+    }
+    Ok(output)
+}
+
+async fn stream_with_chat_provider_inner(
     state: &crate::state::AppState,
     provider: &crate::settings::ModelProvider,
     retry_attempts: usize,

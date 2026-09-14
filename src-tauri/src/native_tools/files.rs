@@ -49,6 +49,7 @@ pub struct FileMutationResult {
     pub additions: usize,
     pub removals: usize,
     pub diff: String,
+    pub diff_complete: bool,
     pub warnings: Vec<String>,
     pub diagnostics: Vec<Value>,
 }
@@ -76,11 +77,16 @@ pub struct FileMutationFile {
     pub additions: usize,
     pub removals: usize,
     pub diff: String,
+    pub diff_complete: bool,
 }
 
 impl FileMutationResult {
     pub fn summary(&self) -> String {
-        let stats = format!("+{} -{}", self.additions, self.removals);
+        let stats = if self.diff_complete {
+            format!("+{} -{}", self.additions, self.removals)
+        } else {
+            "diff incomplete; line counts unavailable".to_string()
+        };
         if let Some(file) = self.files.first().filter(|_| self.files.len() == 1) {
             return format!(
                 "{} {} ({stats})",
@@ -343,6 +349,7 @@ pub fn write_file(
             additions: 0,
             removals: 0,
             diff: String::new(),
+            diff_complete: false,
         }
     } else {
         planned_file_result(workspace, full, operation, before.as_deref(), Some(content))?
@@ -476,11 +483,13 @@ pub fn edit_file(
                 additions: 0,
                 removals: 0,
                 diff: String::new(),
+                diff_complete: true,
             }],
             bytes_written: content.len() as u64,
             additions: 0,
             removals: 0,
             diff: String::new(),
+            diff_complete: true,
             warnings,
             diagnostics: Vec::new(),
         });
@@ -704,6 +713,7 @@ where
 }
 
 fn file_mutation_result(operation: &str, files: Vec<FileMutationFile>) -> FileMutationResult {
+    let diff_complete = files.iter().all(|file| file.diff_complete);
     let resolved_path = files
         .first()
         .filter(|_| files.len() == 1)
@@ -727,6 +737,7 @@ fn file_mutation_result(operation: &str, files: Vec<FileMutationFile>) -> FileMu
         additions,
         removals,
         diff,
+        diff_complete,
         warnings: Vec::new(),
         diagnostics: Vec::new(),
     }
@@ -763,6 +774,16 @@ fn atomic_write_bytes(
     bytes: &[u8],
     existing_text: Option<&str>,
 ) -> Result<(), String> {
+    // The per-path lock coordinates Kivio callers only. Check the observed bytes
+    // again before replacement to catch edits from users or other processes.
+    let expected = match existing_text {
+        Some(text) => Some(text.as_bytes().to_vec()),
+        None => match fs::read(target) {
+            Ok(bytes) => Some(bytes),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => return Err(format!("Read target before write failed: {err}")),
+        },
+    };
     let parent = target
         .parent()
         .ok_or_else(|| "Target path has no parent directory".to_string())?;
@@ -793,23 +814,56 @@ fn atomic_write_bytes(
             );
         }
     }
-    let _ = existing_text;
-    #[cfg(target_os = "windows")]
-    if target.exists() {
-        // std::fs::rename cannot replace an existing file on Windows. This
-        // fallback has a tiny non-atomic gap, but still guarantees chunks are
-        // never streamed directly into the target. A future Windows API
-        // ReplaceFileW path can tighten this last commit step.
-        fs::remove_file(target)
-            .map_err(|err| format!("Remove existing target failed before replace: {err}"))?;
+    let current = match fs::read(target) {
+        Ok(bytes) => Some(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!("Check target before replace failed: {err}"));
+        }
+    };
+    if current != expected {
+        let _ = fs::remove_file(&tmp);
+        return Err(
+            "File changed since it was read; re-read the affected file before editing.".into(),
+        );
     }
-    match fs::rename(&tmp, target) {
+    match replace_staged_file(&tmp, target, expected.is_some()) {
         Ok(()) => Ok(()),
         Err(err) => {
             let _ = fs::remove_file(&tmp);
             Err(format!("Rename temp file failed: {err}"))
         }
     }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn replace_staged_file(tmp: &Path, target: &Path, _existed: bool) -> std::io::Result<()> {
+    fs::rename(tmp, target)
+}
+
+#[cfg(target_os = "windows")]
+fn replace_staged_file(tmp: &Path, target: &Path, existed: bool) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+    let source: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let flags = if existed {
+        MOVEFILE_WRITE_THROUGH | MOVEFILE_REPLACE_EXISTING
+    } else {
+        MOVEFILE_WRITE_THROUGH
+    };
+    // Both buffers are NUL terminated and remain alive throughout the call.
+    unsafe {
+        MoveFileExW(
+            windows::core::PCWSTR(source.as_ptr()),
+            windows::core::PCWSTR(destination.as_ptr()),
+            flags,
+        )
+    }
+    .map_err(std::io::Error::other)
 }
 
 fn planned_file_result(
@@ -820,7 +874,9 @@ fn planned_file_result(
     after: Option<&str>,
 ) -> Result<FileMutationFile, String> {
     let display_path = workspace_display_path(workspace, &path);
-    let (diff, additions, removals) = unified_diff(&display_path, before, after);
+    let computed = unified_diff(&display_path, before, after);
+    let diff_complete = computed.is_some();
+    let (diff, additions, removals) = computed.unwrap_or_default();
     Ok(FileMutationFile {
         path: display_path,
         operation: operation.to_string(),
@@ -828,12 +884,15 @@ fn planned_file_result(
         additions,
         removals,
         diff,
+        diff_complete,
     })
 }
 
-/// LCS guard: above this many DP cells for the changed middle region, fall back
-/// to a coarse single-hunk diff (whole middle as remove+add).
-const DIFF_LCS_MAX_CELLS: usize = 250_000;
+/// Hirschberg uses linear working memory and at most twice this many comparisons.
+/// Beyond the budget, omit statistics instead of inventing a whole-file rewrite.
+const DIFF_LCS_MAX_CELLS: usize = 4_000_000;
+const DIFF_MAX_BYTES: usize = 16 * 1024 * 1024;
+const DIFF_MAX_LINES: usize = 100_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DiffOpKind {
@@ -848,11 +907,26 @@ struct DiffOp<'a> {
     text: &'a str,
 }
 
-fn unified_diff(path: &str, before: Option<&str>, after: Option<&str>) -> (String, usize, usize) {
+fn unified_diff(
+    path: &str,
+    before: Option<&str>,
+    after: Option<&str>,
+) -> Option<(String, usize, usize)> {
+    if before
+        .unwrap_or("")
+        .len()
+        .saturating_add(after.unwrap_or("").len())
+        > DIFF_MAX_BYTES
+    {
+        return None;
+    }
     let old_lines = diff_lines(before.unwrap_or(""));
     let new_lines = diff_lines(after.unwrap_or(""));
     if old_lines == new_lines {
-        return (String::new(), 0, 0);
+        return Some((String::new(), 0, 0));
+    }
+    if old_lines.len().saturating_add(new_lines.len()) > DIFF_MAX_LINES {
+        return None;
     }
 
     let mut prefix = 0usize;
@@ -870,6 +944,9 @@ fn unified_diff(path: &str, before: Option<&str>, after: Option<&str>) -> (Strin
         new_end -= 1;
     }
 
+    if (old_end - prefix).saturating_mul(new_end - prefix) > DIFF_LCS_MAX_CELLS {
+        return None;
+    }
     let ops = build_diff_ops(&old_lines, &new_lines, prefix, old_end, new_end);
 
     let changed: Vec<usize> = ops
@@ -879,7 +956,7 @@ fn unified_diff(path: &str, before: Option<&str>, after: Option<&str>) -> (Strin
         .map(|(idx, _)| idx)
         .collect();
     if changed.is_empty() {
-        return (String::new(), 0, 0);
+        return Some((String::new(), 0, 0));
     }
 
     // Prefix sums of old/new lines consumed before each op index.
@@ -951,7 +1028,7 @@ fn unified_diff(path: &str, before: Option<&str>, after: Option<&str>) -> (Strin
             }
         }
     }
-    (out, additions, removals)
+    Some((out, additions, removals))
 }
 
 fn build_diff_ops<'a>(
@@ -970,72 +1047,7 @@ fn build_diff_ops<'a>(
     }
     let middle_old = &old_lines[prefix..old_end];
     let middle_new = &new_lines[prefix..new_end];
-    if middle_old.len().saturating_mul(middle_new.len()) > DIFF_LCS_MAX_CELLS {
-        // Coarse fallback: whole middle as remove+add in a single block.
-        for line in middle_old {
-            ops.push(DiffOp {
-                kind: DiffOpKind::Remove,
-                text: line,
-            });
-        }
-        for line in middle_new {
-            ops.push(DiffOp {
-                kind: DiffOpKind::Add,
-                text: line,
-            });
-        }
-    } else {
-        let m = middle_old.len();
-        let n = middle_new.len();
-        let width = n + 1;
-        let mut dp = vec![0u32; (m + 1) * width];
-        for i in (0..m).rev() {
-            for j in (0..n).rev() {
-                dp[i * width + j] = if middle_old[i] == middle_new[j] {
-                    dp[(i + 1) * width + j + 1] + 1
-                } else {
-                    dp[(i + 1) * width + j].max(dp[i * width + j + 1])
-                };
-            }
-        }
-        let (mut i, mut j) = (0usize, 0usize);
-        while i < m && j < n {
-            if middle_old[i] == middle_new[j] {
-                ops.push(DiffOp {
-                    kind: DiffOpKind::Equal,
-                    text: &middle_old[i],
-                });
-                i += 1;
-                j += 1;
-            } else if dp[(i + 1) * width + j] >= dp[i * width + j + 1] {
-                ops.push(DiffOp {
-                    kind: DiffOpKind::Remove,
-                    text: &middle_old[i],
-                });
-                i += 1;
-            } else {
-                ops.push(DiffOp {
-                    kind: DiffOpKind::Add,
-                    text: &middle_new[j],
-                });
-                j += 1;
-            }
-        }
-        while i < m {
-            ops.push(DiffOp {
-                kind: DiffOpKind::Remove,
-                text: &middle_old[i],
-            });
-            i += 1;
-        }
-        while j < n {
-            ops.push(DiffOp {
-                kind: DiffOpKind::Add,
-                text: &middle_new[j],
-            });
-            j += 1;
-        }
-    }
+    hirschberg_ops(middle_old, middle_new, &mut ops);
     for line in &old_lines[old_end..] {
         ops.push(DiffOp {
             kind: DiffOpKind::Equal,
@@ -1043,6 +1055,76 @@ fn build_diff_ops<'a>(
         });
     }
     ops
+}
+
+// Recover an exact LCS without allocating an m*n matrix. Rows are dropped before
+// recursion; the source slices and output are borrowed, even for repeated lines.
+fn hirschberg_ops<'a>(old: &'a [String], new: &'a [String], ops: &mut Vec<DiffOp<'a>>) {
+    if old.is_empty() {
+        ops.extend(new.iter().map(|text| DiffOp {
+            kind: DiffOpKind::Add,
+            text,
+        }));
+    } else if old.len() == 1 {
+        if let Some(index) = new.iter().position(|line| line == &old[0]) {
+            ops.extend(new[..index].iter().map(|text| DiffOp {
+                kind: DiffOpKind::Add,
+                text,
+            }));
+            ops.push(DiffOp {
+                kind: DiffOpKind::Equal,
+                text: &old[0],
+            });
+            ops.extend(new[index + 1..].iter().map(|text| DiffOp {
+                kind: DiffOpKind::Add,
+                text,
+            }));
+        } else {
+            ops.push(DiffOp {
+                kind: DiffOpKind::Remove,
+                text: &old[0],
+            });
+            ops.extend(new.iter().map(|text| DiffOp {
+                kind: DiffOpKind::Add,
+                text,
+            }));
+        }
+    } else if new.is_empty() {
+        ops.extend(old.iter().map(|text| DiffOp {
+            kind: DiffOpKind::Remove,
+            text,
+        }));
+    } else {
+        let middle = old.len() / 2;
+        let split = {
+            let forward = lcs_row(&old[..middle], new, false);
+            let backward = lcs_row(&old[middle..], new, true);
+            (0..=new.len())
+                .max_by_key(|&i| forward[i] + backward[new.len() - i])
+                .unwrap()
+        };
+        hirschberg_ops(&old[..middle], &new[..split], ops);
+        hirschberg_ops(&old[middle..], &new[split..], ops);
+    }
+}
+
+fn lcs_row(old: &[String], new: &[String], reverse: bool) -> Vec<usize> {
+    let mut row = vec![0; new.len() + 1];
+    for i in 0..old.len() {
+        let old_line = &old[if reverse { old.len() - 1 - i } else { i }];
+        let mut diagonal = 0;
+        for j in 0..new.len() {
+            let previous = row[j + 1];
+            let new_line = &new[if reverse { new.len() - 1 - j } else { j }];
+            row[j + 1] = if old_line == new_line {
+                diagonal + 1
+            } else {
+                row[j].max(previous)
+            };
+            diagonal = previous;
+        }
+    }
+    row
 }
 
 fn diff_lines(content: &str) -> Vec<String> {
@@ -1086,7 +1168,7 @@ pub fn list_dir(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<St
         .or_else(|| arguments.get("maxEntries"))
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
-        .unwrap_or(200)
+        .unwrap_or(40)
         .clamp(1, MAX_LIST_ENTRIES);
 
     let dir = resolve_tool_read_path(workspace, path)?;
@@ -1119,12 +1201,15 @@ pub fn list_dir(workspace: &NativeToolWorkspace, arguments: &Value) -> Result<St
                     .cmp(b.get("path").and_then(|v| v.as_str()).unwrap_or(""))
             })
     });
-    let truncated = entries.len() > max_entries;
+    let total_entries = entries.len();
+    let truncated = total_entries > max_entries;
     entries.truncate(max_entries);
 
     format_json(json!({
         "path": workspace_display_path(workspace, &dir),
         "entries": entries,
+        "total_entries": total_entries,
+        "returned_entries": entries.len(),
         "truncated": truncated
     }))
 }
@@ -2578,6 +2663,73 @@ mod tests {
         );
         assert_eq!(expand_glob_braces("*.rs"), vec!["*.rs".to_string()]);
         assert_eq!(expand_glob_braces("*.{rs}"), vec!["*.rs".to_string()]);
+    }
+
+    #[test]
+    fn diff_budget_exhaustion_reports_unknown_counts_without_changing_write_result() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = NativeToolWorkspace::project(
+            "test".into(),
+            "Test".into(),
+            Some(root.path().to_string_lossy().into_owned()),
+        );
+        let old = (0..2100).map(|i| format!("old {i}\n")).collect::<String>();
+        let new = (0..2100).map(|i| format!("new {i}\n")).collect::<String>();
+        fs::write(root.path().join("large.txt"), old).unwrap();
+        let result = write_file(&workspace, &json!({"path":"large.txt", "content":new})).unwrap();
+        assert!(result.ok);
+        assert!(!result.diff_complete);
+        assert!(result.diff.is_empty());
+        assert!(result.summary().contains("counts unavailable"));
+        assert_eq!(
+            fs::read_to_string(root.path().join("large.txt")).unwrap(),
+            new
+        );
+    }
+
+    #[test]
+    fn stale_write_snapshot_does_not_overwrite_external_changes() {
+        let root = std::env::temp_dir().join(format!("kivio_stale_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("file.txt");
+        fs::write(&target, "user updated this").unwrap();
+        let result = atomic_write_text(&target, "agent change", Some("previous content"));
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "user updated this");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn distant_local_edits_preserve_large_file_diff() {
+        let root = std::env::temp_dir().join(format!("kivio_diff_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let workspace = NativeToolWorkspace::project(
+            "test".into(),
+            "Test".into(),
+            Some(root.to_string_lossy().into_owned()),
+        );
+        let lines: Vec<_> = (0..1303).map(|i| format!("原始行 {i}\r\n")).collect();
+        let before = lines.concat();
+        fs::write(root.join("large.txt"), &before).unwrap();
+        let mut expected = before.clone();
+        let mut edits = Vec::new();
+        for (index, start) in [50, 250, 450, 650, 850, 1150].into_iter().enumerate() {
+            let count = if index < 2 { 4 } else { 3 };
+            let old = lines[start..start + count].concat();
+            let new = (0..5)
+                .map(|i| format!("替换 {index}-{i}\r\n"))
+                .collect::<String>();
+            expected = expected.replace(&old, &new);
+            edits.push(json!({"old_string": old, "new_string": new}));
+        }
+        let result = edit_file(&workspace, &json!({"path": "large.txt", "edits": edits})).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("large.txt")).unwrap(),
+            expected
+        );
+        assert_eq!((result.additions, result.removals), (30, 20));
+        assert_eq!(result.diff.matches("@@ -").count(), 6);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

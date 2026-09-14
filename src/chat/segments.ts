@@ -105,6 +105,7 @@ export function toolCallDiffStats(toolCall: ToolCallRecord): DiffStats | null {
 
   const structured = recordObject(toolCall.structured_content ?? toolCall.structuredContent)
   if (structured && !recordObject(structured.toolDraft)) {
+    if (structured.diff_complete === false) return null
     const files = Array.isArray(structured.files) ? structured.files.map(recordObject) : []
     if (typeof structured.additions === 'number' || typeof structured.removals === 'number' || files.length) {
       let additions = typeof structured.additions === 'number' ? structured.additions : 0

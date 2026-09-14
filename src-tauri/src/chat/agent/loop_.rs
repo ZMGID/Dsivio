@@ -83,6 +83,7 @@ pub(crate) struct RunState {
     /// `config.initial_anchor_*`（来自上一轮落盘 usage）是否仍可用：run 首次压缩检查前为 true；
     /// 一旦发生压缩即失效（回落纯估算，直到本轮模型调用产生新的 `last_step_usage`）。
     pub(crate) initial_anchor_valid: bool,
+    pub(crate) initial_request_identity: Option<crate::chat::model::usage_anchor::UsageRequestIdentity>,
     /// 本轮是否真正发生过 L2 压缩（摘要已写回 `runtime_messages`）。finalize 据此
     /// 把压缩后的完整历史回传到 `AgentRunResult.compacted_history`，让跨轮调用方
     /// 用压缩后的历史替换其累积副本（压缩真正跨轮生效，而非仅当轮发送视图瘦身）。
@@ -231,6 +232,10 @@ pub async fn run_agent_loop(
     host: &dyn AgentHost,
     executor: &dyn ToolExecutor,
 ) -> Result<AgentRunResult, String> {
+    let initial_request_identity = crate::chat::model::usage_anchor::UsageRequestIdentity::from_request(
+        &config.provider, &crate::chat::model::usage_anchor::request_view(
+            &config.model, &config.runtime_messages, &config.tools, config.builtin_web_search_active()),
+    );
     let mut state = RunState {
         runtime_messages: std::mem::take(&mut config.runtime_messages),
         tools: std::mem::take(&mut config.tools),
@@ -252,6 +257,7 @@ pub async fn run_agent_loop(
         last_step_usage: None,
         runtime_len_at_last_call: 0,
         initial_anchor_valid: true,
+        initial_request_identity,
         compacted: false,
         compaction_unresolved_rounds: 0,
         pending_compaction_boundary: None,

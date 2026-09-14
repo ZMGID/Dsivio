@@ -1053,12 +1053,17 @@ async fn compact_with_summary_model(
     message_id: &str,
     cancel: Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>>,
 ) -> CompactAttempt {
+    let max_output = match kind {
+        SummaryKind::History => summary_output_tokens(config_max_output_tokens),
+        SummaryKind::TurnPrefix => summary_output_tokens(config_max_output_tokens).min(4_096),
+    };
+    let limits = crate::chat::model_metadata::request_budget(provider, model, max_output);
     // 摘要**输入**预算（R1）：window * ratio，未知窗口用兜底常量。
-    let summary_input_budget = if window == 0 {
+    let summary_input_budget = (if window == 0 {
         SUMMARY_INPUT_BUDGET_FALLBACK_TOKENS
     } else {
         ((window as f32) * SUMMARY_INPUT_BUDGET_RATIO) as usize
-    };
+    }).min(limits.input);
     // 为固定开销（system prompt + 基底 prompt + anchored previous_summary + focus）
     // 预留预算（R4：previous_summary 不被裁掉），剩余给序列化旧段 head。
     let base_prompt = match kind {
@@ -1071,9 +1076,10 @@ async fn compact_with_summary_model(
         + previous_summary.map(estimate_tokens).unwrap_or(0)
         + focus.map(estimate_tokens).unwrap_or(0);
     // head 预算 = 总输入预算 - 固定开销；至少保留一点，避免开销吃光预算时退化为 0。
-    let head_budget = summary_input_budget
-        .saturating_sub(fixed_overhead)
-        .max(summary_input_budget / 4);
+    if fixed_overhead.saturating_add(32) >= summary_input_budget {
+        return CompactAttempt::Failed;
+    }
+    let head_budget = summary_input_budget.saturating_sub(fixed_overhead + 32);
 
     // 序列化旧段，超 head 预算时头尾裁剪（R2）；未超则原样（R5）。
     let serialized = clip_serialized_to_budget(serialized_old_segment, head_budget);
@@ -1083,11 +1089,9 @@ async fn compact_with_summary_model(
         json!({ "role": "user", "content": user_content }),
     ];
 
-    // 前缀摘要预算减半（对齐 pi：turn prefix 用 0.5×，历史摘要 0.8×——它只需覆盖半轮）。
-    let max_output = match kind {
-        SummaryKind::History => summary_output_tokens(config_max_output_tokens),
-        SummaryKind::TurnPrefix => summary_output_tokens(config_max_output_tokens).min(4_096),
-    };
+    if estimate_messages_tokens(&summary_request) > limits.input {
+        return CompactAttempt::Failed;
+    }
     // 流式调用：部分 provider（如 openai_responses 代理）只可靠服务流式，非流式会失败。
     let call = call_chat_completion_message_streamed(
         state,
@@ -1374,8 +1378,22 @@ fn empty_history_fallback_text(previous_summary: Option<&PreviousSummary>) -> St
 ///   ——压缩是优化，绝不让它失败掉整轮。
 ///
 /// `generated_api_messages`（持久化镜像）在任何分支都不被触碰。
-pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunState) -> Vec<Value> {
+pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunState, include_tools: bool) -> Result<Vec<Value>, String> {
     let config = env.config;
+    let active_tools = if include_tools { state.tools.as_slice() } else { &[] };
+    let request_view = crate::chat::model::usage_anchor::request_view(
+        &config.model, &state.runtime_messages, active_tools, config.builtin_web_search_active(),
+    );
+    if state.last_step_usage.as_ref().is_some_and(|usage| {
+        usage.request_identity.as_ref().is_none_or(|identity| !identity.applies_to(&config.provider, &request_view))
+    }) {
+        state.last_step_usage = None;
+        state.initial_anchor_valid = false;
+    }
+    if state.initial_anchor_valid {
+        state.initial_anchor_valid = state.initial_request_identity.as_ref()
+            .is_some_and(|identity| identity.applies_to(&config.provider, &request_view));
+    }
     // 先做无条件的图片收敛：与 token 预算无关，重复上传同一张图、以及无上限堆积的历史
     // 图片，任何情况下都是纯浪费，而 token 估算看不见它们（详见 `prune_image_parts`）。
     let saved_bytes = prune_image_parts(&mut state.runtime_messages, IMAGE_BYTES_BUDGET);
@@ -1388,31 +1406,29 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
     // 触发 / 摘要输入封顶都用同一个裸窗口，三处触发（落盘 / L2 / 手动）口径一致。
     let window = context_window_for_model(Some(&config.provider), &config.model).0;
     if window == 0 {
-        return state.runtime_messages.clone();
+        return Ok(state.runtime_messages.clone());
     }
     // 真实用量锚点口径（对齐 pi/opencode 的 ground-truth 优先）：有锚点时用 provider 实报的
     // 上次 prompt token 数 + 锚点响应起往后新增消息的字符估算；无锚点回落纯字符估算。
     // 纯估算仅用于没有有效实报的情况，不能覆盖已上报的用量。
-    let budget = (window as f32 * AUTO_COMPACT_RATIO) as usize;
+    let limits = crate::chat::model_metadata::request_budget(&config.provider, &config.model, config.max_output_tokens);
+    let budget = ((window as f32 * AUTO_COMPACT_RATIO) as usize).min(limits.input);
     // 纯字符估算 = 消息 + **工具 schema**（对齐 pi/footer 的兜底口径：pi 兜底含 system+每工具+消息；
     // Kivio footer 也含 `estimate_tool_segments`）。工具定义随每次请求发送、provider 会计入，漏算会
     // 让无锚点的首轮低估数千 token、压缩过晚——故这里补上（与 footer `count_tokens_in_value` 同口径，
     // 都基于 `estimate_value_tokens(tool.to_openai_tool())`）。
-    // 按「工具名集合哈希」做轮间缓存：每轮为上百个工具重建整份 schema JSON 只为估个
-    // token 数太浪费；工具集只在 Skill 激活时变（同名工具的 schema run 内稳定）。
+    // Cache by the full advertised schema: same-name schema updates also change input.
     let tool_schema_tokens = {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        for tool in &state.tools {
-            tool.name.hash(&mut hasher);
+        for tool in active_tools {
+            tool.to_openai_tool().to_string().hash(&mut hasher);
         }
         let fingerprint = hasher.finish();
         match state.tool_schema_tokens_cache {
             Some((cached_fingerprint, cached)) if cached_fingerprint == fingerprint => cached,
             _ => {
-                let estimated: usize = state
-                    .tools
-                    .iter()
+                let estimated: usize = active_tools.iter()
                     .map(|tool| estimate_value_tokens(&tool.to_openai_tool()))
                     .sum();
                 state.tool_schema_tokens_cache = Some((fingerprint, estimated));
@@ -1428,7 +1444,8 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
             .runtime_len_at_last_call
             .min(state.runtime_messages.len());
         (
-            super::context_estimate::anchor_total_tokens(usage, &config.provider.api_format),
+            super::context_estimate::anchor_total_tokens(usage, usage.request_identity.as_ref()
+                .map(|identity| identity.api_format.as_str()).unwrap_or(&config.provider.api_format)),
             estimate_messages_tokens(&state.runtime_messages[start..]),
         )
     } else if state.initial_anchor_valid {
@@ -1457,7 +1474,7 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
     if estimated <= budget {
         // 未超预算：本步无需压缩。重置 anti-thrashing 计数（Gap 2）——上下文已回到预算内。
         state.compaction_unresolved_rounds = 0;
-        return state.runtime_messages.clone();
+        return Ok(state.runtime_messages.clone());
     }
 
     eprintln!(
@@ -1469,11 +1486,24 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
 
     // 受保护近期窗口默认 20k token，但不得超过压缩预算——否则小窗口模型上整段历史会被近期窗口
     // 吞掉，没有可摘要的旧段，压缩永远救不了超窗。
-    let keep_tokens = RECENT_KEEP_TOKENS.min(budget);
+    let fixed_tokens = tool_schema_tokens.saturating_add(estimate_messages_tokens(
+        &state.runtime_messages.iter().filter(|m| m.get("role").and_then(Value::as_str) == Some("system"))
+            .cloned().collect::<Vec<_>>()));
+    if fixed_tokens >= limits.input {
+        env.host.emit_compaction_status(&config.conversation_id, "failed", Some("agent_loop"), None);
+        return Err(format!("Context budget exceeded: fixed instructions/tools need about {fixed_tokens} tokens; input budget {}, output reserve {} (estimated metadata: {}). Reduce fixed context or output allocation.", limits.input, limits.output_reserve, limits.estimated));
+    }
+    let message_budget = budget.saturating_sub(tool_schema_tokens);
+    let summary_reserve = summary_output_tokens(
+        chat_max_output_tokens_for_model(Some(&config.provider), &config.model).unwrap_or(SUMMARY_OUTPUT_TOKENS)
+    ) as usize;
+    let keep_tokens = RECENT_KEEP_TOKENS.min(message_budget
+        .saturating_sub(fixed_tokens.saturating_sub(tool_schema_tokens))
+        .saturating_sub(summary_reserve.min(message_budget / 2)));
 
     // Microcompact（R-1）：先尝试把旧段工具结果降级成标记，够了就跳过昂贵的 LLM 摘要
     // （对齐 Claude Code "能拖就拖、便宜优先"）。仅当降级足以回到预算内才走此分支。
-    if let Some(degraded) = microcompact_send_view(&state.runtime_messages, keep_tokens, budget) {
+    if let Some(degraded) = microcompact_send_view(&state.runtime_messages, keep_tokens, message_budget) {
         let after = estimate_messages_tokens(&degraded);
         eprintln!(
             "Chat context microcompaction: est {estimated} -> {after} tokens (skipped summary)"
@@ -1490,7 +1520,9 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
             Some("agent_loop"),
             None,
         );
-        return degraded;
+        env.host.emit_context_usage_live(&config.conversation_id,
+            after.saturating_add(tool_schema_tokens) as u64, None, Some(window as u64));
+        return Ok(degraded);
     }
 
     // 降级不足以回到预算内——走重型 LLM 摘要。取消 future 只在这条路径需要。
@@ -1517,9 +1549,9 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
     )
     .await;
 
-    match compacted {
+    let send_view = match compacted {
         CompactOutcome::Compacted(compacted, summary_text) => {
-            let after = estimate_messages_tokens(&compacted);
+            let after = estimate_messages_tokens(&compacted).saturating_add(tool_schema_tokens);
             eprintln!("Chat context compaction: est {estimated} -> {after} tokens");
             state.runtime_messages = compacted.clone();
             state.compacted = true;
@@ -1629,7 +1661,17 @@ pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunSt
             );
             state.runtime_messages.clone()
         }
+    };
+    let after = if state.compacted {
+        estimate_messages_tokens(&send_view).saturating_add(tool_schema_tokens)
+    } else { estimated };
+    if after > limits.input {
+        return Err(format!("Context budget exceeded after compaction: {after} tokens, input budget {}, output reserve {} (estimated metadata: {}).", limits.input, limits.output_reserve, limits.estimated));
     }
+    if state.compacted {
+        env.host.emit_context_usage_live(&config.conversation_id, after as u64, None, Some(window as u64));
+    }
+    Ok(send_view)
 }
 
 /// 手动压缩的保底切分（R4）：token 尾窗覆盖全部消息（无旧段）时，`/compact` 不该直接报

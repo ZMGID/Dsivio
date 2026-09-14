@@ -45,7 +45,7 @@ pub(crate) async fn synthesis_step(
         AgentPhase::Synthesis
     };
     // 循环内上下文治理：超限时先 snip / 摘要（与 planning_step 相同的发送视图）。
-    let send_messages = super::compaction::maybe_compact_send_view(env, state).await;
+    let send_messages = super::compaction::maybe_compact_send_view(env, state, false).await?;
     let synthesis_stream_policy = if state.tool_records.is_empty() {
         AgentStreamPolicy::SynthesisAlwaysDone
     } else {
@@ -348,7 +348,10 @@ fn silent_overflow_aware_kind(
 async fn recover_overflow_compact_and_retry(env: &LoopEnv<'_>, state: &mut RunState) -> String {
     let config = env.config;
     // 压缩一次(L1 snip → L2 摘要);返回压缩后的发送视图,并已写回 state.runtime_messages。
-    let compacted = super::compaction::maybe_compact_send_view(env, state).await;
+    let compacted = match super::compaction::maybe_compact_send_view(env, state, false).await {
+        Ok(messages) => messages,
+        Err(error) => return error,
+    };
     // 恢复重试内部有 send_with_retry 多次退避——必须接取消，否则用户点停止后卡到重试耗尽。
     let result = tokio::select! {
         result = call_chat_completion_message_with_usage(

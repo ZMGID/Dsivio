@@ -267,6 +267,8 @@ pub struct GenerateRequest {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelUsage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_identity: Option<super::usage_anchor::UsageRequestIdentity>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,

@@ -1153,30 +1153,20 @@ where
         .map_err(|err| format!("File mutation task failed: {err}"))?
 }
 
-/// 文件变更结果给模型的 diff 最多带多少行（对齐 clawspring 的 80 行裁剪）。
-const FILE_MUTATION_DIFF_MAX_LINES: usize = 80;
-
 pub fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCallResult, String> {
     let summary = result.summary();
     let mut content = summary;
     if !result.warnings.is_empty() {
         content = format!("{}\n{}", content, result.warnings.join("\n"));
     }
-    // 把裁剪后的 unified diff 直接回显给模型：模型在结果里"看到"自己实际改了什么，
-    // 能立即发现写歪。完整 diff 始终在 structured_content 里给前端渲染。
-    if !result.diff.trim().is_empty() {
-        let lines: Vec<&str> = result.diff.lines().collect();
-        if lines.len() > FILE_MUTATION_DIFF_MAX_LINES {
-            let clipped = lines[..FILE_MUTATION_DIFF_MAX_LINES].join("\n");
-            content = format!(
-                "{}\n\n{}\n[... diff clipped: showing first {FILE_MUTATION_DIFF_MAX_LINES} of {} lines ...]",
-                content,
-                clipped,
-                lines.len()
-            );
-        } else {
-            content = format!("{}\n\n{}", content, result.diff);
-        }
+    // Review payload stays structured; model receipts never echo generated code.
+    if !result.diagnostics.is_empty() {
+        content.push_str("\nDiagnostics: ");
+        content.push_str(&serde_json::to_string(&result.diagnostics)
+            .map_err(|err| format!("Serialize diagnostics failed: {err}"))?);
+    }
+    if !result.ok {
+        content = format!("Not completed: {content}");
     }
     let is_error = !result.ok;
     let structured = serde_json::to_value(&result)
@@ -1298,6 +1288,24 @@ async fn resolve_native_workspace(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mutation_receipt_keeps_diff_only_in_review_metadata() {
+        let root = std::env::temp_dir().join(format!("kivio_receipt_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = crate::native_tools::NativeToolWorkspace::project(
+            "test".into(), "Test".into(), Some(root.to_string_lossy().into_owned()),
+        );
+        let result = crate::native_tools::write_file(&workspace, &serde_json::json!({
+            "path": "receipt.txt", "content": "UNIQUE_CODE_BODY\n".repeat(200)
+        })).unwrap();
+        let receipt = super::file_mutation_tool_result(result).unwrap();
+        assert!(!receipt.content.contains("UNIQUE_CODE_BODY"));
+        assert!(receipt.content.contains("receipt.txt"));
+        assert_eq!(receipt.structured_content.as_ref().unwrap()["additions"], 200);
+        assert!(receipt.structured_content.as_ref().unwrap()["diff"].as_str().unwrap().contains("+UNIQUE_CODE_BODY"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
     use crate::native_tools::ReadFileResult;
 

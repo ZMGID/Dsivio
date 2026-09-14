@@ -328,6 +328,95 @@ struct RecordingExecutor {
     events: Arc<Mutex<Vec<String>>>,
 }
 
+struct NativeMutationExecutor(crate::native_tools::NativeToolWorkspace);
+
+impl ToolExecutor for NativeMutationExecutor {
+    fn call<'a>(
+        &'a self,
+        _ctx: &'a ToolExecutionContext<'a>,
+        tool: &'a ChatToolDefinition,
+        arguments: Value,
+        _cache: Option<&'a mut skills::SkillRunCache>,
+    ) -> super::super::execute::ToolExecutorFuture<'a> {
+        Box::pin(async move {
+            let result = match tool.name.as_str() {
+                "write" => crate::native_tools::write_file(&self.0, &arguments),
+                "edit" => crate::native_tools::edit_file(&self.0, &arguments),
+                _ => Err("unexpected tool".into()),
+            }?;
+            crate::mcp::registry::file_mutation_tool_result(result)
+        })
+    }
+}
+
+#[tokio::test]
+async fn native_file_receipts_are_short_on_the_wire_and_keep_review_diff() {
+    let root = tempfile::tempdir().unwrap();
+    let call = |id: &str, name: &str, arguments: Value| {
+        MockResponse::Sse(vec![
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":id,
+            "function":{"name":name,"arguments":arguments.to_string()}}]}}]})
+            .to_string(),
+            "[DONE]".into(),
+        ])
+    };
+    let server = MockModelServer::start(vec![
+        call("write1", "write", serde_json::json!({"path":"fixture.txt", "content":"BODY_MARKER\n".repeat(200)})),
+        call("edit1", "edit", serde_json::json!({"path":"fixture.txt", "edits":[{
+            "old_string":"BODY_MARKER\n".repeat(200), "new_string":"FINAL_MARKER\n"
+        }]})),
+        MockResponse::Sse(vec![r#"{"choices":[{"delta":{"content":"done"}}]}"#.into(),
+            r#"{"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010}}"#.into(), "[DONE]".into()]),
+    ]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.tools = vec![
+        native_write_file_tool(),
+        crate::mcp::types::native_edit_file_tool(),
+    ];
+    config.effective_chat_tools.max_tool_rounds = Some(5);
+    let result = run_agent_loop(
+        config,
+        &TestHost::default(),
+        &NativeMutationExecutor(crate::native_tools::NativeToolWorkspace::project(
+            "test".into(),
+            "Test".into(),
+            Some(root.path().to_string_lossy().into_owned()),
+        )),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("fixture.txt")).unwrap(),
+        "FINAL_MARKER\n"
+    );
+    assert!(result
+        .last_step_usage
+        .as_ref()
+        .unwrap()
+        .request_identity
+        .is_some());
+    let bodies = server.captured_bodies.lock().unwrap();
+    let last: Value = serde_json::from_str(bodies.last().unwrap()).unwrap();
+    let receipts: Vec<_> = last["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| message["content"].as_str().unwrap())
+        .collect();
+    assert_eq!(receipts.len(), 2);
+    assert!(receipts
+        .iter()
+        .all(|text| text.len() < 150 && !text.contains("MARKER")));
+    assert!(result.tool_records.iter().all(|record| record
+        .structured_content
+        .as_ref()
+        .is_some_and(|value| value["diff"]
+            .as_str()
+            .is_some_and(|diff| diff.contains("MARKER")))));
+}
+
 impl RecordingExecutor {
     fn max_active(&self) -> usize {
         self.max_active.load(Ordering::SeqCst)
@@ -1970,18 +2059,19 @@ async fn run_loop_l2_compacts_old_history_keeps_current_round_raw() {
     ]);
     let state = test_app_state();
     let mut config = test_run_config(&state, &server.base_url);
-    // 600 token 窗口（预算 510）：旧工具输出先经 microcompact，再由大段非工具历史确保
+    // 4000 token 窗口包含工具和输出预留：由大段非工具历史确保
     // 发送视图仍超预算，稳定进入 Layer2 摘要。
     config.provider.model_overrides.insert(
         "test-model".to_string(),
         crate::settings::ModelInfo {
-            context_window: Some(600),
+            context_window: Some(4000),
+            max_output: Some(512),
             ..Default::default()
         },
     );
     // 预填早前轮次历史：大段普通对话不受 tool-result microcompact 影响；超大 tool 输出
     // 仍保留，用来验证 L2 会替换旧段且不动本轮新工具结果。
-    let large_non_tool = "D".repeat(9_000);
+    let large_non_tool = "D".repeat(18_000);
     config.runtime_messages.push(serde_json::json!({
         "role": "user", "content": large_non_tool
     }));
@@ -2163,6 +2253,38 @@ async fn run_loop_no_anchor_skips_compaction_when_estimate_below_budget() {
 /// （`context_window_for_model`），所以实时通道零额外计算。这条断言两件事：
 /// 一轮里**多次**上报（多次工具往返 ⇒ 多轮 ⇒ 多次上报），且数字单调不减。
 #[tokio::test]
+async fn run_loop_reserves_output_and_does_not_send_an_unfixable_prompt() {
+    let server = MockModelServer::start(vec![MockResponse::Sse(vec![
+        r#"{"choices":[{"delta":{"content":"should not be requested"}}]}"#.into(),
+        "[DONE]".into(),
+    ])]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.provider.model_overrides.insert(
+        "test-model".into(),
+        crate::settings::ModelInfo {
+            context_window: Some(1000),
+            ..Default::default()
+        },
+    );
+    config.max_output_tokens = 900;
+    config.tools.clear();
+    config.runtime_messages = vec![
+        serde_json::json!({"role":"system", "content": "fixed instruction ".repeat(70)}),
+        serde_json::json!({"role":"user", "content":"hello"}),
+    ];
+    let result = run_agent_loop(config, &TestHost::default(), &RecordingExecutor::default()).await;
+    assert!(
+        result.is_err(),
+        "an unfixable request must report its budget constraint"
+    );
+    assert!(
+        server.captured_bodies.lock().unwrap().is_empty(),
+        "do not send a known over-budget prompt"
+    );
+}
+
+#[tokio::test]
 async fn run_loop_context_reported_anchor_wins_then_missing_usage_falls_back() {
     let server = MockModelServer::start(vec![
         MockResponse::Sse(planning_tool_call_sse_events()),
@@ -2182,8 +2304,14 @@ async fn run_loop_context_reported_anchor_wins_then_missing_usage_falls_back() {
         .expect("run completes");
     let ticks = host.recorded_context_ticks();
     assert!(ticks.len() >= 2, "{ticks:?}");
-    assert_eq!(ticks[0].0, 10, "larger estimate must not override reported usage");
-    assert!(ticks[1].0 > 10, "missing usage must not retain a stale anchor: {ticks:?}");
+    assert_eq!(
+        ticks[0].0, 10,
+        "larger estimate must not override reported usage"
+    );
+    assert!(
+        ticks[1].0 > 10,
+        "missing usage must not retain a stale anchor: {ticks:?}"
+    );
     assert!(result.last_step_usage.is_none());
 }
 
@@ -2234,11 +2362,12 @@ async fn run_loop_reports_live_context_usage_each_round() {
             .all(|(used, window)| *used > 0 && *window == Some(200_000)),
         "分子必须非零、分母必须是模型窗口：{ticks:?}"
     );
-    // 单调不减：工具结果进入历史后占用只会涨（压缩才会降，本例不触发）。
-    assert!(
-        ticks.windows(2).all(|pair| pair[1].0 >= pair[0].0),
-        "过程中的占用不该往回跳：{ticks:?}"
-    );
+    // Synthesis omits tool schemas; the live estimate must reflect that actual
+    // request rather than artificially remain monotonic across different views.
+    assert!(ticks[1].0 < ticks[0].0);
+    let bodies = server.captured_bodies();
+    let synthesis: Value = serde_json::from_str(bodies.last().unwrap()).unwrap();
+    assert!(synthesis.get("tools").is_none());
 }
 
 /// Crash-safety: after a tool round that returns `Continue` (more rounds
@@ -2686,11 +2815,12 @@ async fn run_loop_layer2_replaces_old_history_with_summary() {
     config.provider.model_overrides.insert(
         "test-model".to_string(),
         crate::settings::ModelInfo {
-            context_window: Some(600),
+            context_window: Some(4000),
+            max_output: Some(512),
             ..Default::default()
         },
     );
-    let large_non_tool = "E".repeat(9_000);
+    let large_non_tool = "E".repeat(18_000);
     config.runtime_messages.push(serde_json::json!({
         "role": "user", "content": large_non_tool
     }));
@@ -2778,11 +2908,12 @@ async fn run_loop_compaction_summary_streams_on_streaming_only_provider() {
     config.provider.model_overrides.insert(
         "test-model".to_string(),
         crate::settings::ModelInfo {
-            context_window: Some(600),
+            context_window: Some(4000),
+            max_output: Some(512),
             ..Default::default()
         },
     );
-    let large_non_tool = "F".repeat(9_000);
+    let large_non_tool = "F".repeat(18_000);
     config.runtime_messages.push(serde_json::json!({
         "role": "user", "content": large_non_tool
     }));
@@ -2846,7 +2977,7 @@ async fn run_loop_compaction_summary_streams_on_streaming_only_provider() {
 /// the turn gracefully with the gathered tool results — a degraded answer, not
 /// an `Err`, and a BOUNDED number of model calls.
 #[tokio::test]
-async fn run_loop_compaction_thrash_degrades_with_gathered_results() {
+async fn run_loop_failed_compaction_stops_before_sending_over_budget_history() {
     let overflow_400 = || {
         MockResponse::Status(
             400,
@@ -2872,7 +3003,8 @@ async fn run_loop_compaction_thrash_degrades_with_gathered_results() {
     config.provider.model_overrides.insert(
         "test-model".to_string(),
         crate::settings::ModelInfo {
-            context_window: Some(600),
+            context_window: Some(4000),
+            max_output: Some(512),
             ..Default::default()
         },
     );
@@ -2882,7 +3014,7 @@ async fn run_loop_compaction_thrash_degrades_with_gathered_results() {
     // Pre-fill oversized ordinary history plus an earlier tool output and a small
     // recent tail. The summary call always errors, so the send view never shrinks
     // enough and unresolved_rounds climbs to the limit.
-    let large_non_tool = "G".repeat(9_000);
+    let large_non_tool = "G".repeat(18_000);
     config.runtime_messages.push(serde_json::json!({
         "role": "user", "content": large_non_tool
     }));
@@ -2904,35 +3036,20 @@ async fn run_loop_compaction_thrash_degrades_with_gathered_results() {
     let host = TestHost::default();
     let executor = RecordingExecutor::default();
 
-    let result = run_agent_loop(config, &host, &executor)
-        .await
-        .expect("anti-thrashing must end the turn, not bubble Err");
-
-    // Degraded but completed via the recovery path — not an error, not a loop.
-    assert_eq!(result.stream_outcome, "compaction_thrash");
-    // The gathered round-1 tool result is surfaced in the degraded answer.
-    assert_eq!(result.tool_records.len(), 1);
-    assert!(matches!(
-        result.tool_records[0].status,
-        ToolCallStatus::Success
-    ));
+    let result = run_agent_loop(config, &host, &executor).await;
     assert!(
-        result.content.contains("result:read"),
-        "degraded answer must carry the gathered tool result, got: {}",
-        result.content
+        result.is_err(),
+        "failed compaction must not send the still-over-budget planning request"
     );
-    // BOUNDED model calls: summary#1 + planning#1 + summary#2 = exactly 3.
-    // The thrash guard fires before a 2nd planning call, so we never see the
-    // 6× failed-compaction loop from the regression.
+    assert!(executor.events().is_empty());
     assert_eq!(
         server.captured_bodies().len(),
-        3,
-        "anti-thrashing must bound model calls (summary + planning + summary), no repeat-fail loop"
+        1,
+        "only the failed summary request is allowed"
     );
+    assert!(server.captured_bodies()[0].contains("context summarization assistant"));
 }
 
-/// Under-budget runs must not be touched by compaction: the request body
-/// carries the tool output verbatim.
 #[tokio::test]
 async fn run_loop_under_budget_sends_messages_untouched() {
     let server = MockModelServer::start(vec![

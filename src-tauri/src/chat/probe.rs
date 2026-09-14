@@ -592,6 +592,7 @@ mod tests {
     #[test]
     fn usage_projection_keeps_every_field() {
         let usage = crate::chat::model::ModelUsage {
+            request_identity: None,
             input_tokens: Some(1),
             output_tokens: Some(2),
             total_tokens: Some(3),

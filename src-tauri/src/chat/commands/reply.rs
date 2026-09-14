@@ -813,7 +813,10 @@ pub(super) async fn complete_assistant_reply_inner(
     // 真实用量锚点：run 首次压缩检查前，用上一轮落盘 usage 把上下文占用锚定到 provider 实报值
     // （对齐 pi/opencode 的 ground-truth 口径，避免字符估算低估导致压缩过晚/超窗）。
     let (initial_anchor_total_tokens, initial_anchor_trailing_estimate) =
-        resolve_usage_anchor(conversation, Some(&provider));
+        resolve_usage_anchor(conversation, Some(&provider),
+            &crate::chat::model::usage_anchor::request_view(&resolved_model, &runtime_messages, &tools,
+                web_search_mode == crate::chat::types::WebSearchMode::Builtin
+                    && crate::chat::model_metadata::builtin_web_search_supported(&provider)));
     let result = crate::chat::agent::run_agent_loop(
         crate::chat::agent::AgentRunConfig {
             state: state.inner(),

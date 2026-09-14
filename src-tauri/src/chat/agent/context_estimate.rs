@@ -102,6 +102,7 @@ mod tests {
             cached_input_tokens: cached,
             cache_creation_input_tokens: cache_create,
             reasoning_tokens: None,
+            request_identity: None,
             context_window_tokens: None,
         }
     }

@@ -962,7 +962,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     }
     if has_write || has_edit {
         bullets.push(
-            "Touch files only when the user explicitly asks to save/modify/delete local files or gives a target path: edit for small edits, write for new files or whole-file overwrites. If asked for a code block without saving, answer inline. After a write, state the path briefly; do not repeat the file content.".to_string(),
+            "For authorized file work, create new files with write; default to edit for existing files, including multiple distant replacements in one call. Preserve unrelated code. Whole-file replacement is appropriate for an intentional full rewrite, not as a shortcut after a failed edit: re-read the affected range and fix the match first. If asked only for an inline code block, answer inline. After a write, state the path briefly; do not repeat the file content.".to_string(),
         );
     }
     if has_write || has_edit || has_bash || has_memory {
@@ -977,6 +977,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
         });
     }
     if has_bash {
+        bullets.push("Scope searches to relevant directories and patterns with bounded results; read code by offset/limit. Track exact paths created by this task. Verify cleanup against those paths only, never enumerate the shared temporary directory to guess ownership. For large listings return counts and a small sample; retain error diagnostics and follow the full-log path when more detail is needed.".to_string());
         // 运行时取值,让同一份 prompt 在不同平台都说真话。Windows 上 bash 实际选哪个
         // shell 是运行期探测的(见 native_tools::find_git_bash / run_command_shell_hint),
         // 这里用同一个探测结果分支措辞,保证系统提示词与 run_command 工具描述(R4,

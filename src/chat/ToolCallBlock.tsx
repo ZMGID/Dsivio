@@ -61,6 +61,7 @@ export interface ToolCallBlockProps {
 }
 
 interface FileMutationFile {
+  diff_complete?: boolean
   path: string
   operation: string
   bytesWritten?: number
@@ -71,6 +72,7 @@ interface FileMutationFile {
 }
 
 interface FileMutationStructuredContent {
+  diff_complete?: boolean
   ok?: boolean
   operation: string
   targetTouched?: boolean
@@ -927,6 +929,7 @@ function normalizeFileMutationFile(value: unknown): FileMutationFile | null {
     operation: typeof file.operation === 'string' ? file.operation : 'edit',
     bytesWritten: numberValue(file.bytesWritten),
     bytes_written: numberValue(file.bytes_written),
+    diff_complete: typeof file.diff_complete === 'boolean' ? file.diff_complete : undefined,
     additions: numberValue(file.additions),
     removals: numberValue(file.removals),
     diff: typeof file.diff === 'string' ? file.diff : '',
@@ -1187,6 +1190,7 @@ function structuredFileMutation(toolCall: ToolCallRecord): FileMutationStructure
     files,
     bytesWritten: numberValue(structured.bytesWritten),
     bytes_written: numberValue(structured.bytes_written),
+    diff_complete: typeof structured.diff_complete === 'boolean' ? structured.diff_complete : undefined,
     additions: numberValue(structured.additions),
     removals: numberValue(structured.removals),
     diff: typeof structured.diff === 'string' ? structured.diff : '',
@@ -1196,6 +1200,7 @@ function structuredFileMutation(toolCall: ToolCallRecord): FileMutationStructure
 }
 
 function fileMutationStats(mutation: FileMutationStructuredContent): string {
+  if (mutation.diff_complete === false) return '差异未完整计算'
   return `+${mutation.additions ?? 0} -${mutation.removals ?? 0}`
 }
 
@@ -1248,6 +1253,7 @@ function fileMutationInlineStats(
   toolCall: ToolCallRecord,
   mutation: FileMutationStructuredContent | null,
 ): { additions: number; removals: number } | null {
+  if (mutation?.diff_complete === false) return null
   if (mutation) return { additions: mutation.additions ?? 0, removals: mutation.removals ?? 0 }
   return toolCallDiffStats(toolCall)
 }
@@ -1316,12 +1322,12 @@ function FileMutationDetails({ mutation }: { mutation: FileMutationStructuredCon
                   {fileOperationLabel(file.operation)}
                 </span>
                 <span className="min-w-0 truncate">{cleanWinPath(file.path)}</span>
-                <span className="shrink-0 tabular-nums text-emerald-600 dark:text-emerald-400">
+                {file.diff_complete === false ? <span>差异未完整计算</span> : <><span className="shrink-0 tabular-nums text-emerald-600 dark:text-emerald-400">
                   +{file.additions}
                 </span>
                 <span className="shrink-0 tabular-nums text-red-500/80 dark:text-red-400/80">
                   -{file.removals}
-                </span>
+                </span></>}
               </div>
             ))}
           </div>

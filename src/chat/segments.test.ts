@@ -16,7 +16,18 @@ import {
   userFollowUpId,
   userSteerId,
   userSteerText,
+  toolCallDiffStats,
 } from './segments'
+
+it('does not present incomplete diff counts as exact or fall back to edit arguments', () => {
+  const call = { name: 'edit', status: 'success', arguments: { path: 'large.txt', edits: [
+    { old_string: 'a', new_string: 'b\nc' },
+  ] }, structured_content: { operation: 'edit', diff_complete: false, additions: 0, removals: 0 } } as unknown as ToolCallRecord
+  expect(toolCallDiffStats(call)).toBeNull()
+  expect(toolCallDiffStats({ ...call, structured_content: {
+    operation: 'edit', diff_complete: true, additions: 2, removals: 1,
+  } })).toEqual({ additions: 2, removals: 1 })
+})
 
 function segment(partial: Partial<ChatMessageSegment> & Pick<ChatMessageSegment, 'id' | 'kind' | 'order'>): ChatMessageSegment {
   return {

@@ -286,7 +286,10 @@ pub struct CapturedCommand {
     pub stderr: String,
 }
 
-fn deny_unsafe_command(command: &str, allow_host_python_package_install: bool) -> Result<(), String> {
+fn deny_unsafe_command(
+    command: &str,
+    allow_host_python_package_install: bool,
+) -> Result<(), String> {
     let lowered = command.to_ascii_lowercase();
     for denied in COMMAND_DENYLIST {
         if lowered.contains(denied) {
@@ -425,36 +428,6 @@ pub async fn run_command(
 /// first place.
 pub(super) const MAX_INLINE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024;
 
-/// Tail-truncation caps for the inline body: keep the END of the output (where
-/// errors and final results live), bounded by both a line count and a byte size,
-/// whichever hits first. Same budget as `read` — one shared pair of numbers so
-/// no tool can be the one that forgot its output ceiling (pi `truncate.ts`).
-const TAIL_MAX_LINES: usize = super::TOOL_OUTPUT_MAX_LINES;
-const TAIL_MAX_BYTES: usize = super::TOOL_OUTPUT_MAX_BYTES;
-
-/// Keep the LAST `TAIL_MAX_LINES` lines / `TAIL_MAX_BYTES` bytes of `text`,
-/// dropping earlier lines. Returns `(kept_text, dropped_line_count)` where a
-/// non-zero count means truncation happened. Whole lines only (never a partial
-/// line), and the byte budget is applied after the line budget.
-fn tail_truncate(text: &str) -> (String, usize) {
-    let lines: Vec<&str> = text.lines().collect();
-    let total = lines.len();
-    // First, cap by line count (keep the tail).
-    let mut start = total.saturating_sub(TAIL_MAX_LINES);
-    // Then walk backward dropping leading lines until the kept tail fits the byte
-    // budget (counting the trailing newline each line contributes).
-    let mut kept_bytes: usize = lines[start..].iter().map(|line| line.len() + 1).sum();
-    while kept_bytes > TAIL_MAX_BYTES && start < total {
-        kept_bytes -= lines[start].len() + 1;
-        start += 1;
-    }
-    if start == 0 {
-        return (text.to_string(), 0);
-    }
-    let kept = lines[start..].join("\n");
-    (kept, start)
-}
-
 fn offload_large_output(formatted: String) -> String {
     if formatted.len() <= MAX_INLINE_COMMAND_OUTPUT_BYTES {
         return formatted;
@@ -471,17 +444,25 @@ fn offload_large_output(formatted: String) -> String {
         Err(_) => None,
     };
 
-    // Keep the END of the output — errors and final results live there.
-    let (tail, dropped) = tail_truncate(&formatted);
-    let mut out = String::new();
-    if let Some(note) = log_note {
-        out.push_str(&note);
-        out.push('\n');
+    // The full log is recoverable. Keep bounded head/tail diagnostics rather
+    // than carrying up to 50 KiB again after writing the same log to disk.
+    let mut head_end = formatted.len().min(2_048);
+    while !formatted.is_char_boundary(head_end) {
+        head_end -= 1;
     }
-    if dropped > 0 {
-        out.push_str(&format!("[... {dropped} earlier lines truncated ...]\n"));
+    let mut tail_start = formatted.len().saturating_sub(6_144);
+    while !formatted.is_char_boundary(tail_start) {
+        tail_start += 1;
     }
-    out.push_str(&tail);
+    let mut out = log_note
+        .unwrap_or_else(|| "[Full log could not be saved; inline output truncated.]".into());
+    out.push('\n');
+    out.push_str(&formatted[..head_end]);
+    out.push_str(&format!(
+        "\n[... {} bytes omitted ...]\n",
+        tail_start.saturating_sub(head_end)
+    ));
+    out.push_str(&formatted[tail_start..]);
     out
 }
 
@@ -920,16 +901,10 @@ pub async fn bash_output(
     loop {
         let (status, new_text, new_offset, command) =
             snapshot_bash_output(state, job_id, since_offset, conversation_id)?;
-        let ready = status.is_terminal()
-            || wait_ms == 0
-            || tokio::time::Instant::now() >= deadline;
+        let ready = status.is_terminal() || wait_ms == 0 || tokio::time::Instant::now() >= deadline;
         if ready {
             return Ok(format_bash_output(
-                job_id,
-                &command,
-                &status,
-                new_text,
-                new_offset,
+                job_id, &command, &status, new_text, new_offset,
             ));
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -938,11 +913,7 @@ pub async fn bash_output(
         ));
         if slice.is_zero() {
             return Ok(format_bash_output(
-                job_id,
-                &command,
-                &status,
-                new_text,
-                new_offset,
+                job_id, &command, &status, new_text, new_offset,
             ));
         }
         tokio::time::sleep(slice).await;
@@ -1119,9 +1090,7 @@ async fn exec_shell_command(
             }
         }
     } else {
-        let result = wait
-            .await
-            .map_err(|err| format!("Command failed: {err}"))?;
+        let result = wait.await.map_err(|err| format!("Command failed: {err}"))?;
         kill_on_cancel.disarm();
         result
     };
@@ -1828,8 +1797,9 @@ mod tests {
         assert!(result.starts_with("[full output:"));
         assert!(result.contains("kivio-bash-"));
         assert!(result.contains("complete log saved to"));
-        // The full body is still present inline (the loop truncates the middle).
-        assert!(result.contains(&big));
+        // Offloading must actually reduce the inline payload, including a single huge line.
+        assert!(result.len() < MAX_INLINE_COMMAND_OUTPUT_BYTES);
+        assert!(!result.contains(&big));
         // The referenced temp file exists and holds the full output; clean up.
         let path = result
             .lines()
@@ -2062,10 +2032,7 @@ mod tests {
 
     fn read_pid_file(path: &Path) -> Option<u32> {
         let raw = std::fs::read_to_string(path).ok()?;
-        raw.trim()
-            .trim_start_matches('\u{feff}')
-            .parse()
-            .ok()
+        raw.trim().trim_start_matches('\u{feff}').parse().ok()
     }
 
     fn process_is_running(pid: u32) -> bool {
@@ -2122,9 +2089,8 @@ mod tests {
         };
         #[cfg(not(target_os = "windows"))]
         let fut = {
-            let command = format!(
-                "echo $$ > '{leader_path}'; sleep 60 & echo $! > '{child_path}'; sleep 60"
-            );
+            let command =
+                format!("echo $$ > '{leader_path}'; sleep 60 & echo $! > '{child_path}'; sleep 60");
             exec_shell_command(build_shell_command(&command), dir.clone(), None, None)
         };
         // spawn+abort 才会真正 drop future；`tokio::pin!` 后 `drop(pin)` 只丢掉指针。
@@ -2229,48 +2195,9 @@ mod tests {
     }
 
     #[test]
-    fn tail_truncate_keeps_end_under_line_budget() {
-        let mut body = String::new();
-        for i in 0..(TAIL_MAX_LINES + 500) {
-            body.push_str(&format!("line {i}\n"));
-        }
-        let (kept, dropped) = tail_truncate(&body);
-        assert_eq!(dropped, 500, "first 500 lines dropped, tail kept");
-        let kept_lines: Vec<&str> = kept.lines().collect();
-        assert_eq!(kept_lines.len(), TAIL_MAX_LINES);
-        // The LAST line (where errors/results live) is preserved.
-        assert_eq!(
-            *kept_lines.last().unwrap(),
-            format!("line {}", TAIL_MAX_LINES + 500 - 1)
-        );
-        // The first kept line is line 500 (earlier lines were dropped).
-        assert_eq!(kept_lines[0], "line 500");
-    }
-
-    #[test]
-    fn tail_truncate_keeps_end_under_byte_budget() {
-        // Few lines but each huge → byte budget (not line budget) forces truncation.
-        let big_line = "z".repeat(20 * 1024);
-        let body = format!("{big_line}\n{big_line}\n{big_line}\nFINAL ERROR LINE\n");
-        let (kept, dropped) = tail_truncate(&body);
-        assert!(dropped > 0, "byte budget should drop leading huge lines");
-        assert!(kept.len() <= TAIL_MAX_BYTES + 32);
-        // The final line is always retained.
-        assert!(kept.ends_with("FINAL ERROR LINE"));
-    }
-
-    #[test]
-    fn tail_truncate_passes_small_output_through() {
-        let small = "a\nb\nc\n";
-        let (kept, dropped) = tail_truncate(small);
-        assert_eq!(dropped, 0);
-        assert_eq!(kept, "a\nb\nc\n");
-    }
-
-    #[test]
     fn offload_large_output_tail_truncates_and_marks() {
         let mut body = String::new();
-        for i in 0..(TAIL_MAX_LINES + 1000) {
+        for i in 0..(3000) {
             body.push_str(&format!(
                 "row {i} ----------------------------------------\n"
             ));
@@ -2280,10 +2207,10 @@ mod tests {
         // Full log path noted in the head.
         assert!(result.contains("complete log saved to"));
         // Tail-truncation marker present.
-        assert!(result.contains("earlier lines truncated"));
-        // The END of the output is kept (last row), not the head (row 0 dropped).
-        assert!(result.contains(&format!("row {}", TAIL_MAX_LINES + 1000 - 1)));
-        assert!(!result.contains("\nrow 0 -"));
+        assert!(result.contains("bytes omitted"));
+        // Preserve diagnostics at both ends.
+        assert!(result.contains(&format!("row {}", 3000 - 1)));
+        assert!(result.contains("\nrow 0 -"));
 
         // Clean up the temp log referenced in the note.
         if let Some(path) = result

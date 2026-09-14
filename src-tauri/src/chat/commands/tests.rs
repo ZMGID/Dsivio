@@ -2700,12 +2700,20 @@ fn test_settings_with_providers(provider_ids: &[&str]) -> Settings {
     settings
 }
 
+fn anchor_test_request() -> crate::chat::model::GenerateRequest {
+    crate::chat::model::usage_anchor::request_view("gpt-4o", &[
+        serde_json::json!({"role": "user", "content": "hi"})
+    ], &[], false)
+}
+
 /// 带 anchor_usage 的 assistant（openai_chat 口径：anchor_prompt = input_tokens）。
 fn assistant_with_anchor(id: &str, ts: i64, input_tokens: u64) -> ChatMessage {
     let mut m = test_chat_message(id, "assistant", "reply", ts);
     m.provider_id = Some("openai".to_string());
     m.anchor_usage = Some(crate::chat::model::ModelUsage {
         input_tokens: Some(input_tokens),
+        request_identity: crate::chat::model::usage_anchor::UsageRequestIdentity::from_request(
+            &test_provider("openai", "OpenAI", vec!["gpt-4o"]), &anchor_test_request()),
         output_tokens: Some(100),
         ..Default::default()
     });
@@ -2726,6 +2734,17 @@ fn boundary_at(created_at: i64) -> CompactionBoundaryRecord {
 }
 
 #[test]
+fn resolve_usage_anchor_rejects_legacy_unproven_usage() {
+    let mut conv = test_conversation_with_messages(vec![
+        test_chat_message("u1", "user", "hi", 1),
+        assistant_with_anchor("a1", 2, 100_000),
+    ]);
+    conv.messages[1].anchor_usage.as_mut().unwrap().request_identity = None;
+    let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
+    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
+}
+
+#[test]
 fn resolve_usage_anchor_reports_prompt_and_trailing() {
     let conv = test_conversation_with_messages(vec![
         test_chat_message("u1", "user", "hi", 1),
@@ -2733,7 +2752,7 @@ fn resolve_usage_anchor_reports_prompt_and_trailing() {
         test_chat_message("u2", "user", "follow-up question here", 3),
     ]);
     let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    let (total, trailing) = resolve_usage_anchor(&conv, Some(&provider));
+    let (total, trailing) = resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request());
     // openai 无 total_tokens → input(100000) + output(100)。
     assert_eq!(total, Some(100_100), "openai anchor = input + output");
     // trailing = 锚点 assistant **之后** 的消息（新 user），> 0；锚点响应本身不算进 trailing。
@@ -2747,7 +2766,7 @@ fn resolve_usage_anchor_none_without_usage() {
         test_chat_message("a1", "assistant", "reply", 2),
     ]);
     let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
+    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
 }
 
 #[test]
@@ -2775,7 +2794,7 @@ fn resolve_usage_anchor_invalidated_on_provider_switch() {
     ]);
     // 会话切换到 anthropic：旧 openai 锚点计数口径不可比 → 作废。
     let provider = test_provider("anthropic", "Anthropic", vec!["claude"]);
-    assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
+    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
 }
 
 #[test]
@@ -2787,7 +2806,7 @@ fn resolve_usage_anchor_invalidated_after_compaction() {
     ]);
     conv.context_state.compaction_boundaries = vec![boundary_at(10)];
     let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
+    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
 }
 
 #[test]
@@ -2799,7 +2818,7 @@ fn resolve_usage_anchor_kept_when_compaction_precedes_anchor() {
     ]);
     conv.context_state.compaction_boundaries = vec![boundary_at(2)];
     let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    let (total, _) = resolve_usage_anchor(&conv, Some(&provider));
+    let (total, _) = resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request());
     assert_eq!(total, Some(100_100)); // input(100000) + output(100)
 }
 

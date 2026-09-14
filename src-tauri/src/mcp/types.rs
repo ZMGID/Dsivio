@@ -386,7 +386,7 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__write_file".to_string(),
         name: "write".to_string(),
-        description: "Write a full text file: create it if missing, overwrite it if it exists. Use this when the user explicitly asks to save/write/create a local file or gives a target path; for small changes to an existing file prefer edit. Do not call it just because the user asked for a code block or inline code — answer directly instead. Returns structured file mutation metadata including diff stats.".to_string(),
+        description: "Create a new text file with its full content. For existing files default to edit, including multiple distant changes; reserve full overwrite for an intentional whole-file rewrite. A failed edit requires re-reading the affected region, not blindly overwriting the file. Use only for authorized file work; answer inline when only a code block is requested. Returns a concise receipt; complete diff metadata remains available for user review.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),

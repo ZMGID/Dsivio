@@ -843,6 +843,35 @@ pub(crate) fn chat_max_output_tokens_on_wire(
     chat_max_output_tokens_for_model(provider, model).unwrap_or(fallback)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RequestBudget {
+    pub input: usize,
+    pub output_reserve: usize,
+    pub estimated: bool,
+}
+
+/// Gemini advertises separate input/output limits. Other adapters share the
+/// context window; reserve the configured output even when an API would accept
+/// the request and truncate the answer at the boundary.
+pub(crate) fn request_budget(provider: &ModelProvider, model: &str, output: u32) -> RequestBudget {
+    let (window, estimated) = context_window_for_model(Some(provider), model);
+    let input_cap = provider.model_overrides.get(model).and_then(|info| info.max_input)
+        .or_else(|| model_database_entry(provider_model_database_id(Some(provider), model))?
+            .get("maxInput")?.as_u64())
+        .and_then(|value| usize::try_from(value).ok()).filter(|value| *value > 0);
+    let output_reserve = if provider.api_format_kind() == crate::settings::ProviderApiFormat::Gemini {
+        0
+    } else if output > 0 { output as usize } else {
+        // An omitted output limit is not a promise of zero output.
+        chat_max_output_tokens_for_model(Some(provider), model).unwrap_or(16_384) as usize
+    };
+    RequestBudget {
+        input: window.saturating_sub(output_reserve).min(input_cap.unwrap_or(usize::MAX)),
+        output_reserve,
+        estimated: estimated || output == 0,
+    }
+}
+
 /// 解析模型级 temperature。用户显式清空优先于数据库值；所有来源都缺省时不发送。
 pub(crate) fn temperature_for_model(provider: Option<&ModelProvider>, model: &str) -> Option<f64> {
     if let Some(info) = provider.and_then(|provider| provider.model_overrides.get(model)) {
@@ -881,6 +910,20 @@ pub(crate) fn pricing_for_model(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn request_budget_respects_output_and_independent_input_caps() {
+        let mut provider = test_provider_with_overrides(std::collections::HashMap::from([
+            ("budget-model".into(), ModelInfo { context_window: Some(1000), max_input: Some(600), ..Default::default() })
+        ]));
+        provider.api_format = "openai_chat".into();
+        assert_eq!(request_budget(&provider, "budget-model", 100).input, 600);
+        assert_eq!(request_budget(&provider, "budget-model", 800).input, 200);
+        assert_eq!(request_budget(&provider, "budget-model", 1200).input, 0);
+        provider.api_format = "gemini".into();
+        assert_eq!(request_budget(&provider, "budget-model", 800).input, 600);
+        assert!(request_budget(&provider, "unlisted-model", 0).estimated);
+    }
+
     use std::collections::HashMap;
 
     use crate::settings::{ModelInfo, ModelProvider};

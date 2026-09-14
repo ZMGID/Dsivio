@@ -134,6 +134,7 @@ pub fn usage_from_parts(parts: CliUsageParts) -> ModelUsage {
         cached_input_tokens: (parts.cache_read > 0).then_some(parts.cache_read),
         cache_creation_input_tokens: (parts.cache_creation > 0).then_some(parts.cache_creation),
         reasoning_tokens: (parts.reasoning > 0).then_some(parts.reasoning),
+        request_identity: None,
         context_window_tokens: parts.context_window,
     }
 }
