@@ -556,8 +556,8 @@ class WorkspaceTests(unittest.TestCase):
         task = self.draft()
         task = self.action(task, 'save', brief=dict(task['brief'], mode='analysis'))
         metadata = dict(width=576, height=1024, duration=20.04, hasAudio=True)
-        task = self.action(task, 'analysis_result', script='portrait reference', analysis={'content':[
-            {'type':'text', 'text':json.dumps({'metadata':metadata, 'transcript':[]})}]})
+        task = self.action(task, 'analysis_result', script='portrait reference',
+                           analysis={'sourceMetadata': metadata})
         template = self.action(task, 'template_save', name='reference')
         self.assertEqual(template['spec']['aspect_ratio'], '9:16')
         self.assertTrue(template['spec']['source_has_audio'])
