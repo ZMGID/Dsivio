@@ -1162,9 +1162,9 @@ pub fn file_mutation_tool_result(result: FileMutationResult) -> Result<McpToolCa
     if !result.warnings.is_empty() {
         content = format!("{}\n{}", content, result.warnings.join("\n"));
     }
-    // 把裁剪后的 unified diff 直接回显给模型：模型在结果里"看到"自己实际改了什么，
-    // 能立即发现写歪。完整 diff 始终在 structured_content 里给前端渲染。
-    if !result.diff.trim().is_empty() {
+    // 成功只回传摘要和警告；完整 diff 仍留在 structured_content 中用于审阅。
+    // 失败保留原有诊断回显，不修改调用参数或实际文件内容。
+    if !result.ok && !result.diff.trim().is_empty() {
         let lines: Vec<&str> = result.diff.lines().collect();
         if lines.len() > FILE_MUTATION_DIFF_MAX_LINES {
             let clipped = lines[..FILE_MUTATION_DIFF_MAX_LINES].join("\n");
@@ -1298,6 +1298,36 @@ async fn resolve_native_workspace(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn successful_file_receipt_omits_code_but_preserves_disk_and_review() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = crate::native_tools::NativeToolWorkspace::global(&[
+            dir.path().to_string_lossy().into_owned(),
+        ]);
+        let source = "def answer():\n    return 42\n".repeat(100);
+        let mut mutation = crate::native_tools::write_file(&workspace, &serde_json::json!({
+            "path": "answer.py", "content": source,
+        })).unwrap();
+        mutation.warnings.push("retained warning".into());
+        let original_diff = mutation.diff.clone();
+        let result = super::file_mutation_tool_result(mutation).unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.len() < 250);
+        assert!(!result.content.contains("def answer"));
+        assert!(result.content.contains("retained warning"));
+        assert_eq!(std::fs::read_to_string(dir.path().join("answer.py")).unwrap(), source);
+        assert_eq!(result.structured_content.as_ref().unwrap()["diff"], original_diff);
+
+        let edit = crate::native_tools::edit_file(&workspace, &serde_json::json!({
+            "path": "answer.py", "edits": [{"old_string": source, "new_string": "def answer():\n    return 43\n"}],
+        })).unwrap();
+        let result = super::file_mutation_tool_result(edit).unwrap();
+        assert!(!result.is_error);
+        assert!(!result.content.contains("return 43"));
+        assert!(result.structured_content.as_ref().unwrap()["diff"].as_str().unwrap().contains("return 43"));
+        assert_eq!(std::fs::read_to_string(dir.path().join("answer.py")).unwrap(), "def answer():\n    return 43\n");
+    }
+
     use super::*;
     use crate::native_tools::ReadFileResult;
 
