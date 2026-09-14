@@ -403,7 +403,7 @@ export type TimelineGroupItem =
   | { type: 'group'; segments: ChatMessageSegment[] }
 
 /** 一条主代理答复只有一个过程容器，卡片和进度不再切断它。
- * 正文投影与过程归属分开：正常结束保留末尾答复，异常结束保留已有正文。
+ * 过程段在中断后仍属于过程；保留末尾答复和无法判定为过程的部分正文。
  * 这里只改变展示，不改存储正文、复制或模型回放。
  */
 export function groupTimelineSegments(
@@ -434,9 +434,9 @@ export function groupTimelineSegments(
       body.push({ type: 'presentation', segment })
       return
     }
-    const foldText = state === 'running'
-      ? index <= lastProcessIndex
-      : state === 'completed' && hasFinalAnswer && index <= lastProcessIndex
+    const explicitlyProcess = segment.phase === 'tool_loop' || segment.phase === 'auxiliary'
+    const foldText = explicitlyProcess
+      || ((state === 'running' || hasFinalAnswer) && index <= lastProcessIndex)
     if (segment.kind === 'text' && !foldText) {
       body.push({ type: 'text', segment })
     } else {
