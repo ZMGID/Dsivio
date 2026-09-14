@@ -314,11 +314,20 @@ def output_mismatches(media, requested):
 
 
 def reference_spec(analysis):
+    metadata = (analysis or {}).get('sourceMetadata')
+    if isinstance(metadata, dict):
+        candidates = [metadata]
+    else:
+        candidates = []
     for item in (analysis or {}).get('content', []):
         if item.get('type') != 'text':
             continue
         try:
-            metadata = json.loads(item['text']).get('metadata', {})
+            candidates.append(json.loads(item['text']).get('metadata', {}))
+        except (ValueError, KeyError, TypeError):
+            continue
+    for metadata in candidates:
+        try:
             width, height = int(metadata['width']), int(metadata['height'])
             if width <= 0 or height <= 0:
                 continue

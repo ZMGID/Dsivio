@@ -12,6 +12,7 @@ export interface VideoBrief {
   resolution: string
   language: string
   source: string
+  analysisMethod?: 'auto' | 'model' | 'mcp'
   template?: VideoTemplate
   inputMode?: 'auto' | 'text' | 'image' | 'reference' | 'frames'
   speechMode?: 'auto' | 'dialogue' | 'ambient' | 'silent'
@@ -88,6 +89,7 @@ export const newVideoBrief = (
   resolution: '',
   language: 'zh-CN',
   source: '',
+  analysisMethod: 'auto',
   inputMode: 'auto',
   speechMode: 'auto',
   dialogue: '',

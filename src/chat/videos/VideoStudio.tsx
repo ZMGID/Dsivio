@@ -1030,6 +1030,19 @@ export default function VideoStudio() {
                               {brief.source ? '更换本地视频' : '选择本地视频'}
                             </Button>
                           </div>
+                          <Field label="分析方式">
+                            <StudioSelect
+                              disabled={controlsDisabled}
+                              value={brief.analysisMethod || 'auto'}
+                              onChange={(event) =>
+                                change({ analysisMethod: event.target.value as VideoBrief['analysisMethod'] })
+                              }
+                            >
+                              <option value="auto">自动：有视频模型则直传，否则使用 MCP</option>
+                              <option value="model">视频模型</option>
+                              <option value="mcp">video-analyzer MCP</option>
+                            </StudioSelect>
+                          </Field>
                         </>
                       ) : (
                         <>

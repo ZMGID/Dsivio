@@ -273,6 +273,11 @@ describe('video material drag-drop', () => {
     fireEvent.click(screen.getByRole('button', { name: '视频拆解' }))
     const zone = await screen.findByLabelText('参考视频投放区')
     expect(screen.getByText('把参考视频拖到这里')).toBeTruthy()
+    const method = screen.getByRole('button', { name: '分析方式' })
+    fireEvent.click(method)
+    fireEvent.click(screen.getByRole('option', { name: 'video-analyzer MCP' }))
+    expect(screen.getByText('video-analyzer MCP').closest('button')).toBeTruthy()
+    vi.mocked(api.videoStudioTask).mockClear()
     dropHandler?.({ payload: { type: 'enter' } })
     await waitFor(() => expect(zone).toHaveClass('is-drop-active'))
     dropHandler?.({ payload: { type: 'drop', paths: ['C:\\clips\\demo.mp4'] } })
@@ -282,6 +287,7 @@ describe('video material drag-drop', () => {
       'C:\\clips\\demo.mp4',
     )
     expect(screen.getByRole('button', { name: '更换本地视频' })).toBeTruthy()
+    expect(api.videoStudioTask).not.toHaveBeenCalled()
   })
 
   it('imports remake product images on the goods drop zone without replacing the reference video', async () => {
