@@ -386,7 +386,7 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__write_file".to_string(),
         name: "write".to_string(),
-        description: "Create a new text file with its full content. For existing files default to edit, including multiple distant changes; reserve full overwrite for an intentional whole-file rewrite. A failed edit requires re-reading the affected region, not blindly overwriting the file. Use only for authorized file work; answer inline when only a code block is requested. Returns a concise receipt; complete diff metadata remains available for user review.".to_string(),
+        description: "Create a file with full content; default to edit for existing files unless an intentional full rewrite is needed. Only for authorized file work; inline code block requests need no file. Returns a concise receipt and complete diff metadata for review.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -408,7 +408,7 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__edit_file".to_string(),
         name: "edit".to_string(),
-        description: "Edit a file with one or more exact text replacements in a single call. Each edit's old_string must match a unique, contiguous region of the current file (copy it from read output WITHOUT the leading line-number prefix); if a snippet appears more than once, extend it with surrounding context. Edits apply in order. Prefer this over write for changes to existing files. Returns structured file mutation metadata including diff stats.".to_string(),
+        description: "Apply ordered exact replacements to an existing file. Use the smallest unique old_string without read line-number prefixes; new_string contains only its replacement. Keep unrelated code out of both. On mismatch, re-read the affected range before retrying; do not blindly overwrite the file.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),

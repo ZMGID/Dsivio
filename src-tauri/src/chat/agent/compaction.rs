@@ -1379,6 +1379,16 @@ fn empty_history_fallback_text(previous_summary: Option<&PreviousSummary>) -> St
 ///
 /// `generated_api_messages`（持久化镜像）在任何分支都不被触碰。
 pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunState, include_tools: bool) -> Result<Vec<Value>, String> {
+    let original = std::mem::take(&mut state.runtime_messages);
+    state.runtime_messages = super::argument_replay::send_view(
+        &original, env.config.prior_file_calls.iter().copied().chain(state.tool_records.iter()),
+    );
+    let result = compact_projected_send_view(env, state, include_tools).await;
+    super::argument_replay::restore_retained_arguments(&mut state.runtime_messages, &original);
+    result
+}
+
+async fn compact_projected_send_view(env: &LoopEnv<'_>, state: &mut RunState, include_tools: bool) -> Result<Vec<Value>, String> {
     let config = env.config;
     let active_tools = if include_tools { state.tools.as_slice() } else { &[] };
     let request_view = crate::chat::model::usage_anchor::request_view(

@@ -360,6 +360,7 @@ async fn run_builtin_agent_node(
     let web_search_mode = WebSearchMode::resolve(None, &settings);
 
     let config = AgentRunConfig {
+        prior_file_calls: Vec::new(),
         state,
         conversation_id: conversation_id.clone(),
         tool_conversation_id: conversation_id.clone(),

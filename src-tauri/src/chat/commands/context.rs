@@ -917,6 +917,9 @@ pub(super) async fn compute_context_state(
         last_user_api_content,
         main_image_paths,
     )?;
+    let request_messages = crate::chat::agent::argument_replay::send_view(
+        &request_messages, conversation.messages.iter().flat_map(|message| &message.tool_calls),
+    );
     segments.extend(estimate_messages_segments(
         conversation,
         &request_messages,

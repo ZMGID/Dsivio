@@ -43,6 +43,8 @@ pub struct AgentRunConfig<'a> {
     pub provider: ModelProvider,
     pub model: String,
     pub runtime_messages: Vec<Value>,
+    /// Prior native file audit records used only to project bounded request history.
+    pub prior_file_calls: Vec<&'a ToolCallRecord>,
     pub tools: Vec<ChatToolDefinition>,
     pub blocked_tool_calls: Vec<ChatToolDefinition>,
     pub settings: Settings,

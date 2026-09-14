@@ -27,6 +27,8 @@ struct RecordedDelta {
 
 #[derive(Default)]
 struct TestHost {
+    capture_checkpoints: bool,
+    checkpoint_histories: Mutex<Vec<Vec<Value>>>,
     children: Option<Arc<crate::chat::sub_agent::runtime::Runtime>>,
     managed: Option<(
         Arc<crate::chat::sub_agent::runtime::Runtime>,
@@ -157,6 +159,7 @@ impl AgentHost for TestHost {
         history: &'a [Value],
         finishing: bool,
     ) -> super::super::host::AgentHostFuture<'a, Result<Vec<Value>, String>> {
+        if self.capture_checkpoints { self.checkpoint_histories.lock().unwrap().push(history.to_vec()); }
         Box::pin(async move {
             if let Some(runtime) = &self.children {
                 return crate::chat::sub_agent::control::collect_results_with(
@@ -383,6 +386,37 @@ async fn responses_replay_fallback_does_not_certify_original_request_usage() {
 }
 
 #[tokio::test]
+async fn run_loop_preserves_reused_tool_ids_in_durable_checkpoints() {
+    let server = MockModelServer::start(vec![MockResponse::Sse(vec![
+        r#"{"choices":[{"delta":{"content":"done"}}]}"#.into(), "[DONE]".into(),
+    ])]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    let call = |text: &str| serde_json::json!({"role":"assistant","tool_calls":[{
+        "id":"reused", "type":"function", "function":{"name":"write", "arguments":
+            serde_json::json!({"path":"app.txt","content":text.repeat(2000)}).to_string()}
+    }]});
+    config.runtime_messages = vec![
+        serde_json::json!({"role":"user","content":"write first"}), call("first body"),
+        serde_json::json!({"role":"tool","tool_call_id":"reused","content":"ok"}),
+        serde_json::json!({"role":"user","content":"write second"}), call("second body"),
+        serde_json::json!({"role":"tool","tool_call_id":"reused","content":"ok"}),
+        serde_json::json!({"role":"user","content":"finish"}),
+    ];
+    let host = TestHost { capture_checkpoints: true, ..Default::default() };
+    run_agent_loop(config, &host, &RecordingExecutor::default()).await.unwrap();
+    let checkpoints = host.checkpoint_histories.lock().unwrap();
+    assert!(!checkpoints.is_empty());
+    for history in checkpoints.iter() {
+        let args: Vec<_> = history.iter().flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
+            .filter(|c| c["id"] == "reused").map(|c| c["function"]["arguments"].as_str().unwrap()).collect();
+        assert_eq!(args.len(), 2);
+        assert!(args[0].contains("first body"), "earlier call must keep its own arguments");
+        assert!(args[1].contains("second body"));
+    }
+}
+
+#[tokio::test]
 async fn native_file_receipts_are_short_on_the_wire_and_keep_review_diff() {
     let root = tempfile::tempdir().unwrap();
     let call = |id: &str, name: &str, arguments: Value| {
@@ -394,9 +428,9 @@ async fn native_file_receipts_are_short_on_the_wire_and_keep_review_diff() {
         ])
     };
     let server = MockModelServer::start(vec![
-        call("write1", "write", serde_json::json!({"path":"fixture.txt", "content":"BODY_MARKER\n".repeat(200)})),
+        call("write1", "write", serde_json::json!({"path":"fixture.txt", "content":"BODY_MARKER\n".repeat(2000)})),
         call("edit1", "edit", serde_json::json!({"path":"fixture.txt", "edits":[{
-            "old_string":"BODY_MARKER\n".repeat(200), "new_string":"FINAL_MARKER\n"
+            "old_string":"BODY_MARKER\n".repeat(2000), "new_string":"FINAL_MARKER\n"
         }]})),
         MockResponse::Sse(vec![r#"{"choices":[{"delta":{"content":"done"}}]}"#.into(),
             r#"{"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010}}"#.into(), "[DONE]".into()]),
@@ -408,9 +442,10 @@ async fn native_file_receipts_are_short_on_the_wire_and_keep_review_diff() {
         crate::mcp::types::native_edit_file_tool(),
     ];
     config.effective_chat_tools.max_tool_rounds = Some(5);
+    let host = TestHost { capture_checkpoints: true, ..Default::default() };
     let result = run_agent_loop(
         config,
-        &TestHost::default(),
+        &host,
         &NativeMutationExecutor(crate::native_tools::NativeToolWorkspace::project(
             "test".into(),
             "Test".into(),
@@ -429,8 +464,27 @@ async fn native_file_receipts_are_short_on_the_wire_and_keep_review_diff() {
         .unwrap()
         .request_identity
         .is_some());
+    let checkpoints = host.checkpoint_histories.lock().unwrap();
+    assert!(!checkpoints.is_empty());
+    for history in checkpoints.iter() {
+        for call in history.iter().flat_map(|m| m["tool_calls"].as_array().into_iter().flatten()) {
+            if call["id"] == "write1" {
+                assert!(call["function"]["arguments"].as_str().unwrap().len() > 20_000,
+                    "durable checkpoint must preserve original arguments");
+            }
+        }
+    }
     let bodies = server.captured_bodies.lock().unwrap();
     let last: Value = serde_json::from_str(bodies.last().unwrap()).unwrap();
+    let replayed_write = last["messages"].as_array().unwrap().iter()
+        .flat_map(|message| message["tool_calls"].as_array().into_iter().flatten())
+        .find(|call| call["id"] == "write1").unwrap();
+    let replay_arguments = replayed_write["function"]["arguments"].as_str().unwrap();
+    assert!(replay_arguments.len() < 1000, "completed old write payload must not be resent in full");
+    assert!(replay_arguments.contains("omitted"));
+    assert!(result.tool_records[0].arguments.contains("BODY_MARKER"), "audit arguments stay complete");
+    assert!(result.api_messages.iter().any(|message| message.to_string().contains("BODY_MARKER")),
+        "persisted replay stays complete");
     let receipts: Vec<_> = last["messages"]
         .as_array()
         .unwrap()
@@ -723,6 +777,7 @@ fn test_provider(base_url: &str) -> ModelProvider {
 
 fn test_run_config<'a>(state: &'a AppState, base_url: &str) -> AgentRunConfig<'a> {
     AgentRunConfig {
+        prior_file_calls: Vec::new(),
         state,
         conversation_id: "conversation".to_string(),
         tool_conversation_id: "conversation".to_string(),

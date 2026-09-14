@@ -232,10 +232,12 @@ pub async fn run_agent_loop(
     host: &dyn AgentHost,
     executor: &dyn ToolExecutor,
 ) -> Result<AgentRunResult, String> {
+    let initial_send_view = super::argument_replay::send_view(&config.runtime_messages, config.prior_file_calls.iter().copied());
     let initial_request_identity = crate::chat::model::usage_anchor::UsageRequestIdentity::from_request(
         &config.provider, &crate::chat::model::usage_anchor::request_view(
-            &config.model, &config.runtime_messages, &config.tools, config.builtin_web_search_active()),
+            &config.model, &initial_send_view, &config.tools, config.builtin_web_search_active()),
     );
+    drop(initial_send_view);
     let mut state = RunState {
         runtime_messages: std::mem::take(&mut config.runtime_messages),
         tools: std::mem::take(&mut config.tools),

@@ -635,6 +635,7 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
     let effective_chat_tools = req.settings.chat_tools.clone();
 
     let config = AgentRunConfig {
+        prior_file_calls: Vec::new(),
         state,
         conversation_id: sub_conversation_id.clone(),
         tool_conversation_id: req.parent_conversation_id.clone(),

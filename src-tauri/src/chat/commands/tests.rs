@@ -2734,6 +2734,59 @@ fn boundary_at(created_at: i64) -> CompactionBoundaryRecord {
 }
 
 #[test]
+fn history_file_arguments_are_bounded_after_reload_without_changing_audit_or_protected_calls() {
+    for name in ["write", "edit"] {
+        for protection in ["none", "error", "cancelled", "mcp", "signature", "reasoning", "unpaired", "latest", "mismatch"] {
+            let args = if name == "write" {
+                serde_json::json!({"path":"app.txt", "content":"original code\n".repeat(2000)})
+            } else {
+                serde_json::json!({"path":"app.txt", "edits":[{
+                    "old_string":"original code\n".repeat(2000), "new_string":"changed code\n".repeat(2000)
+                }]})
+            };
+            let mut assistant = test_chat_message("a1", "assistant", "done", 2);
+            let mut call = serde_json::json!({"id":"file1","type":"function","function":{
+                "name":name, "arguments":args.to_string()
+            }});
+            if protection == "signature" { call["thought_signature"] = serde_json::json!("opaque"); }
+            let mut request = serde_json::json!({"role":"assistant","content":null,"tool_calls":[call]});
+            if protection == "reasoning" { request["reasoning_items"] = serde_json::json!([{"item":{"encrypted_content":"opaque"}}]); }
+            assistant.api_messages = vec![request];
+            if protection != "unpaired" {
+                assistant.api_messages.push(serde_json::json!({"role":"tool","tool_call_id":"file1","content":"Written app.txt"}));
+            }
+            if protection != "latest" {
+                assistant.api_messages.push(serde_json::json!({"role":"assistant","content":"done"}));
+            }
+            assistant.tool_calls.push(serde_json::from_value(serde_json::json!({
+                "id":"file1", "name":name, "source":if protection == "mcp" {"mcp"} else {"native"},
+                "arguments":if protection == "mismatch" {"{}".to_string()} else {args.to_string()},
+                "status":match protection {"error"=>"error", "cancelled"=>"cancelled", _=>"success"},
+                "round":1,"sensitive":true,"artifacts":[],"structured_content":{"ok":true}
+            })).unwrap());
+            let conversation = test_conversation_with_messages(vec![test_chat_message("u1","user","save file",1), assistant]);
+            let stored = serde_json::to_string(&conversation).unwrap();
+            let reloaded: Conversation = serde_json::from_str(&stored).unwrap();
+            let view = build_chat_api_messages(None,"system",&reloaded,None,None,&[]).unwrap();
+            assert!(view.iter().any(|m| m.to_string().contains("original code")), "runtime history must keep full arguments");
+            let view = crate::chat::agent::argument_replay::send_view(&view, reloaded.messages.iter().flat_map(|m| &m.tool_calls));
+            let replayed = view.iter().flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
+                .find(|c| c["id"] == "file1").unwrap();
+            let raw = replayed["function"]["arguments"].as_str().unwrap();
+            if protection == "none" {
+                assert!(raw.len() < 1000, "{name}: {protection}");
+                assert!(raw.contains("sha256=") && raw.contains("omitted"));
+                let compact: serde_json::Value = serde_json::from_str(raw).unwrap();
+                assert_eq!(compact["path"], "app.txt");
+            } else {
+                assert_eq!(raw, args.to_string(), "{name}: {protection}");
+            }
+            assert_eq!(serde_json::to_string(&reloaded).unwrap(), stored, "audit must remain immutable");
+        }
+    }
+}
+
+#[test]
 fn resolve_usage_anchor_rejects_edited_assistant_output() {
     let mut conv = test_conversation_with_messages(vec![
         test_chat_message("u1", "user", "hi", 1),
