@@ -20,7 +20,7 @@
     "video-analyzer": {
       "command": "${DSVIDEO_NODE}",
       "args": [
-        "${DSVIDEO_RUNTIME_ROOT}/analyzer/node_modules/mcp-video-analyzer/dist/index.js"
+        "${PLUGIN_ROOT}/scripts/mcp_video_analyzer.cjs"
       ],
       "env": {
         "DSVIDEO_RUNTIME_ROOT": "${DSVIDEO_RUNTIME_ROOT}",
