@@ -26,7 +26,7 @@ import { CompactionSummaryPanel } from './CompactionSummaryPanel'
 import { ContextClearDivider } from './ContextClearDivider'
 import { resolveCompactionBoundaries, resolvePendingCompactionAfterIndex, type CompactionBoundaryView } from './compactionBoundary'
 import { resolveClearBoundaries, type ContextClearBoundaryView } from './contextClearBoundary'
-import { isExecutableAgentPlanText } from './agentPlan'
+import { hasAgentPlanText } from './agentPlan'
 import { foldMessageGroups, isLastAssistantTurn, occupiedReplyModels } from './messageGroups'
 import {
   activeMessageNavigatorNodeId,
@@ -508,9 +508,9 @@ function MessageListBase({
 
   const legacyPlanMessageId = useMemo(() => {
     const legacyPlan = agentPlanState?.plan?.trim()
-    if (!isExecutableAgentPlanText(legacyPlan)) return null
+    if (!hasAgentPlanText(legacyPlan)) return null
     const hasMessagePlan = historyMessages.some((message) => Boolean(
-      isExecutableAgentPlanText((message.agent_plan ?? message.agentPlan)?.plan),
+      hasAgentPlanText((message.agent_plan ?? message.agentPlan)?.plan),
     ))
     if (hasMessagePlan) return null
     return [...historyMessages]

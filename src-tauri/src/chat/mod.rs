@@ -21,6 +21,7 @@ pub mod memory;
 pub mod model;
 pub mod model_metadata;
 pub mod plan;
+pub mod plan_document;
 pub mod popout;
 #[cfg(debug_assertions)]
 pub mod probe;

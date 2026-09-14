@@ -414,8 +414,12 @@ export function groupTimelineSegments(
   const presentations = new Set(orderedSegments.filter(segment =>
     segment.kind === 'tool' && isPresentation?.(segment)))
   let lastProcessIndex = -1
+  let lastActivityIndex = -1
   orderedSegments.forEach((segment, index) => {
     if (presentations.has(segment)) return
+    if (segmentHasContent(segment) && segment.kind !== 'text') {
+      lastActivityIndex = index
+    }
     if (segmentHasContent(segment) && (segment.kind !== 'text'
       || segment.phase === 'tool_loop' || segment.phase === 'auxiliary')) {
       lastProcessIndex = index
@@ -434,7 +438,10 @@ export function groupTimelineSegments(
       return
     }
     const foldText = state === 'running'
-      ? index <= lastProcessIndex
+      // A live model reply still carries tool_loop until the round finishes.
+      // Only subsequent reasoning/tools establish that it was progress text;
+      // its phase alone must not pull the streaming answer above deliveries.
+      ? index <= lastActivityIndex
       : state === 'completed' && hasFinalAnswer && index <= lastProcessIndex
     if (segment.kind === 'text' && !foldText) {
       body.push({ type: 'text', segment })

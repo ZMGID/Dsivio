@@ -57,7 +57,6 @@ import { PermissionPicker } from './PermissionPicker'
 import { deriveDshPresetModes, derivePermissionModes, useDetectedExternalAgents, useDshCustomPresets } from './permissionModes'
 import { BackgroundJobsIndicator } from './BackgroundJobsIndicator'
 import { ContextIndicator } from './ContextIndicator'
-import { isExecutableAgentPlanText } from './agentPlan'
 import {
   agentRuntimesEqual,
   BUILTIN_AGENT_RUNTIME,
@@ -601,6 +600,7 @@ function settleOptimisticConversationListItem(
 }
 
 type SendMessageOptions = {
+  planMessageId?: string
   forceNewConversation?: boolean
   conversationOverride?: Conversation | null
   /** 前置校验完成、消息正式进入本地发送流程；输入框可立即清空。 */
@@ -3336,6 +3336,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         trimmed,
         attachments,
         attachmentSkillId,
+        options.planMessageId,
       )
       persistedConversation = updatedConv
       sendAccepted = true
@@ -3651,36 +3652,16 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const handleExecuteAgentPlan = useCallback(async (messageId: string) => {
     const conversation = currentConversation
     if (!conversation) return
-    const planMessage = conversation.messages.find((message) => message.id === messageId)
-    const messagePlan = planMessage?.agent_plan ?? planMessage?.agentPlan ?? null
-    const messagePlanText = messagePlan?.plan?.trim() ?? ''
-    const legacyPlan = conversation.agent_plan_state ?? conversation.agentPlanState ?? null
-    const legacyPlanText = legacyPlan?.plan?.trim() ?? ''
-    const isLegacyPlanMessage = Boolean(
-      planMessage
-      && !isExecutableAgentPlanText(messagePlanText)
-      && isExecutableAgentPlanText(legacyPlanText)
-      && planMessage.role === 'assistant'
-      && planMessage.content.trim() === legacyPlanText,
-    )
-    const planText = isExecutableAgentPlanText(messagePlanText)
-      ? messagePlanText
-      : (isLegacyPlanMessage ? legacyPlanText : '')
-    if (!isExecutableAgentPlanText(planText)) return
     if (isConversationInFlight(inFlightConversationsRef.current, conversation.id)) {
       setStreamErrorForConversation(conversation.id, '该对话正在生成中，请稍后再试')
       return
     }
 
     try {
-      const updated = await chatApi.executeAgentPlan(
-        conversation.id,
-        isExecutableAgentPlanText(messagePlanText) ? messageId : undefined,
-      )
-      applyConversationIfCurrent(conversation.id, updated)
-      refreshSidebar()
-      void refreshContextStats(updated.id)
-      void handleSendMessage('按这条计划开始执行。', [], { conversationOverride: updated })
+      await handleSendMessage('按这条计划开始执行。', [], {
+        conversationOverride: conversation,
+        planMessageId: messageId,
+      })
     } catch (err) {
       console.error('Failed to execute agent plan:', err)
       setStreamErrorForConversation(
@@ -3689,11 +3670,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       )
     }
   }, [
-    applyConversationIfCurrent,
     currentConversation,
     handleSendMessage,
-    refreshContextStats,
-    refreshSidebar,
     setStreamErrorForConversation,
   ])
 

@@ -34,7 +34,7 @@ use super::context::{build_chat_api_messages, resolve_usage_anchor};
 use super::direct_image::complete_direct_image_generation_reply;
 use super::interaction::{emit_chat_stream_delta, emit_chat_tool_record, wait_for_chat_cancel};
 use super::messages::{
-    auxiliary_tool_segments, build_assistant_message, capture_agent_plan_draft_if_needed,
+    auxiliary_tool_segments, build_assistant_message,
     push_assistant_message, tool_segment_for_record,
 };
 use super::reply_runtime::{ArmReplyOutcome, ChatReplyGuard, ReplyArm};
@@ -525,6 +525,7 @@ pub(super) async fn complete_assistant_reply_inner(
     if !builder_mode {
         apply_web_search_mode_tool_filter(&mut tools, web_search_mode, &settings);
     }
+    crate::chat::plan_document::append_tools(&mut tools, plan_mode && !is_builder_conversation(conversation));
     let user_tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
@@ -532,7 +533,7 @@ pub(super) async fn complete_assistant_reply_inner(
         user_tools_available,
     );
     let ask_user_tools_available = append_agent_ask_user_tools(&mut tools);
-    let todo_tools_available = if chat_mode {
+    let todo_tools_available = if chat_mode || plan_mode {
         false
     } else {
         append_agent_todo_tools(&mut tools)
@@ -562,7 +563,7 @@ pub(super) async fn complete_assistant_reply_inner(
     }
     let runtime_tools_available = !tools.is_empty();
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
-    let agent_todo_prompt = if chat_mode {
+    let agent_todo_prompt = if chat_mode || plan_mode {
         None
     } else {
         Some(crate::chat::todo::format_prompt(
@@ -682,7 +683,7 @@ pub(super) async fn complete_assistant_reply_inner(
             Ok(content) => {
                 finish_auxiliary_vision_tool_record(
                     &mut record, ToolCallStatus::Success, started,
-                    Some(truncate_chars(content.trim(), 1000)), None,
+                    Some(content.trim().to_string()), None,
                 );
                 emit_chat_tool_record(app, &run_id, &record);
                 auxiliary_tool_records.push(record);
@@ -722,7 +723,7 @@ pub(super) async fn complete_assistant_reply_inner(
         memory_prompt.as_deref(),
         runtime_prompts.agent_plan_prompt.as_deref(),
         Some(&crate::chat::ask_user::format_prompt(false)),
-        if chat_mode {
+        if chat_mode || plan_mode {
             None
         } else {
             Some(crate::chat::todo::format_prompt(
@@ -880,12 +881,11 @@ pub(super) async fn complete_assistant_reply_inner(
             return Err(error);
         }
     };
-    let message_plan = capture_agent_plan_draft_if_needed(
-        conversation,
-        plan_mode,
-        &result.content,
-        result.stream_outcome.as_str(),
-    );
+    // A saved document, not the wording of the final response, identifies a plan.
+    let message_plan = if plan_mode && result.tool_records.iter().any(|tool| tool.name == "save_plan" && tool.status == crate::chat::types::ToolCallStatus::Success) {
+        let latest = crate::chat::storage::load_conversation(app, &conversation.id)?;
+        (crate::chat::plan::is_plan_mode(&latest.agent_plan_state) && latest.agent_plan_state.document.is_some()).then(|| latest.agent_plan_state.clone())
+    } else { None };
     let mut segments = auxiliary_tool_segments(&auxiliary_tool_records);
     segments.extend(result.segments);
     let mut tool_records = auxiliary_tool_records;

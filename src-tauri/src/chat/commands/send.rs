@@ -74,9 +74,10 @@ pub(crate) async fn chat_send_message(
     attachments: Vec<String>,
     text_attachments: Option<Vec<TextAttachmentInput>>,
     active_skill_id: Option<String>,
+    plan_message_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // 内存文本附件（粘贴长文本虚拟 txt）：前端总传；缺省为空数组以兼容旧调用。
-    let text_attachments = text_attachments.unwrap_or_default();
+    let mut text_attachments = text_attachments.unwrap_or_default();
     // Busy 拒绝：该会话仍有任意一条 run 在跑（含多模型并发组）时不允许再发新消息。
     // 用原子的哨兵预留替代「先 check 后 register」，关闭并发发送同时通过 busy 检查的 TOCTOU 窗口。
     // 哨兵在本命令返回前一直存活；实际的 per-run 槽位 / generation 在 `complete_assistant_reply`
@@ -90,6 +91,17 @@ pub(crate) async fn chat_send_message(
     };
 
     let mut conversation = load_conversation(&app, &conversation_id)?;
+
+    let plan_message_id = plan_message_id.or_else(|| {
+        (conversation.agent_plan_state.document.is_some()
+            && matches!(content.trim(), "开始执行" | "按计划执行" | "执行计划" | "按这条计划开始执行。"))
+            .then(String::new)
+    });
+    let selected_plan = if let Some(id) = plan_message_id.as_deref() {
+        let snapshot = crate::chat::plan_document::prepare_execution(&app, &mut conversation, id)?;
+        text_attachments.push(TextAttachmentInput { name: "执行计划.md".into(), content: snapshot });
+        Some(conversation.agent_plan_state.clone())
+    } else { None };
 
     if content.trim() == "/goal" {
         strip_transcripts_for_frontend(&mut conversation);
@@ -156,7 +168,7 @@ pub(crate) async fn chat_send_message(
     };
     let plan_or_orchestrate = crate::chat::plan::is_plan_mode(&conversation.agent_plan_state)
         || crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state);
-    let fan_out = reply_arms.len() >= 2 && !plan_or_orchestrate;
+    let fan_out = reply_arms.len() >= 2 && !plan_or_orchestrate && selected_plan.is_none();
     // fan-out 时所有臂共享一个 group_id；用户消息也打上它，便于前端把这一问的 N 答聚成一组。
     let group_id = if fan_out {
         Some(format!("grp_{}", Uuid::new_v4()))
@@ -208,6 +220,8 @@ pub(crate) async fn chat_send_message(
             let provisional_title = provisional_title.clone();
             let goal_started = goal_started.clone();
             let waiting_goal_guard = waiting_goal_guard.clone();
+            let selected_plan = selected_plan.clone();
+            let plan_message_id = plan_message_id.clone();
             move |latest| {
                 if latest
                     .messages
@@ -217,6 +231,12 @@ pub(crate) async fn chat_send_message(
                     return Err(format!("message already exists: {}", user_message.id));
                 }
                 latest.messages.push(user_message);
+                if let Some(plan) = selected_plan {
+                    if let Some(message) = latest.messages.iter_mut().find(|m| Some(m.id.as_str()) == plan_message_id.as_deref()) {
+                        message.agent_plan = Some(plan.clone());
+                    }
+                    latest.agent_plan_state = plan;
+                }
                 if let Some(objective) = goal_started.as_deref() {
                     if latest.goal_state.as_ref().is_some_and(|goal| {
                         !matches!(goal.status, crate::chat::types::GoalStatus::Completed | crate::chat::types::GoalStatus::Cancelled)

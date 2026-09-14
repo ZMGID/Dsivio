@@ -17,6 +17,12 @@ separate model capability from image input.
   credentialed model with video input; an explicit selection takes priority over
   auto candidates and is validated before use. With no available model, the chat
   reports how to configure one instead of silently dropping the video.
+- Auxiliary analysis defaults to a detailed chronological breakdown, including
+  visible changes, readable text, presentation structure and uncertainties.
+  Broad requests do not reduce this intermediate record to a short synopsis;
+  explicit requests for brevity are handled in the main model's final answer.
+  Analysis requests allow up to 16,384 output tokens, capped by known model limits.
+  The expanded video analysis step retains the complete returned report.
 - The auxiliary model analyzes all videos in the active context in relation to
   the user questions, then the main model answers from its observations. The
   chat shows a video analysis step; usage logs classify it as video analysis.

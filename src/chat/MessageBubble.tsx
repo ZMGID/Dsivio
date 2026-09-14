@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core'
+import { requestDockPreview } from './dock/dockPreview'
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   AlertCircle,
@@ -21,7 +23,7 @@ import { DegradedAnswerCard } from './DegradedAnswerCard'
 import { GeneratedFileArtifacts } from './GeneratedFileArtifacts'
 import { MarkdownStreamingContext } from './markdownStreaming'
 import { artifactId, artifactPresentationFromToolCall, isArtifactPresentationToolCall } from './artifactPresentation'
-import { isExecutableAgentPlanText } from './agentPlan'
+import { hasAgentPlanText } from './agentPlan'
 import { artifactDataUrl, isImageArtifact } from './artifacts'
 import { loadArtifactDataUrl } from './attachmentPreview'
 import { openChatImageViewer } from './imageViewer'
@@ -352,27 +354,28 @@ function AgentPlanAction({
   disabled?: boolean
   onExecute?: (messageId: string) => Promise<void> | void
 }) {
-  const plan = planState?.plan?.trim() ?? ''
-  if (!isExecutableAgentPlanText(plan)) return null
-
-  const approved = (planState?.status ?? 'draft') === 'approved'
+  const [openError, setOpenError] = useState<string | null>(null)
+  const document = planState?.document
+  if (!document && !hasAgentPlanText(planState?.plan)) return null
   return (
-    <div className="not-prose mt-3 flex max-w-full items-center gap-2 border-l-2 border-emerald-400/70 pl-3 text-[12px] leading-5 text-neutral-500 dark:border-emerald-500/60 dark:text-neutral-400">
-      <ListChecks size={14} strokeWidth={2} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
-      <span className="min-w-0 flex-1 truncate">{approved ? '已按这条计划执行' : '计划草案'}</span>
-      {!approved && onExecute && (
-        <Button
-          variant="primary"
-          size="sm"
-          onClick={() => void onExecute(messageId)}
-          disabled={disabled}
-          title="执行这条计划"
-          aria-label="执行这条计划"
-        >
+    <div className="not-prose mt-3 border-l-2 border-emerald-400/70 pl-3 text-[12px] leading-5 text-neutral-500 dark:border-emerald-500/60 dark:text-neutral-400">
+      <div className="flex min-w-0 items-center gap-2">
+        <ListChecks size={14} className="shrink-0 text-emerald-600" />
+        {document ? (
+          <button className="min-w-0 flex-1 truncate text-left hover:underline" title={document.path} onClick={() => requestDockPreview(document.path)}>
+            {document.title}.md
+          </button>
+        ) : <span className="min-w-0 flex-1 truncate">计划草案</span>}
+        {document && <Button variant="ghost" size="sm" onClick={() => {
+          setOpenError(null)
+          void invoke('chat_open_generated_artifact', { path: document.path }).catch((error) => setOpenError(String(error)))
+        }}>打开编辑</Button>}
+        {onExecute && <Button variant="primary" size="sm" onClick={() => void onExecute(messageId)} disabled={disabled} aria-label="执行这条计划">
           <Play size={12} strokeWidth={2.2} fill="currentColor" />
-          执行这条计划
-        </Button>
-      )}
+          {document ? '执行当前版本' : '执行这条计划'}
+        </Button>}
+      </div>
+      {openError && <div role="alert">{openError}</div>}
     </div>
   )
 }
@@ -1119,7 +1122,7 @@ function MessageBubbleComponent({
   // 工具调用超过 4 个时默认折叠（与思考过程一致）
   const toolsCollapsible = toolCalls.length > 4
   const agentPlan = message.agent_plan ?? message.agentPlan ?? agentPlanOverride
-  const isAgentPlanMessage = isExecutableAgentPlanText(agentPlan?.plan)
+  const isAgentPlanMessage = Boolean(agentPlan?.document) || hasAgentPlanText(agentPlan?.plan)
 
   const handleCopy = async () => {
     const ok = await copyToClipboard(message.content)

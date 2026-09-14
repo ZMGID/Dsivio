@@ -21,7 +21,7 @@ use super::context::{
     mark_summary_stale_if_needed, resolve_usage_anchor, should_auto_compress_context,
 };
 use super::interaction::{
-    approve_agent_plan_for_execution, format_tool_approval_summary, stream_delta_event_kinds,
+    format_tool_approval_summary, stream_delta_event_kinds,
 };
 use super::messages::{
     assistant_model_messages_for_storage, build_assistant_message, build_error_arm_message,
@@ -1712,110 +1712,6 @@ fn test_conversation_with_summary(stale: bool) -> Conversation {
 }
 
 #[test]
-fn approve_agent_plan_targets_selected_message_plan() {
-    let mut conversation = test_conversation_with_summary(false);
-    let old_plan = "1. Inspect current code\n2. Draft older fix";
-    let new_plan = "1. Inspect plan mode\n2. Implement inline execution";
-    let mut older = test_chat_message("msg_plan_old", "assistant", old_plan, 10);
-    older.agent_plan = Some(AgentPlanState {
-        mode: crate::chat::AgentPlanMode::Plan,
-        status: crate::chat::AgentPlanStatus::Draft,
-        plan: Some(old_plan.to_string()),
-        updated_at: 10,
-    });
-    let mut newer = test_chat_message("msg_plan_new", "assistant", new_plan, 11);
-    newer.agent_plan = Some(AgentPlanState {
-        mode: crate::chat::AgentPlanMode::Plan,
-        status: crate::chat::AgentPlanStatus::Draft,
-        plan: Some(new_plan.to_string()),
-        updated_at: 11,
-    });
-    conversation.agent_plan_state = older.agent_plan.clone().unwrap();
-    conversation.messages.push(older);
-    conversation.messages.push(newer);
-
-    approve_agent_plan_for_execution(&mut conversation, Some("msg_plan_new")).unwrap();
-
-    assert_eq!(
-        conversation.agent_plan_state.plan.as_deref(),
-        Some(new_plan)
-    );
-    assert_eq!(
-        conversation.agent_plan_state.status,
-        crate::chat::AgentPlanStatus::Approved
-    );
-    let older = conversation
-        .messages
-        .iter()
-        .find(|message| message.id == "msg_plan_old")
-        .unwrap();
-    assert_eq!(
-        older.agent_plan.as_ref().unwrap().status,
-        crate::chat::AgentPlanStatus::Draft
-    );
-    let newer = conversation
-        .messages
-        .iter()
-        .find(|message| message.id == "msg_plan_new")
-        .unwrap();
-    assert_eq!(
-        newer.agent_plan.as_ref().unwrap().status,
-        crate::chat::AgentPlanStatus::Approved
-    );
-}
-
-#[test]
-fn approve_agent_plan_rejects_non_plan_message_target() {
-    let mut conversation = test_conversation_with_summary(false);
-    conversation.messages.push(test_chat_message(
-        "msg_plain",
-        "assistant",
-        "plain answer",
-        10,
-    ));
-
-    let error = approve_agent_plan_for_execution(&mut conversation, Some("msg_plain")).unwrap_err();
-
-    assert_eq!(error, "该消息不是可执行计划");
-}
-
-#[test]
-fn approve_agent_plan_rejects_empty_message_plan_target() {
-    let mut conversation = test_conversation_with_summary(false);
-    let mut message = test_chat_message("msg_empty_plan", "assistant", "plain answer", 10);
-    message.agent_plan = Some(AgentPlanState {
-        mode: crate::chat::AgentPlanMode::Plan,
-        status: crate::chat::AgentPlanStatus::Draft,
-        plan: Some("   ".to_string()),
-        updated_at: 10,
-    });
-    conversation.messages.push(message);
-
-    let error =
-        approve_agent_plan_for_execution(&mut conversation, Some("msg_empty_plan")).unwrap_err();
-
-    assert_eq!(error, "该消息不是可执行计划");
-}
-
-#[test]
-fn approve_agent_plan_rejects_non_executable_fragment_target() {
-    let mut conversation = test_conversation_with_summary(false);
-    let mut message = test_chat_message("msg_fragment_plan", "assistant", "没问题！积萌,", 10);
-    message.agent_plan = Some(AgentPlanState {
-        mode: crate::chat::AgentPlanMode::Plan,
-        status: crate::chat::AgentPlanStatus::Draft,
-        plan: Some("没问题！积萌,".to_string()),
-        updated_at: 10,
-    });
-    conversation.messages.push(message);
-
-    let error =
-        approve_agent_plan_for_execution(&mut conversation, Some("msg_fragment_plan")).unwrap_err();
-
-    assert_eq!(error, "该消息不是可执行计划");
-}
-
-#[test]
 fn strip_transcripts_for_frontend_keeps_interrupted_draft_drops_completed() {
     let mut completed = test_chat_message("msg_done", "assistant", "final answer", 2);
     completed.api_messages = vec![serde_json::json!({
@@ -2673,6 +2569,44 @@ fn test_conversation_with_messages(messages: Vec<ChatMessage>) -> Conversation {
         forked_from: None,
         agent_runtime: crate::chat::AgentRuntimeConfig::default(),
     }
+}
+
+#[test]
+fn execute_document_reads_selected_file_and_missing_file_does_not_switch_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("选定 计划.md");
+    std::fs::write(&path, "用户编辑后的方案，无需列表").unwrap();
+    let mut message = test_chat_message("selected", "assistant", "已保存", 1);
+    message.agent_plan = Some(AgentPlanState {
+        document: Some(crate::chat::plan_document::PlanDocument {
+            id: "selected-plan".into(), title: "方案".into(), path: path.to_string_lossy().into(),
+        }),
+        ..Default::default()
+    });
+    let mut conversation = test_conversation_with_messages(vec![message]);
+    conversation.agent_plan_state.mode = crate::chat::AgentPlanMode::Plan;
+    let snapshot = crate::chat::plan_document::prepare_execution_in(&mut conversation, "selected", dir.path()).unwrap();
+    assert_eq!(snapshot, "用户编辑后的方案，无需列表");
+    assert_eq!(conversation.agent_plan_state.mode, crate::chat::AgentPlanMode::Act);
+    assert_eq!(conversation.agent_plan_state.document.as_ref().unwrap().id, "selected-plan");
+    std::fs::remove_file(path).unwrap();
+    conversation.agent_plan_state.mode = crate::chat::AgentPlanMode::Plan;
+    assert!(crate::chat::plan_document::prepare_execution_in(&mut conversation, "selected", dir.path()).is_err());
+    assert_eq!(conversation.agent_plan_state.mode, crate::chat::AgentPlanMode::Plan);
+}
+
+#[test]
+fn execute_legacy_plan_creates_document_once() {
+    let mut message = test_chat_message("legacy", "assistant", "旧计划正文", 1);
+    message.agent_plan = Some(AgentPlanState { plan: Some("旧计划正文".into()), ..Default::default() });
+    let mut conversation = test_conversation_with_messages(vec![message]);
+    let dir = tempfile::tempdir().unwrap();
+    crate::chat::plan_document::prepare_execution_in(&mut conversation, "legacy", dir.path()).unwrap();
+    let document = conversation.agent_plan_state.document.clone().unwrap();
+    assert_eq!(std::fs::read_to_string(&document.path).unwrap(), "旧计划正文");
+    crate::chat::plan_document::prepare_execution_in(&mut conversation, "legacy", dir.path()).unwrap();
+    assert_eq!(conversation.agent_plan_state.document.as_ref(), Some(&document));
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
 fn grouped_assistant(id: &str, content: &str, group_id: &str, ts: i64) -> ChatMessage {

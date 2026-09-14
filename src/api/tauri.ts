@@ -204,6 +204,7 @@ export type ChatPlanMode = 'act' | 'plan'
 export type ChatPlanStatus = 'empty' | 'draft' | 'approved'
 
 export type ChatPlanState = {
+  document?: { id: string; title: string; path: string } | null
   mode?: ChatPlanMode
   status?: ChatPlanStatus
   plan?: string | null

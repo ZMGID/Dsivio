@@ -774,6 +774,16 @@
     "ChatPlanStatePayload": {
       "additionalProperties": false,
       "properties": {
+        "document": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanDocument"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mode": {
           "$ref": "#/$defs/ChatPlanMode"
         },
@@ -2254,6 +2264,26 @@
         "round",
         "sensitive",
         "artifacts"
+      ],
+      "type": "object"
+    },
+    "PlanDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "path"
       ],
       "type": "object"
     }

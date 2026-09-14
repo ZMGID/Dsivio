@@ -416,6 +416,16 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
     // Conversation-level tools below are appended in chat/commands.rs and
     // never exposed via list_native_builtin_tool_defs (enabled = false).
     NativeToolEntry {
+        name: "save_plan",
+        def: crate::chat::plan_document::tool,
+        enabled: |_, _, _| false,
+        parallel_safe: false,
+        bypasses_approval: true,
+        read_only: false,
+        requires_session_consent: false,
+        call: NativeToolCall::Conversation(crate::chat::plan_document::handle),
+    },
+    NativeToolEntry {
         name: crate::chat::todo::TODO_WRITE_TOOL_NAME,
         def: crate::chat::todo::todo_write_tool,
         enabled: |_, _, _| false,
@@ -1318,6 +1328,7 @@ mod tests {
         "memory_read",
         "memory_modify",
         "memory_search",
+        "save_plan",
         "todo_write",
         "get_goal",
         "initialize_goal_criteria",
@@ -1428,7 +1439,8 @@ mod tests {
                 "memory_read",
                 "memory_modify",
                 "memory_search",
-                "todo_write",
+                "save_plan",
+        "todo_write",
                 "get_goal",
                 "initialize_goal_criteria",
                 "report_goal_progress",

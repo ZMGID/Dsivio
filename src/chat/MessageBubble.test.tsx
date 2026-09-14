@@ -332,7 +332,7 @@ describe('MessageBubble agent plan action', () => {
     expect(screen.getByText('计划草案')).toBeInTheDocument()
   })
 
-  it('shows approved state without an execute button', () => {
+  it('keeps legacy plans usable without claiming implementation happened', () => {
     const message: ChatMessage = {
       id: 'msg-plan-approved',
       role: 'assistant',
@@ -348,48 +348,24 @@ describe('MessageBubble agent plan action', () => {
 
     render(<MessageBubble message={message} onExecuteAgentPlan={() => {}} />)
 
-    expect(screen.getByText('已按这条计划执行')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '执行这条计划' })).not.toBeInTheDocument()
+    expect(screen.queryByText('已按这条计划执行')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '执行这条计划' })).toBeInTheDocument()
   })
 
-  it('does not render execute action for an incomplete non-plan fragment', () => {
-    const message: ChatMessage = {
-      id: 'msg-plan-fragment',
-      role: 'assistant',
-      content: '没问题！积萌,',
-      agent_plan: {
-        mode: 'plan',
-        status: 'draft',
-        plan: '没问题！积萌,',
-        updated_at: 1,
-      },
-      stream_outcome: 'interrupted',
-      timestamp: 1,
-    }
-
-    render(<MessageBubble message={message} onExecuteAgentPlan={() => {}} />)
-
-    expect(screen.queryByText('计划草案')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '执行这条计划' })).not.toBeInTheDocument()
+  it('uses document identity without requiring steps in the reply', () => {
+    const execute = vi.fn()
+    render(<MessageBubble message={{
+      id: 'document-plan', role: 'assistant', content: '方案已保存。', timestamp: 1,
+      agent_plan: { mode: 'plan', status: 'draft', document: { id: 'p1', title: '登录方案', path: 'E:/project/docs/plans/登录方案.md' } },
+    }} onExecuteAgentPlan={execute} />)
+    expect(screen.getByRole('button', { name: '登录方案.md' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '打开编辑' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '执行这条计划' }))
+    expect(execute).toHaveBeenCalledWith('document-plan')
   })
 
-  it('does not render execute action for a non-plan sentence even if persisted as draft', () => {
-    const message: ChatMessage = {
-      id: 'msg-plan-sentence',
-      role: 'assistant',
-      content: '计划：我会处理这个问题。',
-      agent_plan: {
-        mode: 'plan',
-        status: 'draft',
-        plan: '计划：我会处理这个问题。',
-        updated_at: 1,
-      },
-      timestamp: 1,
-    }
-
-    render(<MessageBubble message={message} onExecuteAgentPlan={() => {}} />)
-
-    expect(screen.queryByText('计划草案')).not.toBeInTheDocument()
+  it('does not turn an ordinary list into a plan', () => {
+    render(<MessageBubble message={{ id: 'list', role: 'assistant', content: '1. Finding A\n2. Finding B', timestamp: 1 }} onExecuteAgentPlan={() => {}} />)
     expect(screen.queryByRole('button', { name: '执行这条计划' })).not.toBeInTheDocument()
   })
 })
@@ -860,6 +836,28 @@ describe('MessageBubble 建分支', () => {
 
 
 describe('MessageBubble explicit artifact presentation', () => {
+  it('keeps streaming answer text below the presented image before completion', () => {
+    const message: ChatMessage = {
+      id: 'streaming-image-answer', role: 'assistant', timestamp: 1, content: '图片说明正在生成',
+      artifacts: [{ id: 'preview', name: 'preview.png', mime_type: 'image/png', data_url: 'data:image/png;base64,aA==' }],
+      tool_calls: [{ id: 'present', name: 'present_artifacts', source: 'native', status: 'completed',
+        structured_content: { type: 'artifact_presentation', artifactIds: ['preview'] } }],
+      segments: [
+        { id: 'present', kind: 'tool', phase: 'tool_loop', order: 0, tool_call_id: 'present' },
+        { id: 'answer', kind: 'text', phase: 'tool_loop', order: 1, text: '图片说明正在生成' },
+      ],
+    }
+    const { container, rerender } = render(<MessageBubble message={message} messageStreaming />)
+    const assertAnswerPosition = () => {
+      const answer = screen.getByText('图片说明正在生成')
+      expect(answer.closest('[aria-label="过程分组"]')).toBeNull()
+      expect(container.querySelector('img')!.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    assertAnswerPosition()
+    rerender(<MessageBubble message={message} />)
+    assertAnswerPosition()
+  })
+
   it.each(['completed', 'cancelled', 'error', 'interrupted'])('keeps late deliveries visible with Work manually closed after %s', outcome => {
     const message: ChatMessage = {
       id: 'late-delivery', role: 'assistant', timestamp: 1, content: '动画已完成。',

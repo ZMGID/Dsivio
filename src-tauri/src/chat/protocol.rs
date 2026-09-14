@@ -314,6 +314,9 @@ pub enum ChatPlanStatus {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[ts(rename_all = "camelCase")]
 pub struct ChatPlanStatePayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, inline)]
+    pub document: Option<crate::chat::plan_document::PlanDocument>,
     pub mode: ChatPlanMode,
     pub status: ChatPlanStatus,
     pub plan: Option<String>,
@@ -333,6 +336,7 @@ impl From<&crate::chat::AgentPlanState> for ChatPlanStatePayload {
                 crate::chat::AgentPlanStatus::Draft => ChatPlanStatus::Draft,
                 crate::chat::AgentPlanStatus::Approved => ChatPlanStatus::Approved,
             },
+            document: state.document.clone(),
             plan: state.plan.clone(),
             updated_at: state.updated_at,
         }
