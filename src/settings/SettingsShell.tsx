@@ -4,6 +4,7 @@ import {
   Download, Upload, ArrowLeft,
 } from 'lucide-react'
 import { open, save } from '@tauri-apps/plugin-dialog'
+import { applyModelCatalog } from '../data/modelCatalog'
 import {
   api,
   type Settings as SettingsType,
@@ -184,6 +185,7 @@ function defaultDefaultModels(chatProviderId = '', chatModel = ''): SettingsData
   return {
     chat: { providerId: chatProviderId, model: chatModel },
     vision: { providerId: '', model: '' },
+    videoAnalysis: { providerId: '', model: '' },
     titleSummary: { providerId: '', model: '' },
     compression: { providerId: '', model: '' },
     imageGeneration: { providerId: '', model: '' },
@@ -201,6 +203,9 @@ function clearDefaultModelProvider(
     vision: defaultModels.vision.providerId === providerId
       ? { providerId: '', model: '' }
       : defaultModels.vision,
+    videoAnalysis: defaultModels.videoAnalysis.providerId === providerId
+      ? { providerId: '', model: '' }
+      : defaultModels.videoAnalysis,
     titleSummary: defaultModels.titleSummary.providerId === providerId
       ? { providerId: '', model: '' }
       : defaultModels.titleSummary,
@@ -231,6 +236,9 @@ function resolveDefaultModelsAfterModelRemoval(
     vision: defaultModels.vision.providerId === providerId
       ? { ...defaultModels.vision, model: resolveAfterRemoval(defaultModels.vision.model) }
       : defaultModels.vision,
+    videoAnalysis: defaultModels.videoAnalysis.providerId === providerId
+      ? { ...defaultModels.videoAnalysis, model: resolveAfterRemoval(defaultModels.videoAnalysis.model) }
+      : defaultModels.videoAnalysis,
     titleSummary: defaultModels.titleSummary.providerId === providerId
       ? { ...defaultModels.titleSummary, model: resolveAfterRemoval(defaultModels.titleSummary.model) }
       : defaultModels.titleSummary,
@@ -1438,7 +1446,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     setFetchingProviderId(providerId)
     try {
       const currentProvider = settings.providers.find(p => p.id === providerId)
-      const models = await api.fetchModels(providerId, currentProvider
+      const catalog = await api.fetchModelCatalog(providerId, currentProvider
         ? {
           id: currentProvider.id,
           baseUrl: currentProvider.baseUrl,
@@ -1451,7 +1459,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         }
         : undefined)
       if (currentProvider) {
-        updateProvider(providerId, { availableModels: models })
+        updateProvider(providerId, applyModelCatalog(currentProvider, catalog))
       }
     } catch (err) {
       console.error('Failed to fetch models:', err)

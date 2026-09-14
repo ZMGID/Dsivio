@@ -839,7 +839,8 @@ pub(crate) async fn fetch_models(
     state: State<'_, AppState>,
     provider_id: String,
     provider: Option<ProviderConnectionInput>,
-) -> Result<Vec<String>, String> {
+    include_capabilities: Option<bool>,
+) -> Result<serde_json::Value, String> {
     let settings = state.settings_read().clone();
     let mut oauth_provider = effective_request_provider(
         &settings,
@@ -860,7 +861,8 @@ pub(crate) async fn fetch_models(
         }
     }
     if oauth_provider.request.oauth.is_some() {
-        return crate::provider_oauth::models(&state, &oauth_provider).await;
+        let ids = crate::provider_oauth::models(&state, &oauth_provider).await?;
+        return Ok(if include_capabilities == Some(true) { serde_json::json!({"models":ids,"capabilities":{}}) } else { serde_json::json!(ids) });
     }
 
     let api_format = resolve_api_format(&settings, &provider_id, provider.as_ref());
@@ -918,10 +920,22 @@ pub(crate) async fn fetch_models(
         .map_err(|e| format!("Failed to parse models response JSON: {e}"))?;
 
     let mut ids = parse_model_list_ids(&value)?;
-    if anonymous {
-        ids.retain(|id| crate::opencode_free::is_free_model(id));
+    if anonymous { ids.retain(|id| crate::opencode_free::is_free_model(id)); }
+    if include_capabilities == Some(true) {
+        let mut capabilities = serde_json::Map::new();
+        if let Some(items) = value.get("data").and_then(serde_json::Value::as_array) {
+            for item in items {
+                if let (Some(id), Some(video)) = (item.get("id").and_then(serde_json::Value::as_str), item.get("supports_video_in").and_then(serde_json::Value::as_bool)) {
+                    if ids.iter().any(|known| known == id) {
+                        capabilities.insert(id.to_string(), serde_json::json!({"videoInput":video}));
+                    }
+                }
+            }
+        }
+        Ok(serde_json::json!({"models":ids,"capabilities":capabilities}))
+    } else {
+        Ok(serde_json::json!(ids))
     }
-    Ok(ids)
 }
 
 /// 测试供应商连接是否可用

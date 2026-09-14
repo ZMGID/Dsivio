@@ -1,7 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { vi } from 'vitest'
 import { InputBar } from './InputBar'
+import { draftKey, setComposerDraft } from './composerDraft'
 
 let dropHandler:
   | ((event: { payload: { type: string; paths?: string[] } }) => void)
@@ -27,7 +28,7 @@ vi.mock('../api/tauri', () => ({
       paths.map((path) => ({
         path,
         name: path.split(/[/\\]/).pop() || path,
-        kind: /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif)$/i.test(path) ? 'file' : 'directory',
+        kind: /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|heif|mp4|mov)$/i.test(path) ? 'file' : 'directory',
       })),
   },
   isTauriRuntime: () => true,
@@ -42,6 +43,7 @@ vi.mock('./api', () => ({
 describe('InputBar OS drops', () => {
   beforeEach(() => {
     dropHandler = undefined
+    setComposerDraft(draftKey(null), { input: '', quotes: [], attachments: [] })
   })
 
   it('ignores window drops when the conversation composer is hidden', async () => {
@@ -65,4 +67,19 @@ describe('InputBar OS drops', () => {
     expect(await screen.findByText('FOLDER')).toBeInTheDocument()
     expect(screen.getByText('VE女包系列')).toBeInTheDocument()
   })
+  it('sends mixed folder and video drops with their distinct attachment types', async () => {
+    const onSend = vi.fn()
+    render(<InputBar onSend={onSend} />)
+    await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+    dropHandler?.({ payload: { type: 'drop', paths: ['/goods/catalog', '/goods/demo.mp4'] } })
+    expect(await screen.findByText('catalog')).toBeInTheDocument()
+    expect(screen.getByText('demo.mp4')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(onSend).toHaveBeenCalled())
+    expect(onSend.mock.calls[0][1]).toEqual([
+      expect.objectContaining({ type: 'folder', path: '/goods/catalog' }),
+      expect.objectContaining({ type: 'video', path: '/goods/demo.mp4' }),
+    ])
+  })
+
 })

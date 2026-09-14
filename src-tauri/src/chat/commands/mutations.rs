@@ -126,7 +126,7 @@ pub(super) fn prepare_reply_with_model(
     if crate::chat::plan::is_plan_mode(&conversation.agent_plan_state)
         || crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state)
     {
-        return Err("规划模式下无法换模型回答".to_string());
+        return Err("Plan 或 Orchestrate 模式下无法换模型回答".to_string());
     }
     let provider_id = provider_id.trim();
     let model = model.trim();
@@ -904,6 +904,15 @@ pub(crate) async fn chat_delete_conversation(
     state: tauri::State<'_, crate::state::AppState>,
     conversation_id: String,
 ) -> Result<serde_json::Value, String> {
+    let runtime = crate::chat::sub_agent::control::runtime(&app)?;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        runtime.delete_conversation(&conversation_id),
+    )
+    .await
+    .map_err(|_| {
+        "Sub-agent cleanup is still pending; retry deletion after it ends".to_string()
+    })??;
     // 删对话即终止其持久外部 CLI 会话（actor 关闭子进程）并清掉跨重启 resume 句柄。
     state.remove_external_live_session(&conversation_id);
     crate::external_agents::session::clear_live_handle(&app, &conversation_id);
@@ -1247,6 +1256,20 @@ pub(crate) async fn chat_bulk_delete_conversations(
     let mut deleted = 0usize;
     let mut warnings: Vec<String> = Vec::new();
     for conversation_id in ids {
+        let runtime = crate::chat::sub_agent::control::runtime(&app)?;
+        if !matches!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                runtime.delete_conversation(&conversation_id)
+            )
+            .await,
+            Ok(Ok(()))
+        ) {
+            warnings.push(format!(
+                "{conversation_id}: sub-agent cleanup is still pending"
+            ));
+            continue;
+        }
         // 与单条删除一致：外部 CLI 会话 / 后台命令 / 运行态小 map 都先清，
         // 否则工作区被占着时副产物清理会失败，用户体感「删不掉」。
         state.remove_external_live_session(&conversation_id);

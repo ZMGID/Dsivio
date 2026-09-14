@@ -7,6 +7,7 @@
 | 目的 | 文档 |
 | --- | --- |
 | 理解架构、代码约定和关键约束 | [CLAUDE.md](../CLAUDE.md) |
+| 从 Kivio 同步公共功能更新 | [上游同步](upstream-sync.md) |
 | 统一产品用语 | [CONTEXT.md](../CONTEXT.md) |
 | 理解聊天模型协议 | [模型适配器契约](../src-tauri/src/chat/model/README.md) |
 | 修改图片功能 | [图片工作台实现](prd/image-studio-implementation.md)、[保存目录规范](prd/image-studio-folder-convention.md) |

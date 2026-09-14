@@ -9,6 +9,7 @@ type DbEntry = {
   temperature?: number
   capabilities: {
     vision?: boolean
+    videoInput?: boolean
     functionCalling?: boolean
     reasoning?: boolean
     streaming?: boolean
@@ -156,7 +157,13 @@ export function resolveModelInfo(
   provider?: Pick<ModelProvider, 'baseUrl' | 'request'>,
 ): ModelInfo {
   const defaults = matchModel(providerModelDatabaseId(modelName, provider))
-  const override = overrides?.[modelName]
+  const storedOverride = overrides?.[modelName]
+  const override = storedOverride?.advertisedVideoInput != null
+    ? { ...storedOverride, capabilities: {
+      ...storedOverride.capabilities,
+      videoInput: storedOverride.capabilities?.videoInput ?? storedOverride.advertisedVideoInput,
+    } }
+    : storedOverride
 
   if (!defaults && !override) return {}
   if (!defaults) return override!
@@ -178,6 +185,7 @@ export function resolveModelInfo(
       webSearch: override.capabilities?.webSearch ?? defaults.capabilities?.webSearch,
       imageGeneration: override.capabilities?.imageGeneration ?? defaults.capabilities?.imageGeneration,
       videoGeneration: override.capabilities?.videoGeneration ?? defaults.capabilities?.videoGeneration,
+      videoInput: override.capabilities?.videoInput ?? defaults.capabilities?.videoInput,
       embedding: override.capabilities?.embedding ?? defaults.capabilities?.embedding,
     },
     mediaPricing: override.mediaPricing ?? defaults.mediaPricing,
@@ -208,6 +216,7 @@ function toModelInfo(entry: DbEntry): ModelInfo {
       webSearch: entry.capabilities.webSearch ?? false,
       imageGeneration: entry.capabilities.imageGeneration ?? false,
       videoGeneration: entry.capabilities.videoGeneration ?? false,
+      videoInput: entry.capabilities.videoInput ?? false,
       embedding: entry.capabilities.embedding ?? false,
     },
     mediaPricing: entry.mediaPricing,

@@ -169,6 +169,13 @@
             "null"
           ]
         },
+        "tokenCountSource": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "usedTokens": {
           "format": "uint64",
           "minimum": 0,
