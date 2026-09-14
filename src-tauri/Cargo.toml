@@ -81,6 +81,7 @@ directories = "5"
 toml = "0.8"
 
 unicode-normalization = "0.1"
+similar = { version = "2.7", default-features = false }
 
 # 工具库
 base64 = "0.22"
