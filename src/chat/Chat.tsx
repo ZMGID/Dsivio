@@ -876,6 +876,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       streamSnapshotsRef.current,
       pendingToolConfirmsRef.current,
     )
+    // 取消后 invoke 仍可能在收尾；保留 in-flight 锁，但停止侧栏的生成动画。
+    if (locallyCancelledConversationIdRef.current) {
+      next.delete(locallyCancelledConversationIdRef.current)
+    }
     const previous = generatingConversationIdsRef.current
     if (previous.size === next.size && [...previous].every((id) => next.has(id))) return
     generatingConversationIdsRef.current = next
@@ -1162,14 +1166,21 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const cancelCurrentRunLocally = useCallback(() => {
     locallyCancelledConversationIdRef.current = currentConversationIdRef.current
     locallyCancelledRunIdRef.current = activeRunIdRef.current
+    // 已排队的渲染不经过迟到事件过滤，必须先撤掉，防止把 streaming 写回 true。
+    cancelPendingFrame()
     // 立即停掉"生成中"视觉（撤掉取消按钮 + 停 shimmer），但保留已生成文本：
     // 切到 frozen 态冻结展示，等 send invoke 返回持久化消息时由
     // finishStreamingRunWithConversation 无缝替换（clearStreamingPreview 会清除 frozen）。
     // 后续迟到的流事件已被 isLocallyCancelledPayload 过滤，预览不会再变动。
     setStreamCoarse({ streaming: false, streamFrozen: true })
-    patchStreamSnapshot({ reasoningStreaming: false })
+    patchStreamSnapshot({ streaming: false, reasoningStreaming: false })
     const conversationId = currentConversationIdRef.current
     if (conversationId) {
+      const snapshot = streamSnapshotsRef.current[conversationId]
+      if (snapshot) {
+        snapshot.streaming = false
+        snapshot.reasoningStreaming = false
+      }
       delete pendingToolConfirmsRef.current[conversationId]
       delete pendingSessionConsentsRef.current[conversationId]
       delete pendingUserPromptsRef.current[conversationId]
@@ -1177,7 +1188,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     setPendingToolConfirm(null)
     setPendingSessionConsent(null)
     setPendingUserPrompt(null)
-  }, [])
+    syncGeneratingConversationIds()
+  }, [cancelPendingFrame, syncGeneratingConversationIds])
 
   const resetLocalCancellation = useCallback(() => {
     locallyCancelledConversationIdRef.current = null
@@ -2076,6 +2088,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         locallyCancelledConversationIdRef.current,
         locallyCancelledRunIdRef.current,
       )) {
+        // 取消只屏蔽迟到内容；终局仍须收尾。恢复的 run 没有本窗口的
+        // send invoke/finally，吞掉终局会永久留下 in-flight 和冻结预览。
+        if (isStreamTerminal(payload)) {
+          restoredRunIdsRef.current.delete(payload.runId)
+          void finishStreamingRun({ conversationId: payload.conversationId, reason: 'cancelled' })
+        }
         return
       }
       const terminal = isStreamTerminal(payload)
