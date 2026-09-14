@@ -660,7 +660,6 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
         provider_tools_fallback_system_prompt: req.system_prompt.clone(),
         initial_anchor_total_tokens: None,
         initial_anchor_trailing_estimate: 0,
-        initial_display_usage: None,
         skill_project_cwd: req.skill_project_cwd.clone(),
     };
 

@@ -8,7 +8,6 @@ pub mod gemini;
 pub mod openai;
 pub mod responses;
 pub mod types;
-pub mod usage_anchor;
 
 pub use anthropic::AnthropicMessagesProvider;
 pub use gemini::GeminiProvider;
@@ -98,30 +97,6 @@ pub(crate) async fn generate_with_chat_provider(
 
 /// `generate_with_chat_provider` 的流式版本。同为全 crate 统一分发入口。
 pub(crate) async fn stream_with_chat_provider(
-    state: &crate::state::AppState,
-    provider: &crate::settings::ModelProvider,
-    retry_attempts: usize,
-    request: GenerateRequest,
-    sink: &mut (dyn StreamSink + Send),
-) -> Result<GenerateOutput, ModelError> {
-    let identity = usage_anchor::UsageRequestIdentity::from_request(provider, &request);
-    let api_format = usage_anchor::request_api_format(provider, request.options.builtin_web_search).to_string();
-    let mut output = stream_with_chat_provider_inner(state, provider, retry_attempts, request, sink).await?;
-    if let Some(usage) = output.usage.as_mut() {
-        usage.api_format = Some(api_format);
-        // A Responses compatibility retry may have removed reasoning input. Its
-        // measured usage is real, but cannot certify the original logical view
-        // (in particular after restart, when endpoint capability memory is lost).
-        usage.request_identity = if state.reasoning_replay_unsupported(&provider.base_url) {
-            None
-        } else {
-            identity
-        };
-    }
-    Ok(output)
-}
-
-async fn stream_with_chat_provider_inner(
     state: &crate::state::AppState,
     provider: &crate::settings::ModelProvider,
     retry_attempts: usize,

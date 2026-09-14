@@ -947,8 +947,6 @@ fn usage_from_prompt_result(result: &Value) -> Option<crate::chat::model::ModelU
         cache_creation_input_tokens: field("cachedWriteTokens").filter(|v| *v > 0),
         reasoning_tokens: field("reasoningTokens").filter(|v| *v > 0),
         // 窗口不在这里给（grok 在 session/new 的 `_meta.totalContextTokens`，已由模型探测读走）。
-        api_format: None,
-        request_identity: None,
         context_window_tokens: None,
     })
 }

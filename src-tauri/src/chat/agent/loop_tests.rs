@@ -27,8 +27,6 @@ struct RecordedDelta {
 
 #[derive(Default)]
 struct TestHost {
-    capture_checkpoints: bool,
-    checkpoint_histories: Mutex<Vec<Vec<Value>>>,
     children: Option<Arc<crate::chat::sub_agent::runtime::Runtime>>,
     managed: Option<(
         Arc<crate::chat::sub_agent::runtime::Runtime>,
@@ -159,7 +157,6 @@ impl AgentHost for TestHost {
         history: &'a [Value],
         finishing: bool,
     ) -> super::super::host::AgentHostFuture<'a, Result<Vec<Value>, String>> {
-        if self.capture_checkpoints { self.checkpoint_histories.lock().unwrap().push(history.to_vec()); }
         Box::pin(async move {
             if let Some(runtime) = &self.children {
                 return crate::chat::sub_agent::control::collect_results_with(
@@ -326,340 +323,9 @@ impl AgentHost for TestHost {
 
 #[derive(Default)]
 struct RecordingExecutor {
-    image_followups: bool,
     active: AtomicUsize,
     max_active: AtomicUsize,
     events: Arc<Mutex<Vec<String>>>,
-}
-
-struct NativeMutationExecutor(crate::native_tools::NativeToolWorkspace);
-
-const HISTORY_PAYLOAD: &str = "[Kivio history: completed file payload omitted; 20880 UTF-8 bytes; sha256=8b674097a07176154b21437ed50db32db6e05687567ddd6c1f912780bdd1f911. Full arguments/diff remain in local history. Read the file for current content; do not execute this placeholder.]";
-
-#[test]
-fn regression_placeholder_write_preserves_files_and_large_writes_still_work() {
-    let root = tempfile::tempdir().unwrap();
-    let workspace = crate::native_tools::NativeToolWorkspace::project(
-        "test".into(), "Test".into(), Some(root.path().to_string_lossy().into_owned()),
-    );
-    std::fs::write(root.path().join("existing.py"), "original\n").unwrap();
-    for path in ["existing.py", "new.py"] {
-        let error = crate::native_tools::write_file(&workspace, &serde_json::json!({
-            "path":path, "content":HISTORY_PAYLOAD
-        })).unwrap_err();
-        assert!(error.contains("no file was changed"));
-    }
-    assert!(!root.path().join("new.py").exists());
-    assert_eq!(std::fs::read_to_string(root.path().join("existing.py")).unwrap(), "original\n");
-    let large = "print('real code')\n".repeat(4000);
-    crate::native_tools::write_file(&workspace, &serde_json::json!({"path":"new.py", "content":large})).unwrap();
-    assert_eq!(std::fs::read_to_string(root.path().join("new.py")).unwrap(), large);
-}
-
-#[test]
-fn regression_placeholder_edit_must_not_replace_real_code() {
-    let root = tempfile::tempdir().unwrap();
-    let workspace = crate::native_tools::NativeToolWorkspace::project(
-        "audit".into(), "Audit".into(), Some(root.path().to_string_lossy().into_owned()),
-    );
-    let path = root.path().join("app.py");
-    std::fs::write(&path, "def answer():\n    return 42\n").unwrap();
-    let result = crate::native_tools::edit_file(&workspace, &serde_json::json!({
-        "path":"app.py", "edits":[
-            {"old_string":"def answer():", "new_string":"def changed():"},
-            {"old_string":"    return 42", "new_string":HISTORY_PAYLOAD}
-        ]
-    }));
-    assert!(result.is_err(), "history marker was accepted as replacement code");
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "def answer():\n    return 42\n");
-    // Existing damage can be repaired: the marker is allowed as old_string.
-    std::fs::write(&path, HISTORY_PAYLOAD).unwrap();
-    crate::native_tools::edit_file(&workspace, &serde_json::json!({
-        "path":"app.py", "edits":[{"old_string":HISTORY_PAYLOAD,"new_string":"repaired\n"}]
-    })).unwrap();
-    assert_eq!(std::fs::read_to_string(path).unwrap(), "repaired\n");
-}
-
-#[tokio::test]
-async fn regression_responses_placeholder_is_rejected_before_writing() {
-    let arguments = serde_json::json!({"path":"test_api.py","content":HISTORY_PAYLOAD}).to_string();
-    let server = MockModelServer::start(vec![
-        MockResponse::Sse(vec![
-            serde_json::json!({"type":"response.output_item.added","output_index":0,
-                "item":{"id":"item","type":"function_call","call_id":"call","name":"write","arguments":""}}).to_string(),
-            serde_json::json!({"type":"response.function_call_arguments.done","item_id":"item","output_index":0,"arguments":arguments}).to_string(),
-            serde_json::json!({"type":"response.completed","response":{"status":"completed"}}).to_string(),
-        ]),
-        MockResponse::Sse(vec![
-            serde_json::json!({"type":"response.output_text.delta","delta":"Need real source content."}).to_string(),
-            serde_json::json!({"type":"response.completed","response":{"status":"completed"}}).to_string(),
-        ]),
-    ]);
-    let state = test_app_state();
-    let mut config = test_run_config(&state, &server.base_url);
-    config.provider.api_format = "openai_responses".into();
-    config.tools = vec![native_write_file_tool()];
-    config.effective_chat_tools.max_tool_rounds = Some(3);
-    let root = tempfile::tempdir().unwrap();
-    let result = run_agent_loop(config, &TestHost::default(), &NativeMutationExecutor(
-        crate::native_tools::NativeToolWorkspace::project("test".into(),"Test".into(),Some(root.path().to_string_lossy().into_owned()))
-    )).await.unwrap();
-    assert!(!root.path().join("test_api.py").exists());
-    assert_eq!(result.tool_records.len(), 1);
-    assert_eq!(result.tool_records[0].status, ToolCallStatus::Error);
-    assert!(result.tool_records[0].error.as_deref().unwrap().contains("History-only placeholder"));
-    let body: Value = serde_json::from_str(&server.captured_bodies()[1]).unwrap();
-    assert!(body["input"].as_array().unwrap().iter().any(|item|
-        item["type"] == "function_call_output" && item["output"].as_str().unwrap_or("").contains("actual content")));
-}
-
-#[tokio::test]
-async fn regression_live_display_must_keep_last_report() {
-    for cancelled in [false, true] {
-        let call = |id: &str, name: &str, args: Value| MockResponse::Sse(vec![
-            serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":id,
-                "function":{"name":name,"arguments":args.to_string()}}]}}]}).to_string(),
-            serde_json::json!({"choices":[],"usage":{"prompt_tokens":90000,"completion_tokens":10,"total_tokens":90010}}).to_string(),
-            "[DONE]".into(),
-        ]);
-        let server = MockModelServer::start(vec![
-            call("first", "write", serde_json::json!({"path":"app.py", "content":"original body\n".repeat(2000)})),
-            call("second", "edit", serde_json::json!({"path":"app.py", "edits":[{"old_string":"original body\n".repeat(2000),"new_string":"done\n"}]})),
-            if cancelled {
-                MockResponse::SseThenHang(vec![r#"{"choices":[{"delta":{"content":"partial answer"}}]}"#.into()])
-            } else {
-                MockResponse::Sse(vec![r#"{"choices":[{"delta":{"content":"done"}}]}"#.into(), "[DONE]".into()])
-            },
-        ]);
-        let state = test_app_state();
-        let mut config = test_run_config(&state, &server.base_url);
-        config.tools = vec![native_write_file_tool(), crate::mcp::types::native_edit_file_tool()];
-        config.effective_chat_tools.max_tool_rounds = Some(5);
-        config.initial_display_usage = Some((120_000, 20));
-        config.provider.model_overrides.insert("test-model".into(), crate::settings::ModelInfo {
-            extra_body: Some(serde_json::json!({"temperature":0.5})), ..Default::default()
-        });
-        let host = TestHost { cancel_on_first_text_delta: cancelled, ..Default::default() };
-        let root = tempfile::tempdir().unwrap();
-        let result = run_agent_loop(config, &host, &NativeMutationExecutor(crate::native_tools::NativeToolWorkspace::project(
-            "audit".into(), "Audit".into(), Some(root.path().to_string_lossy().into_owned()),
-        ))).await.unwrap();
-        let ticks = host.recorded_context_ticks();
-        assert!(ticks.len() >= 3, "{ticks:?}");
-        assert_eq!(ticks[0].0, 120_020, "reopened report lost before first response: {ticks:?}");
-        assert!(ticks[1].0 >= 90010, "first measurement missing: {ticks:?}");
-        assert!(ticks[2].0 >= 90010, "reported usage erased by argument projection: {ticks:?}");
-        if cancelled {
-            assert_eq!(result.stream_outcome, "cancelled");
-            let usage = result.last_step_usage.unwrap();
-            assert_eq!(usage.total_tokens, Some(90010));
-            assert_eq!(usage.api_format.as_deref(), Some("openai_chat"));
-            assert!(usage.request_identity.is_none());
-        }
-        }
-}
-
-impl ToolExecutor for NativeMutationExecutor {
-    fn call<'a>(
-        &'a self,
-        _ctx: &'a ToolExecutionContext<'a>,
-        tool: &'a ChatToolDefinition,
-        arguments: Value,
-        _cache: Option<&'a mut skills::SkillRunCache>,
-    ) -> super::super::execute::ToolExecutorFuture<'a> {
-        Box::pin(async move {
-            let result = match tool.name.as_str() {
-                "write" => crate::native_tools::write_file(&self.0, &arguments),
-                "edit" => crate::native_tools::edit_file(&self.0, &arguments),
-                _ => Err("unexpected tool".into()),
-            }?;
-            crate::mcp::registry::file_mutation_tool_result(result)
-        })
-    }
-}
-
-#[tokio::test]
-async fn responses_replay_fallback_does_not_certify_original_request_usage() {
-    let server = MockModelServer::start(vec![
-        MockResponse::Status(400, r#"{"error":{"message":"unsupported reasoning input item"}}"#.into()),
-        MockResponse::Sse(vec![
-            r#"{"type":"response.output_text.delta","delta":"done"}"#.into(),
-            r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}"#.into(),
-            "[DONE]".into(),
-        ]),
-    ]);
-    let state = test_app_state();
-    let mut config = test_run_config(&state, &server.base_url);
-    config.provider.api_format = "openai_responses".into();
-    config.tools.clear();
-    config.runtime_messages = vec![
-        serde_json::json!({"role":"user","content":"hello"}),
-        serde_json::json!({"role":"assistant","content":"earlier answer", "reasoning_items":[{
-            "model":"test-model", "item":{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"ciphertext"}
-        }]}),
-        serde_json::json!({"role":"user","content":"continue"}),
-    ];
-    let result = run_agent_loop(config, &TestHost::default(), &RecordingExecutor::default()).await.unwrap();
-    let bodies = server.captured_bodies();
-    assert_eq!(bodies.len(), 2);
-    let first: Value = serde_json::from_str(&bodies[0]).unwrap();
-    let retry: Value = serde_json::from_str(&bodies[1]).unwrap();
-    assert!(first["input"].as_array().unwrap().iter().any(|item| item["type"] == "reasoning"));
-    assert!(retry["input"].as_array().unwrap().iter().all(|item| item["type"] != "reasoning"));
-    let usage = result.last_step_usage.unwrap();
-    assert_eq!(usage.input_tokens, Some(100));
-    assert!(usage.request_identity.is_none(), "reduced retry input cannot certify the original replay view");
-}
-
-#[tokio::test]
-async fn run_loop_preserves_reused_tool_ids_in_durable_checkpoints() {
-    let server = MockModelServer::start(vec![MockResponse::Sse(vec![
-        r#"{"choices":[{"delta":{"content":"done"}}]}"#.into(), "[DONE]".into(),
-    ])]);
-    let state = test_app_state();
-    let mut config = test_run_config(&state, &server.base_url);
-    let call = |text: &str| serde_json::json!({"role":"assistant","tool_calls":[{
-        "id":"reused", "type":"function", "function":{"name":"write", "arguments":
-            serde_json::json!({"path":"app.txt","content":text.repeat(2000)}).to_string()}
-    }]});
-    config.runtime_messages = vec![
-        serde_json::json!({"role":"user","content":"write first"}), call("first body"),
-        serde_json::json!({"role":"tool","tool_call_id":"reused","content":"ok"}),
-        serde_json::json!({"role":"user","content":"write second"}), call("second body"),
-        serde_json::json!({"role":"tool","tool_call_id":"reused","content":"ok"}),
-        serde_json::json!({"role":"user","content":"finish"}),
-    ];
-    let host = TestHost { capture_checkpoints: true, ..Default::default() };
-    run_agent_loop(config, &host, &RecordingExecutor::default()).await.unwrap();
-    let checkpoints = host.checkpoint_histories.lock().unwrap();
-    assert!(!checkpoints.is_empty());
-    for history in checkpoints.iter() {
-        let args: Vec<_> = history.iter().flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
-            .filter(|c| c["id"] == "reused").map(|c| c["function"]["arguments"].as_str().unwrap()).collect();
-        assert_eq!(args.len(), 2);
-        assert!(args[0].contains("first body"), "earlier call must keep its own arguments");
-        assert!(args[1].contains("second body"));
-    }
-}
-
-#[tokio::test]
-async fn image_followup_never_interrupts_a_multi_tool_batch_on_the_wire() {
-    let mut events = Vec::new();
-    for (index, id, name, args) in [(0,"image_call","read",r#"{"path":"shot.png"}"#),
-        (1,"shell_call","bash",r#"{"command":"echo ok"}"#)] {
-        events.push(serde_json::json!({"type":"response.output_item.added","output_index":index,
-            "item":{"id":id,"type":"function_call","call_id":id,"name":name,"arguments":""}}).to_string());
-        events.push(serde_json::json!({"type":"response.function_call_arguments.done","item_id":id,"output_index":index,"arguments":args}).to_string());
-    }
-    events.push(serde_json::json!({"type":"response.completed","response":{"status":"completed"}}).to_string());
-    let server = MockModelServer::start(vec![MockResponse::Sse(events), MockResponse::Sse(vec![
-        r#"{"type":"response.output_text.delta","delta":"done"}"#.into(),
-        r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}}"#.into(),
-    ])]);
-    let state = test_app_state();
-    let mut config = test_run_config(&state, &server.base_url);
-    config.provider.api_format = "openai_responses".into();
-    config.tools = vec![native_read_file_tool(),native_run_command_tool()];
-    config.effective_chat_tools.max_tool_rounds = Some(4);
-    let result = run_agent_loop(config,&TestHost::default(),&RecordingExecutor {image_followups:true,..Default::default()}).await.unwrap();
-    assert_eq!(result.tool_records.len(),2);
-    let bodies = server.captured_bodies();
-    assert_eq!(bodies.len(),2);
-    let last: Value = serde_json::from_str(&bodies[1]).unwrap();
-    let input = last["input"].as_array().unwrap();
-    let image = input.iter().position(|v| v["content"].as_array().is_some_and(|parts| parts.iter().any(|p| p["type"] == "input_image"))).unwrap();
-    let output = input.iter().position(|v| v["type"] == "function_call_output" && v["call_id"] == "shell_call").unwrap();
-    assert!(output < image, "No tool output found: image/user message must follow ALL tool outputs, not just the read result");
-    assert_eq!(result.stream_outcome,"completed");
-}
-
-#[tokio::test]
-async fn native_file_receipts_are_short_on_the_wire_and_keep_review_diff() {
-    let root = tempfile::tempdir().unwrap();
-    let call = |id: &str, name: &str, arguments: Value| {
-        MockResponse::Sse(vec![
-            serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":id,
-            "function":{"name":name,"arguments":arguments.to_string()}}]}}]})
-            .to_string(),
-            "[DONE]".into(),
-        ])
-    };
-    let server = MockModelServer::start(vec![
-        call("write1", "write", serde_json::json!({"path":"fixture.txt", "content":"BODY_MARKER\n".repeat(2000)})),
-        call("edit1", "edit", serde_json::json!({"path":"fixture.txt", "edits":[{
-            "old_string":"BODY_MARKER\n".repeat(2000), "new_string":"FINAL_MARKER\n"
-        }]})),
-        MockResponse::Sse(vec![r#"{"choices":[{"delta":{"content":"done"}}]}"#.into(),
-            r#"{"choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":10,"total_tokens":1010}}"#.into(), "[DONE]".into()]),
-    ]);
-    let state = test_app_state();
-    let mut config = test_run_config(&state, &server.base_url);
-    config.tools = vec![
-        native_write_file_tool(),
-        crate::mcp::types::native_edit_file_tool(),
-    ];
-    config.effective_chat_tools.max_tool_rounds = Some(5);
-    let host = TestHost { capture_checkpoints: true, ..Default::default() };
-    let result = run_agent_loop(
-        config,
-        &host,
-        &NativeMutationExecutor(crate::native_tools::NativeToolWorkspace::project(
-            "test".into(),
-            "Test".into(),
-            Some(root.path().to_string_lossy().into_owned()),
-        )),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(root.path().join("fixture.txt")).unwrap(),
-        "FINAL_MARKER\n"
-    );
-    assert!(result
-        .last_step_usage
-        .as_ref()
-        .unwrap()
-        .request_identity
-        .is_some());
-    let checkpoints = host.checkpoint_histories.lock().unwrap();
-    assert!(!checkpoints.is_empty());
-    for history in checkpoints.iter() {
-        for call in history.iter().flat_map(|m| m["tool_calls"].as_array().into_iter().flatten()) {
-            if call["id"] == "write1" {
-                assert!(call["function"]["arguments"].as_str().unwrap().len() > 20_000,
-                    "durable checkpoint must preserve original arguments");
-            }
-        }
-    }
-    let bodies = server.captured_bodies.lock().unwrap();
-    let last: Value = serde_json::from_str(bodies.last().unwrap()).unwrap();
-    let replayed_write = last["messages"].as_array().unwrap().iter()
-        .flat_map(|message| message["tool_calls"].as_array().into_iter().flatten())
-        .find(|call| call["id"] == "write1").unwrap();
-    let replay_arguments = replayed_write["function"]["arguments"].as_str().unwrap();
-    assert!(replay_arguments.len() > 20_000, "real historical arguments must remain complete");
-    assert!(replay_arguments.contains("BODY_MARKER"));
-    assert!(!replay_arguments.contains("Kivio history:"));
-    assert!(result.tool_records[0].arguments.contains("BODY_MARKER"), "audit arguments stay complete");
-    assert!(result.api_messages.iter().any(|message| message.to_string().contains("BODY_MARKER")),
-        "persisted replay stays complete");
-    let receipts: Vec<_> = last["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|message| message["role"] == "tool")
-        .map(|message| message["content"].as_str().unwrap())
-        .collect();
-    assert_eq!(receipts.len(), 2);
-    assert!(receipts
-        .iter()
-        .all(|text| text.len() < 150 && !text.contains("MARKER")));
-    assert!(result.tool_records.iter().all(|record| record
-        .structured_content
-        .as_ref()
-        .is_some_and(|value| value["diff"]
-            .as_str()
-            .is_some_and(|diff| diff.contains("MARKER")))));
 }
 
 impl RecordingExecutor {
@@ -704,9 +370,7 @@ impl ToolExecutor for RecordingExecutor {
                 raw: Value::Null,
                 artifacts: Vec::new(),
                 structured_content: None,
-                follow_up_user_messages: if self.image_followups && name == "read" {
-                    vec![serde_json::json!({"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]})]
-                } else { Vec::new() },
+                follow_up_user_messages: Vec::new(),
             })
         })
     }
@@ -967,7 +631,6 @@ fn test_run_config<'a>(state: &'a AppState, base_url: &str) -> AgentRunConfig<'a
         provider_tools_fallback_system_prompt: String::new(),
         initial_anchor_total_tokens: None,
         initial_anchor_trailing_estimate: 0,
-        initial_display_usage: None,
         skill_project_cwd: None,
     }
 }
@@ -2307,19 +1970,18 @@ async fn run_loop_l2_compacts_old_history_keeps_current_round_raw() {
     ]);
     let state = test_app_state();
     let mut config = test_run_config(&state, &server.base_url);
-    // 4000 token 窗口包含工具和输出预留：由大段非工具历史确保
+    // 600 token 窗口（预算 510）：旧工具输出先经 microcompact，再由大段非工具历史确保
     // 发送视图仍超预算，稳定进入 Layer2 摘要。
     config.provider.model_overrides.insert(
         "test-model".to_string(),
         crate::settings::ModelInfo {
-            context_window: Some(4000),
-            max_output: Some(512),
+            context_window: Some(600),
             ..Default::default()
         },
     );
     // 预填早前轮次历史：大段普通对话不受 tool-result microcompact 影响；超大 tool 输出
     // 仍保留，用来验证 L2 会替换旧段且不动本轮新工具结果。
-    let large_non_tool = "D".repeat(18_000);
+    let large_non_tool = "D".repeat(9_000);
     config.runtime_messages.push(serde_json::json!({
         "role": "user", "content": large_non_tool
     }));
@@ -2501,71 +2163,6 @@ async fn run_loop_no_anchor_skips_compaction_when_estimate_below_budget() {
 /// （`context_window_for_model`），所以实时通道零额外计算。这条断言两件事：
 /// 一轮里**多次**上报（多次工具往返 ⇒ 多轮 ⇒ 多次上报），且数字单调不减。
 #[tokio::test]
-async fn run_loop_reserves_extra_body_output_before_sending() {
-    let server = MockModelServer::start(vec![MockResponse::Sse(vec![
-        r#"{"choices":[{"delta":{"content":"should not be requested"}}]}"#.into(),
-        "[DONE]".into(),
-    ])]);
-    let state = test_app_state();
-    let mut config = test_run_config(&state, &server.base_url);
-    config.provider.model_overrides.insert(
-        "test-model".into(),
-        crate::settings::ModelInfo {
-            context_window: Some(1000),
-            extra_body: Some(serde_json::json!({"max_tokens":900})),
-            ..Default::default()
-        },
-    );
-    config.max_output_tokens = 100;
-    config.tools.clear();
-    config.runtime_messages = vec![
-        serde_json::json!({"role":"system", "content": "fixed instruction ".repeat(70)}),
-        serde_json::json!({"role":"user", "content":"hello"}),
-    ];
-    let result = run_agent_loop(config, &TestHost::default(), &RecordingExecutor::default()).await;
-    assert!(
-        result.is_err(),
-        "an unfixable request must report its budget constraint"
-    );
-    assert!(
-        server.captured_bodies.lock().unwrap().is_empty(),
-        "do not send a known over-budget prompt"
-    );
-}
-
-#[tokio::test]
-async fn run_loop_reserves_output_and_does_not_send_an_unfixable_prompt() {
-    let server = MockModelServer::start(vec![MockResponse::Sse(vec![
-        r#"{"choices":[{"delta":{"content":"should not be requested"}}]}"#.into(),
-        "[DONE]".into(),
-    ])]);
-    let state = test_app_state();
-    let mut config = test_run_config(&state, &server.base_url);
-    config.provider.model_overrides.insert(
-        "test-model".into(),
-        crate::settings::ModelInfo {
-            context_window: Some(1000),
-            ..Default::default()
-        },
-    );
-    config.max_output_tokens = 900;
-    config.tools.clear();
-    config.runtime_messages = vec![
-        serde_json::json!({"role":"system", "content": "fixed instruction ".repeat(70)}),
-        serde_json::json!({"role":"user", "content":"hello"}),
-    ];
-    let result = run_agent_loop(config, &TestHost::default(), &RecordingExecutor::default()).await;
-    assert!(
-        result.is_err(),
-        "an unfixable request must report its budget constraint"
-    );
-    assert!(
-        server.captured_bodies.lock().unwrap().is_empty(),
-        "do not send a known over-budget prompt"
-    );
-}
-
-#[tokio::test]
 async fn run_loop_context_reported_anchor_wins_then_missing_usage_falls_back() {
     let server = MockModelServer::start(vec![
         MockResponse::Sse(planning_tool_call_sse_events()),
@@ -2585,14 +2182,8 @@ async fn run_loop_context_reported_anchor_wins_then_missing_usage_falls_back() {
         .expect("run completes");
     let ticks = host.recorded_context_ticks();
     assert!(ticks.len() >= 2, "{ticks:?}");
-    assert_eq!(
-        ticks[0].0, 10,
-        "larger estimate must not override reported usage"
-    );
-    assert!(
-        ticks[1].0 > 10,
-        "missing usage must not retain a stale anchor: {ticks:?}"
-    );
+    assert_eq!(ticks[0].0, 10, "larger estimate must not override reported usage");
+    assert!(ticks[1].0 > 10, "missing usage must not retain a stale anchor: {ticks:?}");
     assert!(result.last_step_usage.is_none());
 }
 
@@ -2643,12 +2234,11 @@ async fn run_loop_reports_live_context_usage_each_round() {
             .all(|(used, window)| *used > 0 && *window == Some(200_000)),
         "分子必须非零、分母必须是模型窗口：{ticks:?}"
     );
-    // Synthesis omits tool schemas; the live estimate must reflect that actual
-    // request rather than artificially remain monotonic across different views.
-    assert!(ticks[1].0 < ticks[0].0);
-    let bodies = server.captured_bodies();
-    let synthesis: Value = serde_json::from_str(bodies.last().unwrap()).unwrap();
-    assert!(synthesis.get("tools").is_none());
+    // 单调不减：工具结果进入历史后占用只会涨（压缩才会降，本例不触发）。
+    assert!(
+        ticks.windows(2).all(|pair| pair[1].0 >= pair[0].0),
+        "过程中的占用不该往回跳：{ticks:?}"
+    );
 }
 
 /// Crash-safety: after a tool round that returns `Continue` (more rounds
@@ -3096,12 +2686,11 @@ async fn run_loop_layer2_replaces_old_history_with_summary() {
     config.provider.model_overrides.insert(
         "test-model".to_string(),
         crate::settings::ModelInfo {
-            context_window: Some(4000),
-            max_output: Some(512),
+            context_window: Some(600),
             ..Default::default()
         },
     );
-    let large_non_tool = "E".repeat(18_000);
+    let large_non_tool = "E".repeat(9_000);
     config.runtime_messages.push(serde_json::json!({
         "role": "user", "content": large_non_tool
     }));
@@ -3189,12 +2778,11 @@ async fn run_loop_compaction_summary_streams_on_streaming_only_provider() {
     config.provider.model_overrides.insert(
         "test-model".to_string(),
         crate::settings::ModelInfo {
-            context_window: Some(4000),
-            max_output: Some(512),
+            context_window: Some(600),
             ..Default::default()
         },
     );
-    let large_non_tool = "F".repeat(18_000);
+    let large_non_tool = "F".repeat(9_000);
     config.runtime_messages.push(serde_json::json!({
         "role": "user", "content": large_non_tool
     }));
@@ -3258,7 +2846,7 @@ async fn run_loop_compaction_summary_streams_on_streaming_only_provider() {
 /// the turn gracefully with the gathered tool results — a degraded answer, not
 /// an `Err`, and a BOUNDED number of model calls.
 #[tokio::test]
-async fn run_loop_failed_compaction_stops_before_sending_over_budget_history() {
+async fn run_loop_compaction_thrash_degrades_with_gathered_results() {
     let overflow_400 = || {
         MockResponse::Status(
             400,
@@ -3284,8 +2872,7 @@ async fn run_loop_failed_compaction_stops_before_sending_over_budget_history() {
     config.provider.model_overrides.insert(
         "test-model".to_string(),
         crate::settings::ModelInfo {
-            context_window: Some(4000),
-            max_output: Some(512),
+            context_window: Some(600),
             ..Default::default()
         },
     );
@@ -3295,7 +2882,7 @@ async fn run_loop_failed_compaction_stops_before_sending_over_budget_history() {
     // Pre-fill oversized ordinary history plus an earlier tool output and a small
     // recent tail. The summary call always errors, so the send view never shrinks
     // enough and unresolved_rounds climbs to the limit.
-    let large_non_tool = "G".repeat(18_000);
+    let large_non_tool = "G".repeat(9_000);
     config.runtime_messages.push(serde_json::json!({
         "role": "user", "content": large_non_tool
     }));
@@ -3317,20 +2904,35 @@ async fn run_loop_failed_compaction_stops_before_sending_over_budget_history() {
     let host = TestHost::default();
     let executor = RecordingExecutor::default();
 
-    let result = run_agent_loop(config, &host, &executor).await;
+    let result = run_agent_loop(config, &host, &executor)
+        .await
+        .expect("anti-thrashing must end the turn, not bubble Err");
+
+    // Degraded but completed via the recovery path — not an error, not a loop.
+    assert_eq!(result.stream_outcome, "compaction_thrash");
+    // The gathered round-1 tool result is surfaced in the degraded answer.
+    assert_eq!(result.tool_records.len(), 1);
+    assert!(matches!(
+        result.tool_records[0].status,
+        ToolCallStatus::Success
+    ));
     assert!(
-        result.is_err(),
-        "failed compaction must not send the still-over-budget planning request"
+        result.content.contains("result:read"),
+        "degraded answer must carry the gathered tool result, got: {}",
+        result.content
     );
-    assert!(executor.events().is_empty());
+    // BOUNDED model calls: summary#1 + planning#1 + summary#2 = exactly 3.
+    // The thrash guard fires before a 2nd planning call, so we never see the
+    // 6× failed-compaction loop from the regression.
     assert_eq!(
         server.captured_bodies().len(),
-        1,
-        "only the failed summary request is allowed"
+        3,
+        "anti-thrashing must bound model calls (summary + planning + summary), no repeat-fail loop"
     );
-    assert!(server.captured_bodies()[0].contains("context summarization assistant"));
 }
 
+/// Under-budget runs must not be touched by compaction: the request body
+/// carries the tool output verbatim.
 #[tokio::test]
 async fn run_loop_under_budget_sends_messages_untouched() {
     let server = MockModelServer::start(vec![

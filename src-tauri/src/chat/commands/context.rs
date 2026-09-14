@@ -615,29 +615,23 @@ fn estimate_messages_segments(
     agent_prepare::merge_context_segments(segments)
 }
 
-/// Display the latest response's reported usage, estimating only later additions.
-/// A changed system prompt or tool catalog does not erase a real measurement.
-pub(super) fn resolve_display_usage(
-    conversation: &Conversation,
-    provider: Option<&ModelProvider>,
-) -> (Option<u64>, usize) {
-    resolve_context_usage(conversation, provider, None)
-}
-
-/// Request budgeting additionally checks whether the measured request still applies.
+/// 解析会话的真实用量锚点：从尾部找最近一条带 `anchor_usage` 且 provider 与当前一致的 assistant。
+/// 返回 `(anchor_total_tokens, trailing_estimate)`：
+/// - `anchor_total_tokens` = 该 assistant 上次调用「整个 prompt + 该次响应」的真实 token 总数
+///   （含 output，按 provider 家族消歧，见 `context_estimate::anchor_total_tokens`）；
+/// - `trailing_estimate` = 该 assistant **之后**（不含它本身，其 output 已计入锚点）到末尾所有消息的估算。
+///
+/// provider 与 `conversation.provider_id` 不一致（切换过供应商，计数口径不可比）、锚点消息之后发生过
+/// 压缩（消息序列已变，旧计数失真，R4）或无 usage → `(None, 0)`，调用方回落纯字符估算。
+/// 对齐 `context_estimate::effective_context_tokens` 的锚点口径。
 pub(super) fn resolve_usage_anchor(
     conversation: &Conversation,
     provider: Option<&ModelProvider>,
-    request: &crate::chat::model::GenerateRequest,
 ) -> (Option<u64>, usize) {
-    resolve_context_usage(conversation, provider, Some(request))
-}
-
-fn resolve_context_usage(
-    conversation: &Conversation,
-    provider: Option<&ModelProvider>,
-    request: Option<&crate::chat::model::GenerateRequest>,
-) -> (Option<u64>, usize) {
+    let Some(provider) = provider else {
+        return (None, 0);
+    };
+    let api_format = provider.api_format.as_str();
     // 压缩边界失效（R4）：锚点消息生成后若发生过压缩（自动/手动），其记录的 token 数反映的是压缩前的
     // 完整历史，与压缩后实际发送的 prompt 不再可比——锚点作废。取最晚一次压缩时刻，任何时间戳 ≤ 该时刻的
     // assistant 锚点都视为失真（run 内自动压缩后仍会生成更晚的 assistant，其 anchor_usage 是压缩后调用
@@ -648,28 +642,36 @@ fn resolve_context_usage(
         .iter()
         .map(|b| b.created_at)
         .max();
-    // Only the latest assistant can anchor the current replay. Skipping a newer
-    // missing/invalid measurement would quietly revive an obsolete request view.
-    let anchor = conversation.messages.iter().enumerate().rev()
-        .find(|(_, message)| message.role == "assistant")
-        .and_then(|(idx, message)| {
-            if conversation.context_clear_until_index().is_some_and(|clear_idx| idx <= clear_idx)
-                || latest_compaction_at.is_some_and(|at| at > message.timestamp) {
+    let anchor = conversation
+        .messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, message)| {
+            if message.role != "assistant" {
+                return None;
+            }
+            if conversation
+                .context_clear_until_index()
+                .is_some_and(|clear_idx| idx <= clear_idx)
+            {
                 return None;
             }
             let usage = message.anchor_usage.as_ref()?;
-            if let Some(request) = request {
-                if !usage.request_identity.as_ref()?.applies_to(provider?, request) { return None; }
+            // provider 切换后旧锚点作废：单模型回退会话级 provider_id；多模型每条自带 provider_id。
+            let msg_provider = message
+                .provider_id
+                .as_deref()
+                .unwrap_or(&conversation.provider_id);
+            if msg_provider != provider.id {
+                return None;
             }
-            let api_format = usage.reported_api_format()
-                .or_else(|| {
-                    // Legacy counts without cache are protocol-independent. With
-                    // cache, OpenAI includes it in input while Anthropic excludes
-                    // it; today's provider settings cannot identify an old report.
-                    (usage.cached_input_tokens.unwrap_or(0) == 0
-                        && usage.cache_creation_input_tokens.unwrap_or(0) == 0)
-                        .then_some("openai_chat")
-                })?;
+            // 压缩后锚点失真（R4）：边界晚于锚点消息 → 作废（回落纯估算）。
+            if let Some(compacted_at) = latest_compaction_at {
+                if compacted_at > message.timestamp {
+                    return None;
+                }
+            }
             crate::chat::agent::context_estimate::anchor_total_tokens(usage, api_format)
                 .map(|total| (idx, total))
         });
@@ -788,15 +790,14 @@ pub(super) async fn compute_context_state(
                 Some(session_model_for_conversation(conversation)),
             ),
         );
-    let discovery = list_tools_for_chat(
+    let mut tools = list_tools_for_chat(
         app,
         state.inner(),
         &settings,
         Some(session_model_for_conversation(conversation)),
     )
-    .await;
-    let unavailable_note = crate::mcp::registry::unavailable_mcp_servers_note(&discovery.unavailable_mcp_servers);
-    let mut tools = discovery.tools;
+    .await
+    .tools;
     agent_prepare::apply_assistant_mcp_restrictions(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
@@ -808,15 +809,10 @@ pub(super) async fn compute_context_state(
     apply_inline_code_request_tool_filter(&mut tools, last_user_api_content);
     let chat_mode = conversation.agent_runtime.is_chat();
     let plan_mode = !chat_mode && crate::chat::plan::is_plan_mode(&conversation.agent_plan_state);
-    let web_search_mode = crate::chat::types::WebSearchMode::resolve(conversation.web_search_mode, &settings);
     if chat_mode {
         apply_chat_mode_tool_filter(&mut tools, true, &settings.chat.chat_mode);
     } else {
         apply_agent_plan_tool_filter(&mut tools, plan_mode);
-    }
-    if !is_builder_conversation(conversation) {
-        super::tooling::apply_web_search_mode_tool_filter(&mut tools,
-            provider.as_ref().map(|p| web_search_mode.for_provider(p)).unwrap_or(web_search_mode), &settings);
     }
     let user_tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
@@ -830,16 +826,6 @@ pub(super) async fn compute_context_state(
     } else {
         append_agent_todo_tools(&mut tools)
     };
-    let goal_tools_available = if !chat_mode && !plan_mode
-        && !crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state) {
-        super::tooling::append_goal_tools(&mut tools, conversation.goal_state.as_ref())
-    } else { false };
-    let project_context = project_prompt_context_for(app, conversation);
-    if !chat_mode && !plan_mode && !is_builder_conversation(conversation) {
-        let root = project_context.as_ref().and_then(|context| context.root_path.as_deref()).map(Path::new);
-        let definitions = crate::agents::load_agent_definitions(app, root);
-        crate::chat::sub_agent::append_tool_definitions(&mut tools, true, &definitions);
-    }
     let runtime_tools_available = !tools.is_empty();
     let available_builtin_tools = agent_prepare::available_builtin_tool_names(&tools);
     let runtime_prompts = agent_prepare::resolve_runtime_prompt_sources(
@@ -877,7 +863,7 @@ pub(super) async fn compute_context_state(
     );
     let obsidian_vault_path = (!settings.obsidian_vault_path.trim().is_empty())
         .then_some(settings.obsidian_vault_path.as_str());
-    let (mut system_prompt, mut segments) = agent_prepare::build_chat_system_prompt_with_segments(
+    let (system_prompt, mut segments) = agent_prepare::build_chat_system_prompt_with_segments(
         &language,
         !main_image_paths.is_empty(),
         thinking_enabled,
@@ -918,17 +904,6 @@ pub(super) async fn compute_context_state(
         obsidian_vault_path,
         &conversation.additional_directories,
     );
-    for (id, label, extra) in [
-        ("tool_availability", "Tool availability", unavailable_note),
-        ("goal", "Goal", crate::chat::goal::format_prompt(conversation.goal_state.as_ref()).filter(|_| goal_tools_available)),
-    ] {
-        if let Some(extra) = extra {
-            system_prompt.push_str("\n\n");
-            system_prompt.push_str(&extra);
-            segments.push(ContextUsageSegment { id: id.into(), label: label.into(),
-                estimated_tokens: agent_prepare::estimate_tokens(&extra), color: None });
-        }
-    }
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
     let request_messages = build_chat_api_messages(
         // 估算路径：不 rehydrate 图片（token 口径不计图片字节，读几 MB 纯浪费）。
@@ -956,7 +931,7 @@ pub(super) async fn compute_context_state(
         .sum::<usize>();
     // 真实用量锚点（对齐 pi/opencode）：有锚点时 footer 显示 provider 实报值 + 锚点后新增估算，
     // 否则回落纯字符估算。估算不能覆盖有效的 provider 实报。
-    let (anchor_prompt, anchor_trailing) = resolve_display_usage(conversation, provider.as_ref());
+    let (anchor_prompt, anchor_trailing) = resolve_usage_anchor(conversation, provider.as_ref());
     let (estimated_input_tokens, anchored) =
         crate::chat::agent::context_estimate::effective_context_tokens(
             anchor_prompt,

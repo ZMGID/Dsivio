@@ -1241,8 +1241,6 @@ fn gemini_usage(value: &Value) -> Option<ModelUsage> {
         cache_creation_input_tokens: None,
         reasoning_tokens: get("thoughtsTokenCount"),
         // 内置 provider 路径：窗口来自 model_metadata，不由响应携带。
-        api_format: Some("gemini".into()),
-        request_identity: None,
         context_window_tokens: None,
     })
 }

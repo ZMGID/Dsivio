@@ -267,11 +267,6 @@ pub struct GenerateRequest {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelUsage {
-    /// Token accounting format recorded with the response, independent of budget applicability.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_format: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_identity: Option<super::usage_anchor::UsageRequestIdentity>,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
@@ -290,13 +285,6 @@ pub struct ModelUsage {
     /// `collect_external_session_usage` 能一并读到，无需为分母另开事件通道。
     #[serde(default)]
     pub context_window_tokens: Option<u64>,
-}
-
-impl ModelUsage {
-    pub(crate) fn reported_api_format(&self) -> Option<&str> {
-        self.api_format.as_deref()
-            .or_else(|| self.request_identity.as_ref().map(|identity| identity.api_format.as_str()))
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -752,7 +740,7 @@ pub fn generate_request_from_openai_messages(
 ) -> GenerateRequest {
     let mut system_parts = Vec::new();
     let mut model_messages = Vec::new();
-    for message in order_tool_results_before_followups(messages) {
+    for message in messages {
         let role = message
             .get("role")
             .and_then(|value| value.as_str())
@@ -799,42 +787,6 @@ pub fn generate_request_from_openai_messages(
             ..RequestMetadata::default()
         },
     }
-}
-
-/// A tool can supply an image as a user-role follow-up. When a model requested
-/// several tools at once, that follow-up must wait for the entire batch of
-/// outputs. Otherwise strict providers close the batch at the user message and
-/// reject a later output as missing. Normalize only the request copy so legacy
-/// transcripts and current runs both replay correctly without changing audit data.
-fn order_tool_results_before_followups(messages: Vec<Value>) -> Vec<Value> {
-    let mut pending = std::collections::HashSet::new();
-    let mut deferred = Vec::new();
-    let mut ordered = Vec::with_capacity(messages.len());
-    for message in messages {
-        match message.get("role").and_then(Value::as_str) {
-            Some("assistant") => {
-                // Never move a follow-up across a new assistant turn or invent
-                // outputs for an incomplete batch. Call IDs can be reused later.
-                ordered.append(&mut deferred);
-                pending.clear();
-                if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
-                    pending.extend(calls.iter().filter_map(|call| call.get("id").and_then(Value::as_str)).map(str::to_owned));
-                }
-                ordered.push(message);
-            }
-            Some("tool") => {
-                if let Some(id) = message.get("tool_call_id").and_then(Value::as_str) {
-                    pending.remove(id);
-                }
-                ordered.push(message);
-                if pending.is_empty() { ordered.append(&mut deferred); }
-            }
-            Some("user") if !pending.is_empty() => deferred.push(message),
-            _ => ordered.push(message),
-        }
-    }
-    ordered.append(&mut deferred);
-    ordered
 }
 
 pub fn model_messages_from_openai_messages(messages: Vec<Value>) -> Vec<ModelMessage> {
@@ -1308,36 +1260,6 @@ fn responses_items_from_model_message(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    #[ignore = "requires KIVIO_TOOL_ORDER_REPLAY pointing to a captured conversation; no network or tool execution"]
-    fn captured_history_replays_complete_tool_batches() {
-        let path = std::env::var("KIVIO_TOOL_ORDER_REPLAY").expect("captured conversation path");
-        let capture: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let messages: Vec<super::ModelMessage> = serde_json::from_value(
-            capture["messages"].as_array().unwrap().last().unwrap()["model_messages"].clone(),
-        ).unwrap();
-        let raw = super::openai_messages_from_model_messages(&messages);
-        let original_results = raw.iter().filter(|message| message["role"] == "tool").count();
-        let request = super::generate_request_from_openai_messages(
-            "deepseek-flash", raw, None, Default::default(), "Captured replay", Default::default(),
-        );
-        let input = super::responses_input_from_model_messages(&request.messages, Some("deepseek-flash"));
-        let mut pending = std::collections::HashSet::new();
-        let mut results = 0;
-        for item in &input {
-            if item["type"] == "function_call" { pending.insert(item["call_id"].as_str().unwrap()); }
-            if item["type"] == "function_call_output" {
-                pending.remove(item["call_id"].as_str().unwrap());
-                results += 1;
-            }
-            if item["role"] == "user" {
-                assert!(pending.is_empty(), "user/image interrupted unresolved tool calls: {pending:?}");
-            }
-        }
-        assert!(pending.is_empty());
-        assert_eq!(results, original_results, "no tool result may disappear");
-    }
-
     use super::*;
 
     #[test]

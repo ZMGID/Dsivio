@@ -386,7 +386,7 @@ pub fn native_write_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__write_file".to_string(),
         name: "write".to_string(),
-        description: "Create a file with full content; default to edit for existing files unless an intentional full rewrite is needed. Only for authorized file work; inline code block requests need no file. Returns a concise receipt and complete diff metadata for review.".to_string(),
+        description: "Write a full text file: create it if missing, overwrite it if it exists. Use this when the user explicitly asks to save/write/create a local file or gives a target path; for small changes to an existing file prefer edit. Do not call it just because the user asked for a code block or inline code — answer directly instead. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -408,7 +408,7 @@ pub fn native_edit_file_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__edit_file".to_string(),
         name: "edit".to_string(),
-        description: "Apply ordered exact replacements to an existing file. Use the smallest unique old_string without read line-number prefixes; new_string contains only its replacement. Keep unrelated code out of both. On mismatch, re-read the affected range before retrying; do not blindly overwrite the file.".to_string(),
+        description: "Edit a file with one or more exact text replacements in a single call. Each edit's old_string must match a unique, contiguous region of the current file (copy it from read output WITHOUT the leading line-number prefix); if a snippet appears more than once, extend it with surrounding context. Edits apply in order. Prefer this over write for changes to existing files. Returns structured file mutation metadata including diff stats.".to_string(),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -446,7 +446,7 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "native__run_command".to_string(),
         name: "bash".to_string(),
-        description: format!("Run a host shell command.{shell_hint} For tests/build verification use check:true and run the check directly, without tail/head/grep or a trailing success echo. Check mode retains a complete log; ordinary output over 16KiB is also saved, with a bounded preview. Read that same log for more detail instead of rerunning the check. A non-zero exit is a tool error. Commands default to the project root; use cwd for paths with spaces, never combine it with a leading cd. Explicit cwd is a workspace-local startup directory, not a shell sandbox. Foreground waits until exit; timeout_ms is an optional kill deadline. Keep finite jobs in the foreground. Servers such as npm run dev and vite auto-background and return a job_id. Obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. Host Python installs require an explicit user request and allow_host_python_package_install=true."),
+        description: format!("Run a host shell command (build, test, etc.).{shell_hint} In a project conversation, the command starts from the bound project root by default; any explicit cwd is only a startup directory and is validated as workspace-local. Do not use `cd path && command` when the path contains spaces—pass `cwd` and run only the remaining command. Do not combine `cwd` with a leading `cd ... &&` prefix. Foreground commands wait until they exit — omit timeout_ms unless you want the process killed at a deadline. Do not background finite jobs (builds, tests, image-generation batches); put parallel work inside one command. Long-running never-ending servers such as `npm run dev`, `npm run tauri dev`, and `vite` are started in the background automatically and return immediately with a job_id. This is a sensitive host-shell capability, not the same boundary as the file tools: obey user constraints and explain or seek confirmation before cross-directory, destructive, network, or environment-changing commands. A non-zero exit code is returned as a tool error with stdout/stderr. Host Python package installs require an explicit user request and allow_host_python_package_install=true."),
         source: "native".to_string(),
         server_id: None,
         server_name: Some("Kivio".to_string()),
@@ -454,7 +454,6 @@ pub fn native_run_command_tool() -> ChatToolDefinition {
             "type": "object",
             "properties": {
                 "command": { "type": "string", "description": "Shell command" },
-                "check": { "type": "boolean", "description": "For finite tests/build checks: use Bash -e -o pipefail (Git Bash required on Windows), stop on unhandled failures, and save all captured output to a log. No background. Do not pipe checks through head/tail/grep, suppress errors, or run a shell script that masks its own exit status. Use ordinary mode for exploratory or expected-failure commands." },
                 "cwd": { "type": "string", "description": "Working directory (required when the path contains spaces; do not use `cd ... &&` for that)" },
                 "background": { "type": "boolean", "description": "Run in background and return a job_id immediately. Auto-enabled for never-ending dev servers. Do not use this for finite jobs that will exit." },
                 "timeout_ms": { "type": "integer", "description": "Optional kill deadline in ms (max 600000). Omit to wait until the command exits. Timeout kills the process and returns partial output; it does not background the job." },
@@ -1208,12 +1207,12 @@ mod tests {
     fn write_file_tool_description_discourages_inline_code_requests() {
         let tool = native_write_file_tool();
 
-        assert!(tool.description.contains("authorized file work"));
+        assert!(tool.description.contains("explicitly asks"));
         assert!(tool.description.contains("code block"));
-        assert!(tool.description.contains("default to edit"));
+        assert!(tool.description.contains("prefer edit"));
         assert!(tool
             .description
-            .contains("complete diff metadata"));
+            .contains("structured file mutation metadata"));
     }
 
     #[test]

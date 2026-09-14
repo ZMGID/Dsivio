@@ -2463,8 +2463,6 @@ fn parse_usage(value: Option<&Value>, context_window: Option<u64>) -> Option<Mod
     // dsh 的 TokenUsage 已把 cache hit 从 inputTokens 里减掉（translate.ts::mapUsage）。
     // outputTokens 是 provider completion_tokens，已含 reasoning；total 不再加 reasoning。
     Some(ModelUsage {
-        api_format: None,
-        request_identity: None,
         input_tokens: Some(input),
         output_tokens: Some(output),
         total_tokens: Some(

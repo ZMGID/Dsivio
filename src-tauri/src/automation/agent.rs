@@ -384,7 +384,6 @@ async fn run_builtin_agent_node(
         provider_tools_fallback_system_prompt: system_prompt,
         initial_anchor_total_tokens: None,
         initial_anchor_trailing_estimate: 0,
-        initial_display_usage: None,
         skill_project_cwd: workdir,
     };
 

@@ -2700,43 +2700,12 @@ fn test_settings_with_providers(provider_ids: &[&str]) -> Settings {
     settings
 }
 
-fn anchor_test_request() -> crate::chat::model::GenerateRequest {
-    crate::chat::model::usage_anchor::request_view("gpt-4o", &[
-        serde_json::json!({"role": "user", "content": "hi"})
-    ], &[], false)
-}
-
-#[test]
-fn regression_cached_report_with_body_option_is_not_legacy() {
-    let mut provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    provider.model_overrides.insert("gpt-4o".into(), crate::settings::ModelInfo {
-        extra_body: Some(serde_json::json!({"temperature":0.5})), ..Default::default()
-    });
-    let mut assistant = assistant_with_anchor("a1", 2, 90000);
-    let usage = assistant.anchor_usage.as_mut().unwrap();
-    *usage = crate::usage::model_usage_from_openai_value(&serde_json::json!({"usage": {
-        "prompt_tokens":90000, "completion_tokens":100,
-        "prompt_tokens_details":{"cached_tokens":80000}
-    }})).unwrap();
-    usage.request_identity = crate::chat::model::usage_anchor::UsageRequestIdentity::from_request(
-        &provider, &anchor_test_request(),
-    );
-    assert!(usage.request_identity.is_none());
-    let conv = test_conversation_with_messages(vec![test_chat_message("u1","user","hello",1), assistant]);
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (Some(90100), 0));
-    let reloaded: Conversation = serde_json::from_str(&serde_json::to_string(&conv).unwrap()).unwrap();
-    provider.api_format = "anthropic_messages".into();
-    assert_eq!(super::context::resolve_display_usage(&reloaded, Some(&provider)), (Some(90100), 0));
-}
-
 /// 带 anchor_usage 的 assistant（openai_chat 口径：anchor_prompt = input_tokens）。
 fn assistant_with_anchor(id: &str, ts: i64, input_tokens: u64) -> ChatMessage {
     let mut m = test_chat_message(id, "assistant", "reply", ts);
     m.provider_id = Some("openai".to_string());
     m.anchor_usage = Some(crate::chat::model::ModelUsage {
         input_tokens: Some(input_tokens),
-        request_identity: crate::chat::model::usage_anchor::UsageRequestIdentity::from_request(
-            &test_provider("openai", "OpenAI", vec!["gpt-4o"]), &anchor_test_request()),
         output_tokens: Some(100),
         ..Default::default()
     });
@@ -2757,74 +2726,6 @@ fn boundary_at(created_at: i64) -> CompactionBoundaryRecord {
 }
 
 #[test]
-fn history_file_arguments_remain_faithful_after_reload() {
-    for name in ["write", "edit"] {
-        for protection in ["none", "error", "cancelled", "mcp", "signature", "reasoning", "unpaired", "latest", "mismatch"] {
-            let args = if name == "write" {
-                serde_json::json!({"path":"app.txt", "content":"original code\n".repeat(2000)})
-            } else {
-                serde_json::json!({"path":"app.txt", "edits":[{
-                    "old_string":"original code\n".repeat(2000), "new_string":"changed code\n".repeat(2000)
-                }]})
-            };
-            let mut assistant = test_chat_message("a1", "assistant", "done", 2);
-            let mut call = serde_json::json!({"id":"file1","type":"function","function":{
-                "name":name, "arguments":args.to_string()
-            }});
-            if protection == "signature" { call["thought_signature"] = serde_json::json!("opaque"); }
-            let mut request = serde_json::json!({"role":"assistant","content":null,"tool_calls":[call]});
-            if protection == "reasoning" { request["reasoning_items"] = serde_json::json!([{"item":{"encrypted_content":"opaque"}}]); }
-            assistant.api_messages = vec![request];
-            if protection != "unpaired" {
-                assistant.api_messages.push(serde_json::json!({"role":"tool","tool_call_id":"file1","content":"Written app.txt"}));
-            }
-            if protection != "latest" {
-                assistant.api_messages.push(serde_json::json!({"role":"assistant","content":"done"}));
-            }
-            assistant.tool_calls.push(serde_json::from_value(serde_json::json!({
-                "id":"file1", "name":name, "source":if protection == "mcp" {"mcp"} else {"native"},
-                "arguments":if protection == "mismatch" {"{}".to_string()} else {args.to_string()},
-                "status":match protection {"error"=>"error", "cancelled"=>"cancelled", _=>"success"},
-                "round":1,"sensitive":true,"artifacts":[],"structured_content":{"ok":true}
-            })).unwrap());
-            let conversation = test_conversation_with_messages(vec![test_chat_message("u1","user","save file",1), assistant]);
-            let stored = serde_json::to_string(&conversation).unwrap();
-            let reloaded: Conversation = serde_json::from_str(&stored).unwrap();
-            let view = build_chat_api_messages(None,"system",&reloaded,None,None,&[]).unwrap();
-            assert!(view.iter().any(|m| m.to_string().contains("original code")), "runtime history must keep full arguments");
-            let replayed = view.iter().flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
-                .find(|c| c["id"] == "file1").unwrap();
-            let raw = replayed["function"]["arguments"].as_str().unwrap();
-            assert_eq!(raw, args.to_string(), "{name}: {protection}");
-            assert_eq!(serde_json::to_string(&reloaded).unwrap(), stored, "audit must remain immutable");
-        }
-    }
-}
-
-#[test]
-fn resolve_usage_anchor_rejects_edited_assistant_output() {
-    let mut conv = test_conversation_with_messages(vec![
-        test_chat_message("u1", "user", "hi", 1),
-        assistant_with_anchor("a1", 2, 100_000),
-    ]);
-    let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    assert!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()).0.is_some());
-    replace_final_text_segments_for_edit(&mut conv.messages[1], &"edited answer ".repeat(1000));
-    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
-}
-
-#[test]
-fn resolve_usage_anchor_rejects_legacy_unproven_usage() {
-    let mut conv = test_conversation_with_messages(vec![
-        test_chat_message("u1", "user", "hi", 1),
-        assistant_with_anchor("a1", 2, 100_000),
-    ]);
-    conv.messages[1].anchor_usage.as_mut().unwrap().request_identity = None;
-    let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
-}
-
-#[test]
 fn resolve_usage_anchor_reports_prompt_and_trailing() {
     let conv = test_conversation_with_messages(vec![
         test_chat_message("u1", "user", "hi", 1),
@@ -2832,7 +2733,7 @@ fn resolve_usage_anchor_reports_prompt_and_trailing() {
         test_chat_message("u2", "user", "follow-up question here", 3),
     ]);
     let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    let (total, trailing) = resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request());
+    let (total, trailing) = resolve_usage_anchor(&conv, Some(&provider));
     // openai 无 total_tokens → input(100000) + output(100)。
     assert_eq!(total, Some(100_100), "openai anchor = input + output");
     // trailing = 锚点 assistant **之后** 的消息（新 user），> 0；锚点响应本身不算进 trailing。
@@ -2846,55 +2747,7 @@ fn resolve_usage_anchor_none_without_usage() {
         test_chat_message("a1", "assistant", "reply", 2),
     ]);
     let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
-}
-
-#[test]
-fn display_usage_prefers_report_without_requiring_a_rebuilt_request() {
-    let mut conv = test_conversation_with_messages(vec![
-        test_chat_message("u1", "user", "hi", 1),
-        assistant_with_anchor("a1", 2, 238_983),
-    ]);
-    let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    conv.messages[1].anchor_usage.as_mut().unwrap().output_tokens = Some(476);
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (Some(239_459), 0));
-    // Older real reports are also usable; a request fingerprint is not usage.
-    let identity = conv.messages[1].anchor_usage.as_ref().unwrap().request_identity.clone();
-    conv.messages[1].anchor_usage.as_mut().unwrap().request_identity = None;
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (Some(239_459), 0));
-    let mut switched = provider.clone();
-    switched.api_format = "anthropic_messages".into();
-    conv.messages[1].anchor_usage.as_mut().unwrap().cached_input_tokens = Some(238_848);
-    // Unknown historical cache semantics must not be reinterpreted by today's API.
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&switched)), (None, 0));
-    conv.messages[1].anchor_usage.as_mut().unwrap().request_identity = identity;
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&switched)), (Some(239_459), 0));
-    conv.messages.push(test_chat_message("u2", "user", "new question", 3));
-    let (total, extra) = super::context::resolve_display_usage(&conv, Some(&provider));
-    assert_eq!(total, Some(239_459));
-    assert!(extra > 0);
-    conv.context_state.compaction_boundaries.push(boundary_at(10));
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (None, 0));
-    conv.context_state.compaction_boundaries.clear();
-    apply_context_clear(&mut conv).unwrap();
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (None, 0));
-    conv.context_state.clear_boundaries.clear();
-    replace_final_text_segments_for_edit(&mut conv.messages[1], "edited answer");
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (None, 0));
-}
-
-#[test]
-#[ignore = "local captured conversation; set KIVIO_CONTEXT_REPLAY"]
-fn captured_context_display_uses_returned_usage() {
-    let path = std::env::var("KIVIO_CONTEXT_REPLAY").unwrap();
-    let conv: Conversation = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let latest = conv.messages.iter().rev().find(|m| m.role == "assistant").unwrap();
-    let usage = latest.anchor_usage.as_ref().unwrap();
-    let expected = crate::chat::agent::context_estimate::anchor_total_tokens(
-        usage, &usage.request_identity.as_ref().unwrap().api_format,
-    ).unwrap();
-    let provider = test_provider(&conv.provider_id, "Capture", vec![&conv.model]);
-    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (Some(expected), 0));
+    assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
 }
 
 #[test]
@@ -2922,7 +2775,7 @@ fn resolve_usage_anchor_invalidated_on_provider_switch() {
     ]);
     // 会话切换到 anthropic：旧 openai 锚点计数口径不可比 → 作废。
     let provider = test_provider("anthropic", "Anthropic", vec!["claude"]);
-    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
+    assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
 }
 
 #[test]
@@ -2934,7 +2787,7 @@ fn resolve_usage_anchor_invalidated_after_compaction() {
     ]);
     conv.context_state.compaction_boundaries = vec![boundary_at(10)];
     let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
+    assert_eq!(resolve_usage_anchor(&conv, Some(&provider)), (None, 0));
 }
 
 #[test]
@@ -2946,7 +2799,7 @@ fn resolve_usage_anchor_kept_when_compaction_precedes_anchor() {
     ]);
     conv.context_state.compaction_boundaries = vec![boundary_at(2)];
     let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
-    let (total, _) = resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request());
+    let (total, _) = resolve_usage_anchor(&conv, Some(&provider));
     assert_eq!(total, Some(100_100)); // input(100000) + output(100)
 }
 

@@ -843,47 +843,6 @@ pub(crate) fn chat_max_output_tokens_on_wire(
     chat_max_output_tokens_for_model(provider, model).unwrap_or(fallback)
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RequestBudget {
-    pub input: usize,
-    pub output_reserve: usize,
-    pub estimated: bool,
-}
-
-/// Gemini advertises separate input/output limits. Other adapters share the
-/// context window; reserve the configured output even when an API would accept
-/// the request and truncate the answer at the boundary.
-pub(crate) fn request_budget(provider: &ModelProvider, model: &str, output: u32) -> RequestBudget {
-    let (window, estimated) = context_window_for_model(Some(provider), model);
-    let input_cap = provider.model_overrides.get(model).and_then(|info| info.max_input)
-        .or_else(|| model_database_entry(provider_model_database_id(Some(provider), model))?
-            .get("maxInput")?.as_u64())
-        .and_then(|value| usize::try_from(value).ok()).filter(|value| *value > 0);
-    let mut output_reserve = if provider.api_format_kind() == crate::settings::ProviderApiFormat::Gemini {
-        0
-    } else if output > 0 { output as usize } else {
-        // An omitted output limit is not a promise of zero output.
-        chat_max_output_tokens_for_model(Some(provider), model).unwrap_or(16_384) as usize
-    };
-    // Only the Chat adapter merges model extra_body into the outgoing body.
-    // Reserve conservatively when both legacy and completion limits are present;
-    // never let an override silently increase output beyond the guarded budget.
-    if provider.api_format_kind() == crate::settings::ProviderApiFormat::OpenAiChat {
-        if let Some(body) = provider.model_overrides.get(model).and_then(|info| info.extra_body.as_ref()) {
-            for key in ["max_tokens", "max_completion_tokens"] {
-                if let Some(limit) = body.get(key).and_then(serde_json::Value::as_u64) {
-                    output_reserve = output_reserve.max(usize::try_from(limit).unwrap_or(usize::MAX));
-                }
-            }
-        }
-    }
-    RequestBudget {
-        input: window.saturating_sub(output_reserve).min(input_cap.unwrap_or(usize::MAX)),
-        output_reserve,
-        estimated: estimated || output == 0,
-    }
-}
-
 /// 解析模型级 temperature。用户显式清空优先于数据库值；所有来源都缺省时不发送。
 pub(crate) fn temperature_for_model(provider: Option<&ModelProvider>, model: &str) -> Option<f64> {
     if let Some(info) = provider.and_then(|provider| provider.model_overrides.get(model)) {
@@ -922,38 +881,6 @@ pub(crate) fn pricing_for_model(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn request_budget_accounts_for_chat_body_output_overrides() {
-        let mut provider = test_provider_with_overrides(HashMap::from([
-            ("budget-model".into(), ModelInfo {
-                context_window: Some(32_000),
-                extra_body: Some(serde_json::json!({"max_tokens":24_000})),
-                ..Default::default()
-            })
-        ]));
-        provider.api_format = "openai_chat".into();
-        assert_eq!(request_budget(&provider, "budget-model", 8_000).input, 8_000);
-        provider.model_overrides.get_mut("budget-model").unwrap().extra_body =
-            Some(serde_json::json!({"max_completion_tokens":30_000}));
-        assert_eq!(request_budget(&provider, "budget-model", 8_000).input, 2_000);
-        provider.api_format = "openai_responses".into();
-        assert_eq!(request_budget(&provider, "budget-model", 8_000).input, 24_000);
-    }
-
-    #[test]
-    fn request_budget_respects_output_and_independent_input_caps() {
-        let mut provider = test_provider_with_overrides(std::collections::HashMap::from([
-            ("budget-model".into(), ModelInfo { context_window: Some(1000), max_input: Some(600), ..Default::default() })
-        ]));
-        provider.api_format = "openai_chat".into();
-        assert_eq!(request_budget(&provider, "budget-model", 100).input, 600);
-        assert_eq!(request_budget(&provider, "budget-model", 800).input, 200);
-        assert_eq!(request_budget(&provider, "budget-model", 1200).input, 0);
-        provider.api_format = "gemini".into();
-        assert_eq!(request_budget(&provider, "budget-model", 800).input, 600);
-        assert!(request_budget(&provider, "unlisted-model", 0).estimated);
-    }
-
     use std::collections::HashMap;
 
     use crate::settings::{ModelInfo, ModelProvider};

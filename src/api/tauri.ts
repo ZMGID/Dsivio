@@ -867,7 +867,6 @@ export type ModelInfo = {
   /** Latest upstream capability, separate from the user's explicit override. */
   advertisedVideoInput?: boolean
   contextWindow?: number
-  maxInput?: number
   maxOutput?: number
   /** 模型级采样温度；未设置时请求不发送 temperature。 */
   temperature?: number

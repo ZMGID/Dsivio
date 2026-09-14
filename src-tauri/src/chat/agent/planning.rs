@@ -90,7 +90,7 @@ pub(crate) async fn planning_step(
     let host = env.host;
     let step_number = state.step_number;
     // 循环内上下文治理：超限时先 snip / 摘要，得到本步发送视图（未超限时为原样 clone）。
-    let send_messages = super::compaction::maybe_compact_send_view(env, state, true).await?;
+    let send_messages = super::compaction::maybe_compact_send_view(env, state).await;
 
     // Gap 2（Layer 3 anti-thrashing）：连续多轮「需要压缩但压不下去」时（摘要调用反复失败/为空），
     // 不要再用必然超窗的发送视图去打规划调用、再失败——而是用已收集的工具结果优雅收尾。

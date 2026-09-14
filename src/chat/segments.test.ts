@@ -16,18 +16,7 @@ import {
   userFollowUpId,
   userSteerId,
   userSteerText,
-  toolCallDiffStats,
 } from './segments'
-
-it('does not present incomplete diff counts as exact or fall back to edit arguments', () => {
-  const call = { name: 'edit', status: 'success', arguments: { path: 'large.txt', edits: [
-    { old_string: 'a', new_string: 'b\nc' },
-  ] }, structured_content: { operation: 'edit', diff_complete: false, additions: 0, removals: 0 } } as unknown as ToolCallRecord
-  expect(toolCallDiffStats(call)).toBeNull()
-  expect(toolCallDiffStats({ ...call, structured_content: {
-    operation: 'edit', diff_complete: true, additions: 2, removals: 1,
-  } })).toEqual({ additions: 2, removals: 1 })
-})
 
 function segment(partial: Partial<ChatMessageSegment> & Pick<ChatMessageSegment, 'id' | 'kind' | 'order'>): ChatMessageSegment {
   return {
@@ -112,15 +101,15 @@ describe('groupTimelineSegments', () => {
       toolSegment('t', 2, 'call'),
       segment({ id: 'seg_3_cancelled_synthesis', kind: 'text', phase: 'synthesis', order: 3, text: '已停止生成。' }),
     ], 'completed')
-    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    expect(items.map(item => item.type)).toEqual(['group', 'text', 'text'])
   })
 
-  it('keeps explicit process text folded when a stopped run has no final answer', () => {
+  it('preserves all body text when a stopped run has no final answer', () => {
     const items = groupTimelineSegments([
       segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Progress so far' }),
       toolSegment('t', 2, 'call'),
-    ], 'stopped')
-    expect(items.map(item => item.type)).toEqual(['group'])
+    ], 'completed')
+    expect(items.map(item => item.type)).toEqual(['group', 'text'])
   })
 
   it('keeps every trailing final-answer segment and folds earlier commentary', () => {

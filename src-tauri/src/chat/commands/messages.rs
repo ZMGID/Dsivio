@@ -755,9 +755,6 @@ pub(super) fn replace_final_text_segments_for_edit(message: &mut ChatMessage, co
     message.reasoning = reasoning_from_segments(&message.segments);
     message.model_messages = edited_assistant_model_messages(message);
     message.api_messages = Vec::new();
-    // The measured total included the original assistant output. Keep historical
-    // usage for accounting, but editing that output invalidates its context anchor.
-    message.anchor_usage = None;
 }
 
 fn edited_assistant_model_messages(message: &ChatMessage) -> Vec<ModelMessage> {

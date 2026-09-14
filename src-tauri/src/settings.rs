@@ -260,8 +260,6 @@ pub struct ModelInfo {
     /// Latest upstream capability; never takes precedence over an explicit override.
     pub advertised_video_input: Option<bool>,
     pub context_window: Option<u64>,
-    /// Independent input cap, when supplied by model metadata or a user override.
-    pub max_input: Option<u64>,
     pub max_output: Option<u64>,
     /// 模型级采样温度；None 表示请求默认不发送 temperature。
     pub temperature: Option<f64>,

@@ -30,7 +30,7 @@ use super::agent_host::{ChatAgentHost, RegistryToolExecutor};
 use super::catalog::{
     chat_memory_prompt_for_request, is_builder_conversation, project_prompt_context_for,
 };
-use super::context::{build_chat_api_messages, resolve_display_usage, resolve_usage_anchor};
+use super::context::{build_chat_api_messages, resolve_usage_anchor};
 use super::direct_image::complete_direct_image_generation_reply;
 use super::interaction::{emit_chat_stream_delta, emit_chat_tool_record, wait_for_chat_cancel};
 use super::messages::{
@@ -813,11 +813,7 @@ pub(super) async fn complete_assistant_reply_inner(
     // 真实用量锚点：run 首次压缩检查前，用上一轮落盘 usage 把上下文占用锚定到 provider 实报值
     // （对齐 pi/opencode 的 ground-truth 口径，避免字符估算低估导致压缩过晚/超窗）。
     let (initial_anchor_total_tokens, initial_anchor_trailing_estimate) =
-        resolve_usage_anchor(conversation, Some(&provider),
-            &crate::chat::model::usage_anchor::request_view(&resolved_model, &runtime_messages, &tools,
-                web_search_mode == crate::chat::types::WebSearchMode::Builtin
-                    && crate::chat::model_metadata::builtin_web_search_supported(&provider)));
-    let (display_total, display_trailing) = resolve_display_usage(conversation, Some(&provider));
+        resolve_usage_anchor(conversation, Some(&provider));
     let result = crate::chat::agent::run_agent_loop(
         crate::chat::agent::AgentRunConfig {
             state: state.inner(),
@@ -844,7 +840,6 @@ pub(super) async fn complete_assistant_reply_inner(
             provider_tools_fallback_system_prompt,
             initial_anchor_total_tokens,
             initial_anchor_trailing_estimate,
-            initial_display_usage: display_total.map(|total| (total, display_trailing)),
             skill_project_cwd: skill_cwd.clone(),
         },
         host,
