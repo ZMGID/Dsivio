@@ -615,17 +615,29 @@ fn estimate_messages_segments(
     agent_prepare::merge_context_segments(segments)
 }
 
-/// Use only the latest assistant's measured request when its immutable identity
-/// still applies to the current request view. Missing provenance is not inferred
-/// from today's conversation settings. Return total + newly appended estimates.
+/// Display the latest response's reported usage, estimating only later additions.
+/// A changed system prompt or tool catalog does not erase a real measurement.
+pub(super) fn resolve_display_usage(
+    conversation: &Conversation,
+    provider: Option<&ModelProvider>,
+) -> (Option<u64>, usize) {
+    resolve_context_usage(conversation, provider, None)
+}
+
+/// Request budgeting additionally checks whether the measured request still applies.
 pub(super) fn resolve_usage_anchor(
     conversation: &Conversation,
     provider: Option<&ModelProvider>,
     request: &crate::chat::model::GenerateRequest,
 ) -> (Option<u64>, usize) {
-    let Some(provider) = provider else {
-        return (None, 0);
-    };
+    resolve_context_usage(conversation, provider, Some(request))
+}
+
+fn resolve_context_usage(
+    conversation: &Conversation,
+    provider: Option<&ModelProvider>,
+    request: Option<&crate::chat::model::GenerateRequest>,
+) -> (Option<u64>, usize) {
     // 压缩边界失效（R4）：锚点消息生成后若发生过压缩（自动/手动），其记录的 token 数反映的是压缩前的
     // 完整历史，与压缩后实际发送的 prompt 不再可比——锚点作废。取最晚一次压缩时刻，任何时间戳 ≤ 该时刻的
     // assistant 锚点都视为失真（run 内自动压缩后仍会生成更晚的 assistant，其 anchor_usage 是压缩后调用
@@ -646,9 +658,19 @@ pub(super) fn resolve_usage_anchor(
                 return None;
             }
             let usage = message.anchor_usage.as_ref()?;
-            let identity = usage.request_identity.as_ref()?;
-            if !identity.applies_to(provider, request) { return None; }
-            crate::chat::agent::context_estimate::anchor_total_tokens(usage, &identity.api_format)
+            if let Some(request) = request {
+                if !usage.request_identity.as_ref()?.applies_to(provider?, request) { return None; }
+            }
+            let api_format = usage.request_identity.as_ref().map(|id| id.api_format.as_str())
+                .or_else(|| {
+                    // Legacy counts without cache are protocol-independent. With
+                    // cache, OpenAI includes it in input while Anthropic excludes
+                    // it; today's provider settings cannot identify an old report.
+                    (usage.cached_input_tokens.unwrap_or(0) == 0
+                        && usage.cache_creation_input_tokens.unwrap_or(0) == 0)
+                        .then_some("openai_chat")
+                })?;
+            crate::chat::agent::context_estimate::anchor_total_tokens(usage, api_format)
                 .map(|total| (idx, total))
         });
     match anchor {
@@ -937,15 +959,7 @@ pub(super) async fn compute_context_state(
         .sum::<usize>();
     // 真实用量锚点（对齐 pi/opencode）：有锚点时 footer 显示 provider 实报值 + 锚点后新增估算，
     // 否则回落纯字符估算。估算不能覆盖有效的 provider 实报。
-    let view = crate::chat::model::usage_anchor::request_view(
-        &conversation.model, &request_messages, &tools,
-        provider.as_ref().is_some_and(|provider| {
-            crate::chat::types::WebSearchMode::resolve(conversation.web_search_mode, &settings).for_provider(provider)
-                == crate::chat::types::WebSearchMode::Builtin
-                && crate::chat::model_metadata::builtin_web_search_supported(provider)
-        }),
-    );
-    let (anchor_prompt, anchor_trailing) = resolve_usage_anchor(conversation, provider.as_ref(), &view);
+    let (anchor_prompt, anchor_trailing) = resolve_display_usage(conversation, provider.as_ref());
     let (estimated_input_tokens, anchored) =
         crate::chat::agent::context_estimate::effective_context_tokens(
             anchor_prompt,

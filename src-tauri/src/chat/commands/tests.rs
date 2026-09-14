@@ -2835,6 +2835,54 @@ fn resolve_usage_anchor_none_without_usage() {
 }
 
 #[test]
+fn display_usage_prefers_report_without_requiring_a_rebuilt_request() {
+    let mut conv = test_conversation_with_messages(vec![
+        test_chat_message("u1", "user", "hi", 1),
+        assistant_with_anchor("a1", 2, 238_983),
+    ]);
+    let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
+    conv.messages[1].anchor_usage.as_mut().unwrap().output_tokens = Some(476);
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (Some(239_459), 0));
+    // Older real reports are also usable; a request fingerprint is not usage.
+    let identity = conv.messages[1].anchor_usage.as_ref().unwrap().request_identity.clone();
+    conv.messages[1].anchor_usage.as_mut().unwrap().request_identity = None;
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (Some(239_459), 0));
+    let mut switched = provider.clone();
+    switched.api_format = "anthropic_messages".into();
+    conv.messages[1].anchor_usage.as_mut().unwrap().cached_input_tokens = Some(238_848);
+    // Unknown historical cache semantics must not be reinterpreted by today's API.
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&switched)), (None, 0));
+    conv.messages[1].anchor_usage.as_mut().unwrap().request_identity = identity;
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&switched)), (Some(239_459), 0));
+    conv.messages.push(test_chat_message("u2", "user", "new question", 3));
+    let (total, extra) = super::context::resolve_display_usage(&conv, Some(&provider));
+    assert_eq!(total, Some(239_459));
+    assert!(extra > 0);
+    conv.context_state.compaction_boundaries.push(boundary_at(10));
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (None, 0));
+    conv.context_state.compaction_boundaries.clear();
+    apply_context_clear(&mut conv).unwrap();
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (None, 0));
+    conv.context_state.clear_boundaries.clear();
+    replace_final_text_segments_for_edit(&mut conv.messages[1], "edited answer");
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (None, 0));
+}
+
+#[test]
+#[ignore = "local captured conversation; set KIVIO_CONTEXT_REPLAY"]
+fn captured_context_display_uses_returned_usage() {
+    let path = std::env::var("KIVIO_CONTEXT_REPLAY").unwrap();
+    let conv: Conversation = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let latest = conv.messages.iter().rev().find(|m| m.role == "assistant").unwrap();
+    let usage = latest.anchor_usage.as_ref().unwrap();
+    let expected = crate::chat::agent::context_estimate::anchor_total_tokens(
+        usage, &usage.request_identity.as_ref().unwrap().api_format,
+    ).unwrap();
+    let provider = test_provider(&conv.provider_id, "Capture", vec![&conv.model]);
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (Some(expected), 0));
+}
+
+#[test]
 fn context_estimate_counts_native_reasoning_and_display_copy_once() {
     let native = serde_json::json!({
         "role": "assistant", "content": "Done",
