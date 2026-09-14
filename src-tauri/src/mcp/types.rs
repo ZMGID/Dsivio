@@ -1207,12 +1207,12 @@ mod tests {
     fn write_file_tool_description_discourages_inline_code_requests() {
         let tool = native_write_file_tool();
 
-        assert!(tool.description.contains("explicitly asks"));
+        assert!(tool.description.contains("authorized file work"));
         assert!(tool.description.contains("code block"));
-        assert!(tool.description.contains("prefer edit"));
+        assert!(tool.description.contains("default to edit"));
         assert!(tool
             .description
-            .contains("structured file mutation metadata"));
+            .contains("complete diff metadata"));
     }
 
     #[test]

@@ -107,7 +107,14 @@ pub(crate) async fn stream_with_chat_provider(
     let identity = usage_anchor::UsageRequestIdentity::from_request(provider, &request);
     let mut output = stream_with_chat_provider_inner(state, provider, retry_attempts, request, sink).await?;
     if let Some(usage) = output.usage.as_mut() {
-        usage.request_identity = identity;
+        // A Responses compatibility retry may have removed reasoning input. Its
+        // measured usage is real, but cannot certify the original logical view
+        // (in particular after restart, when endpoint capability memory is lost).
+        usage.request_identity = if state.reasoning_replay_unsupported(&provider.base_url) {
+            None
+        } else {
+            identity
+        };
     }
     Ok(output)
 }

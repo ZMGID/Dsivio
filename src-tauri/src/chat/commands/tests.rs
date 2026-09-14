@@ -2734,6 +2734,18 @@ fn boundary_at(created_at: i64) -> CompactionBoundaryRecord {
 }
 
 #[test]
+fn resolve_usage_anchor_rejects_edited_assistant_output() {
+    let mut conv = test_conversation_with_messages(vec![
+        test_chat_message("u1", "user", "hi", 1),
+        assistant_with_anchor("a1", 2, 100_000),
+    ]);
+    let provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
+    assert!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()).0.is_some());
+    replace_final_text_segments_for_edit(&mut conv.messages[1], &"edited answer ".repeat(1000));
+    assert_eq!(resolve_usage_anchor(&conv, Some(&provider), &anchor_test_request()), (None, 0));
+}
+
+#[test]
 fn resolve_usage_anchor_rejects_legacy_unproven_usage() {
     let mut conv = test_conversation_with_messages(vec![
         test_chat_message("u1", "user", "hi", 1),

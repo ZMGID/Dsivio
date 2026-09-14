@@ -859,12 +859,24 @@ pub(crate) fn request_budget(provider: &ModelProvider, model: &str, output: u32)
         .or_else(|| model_database_entry(provider_model_database_id(Some(provider), model))?
             .get("maxInput")?.as_u64())
         .and_then(|value| usize::try_from(value).ok()).filter(|value| *value > 0);
-    let output_reserve = if provider.api_format_kind() == crate::settings::ProviderApiFormat::Gemini {
+    let mut output_reserve = if provider.api_format_kind() == crate::settings::ProviderApiFormat::Gemini {
         0
     } else if output > 0 { output as usize } else {
         // An omitted output limit is not a promise of zero output.
         chat_max_output_tokens_for_model(Some(provider), model).unwrap_or(16_384) as usize
     };
+    // Only the Chat adapter merges model extra_body into the outgoing body.
+    // Reserve conservatively when both legacy and completion limits are present;
+    // never let an override silently increase output beyond the guarded budget.
+    if provider.api_format_kind() == crate::settings::ProviderApiFormat::OpenAiChat {
+        if let Some(body) = provider.model_overrides.get(model).and_then(|info| info.extra_body.as_ref()) {
+            for key in ["max_tokens", "max_completion_tokens"] {
+                if let Some(limit) = body.get(key).and_then(serde_json::Value::as_u64) {
+                    output_reserve = output_reserve.max(usize::try_from(limit).unwrap_or(usize::MAX));
+                }
+            }
+        }
+    }
     RequestBudget {
         input: window.saturating_sub(output_reserve).min(input_cap.unwrap_or(usize::MAX)),
         output_reserve,
@@ -910,6 +922,24 @@ pub(crate) fn pricing_for_model(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn request_budget_accounts_for_chat_body_output_overrides() {
+        let mut provider = test_provider_with_overrides(HashMap::from([
+            ("budget-model".into(), ModelInfo {
+                context_window: Some(32_000),
+                extra_body: Some(serde_json::json!({"max_tokens":24_000})),
+                ..Default::default()
+            })
+        ]));
+        provider.api_format = "openai_chat".into();
+        assert_eq!(request_budget(&provider, "budget-model", 8_000).input, 8_000);
+        provider.model_overrides.get_mut("budget-model").unwrap().extra_body =
+            Some(serde_json::json!({"max_completion_tokens":30_000}));
+        assert_eq!(request_budget(&provider, "budget-model", 8_000).input, 2_000);
+        provider.api_format = "openai_responses".into();
+        assert_eq!(request_budget(&provider, "budget-model", 8_000).input, 24_000);
+    }
+
     #[test]
     fn request_budget_respects_output_and_independent_input_caps() {
         let mut provider = test_provider_with_overrides(std::collections::HashMap::from([

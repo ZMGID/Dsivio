@@ -350,6 +350,39 @@ impl ToolExecutor for NativeMutationExecutor {
 }
 
 #[tokio::test]
+async fn responses_replay_fallback_does_not_certify_original_request_usage() {
+    let server = MockModelServer::start(vec![
+        MockResponse::Status(400, r#"{"error":{"message":"unsupported reasoning input item"}}"#.into()),
+        MockResponse::Sse(vec![
+            r#"{"type":"response.output_text.delta","delta":"done"}"#.into(),
+            r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}}"#.into(),
+            "[DONE]".into(),
+        ]),
+    ]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.provider.api_format = "openai_responses".into();
+    config.tools.clear();
+    config.runtime_messages = vec![
+        serde_json::json!({"role":"user","content":"hello"}),
+        serde_json::json!({"role":"assistant","content":"earlier answer", "reasoning_items":[{
+            "model":"test-model", "item":{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"ciphertext"}
+        }]}),
+        serde_json::json!({"role":"user","content":"continue"}),
+    ];
+    let result = run_agent_loop(config, &TestHost::default(), &RecordingExecutor::default()).await.unwrap();
+    let bodies = server.captured_bodies();
+    assert_eq!(bodies.len(), 2);
+    let first: Value = serde_json::from_str(&bodies[0]).unwrap();
+    let retry: Value = serde_json::from_str(&bodies[1]).unwrap();
+    assert!(first["input"].as_array().unwrap().iter().any(|item| item["type"] == "reasoning"));
+    assert!(retry["input"].as_array().unwrap().iter().all(|item| item["type"] != "reasoning"));
+    let usage = result.last_step_usage.unwrap();
+    assert_eq!(usage.input_tokens, Some(100));
+    assert!(usage.request_identity.is_none(), "reduced retry input cannot certify the original replay view");
+}
+
+#[tokio::test]
 async fn native_file_receipts_are_short_on_the_wire_and_keep_review_diff() {
     let root = tempfile::tempdir().unwrap();
     let call = |id: &str, name: &str, arguments: Value| {
@@ -2252,6 +2285,39 @@ async fn run_loop_no_anchor_skips_compaction_when_estimate_below_budget() {
 /// 且已经按权威口径算出了分子（`effective_context_tokens`）与分母
 /// （`context_window_for_model`），所以实时通道零额外计算。这条断言两件事：
 /// 一轮里**多次**上报（多次工具往返 ⇒ 多轮 ⇒ 多次上报），且数字单调不减。
+#[tokio::test]
+async fn run_loop_reserves_extra_body_output_before_sending() {
+    let server = MockModelServer::start(vec![MockResponse::Sse(vec![
+        r#"{"choices":[{"delta":{"content":"should not be requested"}}]}"#.into(),
+        "[DONE]".into(),
+    ])]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.provider.model_overrides.insert(
+        "test-model".into(),
+        crate::settings::ModelInfo {
+            context_window: Some(1000),
+            extra_body: Some(serde_json::json!({"max_tokens":900})),
+            ..Default::default()
+        },
+    );
+    config.max_output_tokens = 100;
+    config.tools.clear();
+    config.runtime_messages = vec![
+        serde_json::json!({"role":"system", "content": "fixed instruction ".repeat(70)}),
+        serde_json::json!({"role":"user", "content":"hello"}),
+    ];
+    let result = run_agent_loop(config, &TestHost::default(), &RecordingExecutor::default()).await;
+    assert!(
+        result.is_err(),
+        "an unfixable request must report its budget constraint"
+    );
+    assert!(
+        server.captured_bodies.lock().unwrap().is_empty(),
+        "do not send a known over-budget prompt"
+    );
+}
+
 #[tokio::test]
 async fn run_loop_reserves_output_and_does_not_send_an_unfixable_prompt() {
     let server = MockModelServer::start(vec![MockResponse::Sse(vec![
