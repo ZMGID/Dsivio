@@ -80,16 +80,19 @@ export function ImageLanguageSelect({
   onChange,
   disabled,
   allowFollowExample = false,
+  allowAuto = false,
   inheritedValue,
 }: {
   value: string
   onChange: (value: string) => void
   disabled?: boolean
   allowFollowExample?: boolean
+  allowAuto?: boolean
   inheritedValue?: string
 }) {
   const languages = allowFollowExample || value === '跟随样图'
     ? [['跟随样图', '跟随样图'], ...imageLanguages] : [...imageLanguages]
+  if (allowAuto) languages.unshift(['auto', 'Auto'])
   if (inheritedValue && !languages.some(([code]) => code === inheritedValue)) {
     const label = imageLanguages.find(([code]) => inheritedValue.includes(code))?.[1]
     languages.unshift([inheritedValue, label ? `模板语言 · ${label}` : '跟随模板语言'])

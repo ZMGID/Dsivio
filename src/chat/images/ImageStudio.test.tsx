@@ -202,13 +202,13 @@ describe('Built-in image workflows', () => {
     vi.mocked(api.imageStudioAction).mockResolvedValue({ ...saved, status: 'running' })
     render(<ImageStudio />)
     expect(await screen.findByRole('button', { name: '生成图片' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '比例' })).toHaveTextContent('1:1 正方形')
-    expect(screen.getByRole('button', { name: '分辨率' })).toHaveTextContent('1K · 1024×1024')
+    expect(screen.getByRole('button', { name: '比例' })).toHaveTextContent('Auto')
+    expect(screen.getByRole('button', { name: '分辨率' })).toHaveTextContent('Auto')
     expect(screen.queryByRole('button', { name: '画幅' })).not.toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: saved.brief.requirement } })
     fireEvent.click(screen.getByRole('button', { name: '生成图片' }))
     await waitFor(() => expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, { kind: 'start', group: '未分类' }))
-    expect(api.imageStudioSave).toHaveBeenCalledWith(expect.objectContaining({ language: '无文字', products: [] }), undefined, undefined)
+    expect(api.imageStudioSave).toHaveBeenCalledWith(expect.objectContaining({ language: 'auto', count: 0, products: [] }), undefined, undefined)
     expect(screen.queryByRole('tab', { name: /画面方案/ })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('商品正面')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('商品背面')).not.toBeInTheDocument()
@@ -370,7 +370,7 @@ describe('Built-in image workflows', () => {
       expect(api.imageStudioAction).toHaveBeenCalledWith('job', 2, { kind: 'start', group: '未分类' }),
     )
     expect(api.imageStudioSave).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'gen', requirement: '纯白底，保留产品细节', ratio: '1:1' }),
+      expect.objectContaining({ feature: 'gen', requirement: '纯白底，保留产品细节', ratio: 'auto' }),
       undefined,
       undefined,
     )

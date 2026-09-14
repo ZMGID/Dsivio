@@ -140,7 +140,7 @@ fn validate_brief(b: &Brief) -> Result<(), String> {
     ) {
         return Err("未知图片功能".into());
     }
-    if b.count == 0 || b.count > 30 || b.products.len() > 200 {
+    if (b.count == 0 && b.feature != "gen") || b.count > 30 || b.products.len() > 200 {
         return Err("每套 1–30 页、每批最多 200 个商品".into());
     }
     let mut ids = HashSet::new();

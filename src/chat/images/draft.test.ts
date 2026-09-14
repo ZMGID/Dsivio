@@ -7,3 +7,8 @@ it('keeps output settings across new image tasks without copying product content
   rememberImageSettings({ ...emptyBrief('gen'), ratio: '16:9', resolution: '2k', requirement: 'old request' })
   expect(newImageDraftBrief('design')).toMatchObject({ feature: 'design', ratio: '16:9', resolution: '2k', requirement: '', products: [] })
 })
+
+it('starts quick image requests with Auto even after manual output preferences', () => {
+  rememberImageSettings({ ...emptyBrief('gen'), ratio: '16:9', resolution: '2k' })
+  expect(newImageDraftBrief('gen')).toMatchObject({ count: 0, ratio: 'auto', resolution: 'auto', language: 'auto' })
+})

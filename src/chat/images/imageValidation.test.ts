@@ -10,7 +10,8 @@ it('blocks missing image configuration and incompatible output before generation
   expect(imageConfigIssue({ ...config, protocol: 'grok' }, { ...brief, resolution: '4k' })).toBe('')
   expect(imageConfigIssue({ ...config, protocol: 'grok' }, { ...brief, ratio: '5:4' })).toBe('')
   expect(imageConfigIssue({ ...config, protocol: 'grok' }, { ...brief, ratio: '4:5', resolution: '2k' })).toBe('')
-  expect(imageConfigIssue(config, { ...brief, count: 0 })).toContain('1–30')
+  expect(imageConfigIssue(config, emptyBrief('gen'))).toBe('')
+  expect(imageConfigIssue(config, { ...brief, count: -1 })).toContain('1–30')
 })
 
 it('does not dump gateway size or timeout payloads to the user', () => {

@@ -1,6 +1,7 @@
 import { StudioSelect } from './StudioPanels'
 import {
   imageOutputRatios,
+  listImageOutputs,
   imageOutputResolutions,
   imageRatioLabel,
   imageResolutionLabel,
@@ -19,6 +20,7 @@ function frameBox(ratio: string, max = 16): { width: number; height: number } {
 }
 
 export function ImageRatioSelect({
+  allowAuto = false,
   ratio,
   resolution,
   model,
@@ -27,6 +29,7 @@ export function ImageRatioSelect({
   ariaLabel = '比例',
   onChange,
 }: {
+  allowAuto?: boolean
   ratio: string
   resolution: string
   model?: string
@@ -45,9 +48,10 @@ export function ImageRatioSelect({
         ariaLabel={ariaLabel}
         disabled={disabled}
         value={ratio}
-        onChange={(event) => onChange(snapImageOutput(model, protocol, event.target.value, resolution))}
+        onChange={(event) => onChange(allowAuto && (event.target.value === 'auto' || resolution === 'auto') ? { ratio: event.target.value, resolution } : snapImageOutput(model, protocol, event.target.value, resolution))}
       >
-        {ratios.map((value) => (
+        {allowAuto && <option value="auto">Auto</option>}
+        {ratios.filter(value => value !== 'auto').map((value) => (
           <option key={value} value={value}>{imageRatioLabel(value)}</option>
         ))}
       </StudioSelect>
@@ -56,6 +60,7 @@ export function ImageRatioSelect({
 }
 
 export function ImageResolutionSelect({
+  allowAuto = false,
   ratio,
   resolution,
   model,
@@ -64,6 +69,7 @@ export function ImageResolutionSelect({
   ariaLabel = '分辨率',
   onChange,
 }: {
+  allowAuto?: boolean
   ratio: string
   resolution: string
   model?: string
@@ -72,7 +78,9 @@ export function ImageResolutionSelect({
   ariaLabel?: string
   onChange: (next: { ratio: string; resolution: string }) => void
 }) {
-  const resolutions = imageOutputResolutions(model, protocol, ratio, resolution)
+  const resolutions = ratio === 'auto' && allowAuto
+    ? listImageOutputs(model, protocol).filter((item, index, all) => all.findIndex(other => other.resolution === item.resolution) === index)
+    : imageOutputResolutions(model, protocol, ratio, resolution)
   const value = resolution
   return (
     <StudioSelect
@@ -81,8 +89,9 @@ export function ImageResolutionSelect({
       value={value}
       onChange={(event) => onChange({ ratio, resolution: event.target.value })}
     >
-      {resolutions.map((item) => (
-        <option key={item.resolution} value={item.resolution}>{imageResolutionLabel(item)}</option>
+      {allowAuto && <option value="auto">Auto</option>}
+      {resolutions.filter(item => item.resolution !== 'auto').map((item) => (
+        <option key={item.resolution} value={item.resolution}>{ratio === 'auto' ? item.resolution.toUpperCase() : imageResolutionLabel(item)}</option>
       ))}
     </StudioSelect>
   )
