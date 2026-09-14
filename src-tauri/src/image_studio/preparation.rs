@@ -236,7 +236,7 @@ async fn derive(
             .attempts
             .push(result.clone());
         persist(task)?; // Save the attempt before any billable submission.
-        let plan = ImagePlan {
+        let plan = ImagePlan { output: None,
             product_id: product.id.clone(),
             slot_id: result.slot_id.clone(),
             purpose: "内部参考素材".into(),

@@ -7,10 +7,11 @@ export function rememberImageSettings(brief: ImageBrief) {
 }
 export function newImageDraftBrief(feature: ImageBrief['feature']): ImageBrief {
   const brief = emptyBrief(feature)
+  if (feature === 'gen') return brief
   try {
     const saved = JSON.parse(localStorage.getItem(PREFERENCES_KEY) || '{}')
-    if (typeof saved.ratio === 'string') brief.ratio = saved.ratio
-    if (typeof saved.resolution === 'string') brief.resolution = saved.resolution
+    if (typeof saved.ratio === 'string' && saved.ratio !== 'auto') brief.ratio = saved.ratio
+    if (typeof saved.resolution === 'string' && saved.resolution !== 'auto') brief.resolution = saved.resolution
   } catch { /* Use defaults if local preferences are unavailable. */ }
   return brief
 }

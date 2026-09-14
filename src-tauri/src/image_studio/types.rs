@@ -86,6 +86,8 @@ pub struct RuleChange {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImagePlan {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<ImagePlanOutput>,
     pub product_id: String,
     pub slot_id: String,
     pub purpose: String,
@@ -93,6 +95,15 @@ pub struct ImagePlan {
     pub prompt: String,
     #[serde(default)]
     pub refs: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImagePlanOutput {
+    pub ratio: String,
+    pub resolution: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

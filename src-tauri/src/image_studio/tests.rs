@@ -397,7 +397,7 @@ fn workflow_append_preserves_approval_and_only_new_products_need_generation() {
     workflow::validate_action(&task, &workflow_action("workflow_produce")).unwrap();
     task.plans = ["a", "b", "next-product"]
         .iter()
-        .map(|id| ImagePlan {
+        .map(|id| ImagePlan { output: None,
             product_id: id.to_string(),
             slot_id: "h1".into(),
             purpose: "主图".into(),
@@ -1021,7 +1021,7 @@ impl generation::Backend for GenerationBackend {
 
 fn generation_plans(task: &Task, count: usize) -> Vec<ImagePlan> {
     (0..count)
-        .map(|i| ImagePlan {
+        .map(|i| ImagePlan { output: None,
             slot_id: format!("h{i}"),
             ..task.plans[0].clone()
         })
@@ -1291,4 +1291,59 @@ async fn failed_cdn_download_preserves_receipt_and_resumes_without_paid_resubmis
     assert!(result.path.is_some());
     assert_eq!(backend.submitted.lock().unwrap().len(), 1);
     assert_eq!(backend.polled.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn auto_edits_route_logo_to_each_target_and_preserve_delivery_dimensions() {
+    let base = std::env::temp_dir().join(format!("dsivio-auto-{}", storage::id()));
+    fs::create_dir_all(&base).unwrap();
+    let mut task = fixture();
+    task.brief.feature = "gen".into();
+    task.brief.count = 0;
+    task.brief.ratio = "auto".into();
+    task.brief.resolution = "auto".into();
+    task.brief.language = "auto".into();
+    task.brief.requirement = "把后面两张图片的标志替换为图一的 Logo".into();
+    let mut assets = Vec::new();
+    for (i,(w,h)) in [(64,64),(320,480),(640,360)].into_iter().enumerate() {
+        let path = base.join(format!("{i}.png"));
+        image::DynamicImage::new_rgb8(w,h).save(&path).unwrap();
+        assets.push(storage::import_asset(&path).unwrap());
+    }
+    task.brief.products[0].assets = assets.clone();
+    let out = json!({"outputs":[
+        {"target":2,"ratio":"2:3","resolution":"1k"},
+        {"target":3,"ratio":"16:9","resolution":"1k"}
+    ]});
+    let plans = agent::resolve_gen_outputs(&task.brief,&task.brief.products[0],&out).unwrap();
+    assert_eq!(plans.len(),2);
+    for (index, plan) in plans.iter().enumerate() {
+        assert!(plan.prompt.starts_with(&task.brief.requirement));
+        assert!(plan.prompt.contains(&format!("只输出图{}",index+2)));
+        assert_eq!(plan.refs.len(),3);
+        assert!(!plan.prompt.contains("文字语言设置：auto"));
+    }
+    assert_eq!((plans[0].output.as_ref().unwrap().width,plans[0].output.as_ref().unwrap().height),(320,480));
+    assert_eq!((plans[1].output.as_ref().unwrap().width,plans[1].output.as_ref().unwrap().height),(640,360));
+    let cfg = StudioConfig { provider_id:"test".into(),model:"gpt-image-2".into(),protocol:"openai".into(),output_root:base.join("out").to_string_lossy().into(),..Default::default() };
+    assert_eq!(engine::resolved_gen_brief(&cfg,&task.brief,&plans[1]).unwrap().ratio,"16:9");
+    let mut manual = task.brief.clone();
+    manual.ratio = "1:1".into();
+    manual.resolution = "1k".into();
+    assert_eq!(engine::resolved_gen_brief(&cfg,&manual,&plans[1]).unwrap().ratio,"1:1");
+    manual.count = 3;
+    assert!(agent::resolve_gen_outputs(&manual,&task.brief.products[0],&out).is_err());
+    assert!(agent::resolve_gen_outputs(&task.brief,&task.brief.products[0],&json!({"outputs":[{"target":99}]})).is_err());
+    task.plans = plans;
+    output::prepare(&mut task,&cfg).unwrap();
+    let mut generated = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(1536,864).write_to(&mut generated,image::ImageFormat::Png).unwrap();
+    let mut saved = result(&task.plans[1].product_id,task.revision,None);
+    saved.slot_id = task.plans[1].slot_id.clone();
+    engine::store_image_in(&task,&mut saved,generated.get_ref()).unwrap();
+    assert_eq!((saved.width,saved.height),(640,360));
+    let file = output::directory(&task).unwrap().join(output::original_relative(&task,&saved,"png"));
+    assert_eq!(image::image_dimensions(file).unwrap(),(640,360));
+    for asset in assets { fs::remove_file(storage::resolve(&asset.path).unwrap()).unwrap(); }
+    fs::remove_dir_all(base).unwrap();
 }

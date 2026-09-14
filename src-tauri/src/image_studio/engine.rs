@@ -132,16 +132,23 @@ pub fn validate(cfg: &StudioConfig, brief: &Brief) -> Result<(), String> {
     ) {
         return Err("请选择图片接口协议".into());
     }
-    if !matches!(
-        brief.ratio.as_str(),
-        "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9"
-    ) {
+    let auto = brief.feature == "gen";
+    if !(auto && brief.ratio == "auto")
+        && !matches!(
+            brief.ratio.as_str(),
+            "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9"
+        )
+    {
         return Err("不支持的画幅".into());
     }
-    if !matches!(brief.resolution.as_str(), "1k" | "2k" | "4k") {
+    if !(auto && brief.resolution == "auto")
+        && !matches!(brief.resolution.as_str(), "1k" | "2k" | "4k")
+    {
         return Err("不支持的生成清晰度".into());
     }
-    if !allowed_image_output(&cfg.model, &cfg.protocol, &brief.ratio, &brief.resolution) {
+    if !(auto && (brief.ratio == "auto" || brief.resolution == "auto"))
+        && !allowed_image_output(&cfg.model, &cfg.protocol, &brief.ratio, &brief.resolution)
+    {
         let name = cfg.model.to_ascii_lowercase();
         if name.contains("gpt-image-2") {
             return Err("gpt-image-2 请使用官方尺寸：1:1、2:3、3:2、9:16、16:9".into());
@@ -298,6 +305,66 @@ fn data_uri(path: &str) -> Result<String, String> {
     };
     Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
+pub(super) fn resolved_gen_brief(
+    cfg: &StudioConfig,
+    brief: &Brief,
+    plan: &ImagePlan,
+) -> Result<Brief, String> {
+    let mut resolved = brief.clone();
+    if brief.ratio != "auto" && brief.resolution != "auto" {
+        return Ok(resolved);
+    }
+    let output = plan.output.as_ref().ok_or("请先自动分配图片参数")?;
+    let desired_ratio = if output.width > 0 && output.height > 0 {
+        output.width as f64 / output.height as f64
+    } else {
+        let (w, h) = output.ratio.split_once(':').ok_or("无效画幅")?;
+        w.parse::<f64>().map_err(|_| "无效画幅")? / h.parse::<f64>().map_err(|_| "无效画幅")?
+    };
+    let mut best: Option<(f64, &str, &str)> = None;
+    for ratio in [
+        "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9",
+    ] {
+        if brief.ratio != "auto" && brief.ratio != ratio {
+            continue;
+        }
+        for resolution in ["1k", "2k", "4k"] {
+            if brief.resolution != "auto" && brief.resolution != resolution {
+                continue;
+            }
+            if !allowed_image_output(&cfg.model, &cfg.protocol, ratio, resolution) {
+                continue;
+            }
+            let (w, h) = ratio.split_once(':').unwrap();
+            let aspect = w.parse::<f64>().unwrap() / h.parse::<f64>().unwrap();
+            let desired_level = if output.width > 0 {
+                if output.width.max(output.height) > 2048 {
+                    "4k"
+                } else if output.width.max(output.height) > 1536 {
+                    "2k"
+                } else {
+                    "1k"
+                }
+            } else {
+                &output.resolution
+            };
+            let score = (aspect / desired_ratio).ln().abs() * 100.0
+                + if resolution == desired_level {
+                    0.0
+                } else {
+                    1.0
+                };
+            if best.is_none_or(|(previous, _, _)| score < previous) {
+                best = Some((score, ratio, resolution));
+            }
+        }
+    }
+    let (_, ratio, resolution) = best.ok_or("当前模型不支持指定规格，请把比例和分辨率改为 Auto")?;
+    resolved.ratio = ratio.into();
+    resolved.resolution = resolution.into();
+    Ok(resolved)
+}
+
 pub async fn submit(
     app: &AppHandle,
     cfg: &StudioConfig,
@@ -309,6 +376,8 @@ pub async fn submit(
     let mut resolved = cfg.clone();
     apply_resolved_protocol(&mut resolved, &p);
     let cfg = &resolved;
+    let resolved_brief = resolved_gen_brief(cfg, brief, plan)?;
+    let brief = &resolved_brief;
     validate(cfg, brief)?;
     if plan.refs.len() > if cfg.protocol == "grok" { 5 } else { 16 } {
         return Err("参考图数量超出该接口限制，请减少参考素材".into());
@@ -384,7 +453,9 @@ pub async fn submit(
             "openai" => {
                 json!({"model":cfg.model,"prompt":plan.prompt,"n":1,"size":images_size(&cfg.model, &b.ratio, &b.resolution),"quality":"high"})
             }
-            "grok" => grok_generation_payload(&cfg.model, &plan.prompt, &b.ratio, &b.resolution, &images),
+            "grok" => {
+                grok_generation_payload(&cfg.model, &plan.prompt, &b.ratio, &b.resolution, &images)
+            }
             "gemini" => {
                 let mut parts = vec![json!({"text":plan.prompt})];
                 for u in &images {
@@ -400,7 +471,9 @@ pub async fn submit(
                 }
                 json!({"model":cfg.model,"messages":[{"role":"user","content":content}],"stream":false,"generationConfig":{"responseModalities":["IMAGE"],"imageConfig":{"aspectRatio":b.ratio,"imageSize":b.resolution.to_uppercase()}}})
             }
-            _ => async_generation_payload(&cfg.model, &plan.prompt, &b.ratio, &b.resolution, &images),
+            _ => {
+                async_generation_payload(&cfg.model, &plan.prompt, &b.ratio, &b.resolution, &images)
+            }
         };
         req = req.json(&payload);
     }
@@ -422,7 +495,8 @@ pub(super) fn explain_image_http_error(status: u16, body: &str) -> String {
         || lower.contains("image-2 size")
         || (lower.contains("invalid_request") && lower.contains("size") && lower.contains("1:1"))
     {
-        return "该模型需要像素尺寸（如 1024x1024），不能把画幅比例直接当作 size。请重新生成。".into();
+        return "该模型需要像素尺寸（如 1024x1024），不能把画幅比例直接当作 size。请重新生成。"
+            .into();
     }
     if let Ok(v) = serde_json::from_str::<Value>(body) {
         if let Some(msg) = v
@@ -724,14 +798,9 @@ pub(super) fn remote_task_id(v: &Value) -> Option<String> {
         .into_iter()
         .filter_map(|k| v.get(k).and_then(Value::as_str))
         .chain(
-            [
-                "/data/0/task_id",
-                "/data/task_id",
-                "/data/0/id",
-                "/data/id",
-            ]
-            .into_iter()
-            .filter_map(|p| v.pointer(p).and_then(Value::as_str)),
+            ["/data/0/task_id", "/data/task_id", "/data/0/id", "/data/id"]
+                .into_iter()
+                .filter_map(|p| v.pointer(p).and_then(Value::as_str)),
         )
         .find(|s| !s.is_empty())
         .map(str::to_string)
@@ -768,7 +837,27 @@ pub(super) fn store_image_in(
     result: &mut ImageResult,
     bytes: &[u8],
 ) -> Result<(), String> {
-    let img = storage::decode(bytes)?;
+    let mut img = storage::decode(bytes)?;
+    let output = task
+        .plans
+        .iter()
+        .find(|plan| plan.product_id == result.product_id && plan.slot_id == result.slot_id)
+        .and_then(|plan| plan.output.as_ref());
+    let mut resized = std::io::Cursor::new(Vec::new());
+    let bytes = if let Some(output) = output.filter(|o| {
+        o.width > 0 && o.height > 0 && (o.width != img.width() || o.height != img.height())
+    }) {
+        img = img.resize_exact(
+            output.width,
+            output.height,
+            image::imageops::FilterType::Lanczos3,
+        );
+        img.write_to(&mut resized, image::ImageFormat::Png)
+            .map_err(|e| e.to_string())?;
+        resized.get_ref().as_slice()
+    } else {
+        bytes
+    };
     let fmt = image::guess_format(bytes).map_err(|e| e.to_string())?;
     let ext = match fmt {
         image::ImageFormat::Jpeg => "jpg",

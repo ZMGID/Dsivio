@@ -2,7 +2,7 @@ import { useMemo, useState, type DragEvent } from 'react'
 import { ArrowRight, FolderOpen, ImagePlus, Layers3, Loader2, Plus, Search, X } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
 import { ImageRatioSelect, ImageResolutionSelect } from './ImageOutputSelect'
-import { AssetImage, Field, ImageLanguageSelect } from './StudioPanels'
+import { AssetImage, Field, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 import type { ImageAsset, ImageBrief, ImageTemplate } from './types'
 
 function templateHaystack(item: ImageTemplate): string {
@@ -238,14 +238,15 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
         </Field>
       </section>
       <div className="if-options">
-        <Field label={quick ? '张数' : '每款张数'}><input className="kv-input" type="number" min={1} max={30} disabled={busy || !!template || (replace && !!sources.length)}
-          value={pages}
-          onChange={(e) => onChange({ count: Math.max(1, Math.min(30, Number(e.target.value) || 1)) })} /></Field>
-        <Field label="比例"><ImageRatioSelect disabled={busy} model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
+        <Field label={quick ? '张数' : '每款张数'}>{quick ? <StudioSelect value={brief.count} disabled={busy} onChange={e => onChange({ count: Number(e.target.value) })}>
+          <option value={0}>Auto</option>{Array.from({ length: 30 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+        </StudioSelect> : <input className="kv-input" type="number" min={1} max={30} disabled={busy || !!template || (replace && !!sources.length)}
+          value={pages} onChange={(e) => onChange({ count: Math.max(1, Math.min(30, Number(e.target.value) || 1)) })} />}</Field>
+        <Field label="比例"><ImageRatioSelect allowAuto={quick} disabled={busy} model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
           onChange={(output) => onChange(output)} /></Field>
-        <Field label="分辨率"><ImageResolutionSelect disabled={busy} model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
+        <Field label="分辨率"><ImageResolutionSelect allowAuto={quick} disabled={busy} model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
           onChange={(output) => onChange(output)} /></Field>
-        <Field label="图内文字"><ImageLanguageSelect disabled={busy} allowFollowExample={replace} inheritedValue={template?.data.language} value={brief.language} onChange={(language) => onChange({ language })} /></Field>
+        <Field label="图内文字"><ImageLanguageSelect allowAuto={quick} disabled={busy} allowFollowExample={replace} inheritedValue={template?.data.language} value={brief.language} onChange={(language) => onChange({ language })} /></Field>
       </div>
       <details className="if-more">
         <summary>更多设置</summary>

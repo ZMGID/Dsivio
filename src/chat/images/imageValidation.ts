@@ -3,16 +3,17 @@ import type { ImageBrief, ImageConfig } from './types'
 export function imageConfigIssue(config: ImageConfig, brief: ImageBrief): string {
   if (!config.providerId || !config.model) return '请先在图片设置中选择图片供应商和生成模型'
   if (!['openai', 'grok', 'gemini', 'gemini-chat', 'async'].includes(config.protocol)) return '请选择图片接口协议'
-  if (!(IMAGE_RATIOS as readonly string[]).includes(brief.ratio) || !(IMAGE_RESOLUTIONS as readonly string[]).includes(brief.resolution)) {
+  const auto = brief.feature === 'gen'
+  if (!(auto && brief.ratio === 'auto') && !(IMAGE_RATIOS as readonly string[]).includes(brief.ratio) || !(auto && brief.resolution === 'auto') && !(IMAGE_RESOLUTIONS as readonly string[]).includes(brief.resolution)) {
     return '请选择分辨率'
   }
-  if (!isAllowedImageOutput(brief.ratio, brief.resolution, config.model, config.protocol)) {
+  if (!(auto && (brief.ratio === 'auto' || brief.resolution === 'auto')) && !isAllowedImageOutput(brief.ratio, brief.resolution, config.model, config.protocol)) {
     if (config.model.toLowerCase().includes('gpt-image-2')) return 'gpt-image-2 请使用官方尺寸：1:1、2:3、3:2、9:16、16:9'
     if (config.protocol === 'openai') return 'OpenAI 标准接口只支持 1024×1024、1024×1536 或 1536×1024'
     if (config.protocol === 'grok') return 'Grok 只支持 1K/2K 以及 1:1、16:9、9:16、4:3、3:4、3:2、2:3'
     return '请选择当前模型支持的分辨率'
   }
-  if (!Number.isInteger(brief.count) || brief.count < 1 || brief.count > 30) return '每套图片数量须为 1–30 的整数'
+  if (!Number.isInteger(brief.count) || brief.count < (auto ? 0 : 1) || brief.count > 30) return '每套图片数量须为 1–30 的整数'
   if (brief.products.length > 200 || brief.products.some(p => p.assets.filter(a => !a.name.startsWith('__dsimage_')).length > 16)) return '每个任务最多 200 款商品，每款最多 16 张参考图'
   return ''
 }

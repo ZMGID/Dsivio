@@ -26,6 +26,7 @@ export type ImageBrief = {
   workflowInput?: { mode: 'smart' | 'replace'; sources: ImageAsset[] } | null
 }
 export type ImagePlan = {
+  output?: { ratio: string; resolution: string; width: number; height: number }
   productId: string
   slotId: string
   purpose: string
@@ -134,7 +135,7 @@ export const FEATURES = [
     id: 'gen',
     label: '单张 / 改图',
     description: '主图、白底、场景与局部改图',
-    step: '生成一张图片，或修改已有图片。写下要求即可开始。',
+    step: '根据要求生成或修改图片，Auto 会按内容和参考图安排输出。',
   },
   {
     id: 'workflow',
@@ -225,7 +226,7 @@ export function suggestImageTaskName(brief: ImageBrief): string {
     '图片任务'
   const language = brief.language.trim()
   const market =
-    LANGUAGE_MARKET[language] || (language && language !== '无文字' ? language : '')
+    LANGUAGE_MARKET[language] || (language && language !== '无文字' && language !== 'auto' ? language : '')
   return market ? `${head} · ${market}` : head
 }
 
@@ -233,11 +234,11 @@ export const emptyBrief = (feature: ImageFeature): ImageBrief => ({
   feature,
   name: '',
   requirement: '',
-  language: feature === 'gen' ? '无文字' : feature === 'replace' ? '跟随样图' : 'zh-CN',
+  language: feature === 'gen' ? 'auto' : feature === 'replace' ? '跟随样图' : 'zh-CN',
   platform: '',
-  ratio: '1:1',
-  resolution: '1k',
-  count: feature === 'gen' ? 1 : 7,
+  ratio: feature === 'gen' ? 'auto' : '1:1',
+  resolution: feature === 'gen' ? 'auto' : '1k',
+  count: feature === 'gen' ? 0 : 7,
   style: '',
   templateId: null,
   products: [],
