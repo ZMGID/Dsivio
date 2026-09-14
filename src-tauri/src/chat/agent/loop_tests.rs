@@ -326,6 +326,7 @@ impl AgentHost for TestHost {
 
 #[derive(Default)]
 struct RecordingExecutor {
+    image_followups: bool,
     active: AtomicUsize,
     max_active: AtomicUsize,
     events: Arc<Mutex<Vec<String>>>,
@@ -414,6 +415,37 @@ async fn run_loop_preserves_reused_tool_ids_in_durable_checkpoints() {
         assert!(args[0].contains("first body"), "earlier call must keep its own arguments");
         assert!(args[1].contains("second body"));
     }
+}
+
+#[tokio::test]
+async fn image_followup_never_interrupts_a_multi_tool_batch_on_the_wire() {
+    let mut events = Vec::new();
+    for (index, id, name, args) in [(0,"image_call","read",r#"{"path":"shot.png"}"#),
+        (1,"shell_call","bash",r#"{"command":"echo ok"}"#)] {
+        events.push(serde_json::json!({"type":"response.output_item.added","output_index":index,
+            "item":{"id":id,"type":"function_call","call_id":id,"name":name,"arguments":""}}).to_string());
+        events.push(serde_json::json!({"type":"response.function_call_arguments.done","item_id":id,"output_index":index,"arguments":args}).to_string());
+    }
+    events.push(serde_json::json!({"type":"response.completed","response":{"status":"completed"}}).to_string());
+    let server = MockModelServer::start(vec![MockResponse::Sse(events), MockResponse::Sse(vec![
+        r#"{"type":"response.output_text.delta","delta":"done"}"#.into(),
+        r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}}"#.into(),
+    ])]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.provider.api_format = "openai_responses".into();
+    config.tools = vec![native_read_file_tool(),native_run_command_tool()];
+    config.effective_chat_tools.max_tool_rounds = Some(4);
+    let result = run_agent_loop(config,&TestHost::default(),&RecordingExecutor {image_followups:true,..Default::default()}).await.unwrap();
+    assert_eq!(result.tool_records.len(),2);
+    let bodies = server.captured_bodies();
+    assert_eq!(bodies.len(),2);
+    let last: Value = serde_json::from_str(&bodies[1]).unwrap();
+    let input = last["input"].as_array().unwrap();
+    let image = input.iter().position(|v| v["content"].as_array().is_some_and(|parts| parts.iter().any(|p| p["type"] == "input_image"))).unwrap();
+    let output = input.iter().position(|v| v["type"] == "function_call_output" && v["call_id"] == "shell_call").unwrap();
+    assert!(output < image, "No tool output found: image/user message must follow ALL tool outputs, not just the read result");
+    assert_eq!(result.stream_outcome,"completed");
 }
 
 #[tokio::test]
@@ -546,7 +578,9 @@ impl ToolExecutor for RecordingExecutor {
                 raw: Value::Null,
                 artifacts: Vec::new(),
                 structured_content: None,
-                follow_up_user_messages: Vec::new(),
+                follow_up_user_messages: if self.image_followups && name == "read" {
+                    vec![serde_json::json!({"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AAAA"}}]})]
+                } else { Vec::new() },
             })
         })
     }
