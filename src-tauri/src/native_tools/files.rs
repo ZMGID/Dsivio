@@ -316,6 +316,15 @@ fn read_file_window_streaming(
     })
 }
 
+fn reject_history_placeholder(text: &str) -> Result<(), String> {
+    if text.lines().any(|line| line.trim_start().starts_with(
+        "[Kivio history: completed file payload omitted;",
+    )) {
+        return Err("History-only placeholder is not file content; no file was changed. Supply the actual content. Read an existing file to recover its text; there is no 7KB write limit.".into());
+    }
+    Ok(())
+}
+
 pub fn write_file(
     workspace: &NativeToolWorkspace,
     arguments: &Value,
@@ -328,6 +337,7 @@ pub fn write_file(
         .get("content")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "write_file requires content".to_string())?;
+    reject_history_placeholder(content)?;
     let full = resolve_tool_write_path(workspace, path)?;
     let _guard = acquire_file_mutation_locks([full.clone()])?;
     let existed = full.is_file();
@@ -391,6 +401,7 @@ pub fn edit_file(
                 .get("new_string")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| format!("edits[{i}] requires new_string"))?;
+            reject_history_placeholder(new)?;
             Ok((old.to_string(), new.to_string()))
         })
         .collect::<Result<_, String>>()?;

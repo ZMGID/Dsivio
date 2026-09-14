@@ -1379,27 +1379,16 @@ fn empty_history_fallback_text(previous_summary: Option<&PreviousSummary>) -> St
 ///
 /// `generated_api_messages`（持久化镜像）在任何分支都不被触碰。
 pub(crate) async fn maybe_compact_send_view(env: &LoopEnv<'_>, state: &mut RunState, include_tools: bool) -> Result<Vec<Value>, String> {
-    let original = std::mem::take(&mut state.runtime_messages);
-    state.runtime_messages = super::argument_replay::send_view(
-        &original, env.config.prior_file_calls.iter().copied().chain(state.tool_records.iter()),
-    );
-    let result = compact_projected_send_view(env, state, include_tools).await;
-    super::argument_replay::restore_retained_arguments(&mut state.runtime_messages, &original);
-    result
-}
-
-async fn compact_projected_send_view(env: &LoopEnv<'_>, state: &mut RunState, include_tools: bool) -> Result<Vec<Value>, String> {
     let config = env.config;
     let active_tools = if include_tools { state.tools.as_slice() } else { &[] };
     let request_view = crate::chat::model::usage_anchor::request_view(
         &config.model, &state.runtime_messages, active_tools, config.builtin_web_search_active(),
     );
-    if state.last_step_usage.as_ref().is_some_and(|usage| {
-        usage.request_identity.as_ref().is_none_or(|identity| !identity.applies_to(&config.provider, &request_view))
-    }) {
-        state.last_step_usage = None;
-        state.initial_anchor_valid = false;
-    }
+    // A budget mismatch must not erase a response's real usage. Display and
+    // persistence keep it; only the next-request budget falls back to estimation.
+    let measured_budget_applies = state.last_step_usage.as_ref().is_some_and(|usage| {
+        usage.request_identity.as_ref().is_some_and(|identity| identity.applies_to(&config.provider, &request_view))
+    });
     if state.initial_anchor_valid {
         state.initial_anchor_valid = state.initial_request_identity.as_ref()
             .is_some_and(|identity| identity.applies_to(&config.provider, &request_view));
@@ -1410,6 +1399,7 @@ async fn compact_projected_send_view(env: &LoopEnv<'_>, state: &mut RunState, in
     if saved_bytes > 0 {
         state.last_step_usage = None;
         state.initial_anchor_valid = false;
+        state.initial_display_usage = None;
         eprintln!("Chat context: pruned {saved_bytes} bytes of image data from the send view");
     }
     // 统一基准：裸窗口 × AUTO_COMPACT_RATIO（0.90），对齐 Codex。去掉 safe_window 折扣——
@@ -1454,10 +1444,12 @@ async fn compact_projected_send_view(env: &LoopEnv<'_>, state: &mut RunState, in
             .runtime_len_at_last_call
             .min(state.runtime_messages.len());
         (
-            super::context_estimate::anchor_total_tokens(usage, usage.request_identity.as_ref()
-                .map(|identity| identity.api_format.as_str()).unwrap_or(&config.provider.api_format)),
+            super::context_estimate::anchor_total_tokens(usage, usage.reported_api_format()
+                .unwrap_or(&config.provider.api_format)),
             estimate_messages_tokens(&state.runtime_messages[start..]),
         )
+    } else if let Some((total, trailing)) = state.initial_display_usage {
+        (Some(total), trailing)
     } else if state.initial_anchor_valid {
         // 本轮尚未调用模型（首次压缩检查）：用上一轮落盘 usage 组成的 config 锚点。
         (
@@ -1467,20 +1459,26 @@ async fn compact_projected_send_view(env: &LoopEnv<'_>, state: &mut RunState, in
     } else {
         (None, 0)
     };
-    let (estimated, anchored) =
+    let (display_tokens, anchored) =
         super::context_estimate::effective_context_tokens(anchor_prompt, trailing, estimate_full);
-    // **内置路径的实时用量通道**：本函数每个 planning 轮都跑一次，且这两个数就是权威口径
-    // （`compute_context_state` 用的是同一对函数 `anchor_total_tokens` +
-    // `effective_context_tokens`，分母同样是 `context_window_for_model`）—— 白捡的实时来源，
-    // 零额外计算。粒度是「每轮一次」而不是每个 token：内置路径的分子来自 provider 的
-    // usage，只有一次模型调用结束才有新数，中途没有更细的真实来源。
+    // 实时显示使用最近实报加尚未计入的增量，与轮末快照共享计数口径。
+    // 下一次请求的预算适用性在下方单独判断，不影响这里显示已收到的实报。
     // 子 agent 的 host 走默认 no-op，用量不会混进主对话。
     env.host.emit_context_usage_live(
         &config.conversation_id,
-        estimated as u64,
+        display_tokens as u64,
         super::context_estimate::token_count_source(anchored, trailing),
         Some(window as u64),
     );
+    let estimated = if state.last_step_usage.is_some() {
+        if measured_budget_applies { display_tokens } else { estimate_full }
+    } else if state.initial_anchor_valid {
+        super::context_estimate::effective_context_tokens(
+            config.initial_anchor_total_tokens, config.initial_anchor_trailing_estimate, estimate_full,
+        ).0
+    } else {
+        estimate_full
+    };
     if estimated <= budget {
         // 未超预算：本步无需压缩。重置 anti-thrashing 计数（Gap 2）——上下文已回到预算内。
         state.compaction_unresolved_rounds = 0;
@@ -1524,6 +1522,7 @@ async fn compact_projected_send_view(env: &LoopEnv<'_>, state: &mut RunState, in
         // 压缩后消息序列已变，旧锚点失真——清空，回落纯估算直到下次模型调用产生新 usage。
         state.last_step_usage = None;
         state.initial_anchor_valid = false;
+        state.initial_display_usage = None;
         env.host.emit_compaction_status(
             &config.conversation_id,
             "microcompacted",
@@ -1568,6 +1567,7 @@ async fn compact_projected_send_view(env: &LoopEnv<'_>, state: &mut RunState, in
             // 压缩后消息序列已变，旧锚点失真——清空，回落纯估算直到下次模型调用产生新 usage。
             state.last_step_usage = None;
             state.initial_anchor_valid = false;
+            state.initial_display_usage = None;
             if after <= budget {
                 state.compaction_unresolved_rounds = 0;
             } else {

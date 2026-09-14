@@ -5,6 +5,14 @@ use sha2::{Digest, Sha256};
 use super::{GenerateRequest, OfficialDeepseekBuiltinHop};
 use crate::settings::ModelProvider;
 
+pub(crate) fn request_api_format(provider: &ModelProvider, builtin_search: bool) -> &str {
+    match super::official_deepseek_builtin_hop(provider, builtin_search) {
+        Some(OfficialDeepseekBuiltinHop::Responses) => "openai_responses",
+        Some(OfficialDeepseekBuiltinHop::Anthropic) => "anthropic_messages",
+        None => provider.api_format.as_str(),
+    }
+}
+
 pub(crate) fn request_view(
     model: &str,
     messages: &[serde_json::Value],
@@ -59,15 +67,7 @@ impl UsageRequestIdentity {
         {
             return None;
         }
-        let api_format = match super::official_deepseek_builtin_hop(
-            provider,
-            request.options.builtin_web_search,
-        ) {
-            Some(OfficialDeepseekBuiltinHop::Responses) => "openai_responses",
-            Some(OfficialDeepseekBuiltinHop::Anthropic) => "anthropic_messages",
-            None => provider.api_format.as_str(),
-        }
-        .to_string();
+        let api_format = request_api_format(provider, request.options.builtin_web_search).to_string();
         let endpoint = reqwest::Url::parse(&provider.base_url).ok().map(|mut url| {
             let _ = url.set_username("");
             let _ = url.set_password(None);

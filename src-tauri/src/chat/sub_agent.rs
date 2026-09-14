@@ -635,7 +635,6 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
     let effective_chat_tools = req.settings.chat_tools.clone();
 
     let config = AgentRunConfig {
-        prior_file_calls: Vec::new(),
         state,
         conversation_id: sub_conversation_id.clone(),
         tool_conversation_id: req.parent_conversation_id.clone(),
@@ -661,6 +660,7 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
         provider_tools_fallback_system_prompt: req.system_prompt.clone(),
         initial_anchor_total_tokens: None,
         initial_anchor_trailing_estimate: 0,
+        initial_display_usage: None,
         skill_project_cwd: req.skill_project_cwd.clone(),
     };
 

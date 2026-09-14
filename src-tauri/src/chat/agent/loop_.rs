@@ -75,6 +75,7 @@ pub(crate) struct RunState {
     /// 会虚高数倍，不能当锚点）。`maybe_compact_send_view` 据此把上下文占用锚定到 provider
     /// 实报值，只对锚点之后新增的消息做字符估算（对齐 pi/opencode 的 ground-truth 口径）。
     /// 压缩发生后清空（消息序列已变，旧锚点失真），下次模型调用重新填充。
+    /// 请求身份不匹配只让预算回退估算，不清除供显示与落盘使用的实报。
     pub(crate) last_step_usage: Option<crate::chat::model::ModelUsage>,
     /// 记录锚点**响应 push 之后** `runtime_messages` 的长度——`runtime_messages[该值..]` =
     /// 锚点响应之后新增的消息（工具结果等），即 trailing 增量。在 `rounds.rs` push 完 assistant
@@ -83,6 +84,8 @@ pub(crate) struct RunState {
     /// `config.initial_anchor_*`（来自上一轮落盘 usage）是否仍可用：run 首次压缩检查前为 true；
     /// 一旦发生压缩即失效（回落纯估算，直到本轮模型调用产生新的 `last_step_usage`）。
     pub(crate) initial_anchor_valid: bool,
+    /// 续聊首轮沿用的显示实报；预算身份变化不清除它。
+    pub(crate) initial_display_usage: Option<(u64, usize)>,
     pub(crate) initial_request_identity: Option<crate::chat::model::usage_anchor::UsageRequestIdentity>,
     /// 本轮是否真正发生过 L2 压缩（摘要已写回 `runtime_messages`）。finalize 据此
     /// 把压缩后的完整历史回传到 `AgentRunResult.compacted_history`，让跨轮调用方
@@ -127,6 +130,7 @@ impl RunState {
     pub(crate) fn merge_usage(&mut self, next: Option<crate::chat::model::ModelUsage>) {
         self.last_step_usage = next.clone();
         self.initial_anchor_valid = false;
+        self.initial_display_usage = None;
         let Some(next) = next else { return };
         let total = self.usage.get_or_insert_with(Default::default);
         let add = |slot: &mut Option<u64>, value: Option<u64>| {
@@ -232,12 +236,10 @@ pub async fn run_agent_loop(
     host: &dyn AgentHost,
     executor: &dyn ToolExecutor,
 ) -> Result<AgentRunResult, String> {
-    let initial_send_view = super::argument_replay::send_view(&config.runtime_messages, config.prior_file_calls.iter().copied());
     let initial_request_identity = crate::chat::model::usage_anchor::UsageRequestIdentity::from_request(
         &config.provider, &crate::chat::model::usage_anchor::request_view(
-            &config.model, &initial_send_view, &config.tools, config.builtin_web_search_active()),
+            &config.model, &config.runtime_messages, &config.tools, config.builtin_web_search_active()),
     );
-    drop(initial_send_view);
     let mut state = RunState {
         runtime_messages: std::mem::take(&mut config.runtime_messages),
         tools: std::mem::take(&mut config.tools),
@@ -259,6 +261,7 @@ pub async fn run_agent_loop(
         last_step_usage: None,
         runtime_len_at_last_call: 0,
         initial_anchor_valid: true,
+        initial_display_usage: config.initial_display_usage,
         initial_request_identity,
         compacted: false,
         compaction_unresolved_rounds: 0,

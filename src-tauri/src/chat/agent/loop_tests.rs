@@ -334,6 +334,131 @@ struct RecordingExecutor {
 
 struct NativeMutationExecutor(crate::native_tools::NativeToolWorkspace);
 
+const HISTORY_PAYLOAD: &str = "[Kivio history: completed file payload omitted; 20880 UTF-8 bytes; sha256=8b674097a07176154b21437ed50db32db6e05687567ddd6c1f912780bdd1f911. Full arguments/diff remain in local history. Read the file for current content; do not execute this placeholder.]";
+
+#[test]
+fn regression_placeholder_write_preserves_files_and_large_writes_still_work() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::native_tools::NativeToolWorkspace::project(
+        "test".into(), "Test".into(), Some(root.path().to_string_lossy().into_owned()),
+    );
+    std::fs::write(root.path().join("existing.py"), "original\n").unwrap();
+    for path in ["existing.py", "new.py"] {
+        let error = crate::native_tools::write_file(&workspace, &serde_json::json!({
+            "path":path, "content":HISTORY_PAYLOAD
+        })).unwrap_err();
+        assert!(error.contains("no file was changed"));
+    }
+    assert!(!root.path().join("new.py").exists());
+    assert_eq!(std::fs::read_to_string(root.path().join("existing.py")).unwrap(), "original\n");
+    let large = "print('real code')\n".repeat(4000);
+    crate::native_tools::write_file(&workspace, &serde_json::json!({"path":"new.py", "content":large})).unwrap();
+    assert_eq!(std::fs::read_to_string(root.path().join("new.py")).unwrap(), large);
+}
+
+#[test]
+fn regression_placeholder_edit_must_not_replace_real_code() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = crate::native_tools::NativeToolWorkspace::project(
+        "audit".into(), "Audit".into(), Some(root.path().to_string_lossy().into_owned()),
+    );
+    let path = root.path().join("app.py");
+    std::fs::write(&path, "def answer():\n    return 42\n").unwrap();
+    let result = crate::native_tools::edit_file(&workspace, &serde_json::json!({
+        "path":"app.py", "edits":[
+            {"old_string":"def answer():", "new_string":"def changed():"},
+            {"old_string":"    return 42", "new_string":HISTORY_PAYLOAD}
+        ]
+    }));
+    assert!(result.is_err(), "history marker was accepted as replacement code");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "def answer():\n    return 42\n");
+    // Existing damage can be repaired: the marker is allowed as old_string.
+    std::fs::write(&path, HISTORY_PAYLOAD).unwrap();
+    crate::native_tools::edit_file(&workspace, &serde_json::json!({
+        "path":"app.py", "edits":[{"old_string":HISTORY_PAYLOAD,"new_string":"repaired\n"}]
+    })).unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "repaired\n");
+}
+
+#[tokio::test]
+async fn regression_responses_placeholder_is_rejected_before_writing() {
+    let arguments = serde_json::json!({"path":"test_api.py","content":HISTORY_PAYLOAD}).to_string();
+    let server = MockModelServer::start(vec![
+        MockResponse::Sse(vec![
+            serde_json::json!({"type":"response.output_item.added","output_index":0,
+                "item":{"id":"item","type":"function_call","call_id":"call","name":"write","arguments":""}}).to_string(),
+            serde_json::json!({"type":"response.function_call_arguments.done","item_id":"item","output_index":0,"arguments":arguments}).to_string(),
+            serde_json::json!({"type":"response.completed","response":{"status":"completed"}}).to_string(),
+        ]),
+        MockResponse::Sse(vec![
+            serde_json::json!({"type":"response.output_text.delta","delta":"Need real source content."}).to_string(),
+            serde_json::json!({"type":"response.completed","response":{"status":"completed"}}).to_string(),
+        ]),
+    ]);
+    let state = test_app_state();
+    let mut config = test_run_config(&state, &server.base_url);
+    config.provider.api_format = "openai_responses".into();
+    config.tools = vec![native_write_file_tool()];
+    config.effective_chat_tools.max_tool_rounds = Some(3);
+    let root = tempfile::tempdir().unwrap();
+    let result = run_agent_loop(config, &TestHost::default(), &NativeMutationExecutor(
+        crate::native_tools::NativeToolWorkspace::project("test".into(),"Test".into(),Some(root.path().to_string_lossy().into_owned()))
+    )).await.unwrap();
+    assert!(!root.path().join("test_api.py").exists());
+    assert_eq!(result.tool_records.len(), 1);
+    assert_eq!(result.tool_records[0].status, ToolCallStatus::Error);
+    assert!(result.tool_records[0].error.as_deref().unwrap().contains("History-only placeholder"));
+    let body: Value = serde_json::from_str(&server.captured_bodies()[1]).unwrap();
+    assert!(body["input"].as_array().unwrap().iter().any(|item|
+        item["type"] == "function_call_output" && item["output"].as_str().unwrap_or("").contains("actual content")));
+}
+
+#[tokio::test]
+async fn regression_live_display_must_keep_last_report() {
+    for cancelled in [false, true] {
+        let call = |id: &str, name: &str, args: Value| MockResponse::Sse(vec![
+            serde_json::json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":id,
+                "function":{"name":name,"arguments":args.to_string()}}]}}]}).to_string(),
+            serde_json::json!({"choices":[],"usage":{"prompt_tokens":90000,"completion_tokens":10,"total_tokens":90010}}).to_string(),
+            "[DONE]".into(),
+        ]);
+        let server = MockModelServer::start(vec![
+            call("first", "write", serde_json::json!({"path":"app.py", "content":"original body\n".repeat(2000)})),
+            call("second", "edit", serde_json::json!({"path":"app.py", "edits":[{"old_string":"original body\n".repeat(2000),"new_string":"done\n"}]})),
+            if cancelled {
+                MockResponse::SseThenHang(vec![r#"{"choices":[{"delta":{"content":"partial answer"}}]}"#.into()])
+            } else {
+                MockResponse::Sse(vec![r#"{"choices":[{"delta":{"content":"done"}}]}"#.into(), "[DONE]".into()])
+            },
+        ]);
+        let state = test_app_state();
+        let mut config = test_run_config(&state, &server.base_url);
+        config.tools = vec![native_write_file_tool(), crate::mcp::types::native_edit_file_tool()];
+        config.effective_chat_tools.max_tool_rounds = Some(5);
+        config.initial_display_usage = Some((120_000, 20));
+        config.provider.model_overrides.insert("test-model".into(), crate::settings::ModelInfo {
+            extra_body: Some(serde_json::json!({"temperature":0.5})), ..Default::default()
+        });
+        let host = TestHost { cancel_on_first_text_delta: cancelled, ..Default::default() };
+        let root = tempfile::tempdir().unwrap();
+        let result = run_agent_loop(config, &host, &NativeMutationExecutor(crate::native_tools::NativeToolWorkspace::project(
+            "audit".into(), "Audit".into(), Some(root.path().to_string_lossy().into_owned()),
+        ))).await.unwrap();
+        let ticks = host.recorded_context_ticks();
+        assert!(ticks.len() >= 3, "{ticks:?}");
+        assert_eq!(ticks[0].0, 120_020, "reopened report lost before first response: {ticks:?}");
+        assert!(ticks[1].0 >= 90010, "first measurement missing: {ticks:?}");
+        assert!(ticks[2].0 >= 90010, "reported usage erased by argument projection: {ticks:?}");
+        if cancelled {
+            assert_eq!(result.stream_outcome, "cancelled");
+            let usage = result.last_step_usage.unwrap();
+            assert_eq!(usage.total_tokens, Some(90010));
+            assert_eq!(usage.api_format.as_deref(), Some("openai_chat"));
+            assert!(usage.request_identity.is_none());
+        }
+        }
+}
+
 impl ToolExecutor for NativeMutationExecutor {
     fn call<'a>(
         &'a self,
@@ -512,8 +637,9 @@ async fn native_file_receipts_are_short_on_the_wire_and_keep_review_diff() {
         .flat_map(|message| message["tool_calls"].as_array().into_iter().flatten())
         .find(|call| call["id"] == "write1").unwrap();
     let replay_arguments = replayed_write["function"]["arguments"].as_str().unwrap();
-    assert!(replay_arguments.len() < 1000, "completed old write payload must not be resent in full");
-    assert!(replay_arguments.contains("omitted"));
+    assert!(replay_arguments.len() > 20_000, "real historical arguments must remain complete");
+    assert!(replay_arguments.contains("BODY_MARKER"));
+    assert!(!replay_arguments.contains("Kivio history:"));
     assert!(result.tool_records[0].arguments.contains("BODY_MARKER"), "audit arguments stay complete");
     assert!(result.api_messages.iter().any(|message| message.to_string().contains("BODY_MARKER")),
         "persisted replay stays complete");
@@ -811,7 +937,6 @@ fn test_provider(base_url: &str) -> ModelProvider {
 
 fn test_run_config<'a>(state: &'a AppState, base_url: &str) -> AgentRunConfig<'a> {
     AgentRunConfig {
-        prior_file_calls: Vec::new(),
         state,
         conversation_id: "conversation".to_string(),
         tool_conversation_id: "conversation".to_string(),
@@ -842,6 +967,7 @@ fn test_run_config<'a>(state: &'a AppState, base_url: &str) -> AgentRunConfig<'a
         provider_tools_fallback_system_prompt: String::new(),
         initial_anchor_total_tokens: None,
         initial_anchor_trailing_estimate: 0,
+        initial_display_usage: None,
         skill_project_cwd: None,
     }
 }

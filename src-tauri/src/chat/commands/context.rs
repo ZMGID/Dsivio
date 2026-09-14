@@ -661,7 +661,7 @@ fn resolve_context_usage(
             if let Some(request) = request {
                 if !usage.request_identity.as_ref()?.applies_to(provider?, request) { return None; }
             }
-            let api_format = usage.request_identity.as_ref().map(|id| id.api_format.as_str())
+            let api_format = usage.reported_api_format()
                 .or_else(|| {
                     // Legacy counts without cache are protocol-independent. With
                     // cache, OpenAI includes it in input while Anthropic excludes
@@ -939,9 +939,6 @@ pub(super) async fn compute_context_state(
         last_user_api_content,
         main_image_paths,
     )?;
-    let request_messages = crate::chat::agent::argument_replay::send_view(
-        &request_messages, conversation.messages.iter().flat_map(|message| &message.tool_calls),
-    );
     segments.extend(estimate_messages_segments(
         conversation,
         &request_messages,

@@ -2706,6 +2706,29 @@ fn anchor_test_request() -> crate::chat::model::GenerateRequest {
     ], &[], false)
 }
 
+#[test]
+fn regression_cached_report_with_body_option_is_not_legacy() {
+    let mut provider = test_provider("openai", "OpenAI", vec!["gpt-4o"]);
+    provider.model_overrides.insert("gpt-4o".into(), crate::settings::ModelInfo {
+        extra_body: Some(serde_json::json!({"temperature":0.5})), ..Default::default()
+    });
+    let mut assistant = assistant_with_anchor("a1", 2, 90000);
+    let usage = assistant.anchor_usage.as_mut().unwrap();
+    *usage = crate::usage::model_usage_from_openai_value(&serde_json::json!({"usage": {
+        "prompt_tokens":90000, "completion_tokens":100,
+        "prompt_tokens_details":{"cached_tokens":80000}
+    }})).unwrap();
+    usage.request_identity = crate::chat::model::usage_anchor::UsageRequestIdentity::from_request(
+        &provider, &anchor_test_request(),
+    );
+    assert!(usage.request_identity.is_none());
+    let conv = test_conversation_with_messages(vec![test_chat_message("u1","user","hello",1), assistant]);
+    assert_eq!(super::context::resolve_display_usage(&conv, Some(&provider)), (Some(90100), 0));
+    let reloaded: Conversation = serde_json::from_str(&serde_json::to_string(&conv).unwrap()).unwrap();
+    provider.api_format = "anthropic_messages".into();
+    assert_eq!(super::context::resolve_display_usage(&reloaded, Some(&provider)), (Some(90100), 0));
+}
+
 /// 带 anchor_usage 的 assistant（openai_chat 口径：anchor_prompt = input_tokens）。
 fn assistant_with_anchor(id: &str, ts: i64, input_tokens: u64) -> ChatMessage {
     let mut m = test_chat_message(id, "assistant", "reply", ts);
@@ -2734,7 +2757,7 @@ fn boundary_at(created_at: i64) -> CompactionBoundaryRecord {
 }
 
 #[test]
-fn history_file_arguments_are_bounded_after_reload_without_changing_audit_or_protected_calls() {
+fn history_file_arguments_remain_faithful_after_reload() {
     for name in ["write", "edit"] {
         for protection in ["none", "error", "cancelled", "mcp", "signature", "reasoning", "unpaired", "latest", "mismatch"] {
             let args = if name == "write" {
@@ -2769,18 +2792,10 @@ fn history_file_arguments_are_bounded_after_reload_without_changing_audit_or_pro
             let reloaded: Conversation = serde_json::from_str(&stored).unwrap();
             let view = build_chat_api_messages(None,"system",&reloaded,None,None,&[]).unwrap();
             assert!(view.iter().any(|m| m.to_string().contains("original code")), "runtime history must keep full arguments");
-            let view = crate::chat::agent::argument_replay::send_view(&view, reloaded.messages.iter().flat_map(|m| &m.tool_calls));
             let replayed = view.iter().flat_map(|m| m["tool_calls"].as_array().into_iter().flatten())
                 .find(|c| c["id"] == "file1").unwrap();
             let raw = replayed["function"]["arguments"].as_str().unwrap();
-            if protection == "none" {
-                assert!(raw.len() < 1000, "{name}: {protection}");
-                assert!(raw.contains("sha256=") && raw.contains("omitted"));
-                let compact: serde_json::Value = serde_json::from_str(raw).unwrap();
-                assert_eq!(compact["path"], "app.txt");
-            } else {
-                assert_eq!(raw, args.to_string(), "{name}: {protection}");
-            }
+            assert_eq!(raw, args.to_string(), "{name}: {protection}");
             assert_eq!(serde_json::to_string(&reloaded).unwrap(), stored, "audit must remain immutable");
         }
     }

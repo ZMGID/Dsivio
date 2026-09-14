@@ -267,6 +267,9 @@ pub struct GenerateRequest {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelUsage {
+    /// Token accounting format recorded with the response, independent of budget applicability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_format: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_identity: Option<super::usage_anchor::UsageRequestIdentity>,
     pub input_tokens: Option<u64>,
@@ -287,6 +290,13 @@ pub struct ModelUsage {
     /// `collect_external_session_usage` 能一并读到，无需为分母另开事件通道。
     #[serde(default)]
     pub context_window_tokens: Option<u64>,
+}
+
+impl ModelUsage {
+    pub(crate) fn reported_api_format(&self) -> Option<&str> {
+        self.api_format.as_deref()
+            .or_else(|| self.request_identity.as_ref().map(|identity| identity.api_format.as_str()))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

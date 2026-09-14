@@ -105,8 +105,10 @@ pub(crate) async fn stream_with_chat_provider(
     sink: &mut (dyn StreamSink + Send),
 ) -> Result<GenerateOutput, ModelError> {
     let identity = usage_anchor::UsageRequestIdentity::from_request(provider, &request);
+    let api_format = usage_anchor::request_api_format(provider, request.options.builtin_web_search).to_string();
     let mut output = stream_with_chat_provider_inner(state, provider, retry_attempts, request, sink).await?;
     if let Some(usage) = output.usage.as_mut() {
+        usage.api_format = Some(api_format);
         // A Responses compatibility retry may have removed reasoning input. Its
         // measured usage is real, but cannot certify the original logical view
         // (in particular after restart, when endpoint capability memory is lost).
