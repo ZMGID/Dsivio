@@ -248,7 +248,7 @@ fn work_style_prompt(available_builtin_tools: &[String]) -> String {
                 " — for generated or edited images, read each image file and confirm the visual content is actually correct",
             );
         }
-        prompt.push_str("; if it fails inspection, fix it and verify again.");
+        prompt.push_str(". If a check fails, reproduce the smallest failing case, distinguish a test-driver failure from an application defect, and fix the cause. Reuse passed checks unless relevant code, configuration, or environment changed; do not rerun a full suite just to inspect another log fragment. Keep completed and remaining requirements current, and finish once the requested deliverables and required checks are complete.");
     }
     prompt
 }
@@ -978,6 +978,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     }
     if has_bash {
         bullets.push("Scope searches to relevant directories and patterns with bounded results; read code by offset/limit. Track exact paths created by this task. Verify cleanup against those paths only, never enumerate the shared temporary directory to guess ownership. For large listings return counts and a small sample; retain error diagnostics and follow the full-log path when more detail is needed.".to_string());
+        bullets.push("Before browser verification, inspect project test scripts and probe available browser tools or libraries (such as Playwright) in the environment you will use. Reuse a working tool before writing a CDP driver; do not infer absence from not having tried it. Diagnose lifecycle, selector, or readiness failures with a minimal probe before restarting a whole walkthrough. Close only browser processes or sessions owned by that verification.".to_string());
         // 运行时取值,让同一份 prompt 在不同平台都说真话。Windows 上 bash 实际选哪个
         // shell 是运行期探测的(见 native_tools::find_git_bash / run_command_shell_hint),
         // 这里用同一个探测结果分支措辞,保证系统提示词与 run_command 工具描述(R4,
@@ -1002,7 +1003,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
             "Unix: `$VAR`, `ls`, `/`"
         };
         bullets.push(format!(
-            "Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax ({shell_syntax_hint}). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project."
+            "Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax ({shell_syntax_hint}). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. Use a script file for complex multi-line code or nested quoting; short one-line capability probes may run inline. When a tool returns a hard rejection, change strategy instead of retrying variants of the same action. Before repeating a failed check, read its existing log and identify what changed; rerunning the same command after a relevant fix is appropriate. Don't drop one-off probe or cleanup scripts into the project."
         ));
         bullets.push(
             "bash runs on the host shell from the current default workbench; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Finite commands (builds, tests, image-generation batches) stay in the foreground: bash waits until the process exits. Put parallel work inside one command (a script --concurrency flag, etc.), not as N bash jobs. Pass timeout_ms only if you want the process killed at that deadline. Never-ending servers such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Run a skill's bundled scripts with run_command; never use host pip unless the user explicitly asked for a host Python install.".to_string(),

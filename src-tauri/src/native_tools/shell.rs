@@ -286,6 +286,19 @@ pub struct CapturedCommand {
     pub stderr: String,
 }
 
+/// Opt-in test/build checks fail before later commands can hide an error.
+/// Ordinary shell commands keep their existing semantics, including head/SIGPIPE.
+fn build_check_command(command: &str) -> Result<Command, String> {
+    #[cfg(windows)]
+    let bash = find_git_bash().ok_or_else(||
+        "check mode requires Git Bash; the ordinary PowerShell fallback is unchanged".to_string())?;
+    #[cfg(not(windows))]
+    let bash = "bash";
+    let mut cmd = Command::new(bash);
+    cmd.args(["-e", "-o", "pipefail", "-c", command]);
+    Ok(cmd)
+}
+
 fn deny_unsafe_command(
     command: &str,
     allow_host_python_package_install: bool,
@@ -405,13 +418,22 @@ pub async fn run_command(
         .get("background")
         .and_then(|v| v.as_bool())
         .unwrap_or_else(|| is_long_running_dev_command(&command));
+    let check = arguments.get("check").and_then(Value::as_bool).unwrap_or(false);
+    if check && (background || is_long_running_dev_command(&command)) {
+        return Err("check mode is for finite foreground checks; do not background a test or use it to start a server".into());
+    }
     if background {
         return run_shell_command_background(&command, cwd, state, conversation_id).await;
     }
 
     let timeout_ms = bash_foreground_timeout_ms(arguments);
-    let output = run_shell_command(&command, cwd, timeout_ms, state).await?;
-    let formatted = offload_large_output(format_command_output(&output));
+    let output = if check {
+        exec_shell_command(build_check_command(&command)?, cwd, timeout_ms, state)
+            .await.map_err(|error| command_output_receipt(error, true))?
+    } else {
+        run_shell_command(&command, cwd, timeout_ms, state).await?
+    };
+    let formatted = command_output_receipt(format_command_output(&output), check);
     if let Some(code) = output.status_code {
         if code != 0 {
             return Err(formatted);
@@ -429,7 +451,12 @@ pub async fn run_command(
 pub(super) const MAX_INLINE_COMMAND_OUTPUT_BYTES: usize = 16 * 1024;
 
 fn offload_large_output(formatted: String) -> String {
-    if formatted.len() <= MAX_INLINE_COMMAND_OUTPUT_BYTES {
+    command_output_receipt(formatted, false)
+}
+
+fn command_output_receipt(formatted: String, retain_log: bool) -> String {
+    let truncated = formatted.len() > MAX_INLINE_COMMAND_OUTPUT_BYTES;
+    if !truncated && !retain_log {
         return formatted;
     }
     let lines = formatted.lines().count();
@@ -444,6 +471,10 @@ fn offload_large_output(formatted: String) -> String {
         Err(_) => None,
     };
 
+    if !truncated {
+        return format!("{}\n{formatted}", log_note
+            .unwrap_or_else(|| "[Full log could not be saved; captured output follows.]".into()));
+    }
     // The full log is recoverable. Keep bounded head/tail diagnostics rather
     // than carrying up to 50 KiB again after writing the same log to disk.
     let mut head_end = formatted.len().min(2_048);
@@ -1144,6 +1175,80 @@ fn format_command_output(output: &CommandOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_test_log(receipt: &str) -> PathBuf {
+        let path = receipt.lines().next().unwrap()
+            .split("complete log saved to ").nth(1).expect("check retains output")
+            .split(". Read it").next().unwrap();
+        PathBuf::from(path)
+    }
+
+    #[tokio::test]
+    async fn check_mode_propagates_pipeline_failure_and_stops_before_echo() {
+        #[cfg(windows)]
+        if find_git_bash().is_none() { return; }
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = NativeToolWorkspace::global(&[dir.path().to_string_lossy().into_owned()]);
+        for command in [
+            "(printf 'actual failure\\n' >&2; exit 7) 2>&1 | tail -5",
+            "(printf 'actual failure\\n' >&2; exit 7); printf 'misleading success\\n'",
+        ] {
+            let error = run_command(&workspace, &serde_json::json!({"command":command,"check":true}), None, None)
+                .await.expect_err("checks must preserve failure");
+            assert!(error.contains("exit_code: 7"), "{error}");
+            assert!(!error.contains("misleading success"));
+            let log = check_test_log(&error);
+            assert!(std::fs::read_to_string(&log).unwrap().contains("actual failure"));
+            std::fs::remove_file(log).unwrap();
+        }
+        let ordinary = run_command(&workspace, &serde_json::json!({"command":"yes | head -n 1"}), None, None)
+            .await.expect("normal shell pipelines keep their semantics");
+        assert!(ordinary.contains("exit_code: 0"));
+    }
+
+    #[tokio::test]
+    async fn check_mode_preserves_full_log_and_explicitly_handled_failures() {
+        #[cfg(windows)]
+        if find_git_bash().is_none() { return; }
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = NativeToolWorkspace::global(&[dir.path().to_string_lossy().into_owned()]);
+        let short = run_command(&workspace, &serde_json::json!({"command":"printf 'passed\\n'","check":true}), None, None).await.unwrap();
+        let short_log = check_test_log(&short);
+        assert_eq!(std::fs::read_to_string(&short_log).unwrap(), "exit_code: 0\nstdout:\npassed\n");
+        std::fs::remove_file(short_log).unwrap();
+        let command = "if (exit 3); then exit 9; else printf 'expected failure handled\\n'; fi; for ((i=0;i<3000;i++)); do printf 'row %s diagnostic text abcdefghijklmnopqrstuvwxyz\\n' \"$i\"; done";
+        let receipt = run_command(&workspace, &serde_json::json!({"command":command,"check":true}), None, None).await.unwrap();
+        assert!(receipt.len() < MAX_INLINE_COMMAND_OUTPUT_BYTES);
+        assert!(!receipt.contains("row 1500 "));
+        let log = check_test_log(&receipt);
+        let full = std::fs::read_to_string(&log).unwrap();
+        assert!(full.contains("row 1500 ") && full.contains("row 2999 "));
+        assert!(full.contains("exit_code: 0") && full.contains("expected failure handled"));
+        std::fs::remove_file(log).unwrap();
+    }
+
+    #[tokio::test]
+    async fn check_mode_rejects_background_and_retains_timeout_output() {
+        #[cfg(windows)]
+        if find_git_bash().is_none() { return; }
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = NativeToolWorkspace::global(&[dir.path().to_string_lossy().into_owned()]);
+        let error = run_command(&workspace, &serde_json::json!({
+            "command":"printf should-not-start", "check":true, "background":true
+        }), None, None).await.expect_err("checks cannot detach");
+        assert!(error.contains("foreground"), "{error}");
+        let error = run_command(&workspace, &serde_json::json!({
+            "command":"npm run dev", "check":true, "background":false
+        }), None, None).await.expect_err("checks cannot force a known server into the foreground");
+        assert!(error.contains("foreground"), "{error}");
+        let error = run_command(&workspace, &serde_json::json!({
+            "command":"printf 'started\\n'; sleep 20", "check":true, "timeout_ms":1200
+        }), None, None).await.expect_err("check times out");
+        assert!(error.contains("timed out"));
+        let log = check_test_log(&error);
+        assert!(std::fs::read_to_string(&log).unwrap().contains("started"));
+        std::fs::remove_file(log).unwrap();
+    }
     use crate::native_tools::user_home_dir;
 
     #[test]
