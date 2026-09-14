@@ -87,15 +87,19 @@ export function useExternalSendQueue({
             id: attachment.id || `external-${request.id}-${index}`,
             type: attachment.type === 'folder'
               ? 'folder'
-              : attachment.type === 'file'
-                ? 'file'
-                : 'image',
+              : attachment.type === 'video'
+                ? 'video'
+                : attachment.type === 'file'
+                  ? 'file'
+                  : 'image',
             name: attachment.name || (
               attachment.type === 'folder'
                 ? 'Folder'
-                : attachment.type === 'file'
-                  ? 'Attachment'
-                  : 'Image'
+                : attachment.type === 'video'
+                  ? 'Video'
+                  : attachment.type === 'file'
+                    ? 'Attachment'
+                    : 'Image'
             ),
             path: attachment.path,
           }))

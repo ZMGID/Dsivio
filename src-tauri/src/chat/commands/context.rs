@@ -930,7 +930,7 @@ pub(super) async fn compute_context_state(
         .map(|segment| segment.estimated_tokens)
         .sum::<usize>();
     // 真实用量锚点（对齐 pi/opencode）：有锚点时 footer 显示 provider 实报值 + 锚点后新增估算，
-    // 否则回落纯字符估算。`effective_context_tokens` 取 `max(纯估算)` 作保守下限。
+    // 否则回落纯字符估算。估算不能覆盖有效的 provider 实报。
     let (anchor_prompt, anchor_trailing) = resolve_usage_anchor(conversation, provider.as_ref());
     let (estimated_input_tokens, anchored) =
         crate::chat::agent::context_estimate::effective_context_tokens(
@@ -978,11 +978,8 @@ pub(super) async fn compute_context_state(
         clear_boundaries: conversation.context_state.clear_boundaries.clone(),
         warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
         context_source: Some(crate::external_agents::context::CONTEXT_SOURCE_BUILTIN.to_string()),
-        token_count_source: if anchored {
-            Some(crate::external_agents::context::TOKEN_COUNT_PROVIDER_REPORTED.to_string())
-        } else {
-            None
-        },
+        token_count_source: crate::chat::agent::context_estimate::token_count_source(anchored, anchor_trailing)
+            .map(str::to_string),
         session_input_tokens: if anchored {
             Some(estimated_input_tokens)
         } else {
@@ -1164,6 +1161,7 @@ pub(crate) fn emit_chat_context_usage_live(
     _conversation_id: &str,
     run_id: &str,
     used_tokens: u64,
+    token_count_source: Option<&str>,
     context_window_tokens: Option<u64>,
 ) {
     crate::chat::protocol::emit_run_event(
@@ -1172,6 +1170,7 @@ pub(crate) fn emit_chat_context_usage_live(
         crate::chat::protocol::ChatRunEvent::ContextUsageUpdated {
             usage: crate::chat::protocol::ChatContextUsagePayload {
                 used_tokens,
+                token_count_source: token_count_source.map(str::to_string),
                 context_window_tokens,
             },
         },
@@ -1299,6 +1298,7 @@ pub(super) fn build_chat_api_messages(
         messages.push(summary_message(summary));
     }
 
+    let mut remaining_video_bytes = crate::chat::video::MAX_VIDEO_BYTES;
     for (idx, message) in conversation.messages.iter().enumerate() {
         if idx < start_idx {
             continue;
@@ -1313,11 +1313,32 @@ pub(super) fn build_chat_api_messages(
             message.content.as_str()
         };
         let sanitized_content = sanitize_image_payloads_for_model(content);
+        if message.role == "assistant" && message.id.starts_with("subagent-result-") {
+            messages.push(tag_ui_message_id(
+                crate::chat::sub_agent::control::report_input(&sanitized_content),
+                &message.id,
+            ));
+            continue;
+        }
+        let mut parts = Vec::new();
+        if message.role == "user" {
+            if let Some(app) = app {
+                for attachment in &message.attachments {
+                    // Extension fallback supports videos saved by older versions as ordinary files.
+                    if crate::chat::video::mime_for_name(&attachment.name).is_some() {
+                        let path = crate::chat::attachments::resolve_attachment_file_path(app, Some(&conversation.id), &attachment.path)?;
+                        parts.push(crate::chat::video::content_part(&path, &mut remaining_video_bytes)?);
+                    }
+                }
+            }
+        }
         if Some(idx) == last_user_idx && !last_user_image_paths.is_empty() {
-            let mut parts = last_user_image_paths
+            parts.extend(last_user_image_paths
                 .iter()
                 .map(image_content_part)
-                .collect::<Result<Vec<_>, _>>()?;
+                .collect::<Result<Vec<_>, _>>()?);
+        }
+        if !parts.is_empty() {
             parts.push(serde_json::json!({ "type": "text", "text": sanitized_content }));
             messages.push(tag_ui_message_id(
                 serde_json::json!({

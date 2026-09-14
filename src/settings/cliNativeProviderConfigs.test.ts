@@ -404,6 +404,7 @@ describe('cliNativeProviderConfigs', () => {
       'off',
       'low',
       'high',
+      'xhigh',
       'max',
     ])
 
@@ -422,7 +423,7 @@ describe('cliNativeProviderConfigs', () => {
       low: 'low',
       medium: null,
       high: 'high',
-      xhigh: null,
+      xhigh: 'xhigh',
       max: 'max',
     })
     expect(readNativeCliProvider('pi', {

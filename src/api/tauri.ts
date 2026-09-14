@@ -23,6 +23,7 @@ import type {
 import type { Automation, AutomationChangedEvent, AutomationMeta, AutomationRun, AutomationRunEvent, AutomationRunStarted, AutomationRunSummary } from '../chat/automation/types'
 import type { GoalState } from '../chat/types'
 import type { ImageAction, ImageBootstrap, ImageBrief, ImageConfig, ImagePlan, ImageProduct, ImageTask, ImageTemplate } from '../chat/images/types'
+import { normalizeGitDiffStat, normalizeGitRepoState, type GitSnapshot } from '../chat/dock/types'
 
 // ========== 类型定义 ==========
 
@@ -75,7 +76,7 @@ export type ChatStreamPayload = Extract<
 
 export type ChatExternalSendAttachment = {
   id: string
-  type: 'image' | 'file'
+  type: 'image' | 'file' | 'folder' | 'video'
   name: string
   path: string
 }
@@ -159,6 +160,8 @@ export type ChatContextState = {
 export type ChatContextLiveUsage = {
   /** 此刻已用（分子）。口径与轮末权威值一致，真源在 Rust 侧。 */
   usedTokens: number
+  /** 实报、实报加新增估算或无实报；不能继承上一条快照的来源。 */
+  tokenCountSource?: string | null
   /** 上下文窗口（分母）。`null` = 本次上报没带窗口，前端必须保留已知的旧值（分母粘滞）。 */
   contextWindowTokens?: number | null
 }
@@ -166,8 +169,7 @@ export type ChatContextLiveUsage = {
 /**
  * 上下文状态更新。两种形态共用这一条通道：
  * - `contextState` —— 轮末/手动刷新的**权威快照**（含分段、压缩计数、来源标签）。
- * - `live` —— 生成过程中的**活数**（只有分子 + 分母）。权威快照那次要读磁盘、列工具、算分段，
- *   不能放在每个增量上，所以实时这条刻意只带两个数。
+ * - `live` —— 生成过程中的**活数**（分子 + 分母 + 来源）。完整快照的分段计算不在增量通道执行。
  */
 export type ChatContextPayload = {
   conversationId: string
@@ -883,6 +885,8 @@ export type MediaPricing = {
 export type ModelInfo = {
   mediaPricing?: MediaPricing
   displayName?: string
+  /** Latest upstream capability, separate from the user's explicit override. */
+  advertisedVideoInput?: boolean
   contextWindow?: number
   maxOutput?: number
   /** 模型级采样温度；未设置时请求不发送 temperature。 */
@@ -891,6 +895,7 @@ export type ModelInfo = {
   omitTemperature?: boolean
   capabilities?: {
     vision?: boolean
+    videoInput?: boolean
     functionCalling?: boolean
     reasoning?: boolean
     streaming?: boolean
@@ -999,6 +1004,7 @@ export type DefaultModelSelection = {
 export type DefaultModelsConfig = {
   chat: DefaultModelSelection
   vision: DefaultModelSelection
+  videoAnalysis: DefaultModelSelection
   titleSummary: DefaultModelSelection
   compression: DefaultModelSelection
   imageGeneration: DefaultModelSelection
@@ -1698,6 +1704,7 @@ function normalizeDefaultModels(
   return {
     chat: normalizeDefaultModelSelection(config?.chat ?? legacyChat),
     vision: normalizeDefaultModelSelection(config?.vision),
+    videoAnalysis: normalizeDefaultModelSelection(config?.videoAnalysis),
     titleSummary: normalizeDefaultModelSelection(config?.titleSummary),
     compression: normalizeDefaultModelSelection(config?.compression),
     imageGeneration: normalizeDefaultModelSelection(config?.imageGeneration),
@@ -1947,6 +1954,31 @@ async function onChatProtocol(
 
 // ========== API 导出 ==========
 
+export type SubAgentExecution = {
+  startedAt?: number | null; finishedAt?: number | null
+  id: string; status: string; prompt: string; result?: string; error?: string; usage?: unknown
+  outputAvailable?: boolean
+  recovery?: { outcome?: string; degraded?: { kind?: string; reason?: string; detail?: string } | null } | null
+}
+export type SubAgentRecord = {
+  id: string; name: string; sequence: number
+  profile: { model: string; agentType: string }
+  runs: SubAgentExecution[]
+  messages: { id: string; sender: string; text: string; consumedBy?: string }[]
+  history: unknown[]; tools: unknown[]; preview?: string; steps?: string[]
+}
+export type SubAgentSnapshot = { sequence: number; agents: SubAgentRecord[] }
+export type SubAgentListRequest = { operation: 'list' | 'wait'; id?: string; cursor?: number; timeout_ms?: number }
+export type SubAgentRecordRequest =
+  | { operation: 'get' | 'message' | 'continue' | 'stop'; id: string; execution_id?: string; message_id?: string; message?: string }
+export type SubAgentControlRequest = SubAgentListRequest | SubAgentRecordRequest
+function chatSubagentControl(conversationId: string, args: SubAgentListRequest): Promise<SubAgentSnapshot>
+function chatSubagentControl(conversationId: string, args: SubAgentRecordRequest): Promise<SubAgentRecord>
+function chatSubagentControl(conversationId: string, args: SubAgentControlRequest): Promise<SubAgentSnapshot | SubAgentRecord>
+function chatSubagentControl(conversationId: string, args: SubAgentControlRequest): Promise<SubAgentSnapshot | SubAgentRecord> {
+  return invoke('chat_subagent_control', { conversationId, arguments: args })
+}
+
 export const api = {
   studioTaskFileAction: (domain: 'image' | 'video', id: string, action: 'reveal' | 'delete') =>
     invoke<void>('studio_task_file_action', { domain, id, action }),
@@ -1975,6 +2007,16 @@ export const api = {
   imageStudioFreeze: (id: string, productId: string, name: string) => invoke<ImageTemplate>('image_studio_freeze', { id, productId, name }),
   imageStudioExport: (id: string, destination: string, width: number, height: number, maxKb: number) => invoke<string>('image_studio_export', { id, destination, width, height, maxKb }),
   imageStudioOpen: (path?: string) => invoke<void>('image_studio_open', { path: path ?? null }),
+  chatSubagentControl,
+  /** 一次状态扫描可选附带行数统计，供同工作目录的 Git 徽标共享。 */
+  async dockGitSnapshot(workdir: string, includeDiffStat = false): Promise<GitSnapshot> {
+    const raw = await invoke<{ state: unknown; diffStat?: unknown }>('dock_git_snapshot', { workdir, includeDiffStat })
+    return {
+      state: normalizeGitRepoState(raw.state),
+      diffStat: raw.diffStat == null ? null : normalizeGitDiffStat(raw.diffStat),
+    }
+  },
+
   providerOAuthStart: (provider: ProviderOAuthConfig['provider'], useSystemProxy = true) =>
     invoke<ProviderOAuthLogin>('provider_oauth_start', { provider, useSystemProxy }),
   providerOAuthPoll: (loginId: string) => invoke<ProviderOAuthPoll>('provider_oauth_poll', { loginId }),
@@ -2011,6 +2053,8 @@ export const api = {
   // 提供商相关
   fetchModels: (providerId: string, provider?: ProviderConnectionInput) =>
     invoke<string[]>('fetch_models', { providerId, provider }),
+  fetchModelCatalog: (providerId: string, provider?: ProviderConnectionInput) =>
+    invoke<{ models: string[]; capabilities: Record<string, NonNullable<ModelInfo['capabilities']>> }>('fetch_models', { providerId, provider, includeCapabilities: true }),
   testProviderConnection: (providerId: string, provider?: ProviderConnectionInput) =>
     invoke<{ success: boolean; error?: string }>('test_provider_connection', { providerId, provider }),
 
@@ -2403,8 +2447,8 @@ export const api = {
     }
     return invoke<{ success: boolean; requests: ChatExternalSendRequest[]; error?: string | null }>('chat_take_external_sends')
   },
-  chatMcpListTools: () =>
-    invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null }>('chat_mcp_list_tools'),
+  chatMcpListTools: (cachedOnly = false) =>
+    invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null; discoveryPending?: boolean }>('chat_mcp_list_tools', { cachedOnly }),
   chatMcpTestServer: (server: ChatMcpServer, timeoutMs?: number) =>
     invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null }>(
       'chat_mcp_test_server',
