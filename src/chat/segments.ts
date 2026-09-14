@@ -416,8 +416,13 @@ export function groupTimelineSegments(
   let lastProcessIndex = -1
   orderedSegments.forEach((segment, index) => {
     if (presentations.has(segment)) return
+    // The active model step stays tool_loop until it finishes. Its trailing
+    // text must already render as body; otherwise it grows inside Work above
+    // earlier deliveries and jumps below them when the phase becomes plain.
+    // A later tool/reasoning segment can still fold that text into Work.
     if (segmentHasContent(segment) && (segment.kind !== 'text'
-      || segment.phase === 'tool_loop' || segment.phase === 'auxiliary')) {
+      || (state !== 'running' && segment.phase === 'tool_loop')
+      || segment.phase === 'auxiliary')) {
       lastProcessIndex = index
     }
   })

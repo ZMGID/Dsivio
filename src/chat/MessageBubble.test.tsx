@@ -860,6 +860,38 @@ describe('MessageBubble 建分支', () => {
 
 
 describe('MessageBubble explicit artifact presentation', () => {
+  it('keeps streamed analysis after earlier frames before and after the final phase update', () => {
+    const message: ChatMessage = {
+      id: 'frame-analysis', role: 'assistant', timestamp: 1, content: '',
+      artifacts: [{ id: 'frame', name: 'frame.jpg', mime_type: 'image/jpeg', data_url: 'data:image/jpeg;base64,aA==' }],
+      toolCalls: [
+        { id: 'present', name: 'present_artifacts', source: 'native', status: 'completed',
+          structured_content: { type: 'artifact_presentation', artifactIds: ['frame'], caption: 'MCP 抽帧' } },
+        { id: 'read', name: 'read_file', source: 'native', status: 'completed' },
+      ],
+      segments: [
+        { id: 'present', kind: 'tool', phase: 'tool_loop', order: 1, tool_call_id: 'present' },
+        { id: 'read', kind: 'tool', phase: 'tool_loop', order: 2, tool_call_id: 'read' },
+        { id: 'reason', kind: 'reasoning', phase: 'tool_loop', order: 3, text: 'Prepare analysis' },
+      ],
+    }
+    const { rerender } = render(<MessageBubble message={message} messageStreaming />)
+    const gallery = screen.getByLabelText('展示文件')
+    const image = gallery.querySelector('img')
+    for (const [index, streaming] of [true, true, false].entries()) {
+      const text = `视频分析正文 ${index}`
+      rerender(<MessageBubble message={{ ...message, content: text, segments: [
+        ...message.segments!,
+        { id: 'answer', kind: 'text', phase: streaming ? 'tool_loop' : 'plain', order: 4, text },
+      ] }} messageStreaming={streaming} />)
+      const answer = screen.getByText(text)
+      expect(answer.closest('[aria-label="过程分组"]')).toBeNull()
+      expect(gallery.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(screen.getByLabelText('展示文件')).toBe(gallery)
+      expect(gallery.querySelector('img')).toBe(image)
+    }
+  })
+
   it.each(['completed', 'cancelled', 'error', 'interrupted'])('keeps late deliveries visible with Work manually closed after %s', outcome => {
     const message: ChatMessage = {
       id: 'late-delivery', role: 'assistant', timestamp: 1, content: '动画已完成。',
