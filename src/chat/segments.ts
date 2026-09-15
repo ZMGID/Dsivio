@@ -402,7 +402,7 @@ export type TimelineGroupItem =
   | { type: 'group'; segments: ChatMessageSegment[] }
 
 /** 一条主代理答复只有一个过程容器，卡片和进度不再切断它。
- * 正文投影与过程归属分开：正常结束保留末尾答复，异常结束保留已有正文。
+ * 过程段在中断后仍属于过程；保留末尾答复和无法判定为过程的部分正文。
  * 这里只改变展示，不改存储正文、复制或模型回放。
  */
 export function groupTimelineSegments(
@@ -429,6 +429,9 @@ export function groupTimelineSegments(
     index > lastProcessIndex && segment.kind === 'text' && segmentHasContent(segment)
     && !/^seg_\d+_cancelled_synthesis$/.test(segment.id)
     && (segment.phase === 'plain' || segment.phase === 'synthesis'))
+  const hasCancellationNotice = orderedSegments.some(segment =>
+    segment.kind === 'text' && segmentHasContent(segment)
+    && /^seg_\d+_cancelled_synthesis$/.test(segment.id))
   const process: ChatMessageSegment[] = []
   const body: TimelineGroupItem[] = []
   orderedSegments.forEach((segment, index) => {
@@ -442,7 +445,11 @@ export function groupTimelineSegments(
       // Only subsequent reasoning/tools establish that it was progress text;
       // its phase alone must not pull the streaming answer above deliveries.
       ? index <= lastActivityIndex
-      : state === 'completed' && hasFinalAnswer && index <= lastProcessIndex
+      // Stopping does not turn explicit progress into a final answer. Keep this
+      // independent of the saved outcome, which older history may not contain.
+      : ((segment.phase === 'tool_loop' || segment.phase === 'auxiliary')
+          && (state === 'stopped' || hasCancellationNotice || hasFinalAnswer || index <= lastActivityIndex))
+        || (hasFinalAnswer && index <= lastProcessIndex)
     if (segment.kind === 'text' && !foldText) {
       body.push({ type: 'text', segment })
     } else {

@@ -5,6 +5,45 @@ import { MessageBubble } from './MessageBubble'
 import type { ChatMessage } from './types'
 
 describe('assistant body visibility', () => {
+  it.each(['cancelled', undefined])('folds cancelled progress with outcome %s and preserves the partial answer', outcome => {
+    render(<MessageBubble message={{
+      id: 'partial-answer', role: 'assistant', timestamp: 1, content: 'Useful partial answer', stream_outcome: outcome,
+      segments: [
+        { id: 'progress', kind: 'text', phase: 'tool_loop', order: 1, text: 'Reading files now' },
+        { id: 'call', kind: 'tool', phase: 'tool_loop', order: 2, tool_call_id: 'call' },
+        { id: 'partial', kind: 'text', phase: 'synthesis', order: 3, text: 'Useful partial answer' },
+        { id: 'seg_4_cancelled_synthesis', kind: 'text', phase: 'synthesis', order: 4, text: '已停止生成。' },
+      ],
+    }} />)
+    expect(screen.queryByText('Reading files now')).not.toBeInTheDocument()
+    expect(screen.getByText('Useful partial answer')).toBeVisible()
+    expect(screen.getByText('已停止生成。')).toBeVisible()
+  })
+
+  it.each(['cancelled', undefined])('keeps interrupted browser commentary inside Worked with outcome %s', outcome => {
+    const progress = ['Chrome 起来了，但扩展还是没连上。', '扩展自己重连了，再试一次。', '我找一下 Kivio 的日志。']
+    render(<MessageBubble message={{
+      id: 'browser-cancelled', role: 'assistant', timestamp: 1,
+      content: `${progress.join('\n\n')}\n\n正在检查日志。\n\n已停止生成。`, stream_outcome: outcome,
+      segments: [
+        ...progress.flatMap((text, index) => [
+          { id: `note-${index}`, kind: 'text' as const, phase: 'tool_loop' as const, order: index * 2, text },
+          { id: `call-${index}`, kind: 'tool' as const, phase: 'tool_loop' as const, order: index * 2 + 1, tool_call_id: `call-${index}` },
+        ]),
+        { id: 'trailing-note', kind: 'text', phase: 'tool_loop', order: 6, text: '正在检查日志。' },
+        { id: 'seg_7_cancelled_synthesis', kind: 'text', phase: 'synthesis', order: 7, text: '已停止生成。' },
+      ],
+    }} />)
+    const worked = screen.getByRole('button', { name: /^Worked/ })
+    expect(worked).toHaveAttribute('aria-expanded', 'false')
+    for (const text of progress) expect(screen.queryByText(text)).not.toBeInTheDocument()
+    expect(screen.queryByText('正在检查日志。')).not.toBeInTheDocument()
+    expect(screen.getByText('已停止生成。')).toBeVisible()
+    fireEvent.click(worked)
+    for (const text of progress) expect(screen.getByText(text)).toBeVisible()
+    expect(screen.getByText('正在检查日志。')).toBeVisible()
+  })
+
   it('uses one stable Work for subagents, waiting, final answer and history', () => {
     const message: ChatMessage = {
       id: 'live-subagents', role: 'assistant', timestamp: 1, content: '',
@@ -43,7 +82,7 @@ describe('assistant body visibility', () => {
     expect(screen.getByText('项目用途已了解，等待子代理。')).toBeVisible()
   })
 
-  it.each(['cancelled', 'error', 'interrupted'])('preserves partial text after a %s outcome', outcome => {
+  it.each(['cancelled', 'error', 'interrupted', 'recovered'])('folds progress after a %s outcome', outcome => {
     const message: ChatMessage = {
       id: 'stopped-run', role: 'assistant', timestamp: 1, content: 'Run stopped',
       stream_outcome: outcome,
@@ -54,9 +93,11 @@ describe('assistant body visibility', () => {
       ],
     }
     const { rerender } = render(<MessageBubble message={message} />)
-    expect(screen.getByText('Partial findings')).toBeVisible()
+    expect(screen.queryByText('Partial findings')).not.toBeInTheDocument()
     expect(screen.getByText('Run stopped')).toBeVisible()
     rerender(<MessageBubble message={{ ...message, stream_outcome: undefined, streamOutcome: outcome }} />)
+    expect(screen.queryByText('Partial findings')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Worked/ }))
     expect(screen.getByText('Partial findings')).toBeVisible()
   })
 

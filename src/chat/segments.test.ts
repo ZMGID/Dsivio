@@ -101,15 +101,16 @@ describe('groupTimelineSegments', () => {
       toolSegment('t', 2, 'call'),
       segment({ id: 'seg_3_cancelled_synthesis', kind: 'text', phase: 'synthesis', order: 3, text: '已停止生成。' }),
     ], 'completed')
-    expect(items.map(item => item.type)).toEqual(['group', 'text', 'text'])
+    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    expect(items[0].type === 'group' && items[0].segments.map(s => s.id)).toEqual(['note', 't'])
   })
 
-  it('preserves all body text when a stopped run has no final answer', () => {
+  it.each(['completed', 'stopped'] as const)('folds explicit process text without a final answer when %s', state => {
     const items = groupTimelineSegments([
       segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Progress so far' }),
       toolSegment('t', 2, 'call'),
-    ], 'completed')
-    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    ], state)
+    expect(items.map(item => item.type)).toEqual(['group'])
   })
 
   it('keeps every trailing final-answer segment and folds earlier commentary', () => {
