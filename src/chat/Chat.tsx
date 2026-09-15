@@ -5,6 +5,7 @@ import { lazy, memo, Profiler, startTransition, Suspense, useCallback, useEffect
 import { PanelRight, SquareArrowOutUpRight } from 'lucide-react'
 import { type ConversationSelectionScope, type ExtensionsNavItem } from './Sidebar'
 import { ChatSidebarPane } from './ChatSidebarPane'
+import { completeSettingsExit, type PendingSettingsAction } from './settingsExit'
 import { useChatRouting } from './hooks/useChatRouting'
 import { useExternalSendQueue } from './hooks/useExternalSendQueue'
 import { useMessageQueue } from './hooks/useMessageQueue'
@@ -828,7 +829,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const streamingContentRef = useRef('')
   const streamingReasoningRef = useRef('')
   const settingsRef = useRef<SettingsShellHandle>(null)
-  const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
+  const pendingAfterSettingsCloseRef = useRef<PendingSettingsAction | null>(null)
   // A 合帧（render coalescing）：高频 stream/tool/subagent/userprompt 事件不再每条都同步
   // setState 重渲，而是把"待显示的快照"记到 ref，用 requestAnimationFrame 每帧最多 flush 一次。
 
@@ -1671,12 +1672,15 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     window.setTimeout(() => {
       setSettingsExiting(false)
       setChatView('conversation')
-      syncConversationRoute(currentConversationIdRef.current)
-      void loadSkills()
-      void refreshToolIndicator()
       const pending = pendingAfterSettingsCloseRef.current
       pendingAfterSettingsCloseRef.current = null
-      pending?.()
+      completeSettingsExit(
+        currentConversationIdRef.current,
+        pending,
+        syncConversationRoute,
+      )
+      void loadSkills()
+      void refreshToolIndicator()
     }, 220)
   }, [loadSkills, refreshToolIndicator, syncConversationRoute])
 
@@ -1694,19 +1698,31 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     }
   }, [chatView, loadSkills, refreshToolIndicator])
 
-  const runAfterLeavingSettings = useCallback((action: () => void) => {
+  const runAfterLeavingSettings = useCallback((
+    action: () => void,
+    options?: { restoreCurrentRoute?: boolean },
+  ) => {
     if (chatView !== 'settings') {
       action()
       return
     }
     if (!settingsRef.current) {
       setChatView('conversation')
-      syncConversationRoute(currentConversationIdRef.current)
-      action()
+      completeSettingsExit(
+        currentConversationIdRef.current,
+        {
+          action,
+          restoreCurrentRoute: options?.restoreCurrentRoute ?? true,
+        },
+        syncConversationRoute,
+      )
       return
     }
-    pendingAfterSettingsCloseRef.current = action
-    settingsRef.current?.requestClose()
+    pendingAfterSettingsCloseRef.current = {
+      action,
+      restoreCurrentRoute: options?.restoreCurrentRoute ?? true,
+    }
+    settingsRef.current?.requestClose({ waitForSave: false })
   }, [chatView, syncConversationRoute])
 
   const handleSettingsChange = useCallback(() => {
@@ -4734,7 +4750,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         messageCount: conversation?.message_count,
         focusMessageId: focusMessageId || undefined,
       })
-    })
+    }, { restoreCurrentRoute: false })
   }, [handleSelectConversation, occupyConversationInMain, runAfterLeavingSettings])
 
   const handleSidebarNewConversation = useCallback(() => {
