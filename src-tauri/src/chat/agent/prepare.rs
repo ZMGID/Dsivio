@@ -18,8 +18,8 @@ pub fn chat_tools_capable(
 }
 
 /// Apply the active assistant snapshot's explicit MCP server policy.
-/// Native and Skill tools are unaffected; `None` means unrestricted, while an
-/// empty `mcp_server_ids` list intentionally disables every MCP tool.
+/// Native and Skill tools are unaffected. Prompt-only assistants keep both lists
+/// empty, which means they inherit the user's globally enabled tools.
 pub fn apply_assistant_mcp_restrictions(
     tools: &mut Vec<ChatToolDefinition>,
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
@@ -27,6 +27,9 @@ pub fn apply_assistant_mcp_restrictions(
     let Some(assistant) = assistant_snapshot else {
         return;
     };
+    if assistant.mcp_server_ids.is_empty() {
+        return;
+    }
     tools.retain(|tool| {
         if tool.source != "mcp" {
             return true;
@@ -38,8 +41,8 @@ pub fn apply_assistant_mcp_restrictions(
     });
 }
 
-/// 某技能在当前对话是否可用：全局已启用 **且**（无助手 = 不限；有助手 = 在其 skill_ids 白名单内）。
-/// 空 skill_ids = 该助手不可用任何技能。
+/// A non-empty assistant list restricts skills. Empty means a prompt-only
+/// assistant and inherits the user's global skill settings.
 pub fn skill_allowed_for_conversation(
     chat_tools: &crate::settings::ChatToolsConfig,
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
@@ -50,8 +53,10 @@ pub fn skill_allowed_for_conversation(
         return false;
     }
     match assistant_snapshot {
-        Some(assistant) => skills::skill_id_in_allowlist(skill_id, &assistant.skill_ids),
-        None => true,
+        Some(assistant) if !assistant.skill_ids.is_empty() => {
+            skills::skill_id_in_allowlist(skill_id, &assistant.skill_ids)
+        }
+        _ => true,
     }
 }
 
@@ -1576,13 +1581,13 @@ mod tests {
     }
 
     #[test]
-    fn assistant_empty_mcp_list_drops_all_mcp_tools() {
+    fn prompt_only_assistant_inherits_global_mcp_tools() {
         let assistant = test_assistant_snapshot(vec![], vec![]);
         let mut tools = vec![crate::mcp::types::native_web_fetch_tool(), test_mcp_tool()];
 
         apply_assistant_mcp_restrictions(&mut tools, Some(&assistant));
 
-        assert!(tools.iter().all(|t| t.source != "mcp"));
+        assert!(tools.iter().any(|t| t.source == "mcp"));
         assert!(tools.iter().any(|t| t.name == "web_fetch"));
     }
 
@@ -1615,6 +1620,14 @@ mod tests {
         assert!(skill_allowed_for_conversation(
             &chat_tools,
             None,
+            "pdf",
+            false
+        ));
+
+        let prompt_only = test_assistant_snapshot(vec![], vec![]);
+        assert!(skill_allowed_for_conversation(
+            &chat_tools,
+            Some(&prompt_only),
             "pdf",
             false
         ));

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { RequirementOptimize, type RequirementOptimizePurpose } from './RequirementOptimize'
 
 export function RequirementComposer({
@@ -10,17 +11,20 @@ export function RequirementComposer({
   preferredAssistantId,
   purpose,
   mediaPaths,
+  onAssistantChange,
 }: {
   label: string
   value: string
   onChange: (next: string) => void
-  onError: (message: string) => void
+  onError?: (message: string) => void
+  onAssistantChange?: (id: string) => void
   disabled?: boolean
   placeholder: string
   preferredAssistantId?: string
   purpose?: RequirementOptimizePurpose
   mediaPaths?: Array<string | null | undefined>
 }) {
+  const [error, setError] = useState('')
   return (
     <div className="is-req">
       <div className="is-req-bar">
@@ -32,7 +36,8 @@ export function RequirementComposer({
           purpose={purpose}
           mediaPaths={mediaPaths}
           onChange={onChange}
-          onError={onError}
+          onError={onError ?? setError}
+          onAssistantChange={onAssistantChange}
         />
       </div>
       <textarea
@@ -43,6 +48,7 @@ export function RequirementComposer({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
       />
+      {error && <p role="alert" className="text-xs text-red-500">{error}</p>}
     </div>
   )
 }

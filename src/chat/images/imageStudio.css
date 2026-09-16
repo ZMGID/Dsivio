@@ -1284,3 +1284,20 @@
     animation: none;
   }
 }
+
+.assistant-prompt-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  margin: auto;
+  padding: 24px;
+  border: 1px solid var(--is-border, #ddd);
+  border-radius: 16px;
+  background: var(--kv-bg, #fff);
+  color: inherit;
+  box-shadow: 0 24px 80px #0003;
+}
+.assistant-prompt-dialog::backdrop { background: #0005; }
+.dark .assistant-prompt-dialog { background: #171717; border-color: #404040; color: #f5f5f5; }
+.is-req-bar { flex-wrap: wrap; gap: 8px; }
+.is-optimize-menu { max-height: 320px; overflow-y: auto; z-index: 30; }

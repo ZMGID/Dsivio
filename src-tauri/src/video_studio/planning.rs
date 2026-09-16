@@ -9,10 +9,7 @@ pub fn select(
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .unwrap_or(video_assistants::DEFAULT_ID);
-    if let Some(assistant) = assistants
-        .into_iter()
-        .find(|a| a.id == id && a.category == "video" && !a.archived)
-    {
+    if let Some(assistant) = assistants.into_iter().find(|a| a.id == id && !a.archived) {
         if assistant.system_prompt.trim().is_empty() {
             return Err("视频助手的提示词为空，请在助手中心填写后重试".into());
         }
@@ -21,7 +18,7 @@ pub fn select(
     if id == video_assistants::DEFAULT_ID {
         return Ok(video_assistants::definitions(0).remove(0));
     }
-    Err("所选视频助手已删除、归档或移出视频生成分组，请重新选择".into())
+    Err("所选助手已删除或归档，请重新选择".into())
 }
 
 pub fn instruction(assistant: &ChatAssistant, brief: &Value, revision: bool) -> String {
@@ -43,7 +40,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn selection_uses_saved_persona_and_model_and_rejects_non_video() {
+    fn selection_accepts_prompt_assistants_without_category() {
         let mut defs = video_assistants::definitions(0);
         defs[1].system_prompt = "用户定制的视频规则".into();
         defs[1].provider_id = "custom-provider".into();
@@ -59,7 +56,7 @@ mod tests {
         );
         assert!(!normal.contains("四镜") && !normal.contains("video-director"));
         defs[1].category = "ecommerce".into();
-        assert!(select(defs.clone(), Some(&defs[1].id)).is_err());
+        assert!(select(defs.clone(), Some(&defs[1].id)).is_ok());
         assert!(select(defs, Some("deleted")).is_err());
         assert_eq!(
             select(vec![], None).unwrap().id,

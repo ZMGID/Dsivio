@@ -406,7 +406,7 @@ describe('制作、试品、反馈和持续出图', () => {
     fireEvent.click(await within(screen.getByRole('navigation', { name: '模板与记录' })).findByRole('button', { name: '制作模板' }))
     const field = screen.getByLabelText('制作要求')
     expect(field).toHaveClass('kv-textarea')
-    expect(screen.queryByRole('button', { name: '选择助手' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '选择助手' })).toBeInTheDocument()
     expect(field).toHaveAttribute('placeholder', '例如：做一套简洁的电商主图模板，包含卖点、细节和场景。')
     expect(screen.queryByRole('button', { name: '统一白灰背景' })).not.toBeInTheDocument()
   })

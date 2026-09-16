@@ -34,7 +34,7 @@ import builtin from '../../../src-tauri/resources/plugins/dsvideo-plugin/skills/
 import '../images/imageStudio.css'
 import '../images/studioLayout.css'
 import './VideoStudio.css'
-import { VideoAssistantSelect } from './VideoAssistantSelect'
+import { RequirementComposer } from '../images/RequirementComposer'
 import { VideoMediaOptions } from './VideoMediaOptions'
 import { readVideoDrafts, readVideoTaskDraft, removeVideoTaskDraft, writeVideoDraft, newVideoDraftBrief, rememberVideoAssistant, rememberVideoSettings, preferredVideoResolution, videoResolutions, type VideoEntry } from './videoDrafts'
 import { ChatMarkdown } from '../ChatMarkdown'
@@ -1149,13 +1149,15 @@ export default function VideoStudio() {
                       </div>
                     </section>}
                     <section className="vs-panel">
-                      <Field label={isAnalysis ? '重点分析什么（可选）' : '这次要拍什么'}>
-                        <textarea className="kv-textarea vs-request custom-scrollbar" value={brief.request} disabled={controlsDisabled}
-                          placeholder={isAnalysis ? '例如：重点看开场、商品展示和镜头节奏。留空则完整拆解。' : '例如：让背包在自然光下缓慢转动，展示正面细节，不要口播。'}
-                          onChange={e => change({ request: e.target.value, selectedConcept: undefined })} />
-                      </Field>
-                      {!isAnalysis && <VideoAssistantSelect value={brief.assistantId} disabled={controlsDisabled}
-                        onChange={assistantId => change({ assistantId, selectedConcept: undefined })} />}
+                      {isAnalysis ? <Field label="重点分析什么（可选）"><textarea className="kv-textarea vs-request custom-scrollbar"
+                        value={brief.request} disabled={controlsDisabled} onChange={e => change({ request: e.target.value })}
+                        placeholder="例如：重点看开场、商品展示和镜头节奏。留空则完整拆解。" /></Field> : <RequirementComposer label="这次要拍什么"
+                        value={brief.request} disabled={controlsDisabled} purpose="video_brief"
+                        preferredAssistantId={brief.assistantId}
+                        onAssistantChange={assistantId => change({ assistantId, selectedConcept: undefined })}
+                        onChange={request => change({ request, selectedConcept: undefined })} onError={setError}
+                        mediaPaths={[...brief.images, brief.source, brief.firstFrame, brief.lastFrame, ...(brief.referenceVideos ?? [])]}
+                        placeholder="例如：让背包在自然光下缓慢转动，展示正面细节，不要口播。" />}
                       {brief.template && (
                         <div className="vs-notice">
                           已选模板：{brief.template.name}

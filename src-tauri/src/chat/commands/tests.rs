@@ -277,7 +277,7 @@ fn slash_trigger_skips_disabled_skill() {
 }
 
 #[test]
-fn slash_trigger_respects_assistant_policy_but_allows_explicit_only_skills() {
+fn slash_trigger_inherits_global_skills_for_prompt_only_assistant() {
     let mut record = slash_skill_record("commit", "Commit", vec![]);
     record.meta.disable_model_invocation = true;
     let registry = slash_skill_registry(record);
@@ -306,8 +306,9 @@ fn slash_trigger_respects_assistant_policy_but_allows_explicit_only_skills() {
         None,
         false,
     );
-    assert!(id.is_none() && detail.is_none());
-    assert_eq!(config.skill_fallback_mode, "progressive");
+    assert_eq!(id.as_deref(), Some("commit"));
+    assert!(detail.is_some());
+    assert_eq!(config.skill_fallback_mode, "skill_md_only");
 }
 
 fn test_provider(id: &str, name: &str, enabled_models: Vec<&str>) -> ModelProvider {

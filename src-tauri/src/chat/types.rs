@@ -843,7 +843,7 @@ pub struct ChatAssistant {
     pub color: String,
     #[serde(default)]
     pub source: String,
-    /// 套件广场分类：`writing` / `coding` / `research` / `workplace` / `ecommerce` / `video`。空 = 未分类。
+    /// Prompt library category: `image` / `video` / `general`. Legacy values remain readable.
     #[serde(default)]
     pub category: String,
     #[serde(default)]

@@ -190,3 +190,32 @@ describe('RequirementOptimize', () => {
     expect(onChange).toHaveBeenCalledWith('核心痛点：容量不够用')
   })
 })
+
+describe('optimization draft safety', () => {
+  it('does not overwrite edits made while the request is running', async () => {
+    getAssistants.mockResolvedValue([])
+    let finish!: (value: string) => void
+    optimizePrompt.mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve }))
+    const change = vi.fn()
+    const props = { onChange: change, onError: vi.fn() }
+    const view = render(<RequirementOptimize value="原描述" {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: '优化提示词' }))
+    view.rerender(<RequirementOptimize value="用户的新描述" {...props} />)
+    finish('过期的结果')
+    await waitFor(() => expect(screen.getByRole('button', { name: '优化提示词' })).toBeEnabled())
+    expect(change).not.toHaveBeenCalled()
+  })
+  it('supports another optimization and a separate undo', async () => {
+    getAssistants.mockResolvedValue([])
+    optimizePrompt.mockResolvedValueOnce('优化结果')
+    const change = vi.fn()
+    const props = { onChange: change, onError: vi.fn() }
+    const view = render(<RequirementOptimize value="原描述" {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: '优化提示词' }))
+    await waitFor(() => expect(change).toHaveBeenCalledWith('优化结果'))
+    view.rerender(<RequirementOptimize value="优化结果" {...props} />)
+    expect(screen.getByRole('button', { name: '优化提示词' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '撤销优化' }))
+    expect(change).toHaveBeenLastCalledWith('原描述')
+  })
+})
