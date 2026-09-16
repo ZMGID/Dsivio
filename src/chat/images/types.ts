@@ -237,7 +237,7 @@ export const emptyBrief = (feature: ImageFeature): ImageBrief => ({
   language: feature === 'gen' ? 'auto' : feature === 'replace' ? '跟随样图' : 'zh-CN',
   platform: '',
   ratio: feature === 'gen' ? 'auto' : '1:1',
-  resolution: feature === 'gen' ? 'auto' : '1k',
+  resolution: '1k',
   count: feature === 'gen' ? 0 : 7,
   style: '',
   templateId: null,
