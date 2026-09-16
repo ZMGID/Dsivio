@@ -22,7 +22,8 @@ import { ChatMarkdown, type ChatMarkdownOutlineSource, type MarkdownOutlineSourc
 import { DegradedAnswerCard } from './DegradedAnswerCard'
 import { GeneratedFileArtifacts } from './GeneratedFileArtifacts'
 import { MarkdownStreamingContext } from './markdownStreaming'
-import { artifactId, artifactPresentationFromToolCall, isArtifactPresentationToolCall } from './artifactPresentation'
+import { artifactId, artifactPresentationFromToolCall, isArtifactPresentationToolCall, isVisibleArtifactPresentation } from './artifactPresentation'
+import { referencedArtifactIds } from './artifactReferences'
 import { hasAgentPlanText } from './agentPlan'
 import { artifactDataUrl, isImageArtifact } from './artifacts'
 import { loadArtifactDataUrl } from './attachmentPreview'
@@ -275,10 +276,12 @@ function ArtifactPresentationBlock({
   toolCall,
   artifacts,
   conversationId,
+  excludedArtifactIds,
 }: {
   toolCall: ToolCallRecord
   artifacts: ChatToolArtifact[]
   conversationId?: string | null
+  excludedArtifactIds?: ReadonlySet<string>
 }) {
   const presentation = artifactPresentationFromToolCall(toolCall)
   if (!presentation) {
@@ -293,16 +296,26 @@ function ArtifactPresentationBlock({
       .map((artifact) => [artifactId(artifact), artifact] as const)
       .filter(([id]) => Boolean(id)),
   )
-  const selected = presentation.artifactIds
+  const selectedIds = presentation.artifactIds.filter(id => !excludedArtifactIds?.has(id))
+  const selected = selectedIds
     .map((id) => artifactById.get(id))
     .filter((artifact): artifact is ChatToolArtifact => Boolean(artifact))
-  const missingCount = presentation.artifactIds.length - selected.length
+  const missingCount = selectedIds.length - selected.length
   if (presentation.artifactIds.length === 0) {
     return (
       <ToolCallErrorBoundary>
         <ToolCallBlock toolCall={toolCall} />
       </ToolCallErrorBoundary>
     )
+  }
+
+  if (!selectedIds.length) return null
+  if (presentation.mode === 'prepare') {
+    return <details className="not-prose my-1 text-xs text-neutral-500">
+      <summary className="cursor-pointer">已准备 {selectedIds.length} 个文件</summary>
+      <GeneratedFileArtifacts artifacts={selected} includeImages />
+      {missingCount > 0 && <span>{missingCount} 个文件不可用</span>}
+    </details>
   }
 
   return (
@@ -472,11 +485,13 @@ function TimelineToolSegment({
   toolCallById,
   artifacts,
   conversationId,
+  excludedArtifactIds,
 }: {
   segment: ChatMessageSegment
   toolCallById: ReadonlyMap<string, ToolCallRecord>
   artifacts: ChatToolArtifact[]
   conversationId?: string | null
+  excludedArtifactIds?: ReadonlySet<string>
 }) {
   const toolCallId = segmentToolCallId(segment)
   const toolCall = toolCallById.get(toolCallId)
@@ -492,6 +507,7 @@ function TimelineToolSegment({
         toolCall={toolCall}
         artifacts={artifacts}
         conversationId={conversationId}
+        excludedArtifactIds={excludedArtifactIds}
       />
     )
   }
@@ -879,15 +895,31 @@ function TimelineSegments({
       messageStreaming ? 'running' : completed ? 'completed' : 'stopped',
       segment => {
         const tool = toolCallById.get(segmentToolCallId(segment))
-        return Boolean(tool && isArtifactPresentationToolCall(tool))
+        return Boolean(tool && isVisibleArtifactPresentation(tool))
       },
     )
     const processGroups = groupItems.filter(item => item.type === 'group')
     const allProcessSegments = processGroups.flatMap(item => item.segments)
-    return { toolCallById, citations, reasoningSegmentCount, groupItems, processGroups, allProcessSegments }
+    const referencedIds = referencedArtifactIds(groupItems
+      .filter(item => item.type === 'text').map(item => segmentText(item.segment)).join('\n\n'))
+    const presentedIds = new Set<string>()
+    const presentationExclusions = new Map<string, ReadonlySet<string>>()
+    for (const item of groupItems) {
+      if (item.type !== 'presentation') continue
+      presentationExclusions.set(item.segment.id, new Set([...referencedIds, ...presentedIds]))
+      const tool = toolCallById.get(segmentToolCallId(item.segment))
+      const presentation = tool ? artifactPresentationFromToolCall(tool) : null
+      presentation?.artifactIds.forEach(id => presentedIds.add(id))
+    }
+    const fallbackIds = [...new Set(toolCalls.flatMap(tool => {
+      const presentation = artifactPresentationFromToolCall(tool)
+      return presentation?.mode === 'prepare' ? presentation.artifactIds : []
+    }))].filter(id => !referencedIds.has(id) && !presentedIds.has(id))
+    return { toolCallById, citations, reasoningSegmentCount, groupItems, processGroups, allProcessSegments, presentationExclusions, fallbackIds }
   }, [segments, toolCalls, completed, messageStreaming])
 
-  const { toolCallById, citations, reasoningSegmentCount, groupItems, processGroups, allProcessSegments } = prepared
+  const { toolCallById, citations, reasoningSegmentCount, groupItems, processGroups, allProcessSegments, presentationExclusions, fallbackIds } = prepared
+  const artifactById = new Map(artifacts.map(artifact => [artifactId(artifact), artifact]))
   return (
     <section aria-label="回答时间线" className="space-y-1.5">
       {groupItems.map((item: TimelineGroupItem) => {
@@ -898,6 +930,7 @@ function TimelineSegments({
             toolCallById={toolCallById}
             artifacts={artifacts}
             conversationId={conversationId}
+            excludedArtifactIds={presentationExclusions.get(item.segment.id)}
           />
         }
         if (item.type === 'text') {
@@ -948,6 +981,14 @@ function TimelineSegments({
           />
         )
       })}
+      {!messageStreaming && completed && fallbackIds.length > 0 && <section aria-label="交付文件" className="not-prose text-xs text-neutral-500">
+        <span>文件</span>
+        <GeneratedFileArtifacts artifacts={fallbackIds.flatMap(id => {
+          const artifact = artifactById.get(id)
+          return artifact ? [artifact] : []
+        })} includeImages />
+        {fallbackIds.some(id => !artifactById.has(id)) && <span role="status">部分文件不可用</span>}
+      </section>}
     </section>
   )
 }

@@ -1178,6 +1178,12 @@ fn call_present_artifacts(
     workspace: &NativeToolWorkspace,
     arguments: &Value,
 ) -> Result<McpToolCallResult, String> {
+    let mode = match arguments.get("mode") {
+        None => "prepare",
+        Some(Value::String(value)) if value == "prepare" => "prepare",
+        Some(Value::String(value)) if value == "preview" => "preview",
+        Some(_) => return Err("present_artifacts mode must be prepare or preview".to_string()),
+    };
     let encoded = serde_json::to_string(arguments).unwrap_or_default();
     if encoded.chars().count() > PRESENT_ARTIFACTS_ARGUMENTS_MAX_CHARS {
         return Err(
@@ -1216,6 +1222,7 @@ fn call_present_artifacts(
     let mut structured = serde_json::json!({
         "type": "artifact_presentation",
         "artifactIds": artifact_ids,
+        "mode": mode,
     });
     if let Some(caption) = caption {
         structured["caption"] = Value::String(caption);
@@ -1224,7 +1231,9 @@ fn call_present_artifacts(
     // 再追加一句 "Skipped ..."，模型收到的是自相矛盾的两句话（说要展示、又说跳过了），
     // 无法判断成没成，于是回空响应把整轮卡死（实测 out=4 tokens，稳定复现）。
     let shown = artifact_ids.len() + artifacts.len();
-    let mut content = if shown == 1 {
+    let mut content = if mode == "prepare" {
+        format!("Prepared {shown} file(s) for final-answer references. No expanded preview was displayed. Place only necessary file references beside their explanation in your final answer.")
+    } else if shown == 1 {
         "Displayed 1 file in the response.".to_string()
     } else {
         format!("Displayed {shown} files in the response.")
@@ -1665,6 +1674,7 @@ mod tests {
             Some(serde_json::json!({
                 "type": "artifact_presentation",
                 "artifactIds": ["art_a", "art_b"],
+                "mode": "prepare",
                 "caption": "Preview"
             }))
         );
@@ -1694,7 +1704,7 @@ mod tests {
         // 此前是无条件的 "Selected files will be displayed" + "Skipped ..."，两句矛盾，
         // 模型判断不出成没成而回空响应，整轮卡死（实测 out=4 tokens，稳定复现）。
         assert!(
-            result.content.contains("Displayed 1 file"),
+            result.content.contains("Prepared 1 file"),
             "must state how many were shown, got: {}",
             result.content
         );
@@ -1723,7 +1733,7 @@ mod tests {
         let workspace = NativeToolWorkspace::standalone();
         let result = call_present_artifacts(
             &workspace,
-            &serde_json::json!({ "artifact_ids": ["art_a", "art_b"] }),
+            &serde_json::json!({ "artifact_ids": ["art_a", "art_b"], "mode": "preview" }),
         )
         .expect("presentation result");
         assert!(
@@ -1764,7 +1774,8 @@ mod tests {
             result.structured_content,
             Some(serde_json::json!({
                 "type": "artifact_presentation",
-                "artifactIds": []
+                "artifactIds": [],
+                "mode": "prepare"
             }))
         );
     }
@@ -1781,5 +1792,20 @@ mod tests {
         )
         .expect_err("oversized payload");
         assert!(err.contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn present_artifacts_rejects_unknown_display_modes() {
+        let workspace = NativeToolWorkspace::standalone();
+        for mode in [serde_json::json!("unknown"), serde_json::json!(42)] {
+            assert!(call_present_artifacts(
+                &workspace,
+                &serde_json::json!({
+                    "artifact_ids": ["art_a"], "mode": mode
+                })
+            )
+            .unwrap_err()
+            .contains("mode"));
+        }
     }
 }

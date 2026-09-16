@@ -861,13 +861,11 @@ fn artifact_presentation_hint(artifacts: &[ChatToolArtifact]) -> Option<String> 
     if artifacts.is_empty() {
         return None;
     }
-    let mut ids = Vec::new();
     let mut items = Vec::new();
     for artifact in artifacts {
         let Some(id) = artifact.id.as_deref() else {
             continue;
         };
-        ids.push(id);
         items.push(format!(
             "- {id}: {} ({})",
             artifact.name, artifact.mime_type
@@ -876,11 +874,9 @@ fn artifact_presentation_hint(artifacts: &[ChatToolArtifact]) -> Option<String> 
     if items.is_empty() {
         return None;
     }
-    let example = serde_json::json!({ "artifact_ids": ids });
     Some(format!(
-        "Available artifacts (not shown automatically):\n{}\nTo show selected files in chat, copy those art_ ids into present_artifacts. Example: {}. Do not pass file contents, base64, or data URLs. Existing local files can be shown with paths.",
+        "Available artifacts (not shown automatically):\n{}\nIn your final answer, reference only necessary deliverables at the relevant paragraph: [label](artifact:art_ID) for files, ![description](artifact:art_ID) for images. Replace art_ID with an exact ID listed above. Internal QA screenshots, extracted frames, drafts, and failed attempts normally stay in the work log. Do not pass file contents, base64, or data URLs. Use present_artifacts with paths to prepare selected existing local files; use mode preview only for an explicit user preview or choice.",
         items.join("\n"),
-        example,
     ))
 }
 
@@ -914,6 +910,18 @@ fn tool_content_with_structured_output(output: &McpToolCallResult, source: &str)
                 content.push_str("\n\n");
             }
             content.push_str(&hint);
+        }
+    } else if let Some(structured) = output.structured_content.as_ref() {
+        // Old records have no mode. New calls need the IDs assigned to local
+        // files after execution, including when native content omits raw JSON.
+        if structured.get("mode").is_some() {
+            if let Some(ids) = structured.get("artifactIds").and_then(Value::as_array) {
+                let ids: Vec<&str> = ids.iter().filter_map(Value::as_str).collect();
+                content.push_str(&format!(
+                    "\n\nRegistered artifact IDs: {}. Use only needed IDs in your final answer: [label](artifact:art_ID) for files or ![description](artifact:art_ID) for images. Do not repeat a separate attachment gallery.",
+                    ids.join(", ")
+                ));
+            }
         }
     }
     content
@@ -1347,6 +1355,10 @@ mod tests {
             tool_content_with_structured_output(&output, "native"),
             "display"
         );
+        output.structured_content.as_mut().unwrap()["mode"] = serde_json::json!("prepare");
+        let prepared_content = tool_content_with_structured_output(&output, "native");
+        assert!(prepared_content.contains("Registered artifact IDs: art_existing, art_local"));
+        assert!(prepared_content.contains("[label](artifact:art_ID)"));
     }
 
     #[test]
@@ -1365,9 +1377,10 @@ mod tests {
         assert!(hint.contains("art_report: report.txt (text/plain)"));
         assert!(hint.contains("not shown automatically"));
         assert!(hint.contains("present_artifacts"));
-        assert!(hint.contains(r#"{"artifact_ids":["art_report"]}"#));
+        assert!(hint.contains("[label](artifact:art_ID)"));
+        assert!(hint.contains("Internal QA screenshots"));
         assert!(hint.contains("Do not pass file contents, base64, or data URLs"));
-        assert!(hint.contains("Existing local files can be shown with paths"));
+        assert!(hint.contains("prepare selected existing local files"));
     }
 
     #[test]

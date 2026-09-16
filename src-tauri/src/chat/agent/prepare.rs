@@ -1046,7 +1046,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     }
     if has_present_artifacts {
         bullets.push(
-            "When the user asks to show, preview, attach, or send a local file or image in the chat, you MUST call present_artifacts at the exact display point. Copy art_ ids from tool results into artifact_ids, or pass paths for existing local files. Arguments are those short strings only — never file contents, base64, or data URLs. Reading or analyzing a file does NOT display it.".to_string(),
+            "Keep internal QA screenshots, extracted frames, intermediate exports, drafts, and failed attempts in the work log by default. In your final answer, select only the deliverables and evidence the user needs. Put [label](artifact:art_ID) for a file or ![description](artifact:art_ID) for an image beside the relevant explanation, using exact art_ IDs from tool results. Do not put every generated file into a gallery or repeat a file card already referenced in the answer. To obtain an ID for a selected existing local file, you MUST call present_artifacts with paths; its default mode prepare registers files without expanding previews. Files with existing IDs can be referenced directly. Use present_artifacts with mode preview only when the user explicitly asks to see work now or needs to inspect alternatives to decide how to continue. Reading or analyzing a file does NOT display it. Never invent file IDs or paths, and never pass file contents, base64, or data URLs as identifiers.".to_string(),
         );
     }
     if has_image_generation {
@@ -1413,8 +1413,11 @@ mod tests {
         );
 
         assert!(prompt.contains("MUST call present_artifacts"));
-        assert!(prompt.contains("Copy art_ ids from tool results into artifact_ids"));
-        assert!(prompt.contains("paths for existing local files"));
+        assert!(prompt.contains("using exact art_ IDs from tool results"));
+        assert!(prompt.contains("selected existing local file"));
+        assert!(prompt.contains("mode prepare"));
+        assert!(prompt.contains("[label](artifact:art_ID)"));
+        assert!(prompt.contains("Internal QA") || prompt.contains("internal QA"));
         assert!(prompt.contains("Reading or analyzing a file does NOT display it"));
     }
 
