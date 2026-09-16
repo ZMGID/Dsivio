@@ -1,3 +1,5 @@
+import { RequirementComposer } from './RequirementComposer'
+import { collectBriefImagePaths } from './RequirementOptimize'
 import { useMemo, useState, type DragEvent } from 'react'
 import { ArrowRight, FolderOpen, ImagePlus, Layers3, Loader2, Plus, Search, X } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
@@ -230,12 +232,10 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
         )}
       </section>
       <section className="if-requirements">
-        <Field label="图片要求">
-          <textarea className="kv-textarea custom-scrollbar" disabled={busy} value={brief.requirement}
-            onChange={(event) => onChange({ requirement: event.target.value })}
-            placeholder={quick ? '例如：把背景换成浅色木桌，保留商品原样，不要文字。' : replace ? '有哪些额外要求？不填则保留原版式，只替换商品。' : brief.feature === 'smart' ? '有哪些额外要求？不填则沿用模板。' : batch ? '例如：这批商品用于店铺上新，每款做一套主图、卖点和场景图。' : '例如：设计一套简洁的电商主图，突出材质和容量，使用中文。'}
-            rows={3} />
-        </Field>
+        <RequirementComposer label="图片要求" disabled={busy} value={brief.requirement}
+          onChange={requirement => onChange({ requirement })}
+          preferredAssistantId={brief.assistantId} onAssistantChange={assistantId => onChange({ assistantId })}
+          mediaPaths={collectBriefImagePaths(brief)} placeholder={quick ? '例如：把背景换成浅色木桌，保留商品原样，不要文字。' : replace ? '有哪些额外要求？不填则保留原版式，只替换商品。' : brief.feature === 'smart' ? '有哪些额外要求？不填则沿用模板。' : batch ? '例如：这批商品用于店铺上新，每款做一套主图、卖点和场景图。' : '例如：设计一套简洁的电商主图，突出材质和容量，使用中文。'} />
       </section>
       <div className="if-options">
         <Field label={quick ? '张数' : '每款张数'}>{quick ? <StudioSelect value={brief.count} disabled={busy} onChange={e => onChange({ count: Number(e.target.value) })}>

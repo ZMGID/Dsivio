@@ -725,7 +725,7 @@ describe('video settings and stable result controls', () => {
 describe('video planning assistants', () => {
   beforeEach(() => { localStorage.clear(); vi.mocked(api.videoStudioTask).mockReset() })
   afterEach(() => { localStorage.clear(); vi.mocked(chatApi.getAssistants).mockResolvedValue([]) })
-  it('selects only video assistants, persists selection, and saves it for planning and revisions', async () => {
+  it('selects saved prompt assistants across categories and persists planning selection', async () => {
     vi.mocked(chatApi.getAssistants).mockResolvedValue([
       { id: 'asst_builtin_video_prompt', name: '通用视频', category: 'video', created_at: 0, updated_at: 0 },
       { id: 'asst_builtin_video_product', name: '电商产品展示', category: 'video', installed: false, created_at: 0, updated_at: 0 },
@@ -742,11 +742,11 @@ describe('video planning assistants', () => {
       return task
     })
     const view = render(<VideoStudio />)
-    expect(await screen.findByRole('button', { name: '提示词助手' })).toHaveTextContent('通用视频（默认）')
+    expect(await screen.findByRole('button', { name: '选择助手' })).toBeTruthy()
     await waitFor(() => expect(chatApi.getAssistants).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: '提示词助手' }))
+    fireEvent.click(screen.getByRole('button', { name: '选择助手' }))
     await screen.findByRole('option', { name: '电商产品展示' })
-    expect(screen.queryByRole('option', { name: '写作助手' })).toBeNull()
+    expect(screen.getByRole('option', { name: '写作助手' })).toBeTruthy()
     expect(screen.queryByRole('option', { name: '归档助手' })).toBeNull()
     fireEvent.click(screen.getByRole('option', { name: '电商产品展示' }))
     fireEvent.click(screen.getByRole('button', { name: '帮我设计视频' }))
@@ -760,6 +760,6 @@ describe('video planning assistants', () => {
     view.unmount()
     localStorage.removeItem('dsivio-video-drafts-v1')
     render(<VideoStudio />)
-    await waitFor(() => expect(screen.getByRole('button', { name: '提示词助手' })).toHaveTextContent('电商产品展示'))
+    await waitFor(() => expect(screen.getByRole('button', { name: '电商产品展示' })).toBeTruthy())
   })
 })

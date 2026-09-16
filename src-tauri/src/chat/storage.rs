@@ -2440,9 +2440,8 @@ fn normalize_assistant_source(source: &str, built_in: bool) -> String {
 
 fn normalize_assistant_category(category: &str) -> String {
     match category.trim() {
-        "writing" | "coding" | "research" | "workplace" | "ecommerce" | "video" => {
-            category.trim().to_string()
-        }
+        "image" | "video" | "general" | "writing" | "coding" | "research" | "workplace"
+        | "ecommerce" => category.trim().to_string(),
         _ => String::new(),
     }
 }

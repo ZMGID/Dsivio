@@ -15,6 +15,7 @@ export type ImageBrief = {
   feature: ImageFeature
   name: string
   requirement: string
+  assistantId?: string
   language: string
   platform: string
   ratio: string

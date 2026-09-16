@@ -3,6 +3,8 @@ import {
   ASSISTANT_PLAZA_CATEGORIES,
   assistantMatchesPlazaCategory,
   assistantPlazaCategory,
+  assistantFitsPurpose,
+  assistantPromptCategory,
 } from './assistantCategories'
 
 describe('assistant plaza categories', () => {
@@ -12,6 +14,15 @@ describe('assistant plaza categories', () => {
     expect(assistantPlazaCategory({ category: ' writing ' })).toBe('writing')
     expect(assistantPlazaCategory({ category: 'other' })).toBe('')
     expect(assistantPlazaCategory({})).toBe('')
+  })
+
+  it('maps prompt assistants to image, video, and general use', () => {
+    expect(assistantPromptCategory({ category: 'image' })).toBe('image')
+    expect(assistantPromptCategory({ category: 'video' })).toBe('video')
+    expect(assistantPromptCategory({ category: 'writing' })).toBe('general')
+    expect(assistantFitsPurpose({ category: 'image' }, 'image_brief')).toBe(true)
+    expect(assistantFitsPurpose({ category: 'image' }, 'video_brief')).toBe(false)
+    expect(assistantFitsPurpose({}, 'video_brief')).toBe(true)
   })
 
   it('filters plaza cards by category without hiding the all view', () => {

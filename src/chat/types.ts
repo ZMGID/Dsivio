@@ -295,7 +295,7 @@ export interface ChatAssistant {
   icon?: string
   color?: string
   source?: 'builtin' | 'user' | 'imported' | string
-  /** 套件广场分类：writing / coding / research / workplace / ecommerce / video */
+  /** Prompt category: image / video / general. Legacy values are treated as general. */
   category?: string
   system_prompt?: string
   systemPrompt?: string

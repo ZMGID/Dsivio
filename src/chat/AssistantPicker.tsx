@@ -10,6 +10,7 @@ import { builtinAssistantGlyph } from './assistantIcons'
 import { IconButton } from '../components/Button'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import type { ChatAssistant } from './types'
+import { ASSISTANT_PROMPT_CATEGORY_LABELS, assistantPromptCategory } from './assistantCategories'
 
 export function AssistantPicker({
   currentAssistant,
@@ -32,9 +33,9 @@ export function AssistantPicker({
 
   const load = useCallback(async () => {
     try {
-      // 对话栏只列「常用」专家（内置默认不在常用，需在专家中心的套件广场添加）。
+      // 快捷选择器只显示用户收藏的助手；完整列表在助手中心管理。
       const all = await chatApi.getAssistants()
-      setAssistants(all.filter((a) => (a.installed ?? true) !== false))
+      setAssistants(all.filter((a) => !a.archived && a.installed))
     } catch {
       /* ignore */
     }
@@ -146,6 +147,9 @@ export function AssistantPicker({
                     {builtinAssistantGlyph(assistant.id, 14) ?? <Award size={13} strokeWidth={1.75} />}
                   </span>
                   <span className="min-w-0 flex-1 truncate">{assistant.name}</span>
+                  <span className="shrink-0 text-[10px] text-neutral-400">
+                    {ASSISTANT_PROMPT_CATEGORY_LABELS[assistantPromptCategory(assistant)]}
+                  </span>
                   {active && <Check size={12} strokeWidth={2.5} className="shrink-0 text-indigo-500 dark:text-indigo-300" />}
                 </button>
               )
