@@ -188,8 +188,15 @@ fn redact_video_payloads(value: &mut Value) {
         }
         Value::Array(items) => items.iter_mut().for_each(redact_video_payloads),
         Value::Object(map) => {
-            if map.get("mimeType").or_else(|| map.get("mime_type")).and_then(Value::as_str).is_some_and(|s| s.starts_with("video/")) {
-                if let Some(data) = map.get_mut("data") { *data = Value::String("[video bytes omitted]".into()); }
+            if map
+                .get("mimeType")
+                .or_else(|| map.get("mime_type"))
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.starts_with("video/"))
+            {
+                if let Some(data) = map.get_mut("data") {
+                    *data = Value::String("[video bytes omitted]".into());
+                }
             }
             map.values_mut().for_each(redact_video_payloads);
         }

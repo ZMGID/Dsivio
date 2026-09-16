@@ -81,16 +81,16 @@ describe('groupTimelineSegments', () => {
     ]
     const isPresentation = (s: ChatMessageSegment) => s.id === 'present'
     const live = groupTimelineSegments(segments, 'running', isPresentation)
-    expect(live.map(item => item.type)).toEqual(['group', 'presentation', 'text'])
+    expect(live.map(item => item.type)).toEqual(['presentation', 'group', 'text'])
     const continued = groupTimelineSegments([
       ...segments, toolSegment('check', 4, 'check'),
     ], 'running', isPresentation)
-    expect(continued.map(item => item.type)).toEqual(['group', 'presentation'])
-    expect(continued[0].type === 'group' && continued[0].segments.map(s => s.id))
+    expect(continued.map(item => item.type)).toEqual(['presentation', 'group'])
+    expect(continued[1].type === 'group' && continued[1].segments.map(s => s.id))
       .toEqual(['reason', 'answer', 'check'])
   })
 
-  it('keeps deliveries in answer order without splitting the one process', () => {
+  it.each(['running', 'completed', 'stopped'] as const)('keeps process and deliveries in chronological order when %s', state => {
     const items = groupTimelineSegments([
       toolSegment('read', 0, 'read'),
       segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Working' }),
@@ -98,9 +98,10 @@ describe('groupTimelineSegments', () => {
       toolSegment('check', 3, 'check'),
       segment({ id: 'answer', kind: 'text', phase: 'plain', order: 4, text: 'Done' }),
       toolSegment('present-b', 5, 'present-b'),
-    ], 'completed', s => s.id.startsWith('present-'))
-    expect(items.map(item => item.type)).toEqual(['group', 'presentation', 'text', 'presentation'])
-    expect(items[0].type === 'group' && items[0].segments.map(s => s.id)).toEqual(['read', 'note', 'check'])
+    ], state, s => s.id.startsWith('present-'))
+    expect(items.map(item => item.type)).toEqual(['group', 'presentation', 'group', 'text', 'presentation'])
+    expect(items[0].type === 'group' && items[0].segments.map(s => s.id)).toEqual(['read', 'note'])
+    expect(items[2].type === 'group' && items[2].segments.map(s => s.id)).toEqual(['check'])
   })
 
   it('folds progress and CLI agent cards into the same process', () => {
@@ -118,15 +119,16 @@ describe('groupTimelineSegments', () => {
       toolSegment('t', 2, 'call'),
       segment({ id: 'seg_3_cancelled_synthesis', kind: 'text', phase: 'synthesis', order: 3, text: '已停止生成。' }),
     ], 'completed')
-    expect(items.map(item => item.type)).toEqual(['group', 'text', 'text'])
+    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    expect(items[0].type === 'group' && items[0].segments.map(s => s.id)).toEqual(['note', 't'])
   })
 
-  it('preserves all body text when a stopped run has no final answer', () => {
+  it.each(['completed', 'stopped'] as const)('folds explicit process text without a final answer when %s', state => {
     const items = groupTimelineSegments([
       segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Progress so far' }),
       toolSegment('t', 2, 'call'),
-    ], 'completed')
-    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    ], state)
+    expect(items.map(item => item.type)).toEqual(['group'])
   })
 
   it('keeps every trailing final-answer segment and folds earlier commentary', () => {
@@ -350,13 +352,13 @@ describe('groupTimelineSegments', () => {
     expect(items[0].type === 'group' && items[0].segments.map((s) => s.id)).toEqual(['r', 't1', 't2'])
   })
 
-  it('preserves partial text outside one process when no final answer exists', () => {
+  it('preserves partial text between process sections when no final answer exists', () => {
     const items = groupTimelineSegments([
       toolSegment('t1', 1, 'call-1'),
       segment({ id: 'txt', kind: 'text', order: 2, text: 'between' }),
       toolSegment('t2', 3, 'call-2'),
     ])
-    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    expect(items.map(item => item.type)).toEqual(['group', 'text', 'group'])
     expect(items[1].type === 'text' && items[1].segment.id).toBe('txt')
   })
 

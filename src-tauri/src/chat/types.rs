@@ -216,6 +216,8 @@ impl Default for AgentPlanStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentPlanState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<crate::chat::plan_document::PlanDocument>,
     #[serde(default)]
     pub mode: AgentPlanMode,
     #[serde(default)]

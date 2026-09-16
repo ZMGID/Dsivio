@@ -458,6 +458,7 @@ export type AgentPlanMode = 'act' | 'plan' | 'orchestrate'
 export type AgentPlanStatus = 'empty' | 'draft' | 'approved'
 
 export interface AgentPlanState {
+  document?: { id: string; title: string; path: string } | null
   mode?: AgentPlanMode
   status?: AgentPlanStatus
   plan?: string | null

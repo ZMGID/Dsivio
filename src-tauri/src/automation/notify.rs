@@ -35,14 +35,9 @@ pub(crate) fn show(app: &tauri::AppHandle, title: &str, body: &str) {
     macos::show(app, title, body);
     #[cfg(target_os = "windows")]
     {
-        let app_id = app.config().identifier.clone();
-        let display_name = app
-            .config()
-            .product_name
-            .clone()
-            .unwrap_or_else(|| "dsivio".into());
+        let (app_id, display_name) = windows_sender_identity(&app.config().identifier);
         tauri::async_runtime::spawn_blocking(move || {
-            windows_notify(&app_id, &display_name, &title, &body);
+            windows_notify(&app_id, display_name, &title, &body);
         });
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -71,6 +66,14 @@ fn truncate(s: &str, max: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+#[cfg(target_os = "windows")]
+fn windows_sender_identity(bundle_id: &str) -> (String, &'static str) {
+    // Windows caches the first executable's friendly name for a notification
+    // handler. Use a separate stable identity so older executable metadata
+    // does not override the current product name.
+    (format!("{bundle_id}.notifications"), "dsivio")
 }
 
 #[cfg(target_os = "windows")]
@@ -202,6 +205,14 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     use super::windows_script;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_sender_identity_is_branded_and_separate_from_legacy_app_cache() {
+        let (app_id, display_name) = super::windows_sender_identity("com.zmair.kivio");
+        assert_eq!(app_id, "com.zmair.kivio.notifications");
+        assert_eq!(display_name, "dsivio");
+    }
 
     #[test]
     fn strips_control_breaks_from_notification_text() {

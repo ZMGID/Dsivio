@@ -224,7 +224,7 @@ fn work_style_prompt(available_builtin_tools: &[String]) -> String {
         .any(|tool| tool.as_str() == "read");
     let has_tools = !available_builtin_tools.is_empty();
     let file_clause = if can_edit_files {
-        " after editing files you don't need to restate what changed (the user can see it)."
+        " After editing files, briefly report the outcome, relevant verification, and any remaining user action."
     } else {
         ""
     };
@@ -234,11 +234,14 @@ fn work_style_prompt(available_builtin_tools: &[String]) -> String {
     // 阶段性播报；交付前必须用工具验证（生成图片逐张 read 质检），这是 skill 定义的
     // 「生成→检查→重做」循环能真正执行的前提。
     let mut prompt = format!(
-        "How you work: address only the current request — no filler preamble on simple answers, no wrap-up postamble;{file_clause} Match length to the task: answer simple questions in a sentence or two, and expand into structured output only for complex or report-style tasks — don't pad to look thorough. When the user only asks how to do something or whether it's possible, answer first; don't jump to making changes, and don't do work they didn't ask for."
+        "How you work: address only the current request — no filler preamble on simple answers or generic sign-off.{file_clause} Match length to the task: answer simple questions in a sentence or two, and expand into structured output only for complex or report-style tasks — don't pad to look thorough. When the user only asks how to do something or whether it's possible, answer first; don't jump to making changes, and don't do work they didn't ask for."
     );
     if has_tools {
         prompt.push_str(
             " During multi-step tool work, keep the user oriented: before starting a new phase or changing course, say what you're doing in one short sentence — visible progress, not play-by-play; don't restate tool output. After waiting on a long job, report substance from the new output — what finished, failed, or was rate-limited — not that it is still running.",
+        );
+        prompt.push_str(
+            " Your final answer must be self-contained: intermediate progress, clarification cards and their answers, tool output, and reasoning are collapsed in the UI. Include the result and all remaining steps the user must perform, with the exact paths, commands, links, and settings they need, even if you already gave them before an ask_user question. Incorporate the user's selected answer. Never replace required instructions with 'see above', 'as described earlier', or a pointer into the work log. Repeat only what is needed to use the result, not the whole work history. Keep reasoning in the dedicated reasoning channel; do not put thinking transcripts, Thinking headings, or <think> blocks in the user-facing answer.",
         );
         prompt.push_str(
             " Before declaring a deliverable done, verify it with your tools instead of assuming success: re-open what you produced and check it against the request",
@@ -824,15 +827,17 @@ pub(crate) fn estimate_message_reasoning_tokens(message: &Value) -> usize {
         .get("reasoning_items")
         .and_then(Value::as_array)
         .map(|items| {
-            items.iter().map(|entry| {
-                estimate_reasoning_item_tokens(entry.get("item").unwrap_or(entry))
-            }).sum()
+            items
+                .iter()
+                .map(|entry| estimate_reasoning_item_tokens(entry.get("item").unwrap_or(entry)))
+                .sum()
         })
         .unwrap_or(0);
     if native > 0 {
         return native;
     }
-    message.get("reasoning_content")
+    message
+        .get("reasoning_content")
         .or_else(|| message.get("reasoning"))
         .and_then(Value::as_str)
         .map(estimate_tokens)
@@ -849,16 +854,27 @@ pub(crate) fn estimate_value_tokens(value: &Value) -> usize {
         Value::Array(items) => items.iter().map(estimate_value_tokens).sum(),
         Value::Object(map) => {
             if map.contains_key("reasoning_items") {
-                return map.iter()
-                    .filter(|(key, _)| !matches!(key.as_str(), "reasoning_items" | "reasoning_content" | "reasoning"))
+                return map
+                    .iter()
+                    .filter(|(key, _)| {
+                        !matches!(
+                            key.as_str(),
+                            "reasoning_items" | "reasoning_content" | "reasoning"
+                        )
+                    })
                     .map(|(key, value)| estimate_tokens(key) + estimate_value_tokens(value))
-                    .sum::<usize>() + estimate_message_reasoning_tokens(value);
+                    .sum::<usize>()
+                    + estimate_message_reasoning_tokens(value);
             }
             if let Some(kind) = map.get("type").and_then(Value::as_str) {
-                if kind == "reasoning" && (map.contains_key("content") || map.contains_key("summary")) {
+                if kind == "reasoning"
+                    && (map.contains_key("content") || map.contains_key("summary"))
+                {
                     return estimate_reasoning_item_tokens(value);
                 }
-                if kind == "video_url" { return 0; }
+                if kind == "video_url" {
+                    return 0;
+                }
                 if IMAGE_PART_TYPES.contains(&kind) {
                     return 0;
                 }
@@ -1030,7 +1046,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     }
     if has_present_artifacts {
         bullets.push(
-            "When the user asks to show, preview, attach, or send a local file or image in the chat, you MUST call present_artifacts at the exact display point. Copy art_ ids from tool results into artifact_ids, or pass paths for existing local files. Arguments are those short strings only — never file contents, base64, or data URLs. Reading or analyzing a file does NOT display it.".to_string(),
+            "Keep internal QA screenshots, extracted frames, intermediate exports, drafts, and failed attempts in the work log by default. In your final answer, select only the deliverables and evidence the user needs. Put [label](artifact:art_ID) for a file or ![description](artifact:art_ID) for an image beside the relevant explanation, using exact art_ IDs from tool results. Do not put every generated file into a gallery or repeat a file card already referenced in the answer. To obtain an ID for a selected existing local file, you MUST call present_artifacts with paths; its default mode prepare registers files without expanding previews. Files with existing IDs can be referenced directly. Use present_artifacts with mode preview only when the user explicitly asks to see work now or needs to inspect alternatives to decide how to continue. Reading or analyzing a file does NOT display it. Never invent file IDs or paths, and never pass file contents, base64, or data URLs as identifiers.".to_string(),
         );
     }
     if has_image_generation {
@@ -1091,6 +1107,20 @@ mod tests {
         let prompt = work_style_prompt(&[]);
         assert!(!prompt.contains("During multi-step tool work"), "{prompt}");
         assert!(!prompt.contains("verify it with your tools"), "{prompt}");
+    }
+
+    #[test]
+    fn work_style_prompt_requires_actionable_final_answer_after_clarification() {
+        for tools in [vec!["ask_user".to_string()], vec!["bash".to_string()]] {
+            let prompt = work_style_prompt(&tools);
+            assert!(prompt.contains("final answer must be self-contained"));
+            assert!(prompt.contains("exact paths, commands, links, and settings"));
+            assert!(prompt.contains("before an ask_user question"));
+            assert!(prompt.contains("Incorporate the user's selected answer"));
+            assert!(prompt.contains("dedicated reasoning channel"));
+            assert!(!prompt.contains("don't need to restate what changed"));
+            assert!(!prompt.contains("no wrap-up postamble"));
+        }
     }
 
     fn test_assistant_snapshot(
@@ -1383,8 +1413,11 @@ mod tests {
         );
 
         assert!(prompt.contains("MUST call present_artifacts"));
-        assert!(prompt.contains("Copy art_ ids from tool results into artifact_ids"));
-        assert!(prompt.contains("paths for existing local files"));
+        assert!(prompt.contains("using exact art_ IDs from tool results"));
+        assert!(prompt.contains("selected existing local file"));
+        assert!(prompt.contains("mode prepare"));
+        assert!(prompt.contains("[label](artifact:art_ID)"));
+        assert!(prompt.contains("Internal QA") || prompt.contains("internal QA"));
         assert!(prompt.contains("Reading or analyzing a file does NOT display it"));
     }
 

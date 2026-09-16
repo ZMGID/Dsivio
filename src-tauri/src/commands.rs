@@ -862,7 +862,11 @@ pub(crate) async fn fetch_models(
     }
     if oauth_provider.request.oauth.is_some() {
         let ids = crate::provider_oauth::models(&state, &oauth_provider).await?;
-        return Ok(if include_capabilities == Some(true) { serde_json::json!({"models":ids,"capabilities":{}}) } else { serde_json::json!(ids) });
+        return Ok(if include_capabilities == Some(true) {
+            serde_json::json!({"models":ids,"capabilities":{}})
+        } else {
+            serde_json::json!(ids)
+        });
     }
 
     let api_format = resolve_api_format(&settings, &provider_id, provider.as_ref());
@@ -920,14 +924,21 @@ pub(crate) async fn fetch_models(
         .map_err(|e| format!("Failed to parse models response JSON: {e}"))?;
 
     let mut ids = parse_model_list_ids(&value)?;
-    if anonymous { ids.retain(|id| crate::opencode_free::is_free_model(id)); }
+    if anonymous {
+        ids.retain(|id| crate::opencode_free::is_free_model(id));
+    }
     if include_capabilities == Some(true) {
         let mut capabilities = serde_json::Map::new();
         if let Some(items) = value.get("data").and_then(serde_json::Value::as_array) {
             for item in items {
-                if let (Some(id), Some(video)) = (item.get("id").and_then(serde_json::Value::as_str), item.get("supports_video_in").and_then(serde_json::Value::as_bool)) {
+                if let (Some(id), Some(video)) = (
+                    item.get("id").and_then(serde_json::Value::as_str),
+                    item.get("supports_video_in")
+                        .and_then(serde_json::Value::as_bool),
+                ) {
                     if ids.iter().any(|known| known == id) {
-                        capabilities.insert(id.to_string(), serde_json::json!({"videoInput":video}));
+                        capabilities
+                            .insert(id.to_string(), serde_json::json!({"videoInput":video}));
                     }
                 }
             }
