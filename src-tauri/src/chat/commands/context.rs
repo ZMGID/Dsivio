@@ -814,7 +814,10 @@ pub(super) async fn compute_context_state(
     } else {
         apply_agent_plan_tool_filter(&mut tools, plan_mode);
     }
-    crate::chat::plan_document::append_tools(&mut tools, plan_mode && !is_builder_conversation(conversation));
+    crate::chat::plan_document::append_tools(
+        &mut tools,
+        plan_mode && !is_builder_conversation(conversation),
+    );
     let user_tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
@@ -979,8 +982,11 @@ pub(super) async fn compute_context_state(
         clear_boundaries: conversation.context_state.clear_boundaries.clone(),
         warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
         context_source: Some(crate::external_agents::context::CONTEXT_SOURCE_BUILTIN.to_string()),
-        token_count_source: crate::chat::agent::context_estimate::token_count_source(anchored, anchor_trailing)
-            .map(str::to_string),
+        token_count_source: crate::chat::agent::context_estimate::token_count_source(
+            anchored,
+            anchor_trailing,
+        )
+        .map(str::to_string),
         session_input_tokens: if anchored {
             Some(estimated_input_tokens)
         } else {

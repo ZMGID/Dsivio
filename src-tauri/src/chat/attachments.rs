@@ -309,7 +309,12 @@ fn externalize_model_message_images_in_dir(
                 mime_type,
                 data,
                 path,
-            } | MessagePart::Video { mime_type, data, path }) = part
+            }
+            | MessagePart::Video {
+                mime_type,
+                data,
+                path,
+            }) = part
             else {
                 continue;
             };
@@ -381,7 +386,9 @@ fn rehydrate_model_message_images_in_dir(
 ) {
     for model_message in messages.iter_mut() {
         for part in model_message.content.iter_mut() {
-            let (MessagePart::Image { data, path, .. } | MessagePart::Video { data, path, .. }) = part else {
+            let (MessagePart::Image { data, path, .. } | MessagePart::Video { data, path, .. }) =
+                part
+            else {
                 continue;
             };
             if !data.is_empty() {
@@ -483,7 +490,9 @@ pub(crate) fn message_has_api_message_image_to_externalize(message: &ChatMessage
             .any(|slot| {
                 slot.as_str()
                     .and_then(|url| parse_data_url(url.trim()))
-                    .is_some_and(|(mime, _)| mime.starts_with("image/") || mime.starts_with("video/"))
+                    .is_some_and(|(mime, _)| {
+                        mime.starts_with("image/") || mime.starts_with("video/")
+                    })
             })
     })
 }
@@ -591,7 +600,11 @@ fn api_message_image_url_slots(message: &mut serde_json::Value) -> Vec<&mut serd
         if !is_image {
             continue;
         }
-        let key = if part.get("type").and_then(serde_json::Value::as_str) == Some("video_url") { "video_url" } else { "image_url" };
+        let key = if part.get("type").and_then(serde_json::Value::as_str) == Some("video_url") {
+            "video_url"
+        } else {
+            "image_url"
+        };
         let Some(image_url) = part.get_mut(key) else {
             continue;
         };
@@ -616,9 +629,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn extension_for_media_mime(mime: &str) -> &str {
     match mime {
-        "video/mp4" => "mp4", "video/mpeg" => "mpeg", "video/mov" => "mov",
-        "video/avi" => "avi", "video/x-flv" => "flv", "video/webm" => "webm",
-        "video/wmv" => "wmv", "video/3gpp" => "3gpp",
+        "video/mp4" => "mp4",
+        "video/mpeg" => "mpeg",
+        "video/mov" => "mov",
+        "video/avi" => "avi",
+        "video/x-flv" => "flv",
+        "video/webm" => "webm",
+        "video/wmv" => "wmv",
+        "video/3gpp" => "3gpp",
         _ => extension_for_image_mime(mime),
     }
 }
@@ -639,14 +657,12 @@ fn normalize_stored_image_mime(mime_type: &str) -> String {
 /// 会同时带 path 和整图 data_url（曾让 10 条消息的会话膨胀到 54MB），
 /// 有 path 只影响外置方式（免写盘、只缩 data_url），不影响是否需要外置。
 pub(crate) fn message_has_inline_image_to_externalize(message: &ChatMessage) -> bool {
-    let needs = |artifact: &ChatToolArtifact| {
-        match parse_data_url(artifact.data_url.trim()) {
-            Some((mime, payload)) => {
-                mime.starts_with("image/")
-                    && decoded_base64_len(payload) > ARTIFACT_INLINE_THRESHOLD_BYTES
-            }
-            None => false,
+    let needs = |artifact: &ChatToolArtifact| match parse_data_url(artifact.data_url.trim()) {
+        Some((mime, payload)) => {
+            mime.starts_with("image/")
+                && decoded_base64_len(payload) > ARTIFACT_INLINE_THRESHOLD_BYTES
         }
+        None => false,
     };
     message.artifacts.iter().any(needs)
         || message
@@ -945,9 +961,14 @@ pub(crate) fn compose_user_content_for_api(
         "[已添加附件]\n{}\n\n注意：{}",
         attachment_lines, capability_note
     );
-    let attachment_note = if real_attachments.iter().any(|a| a.attachment_type == "video") {
+    let attachment_note = if real_attachments
+        .iter()
+        .any(|a| a.attachment_type == "video")
+    {
         format!("{attachment_note}\n视频附件随内置运行时请求发送；外部 CLI 代理仅收到文件路径。")
-    } else { attachment_note };
+    } else {
+        attachment_note
+    };
 
     if trimmed.is_empty() {
         attachment_note
@@ -1320,8 +1341,14 @@ mod tests {
     /// 造一张 >32KB 阈值、可被 image crate 解码的噪声 PNG。
     fn big_png_bytes() -> Vec<u8> {
         let img = image::RgbImage::from_fn(512, 512, |x, y| {
-            let v = x.wrapping_mul(2654435761).wrapping_add(y.wrapping_mul(40503));
-            image::Rgb([(v & 0xff) as u8, ((v >> 8) & 0xff) as u8, ((v >> 16) & 0xff) as u8])
+            let v = x
+                .wrapping_mul(2654435761)
+                .wrapping_add(y.wrapping_mul(40503));
+            image::Rgb([
+                (v & 0xff) as u8,
+                ((v >> 8) & 0xff) as u8,
+                ((v >> 16) & 0xff) as u8,
+            ])
         });
         let mut buf = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgb8(img)
@@ -1358,7 +1385,10 @@ mod tests {
         );
         let original_str = original.to_string_lossy().into_owned();
         let mut artifact = artifact_with(data_url, Some(original_str.clone()));
-        assert!(externalize_image_artifact_in_dir(&attachments_dir, &mut artifact));
+        assert!(externalize_image_artifact_in_dir(
+            &attachments_dir,
+            &mut artifact
+        ));
 
         // path 原样保留（前端按它懒加载原图），附件目录没有多写一份字节
         assert_eq!(artifact.path.as_deref(), Some(original_str.as_str()));
@@ -1386,10 +1416,16 @@ mod tests {
         );
         let missing = root.join("gone.png").to_string_lossy().into_owned();
         let mut artifact = artifact_with(data_url, Some(missing));
-        assert!(externalize_image_artifact_in_dir(&attachments_dir, &mut artifact));
+        assert!(externalize_image_artifact_in_dir(
+            &attachments_dir,
+            &mut artifact
+        ));
 
         let new_path = artifact.path.expect("path");
-        assert!(!new_path.contains('/') && !new_path.contains('\\'), "{new_path}");
+        assert!(
+            !new_path.contains('/') && !new_path.contains('\\'),
+            "{new_path}"
+        );
         assert_eq!(
             fs::read(attachments_dir.join(&new_path)).unwrap(),
             bytes,

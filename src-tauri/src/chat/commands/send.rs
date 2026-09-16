@@ -45,7 +45,8 @@ pub(crate) async fn chat_continue_goal(
         &[],
         None,
         crate::chat::agent::AgentRunEntry::Send,
-    ).await;
+    )
+    .await;
     strip_transcripts_for_frontend(&mut conversation);
     match outcome {
         Ok(()) => Ok(serde_json::json!({
@@ -94,14 +95,22 @@ pub(crate) async fn chat_send_message(
 
     let plan_message_id = plan_message_id.or_else(|| {
         (conversation.agent_plan_state.document.is_some()
-            && matches!(content.trim(), "开始执行" | "按计划执行" | "执行计划" | "按这条计划开始执行。"))
-            .then(String::new)
+            && matches!(
+                content.trim(),
+                "开始执行" | "按计划执行" | "执行计划" | "按这条计划开始执行。"
+            ))
+        .then(String::new)
     });
     let selected_plan = if let Some(id) = plan_message_id.as_deref() {
         let snapshot = crate::chat::plan_document::prepare_execution(&app, &mut conversation, id)?;
-        text_attachments.push(TextAttachmentInput { name: "执行计划.md".into(), content: snapshot });
+        text_attachments.push(TextAttachmentInput {
+            name: "执行计划.md".into(),
+            content: snapshot,
+        });
         Some(conversation.agent_plan_state.clone())
-    } else { None };
+    } else {
+        None
+    };
 
     if content.trim() == "/goal" {
         strip_transcripts_for_frontend(&mut conversation);
@@ -112,20 +121,36 @@ pub(crate) async fn chat_send_message(
     }
 
     let goal_started = content.trim().strip_prefix("/goal").and_then(|rest| {
-        if !rest.chars().next().is_some_and(char::is_whitespace) { return None; }
-        let objective = rest.trim(); (!objective.is_empty()).then_some(objective.to_string())
+        if !rest.chars().next().is_some_and(char::is_whitespace) {
+            return None;
+        }
+        let objective = rest.trim();
+        (!objective.is_empty()).then_some(objective.to_string())
     });
-    if goal_started.is_some() && conversation.goal_state.as_ref().is_some_and(|goal| {
-        !matches!(goal.status, crate::chat::types::GoalStatus::Completed | crate::chat::types::GoalStatus::Cancelled)
-    }) {
-        return Err("An unfinished Goal already exists. Use the Goal card's edit action to replace it.".into());
+    if goal_started.is_some()
+        && conversation.goal_state.as_ref().is_some_and(|goal| {
+            !matches!(
+                goal.status,
+                crate::chat::types::GoalStatus::Completed
+                    | crate::chat::types::GoalStatus::Cancelled
+            )
+        })
+    {
+        return Err(
+            "An unfinished Goal already exists. Use the Goal card's edit action to replace it."
+                .into(),
+        );
     }
     let resumed_waiting_goal = goal_started.is_none()
-        && conversation.goal_state.as_ref().is_some_and(|goal| {
-            matches!(goal.status, crate::chat::types::GoalStatus::Waiting)
-        });
+        && conversation
+            .goal_state
+            .as_ref()
+            .is_some_and(|goal| matches!(goal.status, crate::chat::types::GoalStatus::Waiting));
     let waiting_goal_guard = resumed_waiting_goal.then(|| {
-        let goal = conversation.goal_state.as_ref().expect("waiting Goal was checked");
+        let goal = conversation
+            .goal_state
+            .as_ref()
+            .expect("waiting Goal was checked");
         (goal.id.clone(), goal.version)
     });
 

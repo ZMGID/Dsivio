@@ -131,8 +131,16 @@ pub async fn run_external_cli_reply(
     entry: AgentRunEntry,
 ) -> Result<(), String> {
     run_external_cli_reply_in(
-        app, state, conversation, title_from_first_user, latest_user_message,
-        image_paths, file_paths, active_skill_id, entry, None,
+        app,
+        state,
+        conversation,
+        title_from_first_user,
+        latest_user_message,
+        image_paths,
+        file_paths,
+        active_skill_id,
+        entry,
+        None,
     )
     .await
 }
@@ -4652,9 +4660,17 @@ mod tests {
     /// model/reasoning/sandbox/provider; Codex fingerprints sandbox only; ACP stays default.
     #[test]
     fn launch_config_fingerprints_process_bound_protocols() {
-        let grok = |sandbox| launch_config_for_turn(
-            StreamFormat::AcpJsonRpc, None, None, sandbox, None, None, "",
-        );
+        let grok = |sandbox| {
+            launch_config_for_turn(
+                StreamFormat::AcpJsonRpc,
+                None,
+                None,
+                sandbox,
+                None,
+                None,
+                "",
+            )
+        };
         assert_eq!(grok(None), grok(Some("full")));
         assert!(!grok(None).accepts(&grok(Some("ask"))));
         assert!(!grok(Some("ask")).accepts(&grok(Some("full"))));

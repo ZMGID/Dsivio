@@ -74,7 +74,12 @@ pub(crate) fn effective_context_tokens(
     estimate_full: usize,
 ) -> (usize, bool) {
     match anchor_total {
-        Some(total) => (usize::try_from(total).unwrap_or(usize::MAX).saturating_add(trailing_estimate), true),
+        Some(total) => (
+            usize::try_from(total)
+                .unwrap_or(usize::MAX)
+                .saturating_add(trailing_estimate),
+            true,
+        ),
         None => (estimate_full, false),
     }
 }
@@ -184,7 +189,10 @@ mod tests {
     #[test]
     fn usage_source_distinguishes_reported_incremental_and_fallback_counts() {
         assert_eq!(token_count_source(true, 0), Some("provider_reported"));
-        assert_eq!(token_count_source(true, 200), Some("provider_reported_with_estimate"));
+        assert_eq!(
+            token_count_source(true, 200),
+            Some("provider_reported_with_estimate")
+        );
         assert_eq!(token_count_source(false, 0), None);
         assert_eq!(effective_context_tokens(Some(0), 0, 100), (0, true));
     }

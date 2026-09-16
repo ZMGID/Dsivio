@@ -20,9 +20,7 @@ use super::context::{
     estimate_image_tokens_for_dimensions, group_answer_excluded_from_context,
     mark_summary_stale_if_needed, resolve_usage_anchor, should_auto_compress_context,
 };
-use super::interaction::{
-    format_tool_approval_summary, stream_delta_event_kinds,
-};
+use super::interaction::{format_tool_approval_summary, stream_delta_event_kinds};
 use super::messages::{
     assistant_model_messages_for_storage, build_assistant_message, build_error_arm_message,
     content_from_segments, normalize_assistant_segments, reasoning_from_segments,
@@ -2579,33 +2577,62 @@ fn execute_document_reads_selected_file_and_missing_file_does_not_switch_mode() 
     let mut message = test_chat_message("selected", "assistant", "已保存", 1);
     message.agent_plan = Some(AgentPlanState {
         document: Some(crate::chat::plan_document::PlanDocument {
-            id: "selected-plan".into(), title: "方案".into(), path: path.to_string_lossy().into(),
+            id: "selected-plan".into(),
+            title: "方案".into(),
+            path: path.to_string_lossy().into(),
         }),
         ..Default::default()
     });
     let mut conversation = test_conversation_with_messages(vec![message]);
     conversation.agent_plan_state.mode = crate::chat::AgentPlanMode::Plan;
-    let snapshot = crate::chat::plan_document::prepare_execution_in(&mut conversation, "selected", dir.path()).unwrap();
+    let snapshot =
+        crate::chat::plan_document::prepare_execution_in(&mut conversation, "selected", dir.path())
+            .unwrap();
     assert_eq!(snapshot, "用户编辑后的方案，无需列表");
-    assert_eq!(conversation.agent_plan_state.mode, crate::chat::AgentPlanMode::Act);
-    assert_eq!(conversation.agent_plan_state.document.as_ref().unwrap().id, "selected-plan");
+    assert_eq!(
+        conversation.agent_plan_state.mode,
+        crate::chat::AgentPlanMode::Act
+    );
+    assert_eq!(
+        conversation.agent_plan_state.document.as_ref().unwrap().id,
+        "selected-plan"
+    );
     std::fs::remove_file(path).unwrap();
     conversation.agent_plan_state.mode = crate::chat::AgentPlanMode::Plan;
-    assert!(crate::chat::plan_document::prepare_execution_in(&mut conversation, "selected", dir.path()).is_err());
-    assert_eq!(conversation.agent_plan_state.mode, crate::chat::AgentPlanMode::Plan);
+    assert!(crate::chat::plan_document::prepare_execution_in(
+        &mut conversation,
+        "selected",
+        dir.path()
+    )
+    .is_err());
+    assert_eq!(
+        conversation.agent_plan_state.mode,
+        crate::chat::AgentPlanMode::Plan
+    );
 }
 
 #[test]
 fn execute_legacy_plan_creates_document_once() {
     let mut message = test_chat_message("legacy", "assistant", "旧计划正文", 1);
-    message.agent_plan = Some(AgentPlanState { plan: Some("旧计划正文".into()), ..Default::default() });
+    message.agent_plan = Some(AgentPlanState {
+        plan: Some("旧计划正文".into()),
+        ..Default::default()
+    });
     let mut conversation = test_conversation_with_messages(vec![message]);
     let dir = tempfile::tempdir().unwrap();
-    crate::chat::plan_document::prepare_execution_in(&mut conversation, "legacy", dir.path()).unwrap();
+    crate::chat::plan_document::prepare_execution_in(&mut conversation, "legacy", dir.path())
+        .unwrap();
     let document = conversation.agent_plan_state.document.clone().unwrap();
-    assert_eq!(std::fs::read_to_string(&document.path).unwrap(), "旧计划正文");
-    crate::chat::plan_document::prepare_execution_in(&mut conversation, "legacy", dir.path()).unwrap();
-    assert_eq!(conversation.agent_plan_state.document.as_ref(), Some(&document));
+    assert_eq!(
+        std::fs::read_to_string(&document.path).unwrap(),
+        "旧计划正文"
+    );
+    crate::chat::plan_document::prepare_execution_in(&mut conversation, "legacy", dir.path())
+        .unwrap();
+    assert_eq!(
+        conversation.agent_plan_state.document.as_ref(),
+        Some(&document)
+    );
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
 }
 
@@ -2695,10 +2722,17 @@ fn context_estimate_counts_native_reasoning_and_display_copy_once() {
     });
     let mut mirrored = native.clone();
     mirrored["reasoning_content"] = serde_json::json!("think ".repeat(100));
-    assert_eq!(count_tokens_in_value(&mirrored), count_tokens_in_value(&native));
+    assert_eq!(
+        count_tokens_in_value(&mirrored),
+        count_tokens_in_value(&native)
+    );
     let mut different_ciphertext = native.clone();
-    different_ciphertext["reasoning_items"][0]["item"]["encrypted_content"] = serde_json::json!("x");
-    assert_eq!(count_tokens_in_value(&native), count_tokens_in_value(&different_ciphertext));
+    different_ciphertext["reasoning_items"][0]["item"]["encrypted_content"] =
+        serde_json::json!("x");
+    assert_eq!(
+        count_tokens_in_value(&native),
+        count_tokens_in_value(&different_ciphertext)
+    );
 }
 
 #[test]

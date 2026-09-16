@@ -40,7 +40,11 @@ pub(crate) async fn chat_set_agent_plan_mode(
     let mut conversation = crate::chat::repository::repository(&app)
         .mutate(&app, &conversation_id, |conversation| {
             if mode != crate::chat::types::AgentPlanMode::Act {
-                if let Some(goal) = conversation.goal_state.as_mut().filter(|g| crate::chat::goal::is_running(g.status)) {
+                if let Some(goal) = conversation
+                    .goal_state
+                    .as_mut()
+                    .filter(|g| crate::chat::goal::is_running(g.status))
+                {
                     goal.version += 1;
                     goal.status = crate::chat::types::GoalStatus::Paused;
                     goal.status_reason = Some("Paused because the Agent mode changed".into());
@@ -77,9 +81,17 @@ pub(crate) async fn chat_execute_agent_plan(
     message_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     // Legacy command uses the same reserved send path as the document card.
-    super::send::chat_send_message(app, state, conversation_id,
-        "按这条计划开始执行。".into(), vec![], None, None,
-        Some(message_id.unwrap_or_default())).await
+    super::send::chat_send_message(
+        app,
+        state,
+        conversation_id,
+        "按这条计划开始执行。".into(),
+        vec![],
+        None,
+        None,
+        Some(message_id.unwrap_or_default()),
+    )
+    .await
 }
 
 /// 取消指定对话的当前 Chat 生成或工具执行。
@@ -92,7 +104,11 @@ pub(crate) async fn chat_cancel_stream(
     state.cancel_chat_generation(&conversation_id);
     if let Ok(conversation) = crate::chat::repository::repository(&app)
         .mutate(&app, &conversation_id, |conversation| {
-            if let Some(goal) = conversation.goal_state.as_mut().filter(|g| crate::chat::goal::is_running(g.status)) {
+            if let Some(goal) = conversation
+                .goal_state
+                .as_mut()
+                .filter(|g| crate::chat::goal::is_running(g.status))
+            {
                 goal.version += 1;
                 goal.status = crate::chat::types::GoalStatus::Paused;
                 goal.status_reason = Some("Paused by user".into());
@@ -100,7 +116,8 @@ pub(crate) async fn chat_cancel_stream(
                 goal.updated_at = chrono::Local::now().timestamp();
             }
             Ok(())
-        }).await
+        })
+        .await
     {
         crate::chat::goal::emit_goal_state(&app, &conversation);
     }

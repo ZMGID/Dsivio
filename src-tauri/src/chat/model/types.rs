@@ -937,10 +937,21 @@ fn model_message_from_openai_message(message: &Value) -> Option<ModelMessage> {
                             }
                         }
                         "video_url" => {
-                            if let Some(url) = item.get("video_url").and_then(|v| v.get("url").or(Some(v))).and_then(Value::as_str) {
-                                if let Some((mime, data)) = url.strip_prefix("data:").and_then(|s| s.split_once(";base64,")) {
+                            if let Some(url) = item
+                                .get("video_url")
+                                .and_then(|v| v.get("url").or(Some(v)))
+                                .and_then(Value::as_str)
+                            {
+                                if let Some((mime, data)) = url
+                                    .strip_prefix("data:")
+                                    .and_then(|s| s.split_once(";base64,"))
+                                {
                                     if mime.starts_with("video/") {
-                                        parts.push(MessagePart::Video { mime_type: mime.into(), data: data.into(), path: None });
+                                        parts.push(MessagePart::Video {
+                                            mime_type: mime.into(),
+                                            data: data.into(),
+                                            path: None,
+                                        });
                                     }
                                 }
                             }
@@ -1037,10 +1048,14 @@ fn openai_messages_from_model_message(message: &ModelMessage) -> Vec<Value> {
     let mut reasoning_items: Vec<Value> = Vec::new();
     for part in &message.content {
         match part {
-            MessagePart::Video { mime_type, data, .. } => {
+            MessagePart::Video {
+                mime_type, data, ..
+            } => {
                 if data.is_empty() {
                     text_parts.push("[视频附件不可用，请重新添加]".into());
-                    multimodal_parts.push(serde_json::json!({"type":"text", "text":"[视频附件不可用，请重新添加]"}));
+                    multimodal_parts.push(
+                        serde_json::json!({"type":"text", "text":"[视频附件不可用，请重新添加]"}),
+                    );
                 } else {
                     multimodal_parts.push(serde_json::json!({"type":"video_url", "video_url":{"url":format!("data:{mime_type};base64,{data}")}}));
                 }
@@ -1101,10 +1116,12 @@ fn openai_messages_from_model_message(message: &ModelMessage) -> Vec<Value> {
             MessagePart::ToolResult { .. } => {}
         }
     }
-    let content = if multimodal_parts
-        .iter()
-        .any(|part| matches!(part.get("type").and_then(Value::as_str), Some("image_url" | "video_url")))
-    {
+    let content = if multimodal_parts.iter().any(|part| {
+        matches!(
+            part.get("type").and_then(Value::as_str),
+            Some("image_url" | "video_url")
+        )
+    }) {
         Value::Array(multimodal_parts)
     } else if text_parts.is_empty() && !tool_calls.is_empty() {
         Value::Null
@@ -1198,7 +1215,9 @@ fn responses_items_from_model_message(
         match part {
             MessagePart::Video { .. } => {
                 // The Responses adapter rejects video before serialization; never mislabel it as an image.
-                content_parts.push(serde_json::json!({"type":text_part_type,"text":"[视频输入不受此协议支持]"}));
+                content_parts.push(
+                    serde_json::json!({"type":text_part_type,"text":"[视频输入不受此协议支持]"}),
+                );
             }
             MessagePart::Text { text } => {
                 content_parts.push(serde_json::json!({ "type": text_part_type, "text": text }));
@@ -1273,10 +1292,13 @@ mod tests {
             }],
         };
         let messages = openai_messages_from_model_message(&message);
-        assert_eq!(messages[0]["content"][0], serde_json::json!({
-            "type": "video_url",
-            "video_url": {"url": "data:video/mov;base64,AA=="}
-        }));
+        assert_eq!(
+            messages[0]["content"][0],
+            serde_json::json!({
+                "type": "video_url",
+                "video_url": {"url": "data:video/mov;base64,AA=="}
+            })
+        );
     }
 
     #[test]

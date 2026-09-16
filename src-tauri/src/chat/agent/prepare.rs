@@ -824,15 +824,17 @@ pub(crate) fn estimate_message_reasoning_tokens(message: &Value) -> usize {
         .get("reasoning_items")
         .and_then(Value::as_array)
         .map(|items| {
-            items.iter().map(|entry| {
-                estimate_reasoning_item_tokens(entry.get("item").unwrap_or(entry))
-            }).sum()
+            items
+                .iter()
+                .map(|entry| estimate_reasoning_item_tokens(entry.get("item").unwrap_or(entry)))
+                .sum()
         })
         .unwrap_or(0);
     if native > 0 {
         return native;
     }
-    message.get("reasoning_content")
+    message
+        .get("reasoning_content")
         .or_else(|| message.get("reasoning"))
         .and_then(Value::as_str)
         .map(estimate_tokens)
@@ -849,16 +851,27 @@ pub(crate) fn estimate_value_tokens(value: &Value) -> usize {
         Value::Array(items) => items.iter().map(estimate_value_tokens).sum(),
         Value::Object(map) => {
             if map.contains_key("reasoning_items") {
-                return map.iter()
-                    .filter(|(key, _)| !matches!(key.as_str(), "reasoning_items" | "reasoning_content" | "reasoning"))
+                return map
+                    .iter()
+                    .filter(|(key, _)| {
+                        !matches!(
+                            key.as_str(),
+                            "reasoning_items" | "reasoning_content" | "reasoning"
+                        )
+                    })
                     .map(|(key, value)| estimate_tokens(key) + estimate_value_tokens(value))
-                    .sum::<usize>() + estimate_message_reasoning_tokens(value);
+                    .sum::<usize>()
+                    + estimate_message_reasoning_tokens(value);
             }
             if let Some(kind) = map.get("type").and_then(Value::as_str) {
-                if kind == "reasoning" && (map.contains_key("content") || map.contains_key("summary")) {
+                if kind == "reasoning"
+                    && (map.contains_key("content") || map.contains_key("summary"))
+                {
                     return estimate_reasoning_item_tokens(value);
                 }
-                if kind == "video_url" { return 0; }
+                if kind == "video_url" {
+                    return 0;
+                }
                 if IMAGE_PART_TYPES.contains(&kind) {
                     return 0;
                 }

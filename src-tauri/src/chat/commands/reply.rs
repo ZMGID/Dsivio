@@ -34,16 +34,16 @@ use super::context::{build_chat_api_messages, resolve_usage_anchor};
 use super::direct_image::complete_direct_image_generation_reply;
 use super::interaction::{emit_chat_stream_delta, emit_chat_tool_record, wait_for_chat_cancel};
 use super::messages::{
-    auxiliary_tool_segments, build_assistant_message,
-    push_assistant_message, tool_segment_for_record,
+    auxiliary_tool_segments, build_assistant_message, push_assistant_message,
+    tool_segment_for_record,
 };
 use super::reply_runtime::{ArmReplyOutcome, ChatReplyGuard, ReplyArm};
 use super::resolve_thinking;
 use super::tooling::{
-    append_agent_ask_user_tools, append_agent_todo_tools, append_goal_tools, apply_agent_plan_tool_filter,
-    apply_chat_mode_tool_filter, apply_inline_code_request_tool_filter,
-    apply_web_search_mode_tool_filter, await_chat_tool_discovery, list_tools_for_chat,
-    resolve_request_skill,
+    append_agent_ask_user_tools, append_agent_todo_tools, append_goal_tools,
+    apply_agent_plan_tool_filter, apply_chat_mode_tool_filter,
+    apply_inline_code_request_tool_filter, apply_web_search_mode_tool_filter,
+    await_chat_tool_discovery, list_tools_for_chat, resolve_request_skill,
 };
 
 pub(super) async fn complete_assistant_reply(
@@ -70,8 +70,16 @@ pub(super) async fn complete_assistant_reply(
     )
     .await;
     while outcome.is_ok() {
-        if !conversation.goal_state.as_ref().is_some_and(|goal| crate::chat::goal::is_running(goal.status)) { break; }
-        if state.has_goal_user_queue_pending(&conversation.id) { break; }
+        if !conversation
+            .goal_state
+            .as_ref()
+            .is_some_and(|goal| crate::chat::goal::is_running(goal.status))
+        {
+            break;
+        }
+        if state.has_goal_user_queue_pending(&conversation.id) {
+            break;
+        }
         let continuation_skill = conversation.active_skill_id.clone();
         let next = complete_assistant_reply_inner(
             app,
@@ -84,17 +92,36 @@ pub(super) async fn complete_assistant_reply(
             crate::chat::agent::AgentRunEntry::Send,
             None,
             false,
-        ).await;
+        )
+        .await;
         outcome = next;
     }
     if let Err(error) = &outcome {
-        if let Some(goal) = conversation.goal_state.as_ref().filter(|goal| crate::chat::goal::is_running(goal.status)).cloned() {
-            if let Ok(updated) = crate::chat::goal::pause_after_error(app, &conversation.id, &goal.id, goal.version, error).await {
+        if let Some(goal) = conversation
+            .goal_state
+            .as_ref()
+            .filter(|goal| crate::chat::goal::is_running(goal.status))
+            .cloned()
+        {
+            if let Ok(updated) = crate::chat::goal::pause_after_error(
+                app,
+                &conversation.id,
+                &goal.id,
+                goal.version,
+                error,
+            )
+            .await
+            {
                 *conversation = updated;
             }
         }
     }
-    if outcome.is_ok() && !conversation.goal_state.as_ref().is_some_and(|goal| crate::chat::goal::is_running(goal.status)) {
+    if outcome.is_ok()
+        && !conversation
+            .goal_state
+            .as_ref()
+            .is_some_and(|goal| crate::chat::goal::is_running(goal.status))
+    {
         crate::chat::completion_notification::notify_reply_completed(
             app,
             state.inner(),
@@ -196,13 +223,18 @@ pub(super) async fn complete_assistant_reply_inner(
     }
 
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
-    let has_video = conversation.messages.iter()
+    let has_video = conversation
+        .messages
+        .iter()
         .skip(super::context::context_replay_start_index(conversation))
         .filter(|message| message.role == "user")
         .flat_map(|message| &message.attachments)
         .any(|attachment| crate::chat::video::mime_for_name(&attachment.name).is_some());
     let auxiliary_video_model = crate::chat::video_analysis::select_model(
-        &settings, &provider, &resolved_model, has_video,
+        &settings,
+        &provider,
+        &resolved_model,
+        has_video,
     )?;
     if has_video {
         if model_can_generate_images_directly(&provider, &resolved_model) {
@@ -230,21 +262,28 @@ pub(super) async fn complete_assistant_reply_inner(
     let direct_image_model =
         !plan_mode && model_can_generate_images_directly(&provider, &resolved_model);
     if direct_image_model
-        && conversation.goal_state.as_ref().is_some_and(|goal| crate::chat::goal::is_running(goal.status))
+        && conversation
+            .goal_state
+            .as_ref()
+            .is_some_and(|goal| crate::chat::goal::is_running(goal.status))
     {
-        return Err("Goal mode requires a tool-capable text model; direct image models are not supported".into());
+        return Err(
+            "Goal mode requires a tool-capable text model; direct image models are not supported"
+                .into(),
+        );
     }
     let run_generation = state.next_chat_generation(&conversation.id);
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
-    if let Some(goal) = conversation.goal_state.as_ref().filter(|goal| crate::chat::goal::is_running(goal.status)).cloned() {
-        *conversation = crate::chat::goal::claim_run(
-            app,
-            &conversation.id,
-            &goal.id,
-            goal.version,
-            &run_id,
-        ).await?;
+    if let Some(goal) = conversation
+        .goal_state
+        .as_ref()
+        .filter(|goal| crate::chat::goal::is_running(goal.status))
+        .cloned()
+    {
+        *conversation =
+            crate::chat::goal::claim_run(app, &conversation.id, &goal.id, goal.version, &run_id)
+                .await?;
     }
     let recovery = arm.map(|arm| crate::chat::protocol::ChatRunRecoveryMetadata {
         group_id: arm.group_id.clone(),
@@ -525,7 +564,10 @@ pub(super) async fn complete_assistant_reply_inner(
     if !builder_mode {
         apply_web_search_mode_tool_filter(&mut tools, web_search_mode, &settings);
     }
-    crate::chat::plan_document::append_tools(&mut tools, plan_mode && !is_builder_conversation(conversation));
+    crate::chat::plan_document::append_tools(
+        &mut tools,
+        plan_mode && !is_builder_conversation(conversation),
+    );
     let user_tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
@@ -655,10 +697,18 @@ pub(super) async fn complete_assistant_reply_inner(
     };
     if let Some(video_model) = auxiliary_video_model {
         let mut record = crate::chat::video_analysis::tool_record(
-            &settings, &video_model, crate::chat::video_analysis::video_count(&runtime_messages),
+            &settings,
+            &video_model,
+            crate::chat::video_analysis::video_count(&runtime_messages),
         );
         let started = Instant::now();
-        emit_chat_stream_delta(app, &run_id, "", None, Some(&tool_segment_for_record(&record, 100, None)));
+        emit_chat_stream_delta(
+            app,
+            &run_id,
+            "",
+            None,
+            Some(&tool_segment_for_record(&record, 100, None)),
+        );
         emit_chat_tool_record(app, &run_id, &record);
         let analysis = tokio::select! {
             result = crate::chat::video_analysis::analyze(
@@ -682,21 +732,36 @@ pub(super) async fn complete_assistant_reply_inner(
         match analysis {
             Ok(content) => {
                 finish_auxiliary_vision_tool_record(
-                    &mut record, ToolCallStatus::Success, started,
-                    Some(content.trim().to_string()), None,
+                    &mut record,
+                    ToolCallStatus::Success,
+                    started,
+                    Some(content.trim().to_string()),
+                    None,
                 );
                 emit_chat_tool_record(app, &run_id, &record);
                 auxiliary_tool_records.push(record);
-                crate::chat::video_analysis::apply_analysis(&mut runtime_messages, &content, &language);
+                crate::chat::video_analysis::apply_analysis(
+                    &mut runtime_messages,
+                    &content,
+                    &language,
+                );
             }
             Err(error) => {
                 finish_auxiliary_vision_tool_record(
-                    &mut record, ToolCallStatus::Error, started, None, Some(error.clone()),
+                    &mut record,
+                    ToolCallStatus::Error,
+                    started,
+                    None,
+                    Some(error.clone()),
                 );
                 emit_chat_tool_record(app, &run_id, &record);
                 if arm.is_some() {
                     protocol_guard.defer_terminal();
-                    return Ok(ArmReplyOutcome { message: None, run_id: Some(run_id), error: Some(error) });
+                    return Ok(ArmReplyOutcome {
+                        message: None,
+                        run_id: Some(run_id),
+                        error: Some(error),
+                    });
                 }
                 return Err(error);
             }
@@ -882,10 +947,17 @@ pub(super) async fn complete_assistant_reply_inner(
         }
     };
     // A saved document, not the wording of the final response, identifies a plan.
-    let message_plan = if plan_mode && result.tool_records.iter().any(|tool| tool.name == "save_plan" && tool.status == crate::chat::types::ToolCallStatus::Success) {
+    let message_plan = if plan_mode
+        && result.tool_records.iter().any(|tool| {
+            tool.name == "save_plan" && tool.status == crate::chat::types::ToolCallStatus::Success
+        }) {
         let latest = crate::chat::storage::load_conversation(app, &conversation.id)?;
-        (crate::chat::plan::is_plan_mode(&latest.agent_plan_state) && latest.agent_plan_state.document.is_some()).then(|| latest.agent_plan_state.clone())
-    } else { None };
+        (crate::chat::plan::is_plan_mode(&latest.agent_plan_state)
+            && latest.agent_plan_state.document.is_some())
+        .then(|| latest.agent_plan_state.clone())
+    } else {
+        None
+    };
     let mut segments = auxiliary_tool_segments(&auxiliary_tool_records);
     segments.extend(result.segments);
     let mut tool_records = auxiliary_tool_records;
@@ -965,7 +1037,10 @@ pub(super) async fn complete_assistant_reply_inner(
     let terminal_content = result.content.clone();
     let terminal_outcome = result.stream_outcome.clone();
     let goal_assistant_message_id = assistant_message_id.clone();
-    let goal_run = conversation.goal_state.as_ref().filter(|g| crate::chat::goal::is_running(g.status))
+    let goal_run = conversation
+        .goal_state
+        .as_ref()
+        .filter(|g| crate::chat::goal::is_running(g.status))
         .map(|g| (g.id.clone(), g.version));
     let goal_usage = result.usage.clone();
     let run_plan_update = message_plan.clone();
@@ -1002,7 +1077,8 @@ pub(super) async fn complete_assistant_reply_inner(
             &terminal_content,
             goal_usage.as_ref(),
             last_user_api_content.is_none(),
-        ).await?;
+        )
+        .await?;
     }
     if let Some(plan_state) = run_plan_update {
         crate::chat::protocol::emit_run_event(

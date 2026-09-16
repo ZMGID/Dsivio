@@ -1440,7 +1440,7 @@ mod tests {
                 "memory_modify",
                 "memory_search",
                 "save_plan",
-        "todo_write",
+                "todo_write",
                 "get_goal",
                 "initialize_goal_criteria",
                 "report_goal_progress",
