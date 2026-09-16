@@ -814,6 +814,10 @@ pub(super) async fn compute_context_state(
     } else {
         apply_agent_plan_tool_filter(&mut tools, plan_mode);
     }
+    crate::chat::plan_document::append_tools(
+        &mut tools,
+        plan_mode && !is_builder_conversation(conversation),
+    );
     let user_tools_available = tools_capable && !tools.is_empty();
     agent_prepare::apply_skill_fallback_when_tools_unavailable(
         &mut effective_chat_tools,
@@ -821,7 +825,7 @@ pub(super) async fn compute_context_state(
         user_tools_available,
     );
     let ask_user_tools_available = append_agent_ask_user_tools(&mut tools);
-    let todo_tools_available = if chat_mode {
+    let todo_tools_available = if chat_mode || plan_mode {
         false
     } else {
         append_agent_todo_tools(&mut tools)
@@ -882,7 +886,7 @@ pub(super) async fn compute_context_state(
         Some(&crate::chat::ask_user::format_prompt(
             ask_user_tools_available,
         )),
-        if chat_mode {
+        if chat_mode || plan_mode {
             None
         } else {
             Some(crate::chat::todo::format_prompt(
@@ -978,8 +982,11 @@ pub(super) async fn compute_context_state(
         clear_boundaries: conversation.context_state.clear_boundaries.clone(),
         warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
         context_source: Some(crate::external_agents::context::CONTEXT_SOURCE_BUILTIN.to_string()),
-        token_count_source: crate::chat::agent::context_estimate::token_count_source(anchored, anchor_trailing)
-            .map(str::to_string),
+        token_count_source: crate::chat::agent::context_estimate::token_count_source(
+            anchored,
+            anchor_trailing,
+        )
+        .map(str::to_string),
         session_input_tokens: if anchored {
             Some(estimated_input_tokens)
         } else {
@@ -1326,17 +1333,26 @@ pub(super) fn build_chat_api_messages(
                 for attachment in &message.attachments {
                     // Extension fallback supports videos saved by older versions as ordinary files.
                     if crate::chat::video::mime_for_name(&attachment.name).is_some() {
-                        let path = crate::chat::attachments::resolve_attachment_file_path(app, Some(&conversation.id), &attachment.path)?;
-                        parts.push(crate::chat::video::content_part(&path, &mut remaining_video_bytes)?);
+                        let path = crate::chat::attachments::resolve_attachment_file_path(
+                            app,
+                            Some(&conversation.id),
+                            &attachment.path,
+                        )?;
+                        parts.push(crate::chat::video::content_part(
+                            &path,
+                            &mut remaining_video_bytes,
+                        )?);
                     }
                 }
             }
         }
         if Some(idx) == last_user_idx && !last_user_image_paths.is_empty() {
-            parts.extend(last_user_image_paths
-                .iter()
-                .map(image_content_part)
-                .collect::<Result<Vec<_>, _>>()?);
+            parts.extend(
+                last_user_image_paths
+                    .iter()
+                    .map(image_content_part)
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
         }
         if !parts.is_empty() {
             parts.push(serde_json::json!({ "type": "text", "text": sanitized_content }));

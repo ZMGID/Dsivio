@@ -841,18 +841,28 @@ fn estimate_model_messages_tokens(messages: &[ModelMessage]) -> usize {
     messages
         .iter()
         .map(|message| {
-            let native_reasoning: usize = message.content.iter().filter_map(|part| match part {
-                MessagePart::ReasoningItem { item, .. } => Some(super::prepare::estimate_reasoning_item_tokens(item)),
-                _ => None,
-            }).sum();
+            let native_reasoning: usize = message
+                .content
+                .iter()
+                .filter_map(|part| match part {
+                    MessagePart::ReasoningItem { item, .. } => {
+                        Some(super::prepare::estimate_reasoning_item_tokens(item))
+                    }
+                    _ => None,
+                })
+                .sum();
             let parts: usize = message
                 .content
                 .iter()
                 .map(|part| match part {
-                    MessagePart::Text { text } => {
-                        estimate_tokens(text)
+                    MessagePart::Text { text } => estimate_tokens(text),
+                    MessagePart::Reasoning { text } => {
+                        if native_reasoning == 0 {
+                            estimate_tokens(text)
+                        } else {
+                            0
+                        }
                     }
-                    MessagePart::Reasoning { text } => if native_reasoning == 0 { estimate_tokens(text) } else { 0 },
                     MessagePart::ToolCall {
                         name,
                         arguments_raw,

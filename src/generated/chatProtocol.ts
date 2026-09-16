@@ -29,7 +29,7 @@ export type ChatPlanMode = "act" | "plan" | "orchestrate";
 
 export type ChatPlanStatus = "empty" | "draft" | "approved";
 
-export type ChatPlanStatePayload = { mode: ChatPlanMode, status: ChatPlanStatus, plan: string | null, updatedAt: number, };
+export type ChatPlanStatePayload = { document?: { id: string, title: string, path: string, }, mode: ChatPlanMode, status: ChatPlanStatus, plan: string | null, updatedAt: number, };
 
 export type ChatGoalStatus = "active" | "verifying" | "waiting" | "paused" | "blocked" | "completed" | "cancelled";
 

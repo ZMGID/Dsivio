@@ -5,6 +5,7 @@ import { lazy, memo, Profiler, startTransition, Suspense, useCallback, useEffect
 import { PanelRight, SquareArrowOutUpRight } from 'lucide-react'
 import { type ConversationSelectionScope, type ExtensionsNavItem } from './Sidebar'
 import { ChatSidebarPane } from './ChatSidebarPane'
+import { completeSettingsExit, type PendingSettingsAction } from './settingsExit'
 import { useChatRouting } from './hooks/useChatRouting'
 import { useExternalSendQueue } from './hooks/useExternalSendQueue'
 import { useMessageQueue } from './hooks/useMessageQueue'
@@ -60,7 +61,6 @@ import { PermissionPicker } from './PermissionPicker'
 import { deriveDshPresetModes, derivePermissionModes, useDetectedExternalAgents, useDshCustomPresets } from './permissionModes'
 import { BackgroundJobsIndicator } from './BackgroundJobsIndicator'
 import { ContextIndicator } from './ContextIndicator'
-import { isExecutableAgentPlanText } from './agentPlan'
 import {
   agentRuntimesEqual,
   BUILTIN_AGENT_RUNTIME,
@@ -606,6 +606,7 @@ function settleOptimisticConversationListItem(
 }
 
 type SendMessageOptions = {
+  planMessageId?: string
   forceNewConversation?: boolean
   conversationOverride?: Conversation | null
   /** 前置校验完成、消息正式进入本地发送流程；输入框可立即清空。 */
@@ -835,7 +836,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const streamingContentRef = useRef('')
   const streamingReasoningRef = useRef('')
   const settingsRef = useRef<SettingsShellHandle>(null)
-  const pendingAfterSettingsCloseRef = useRef<(() => void) | null>(null)
+  const pendingAfterSettingsCloseRef = useRef<PendingSettingsAction | null>(null)
   // A 合帧（render coalescing）：高频 stream/tool/subagent/userprompt 事件不再每条都同步
   // setState 重渲，而是把"待显示的快照"记到 ref，用 requestAnimationFrame 每帧最多 flush 一次。
 
@@ -1690,12 +1691,15 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     window.setTimeout(() => {
       setSettingsExiting(false)
       setChatView('conversation')
-      syncConversationRoute(currentConversationIdRef.current)
-      void loadSkills()
-      void refreshToolIndicator()
       const pending = pendingAfterSettingsCloseRef.current
       pendingAfterSettingsCloseRef.current = null
-      pending?.()
+      completeSettingsExit(
+        currentConversationIdRef.current,
+        pending,
+        syncConversationRoute,
+      )
+      void loadSkills()
+      void refreshToolIndicator()
     }, 220)
   }, [loadSkills, refreshToolIndicator, syncConversationRoute])
 
@@ -1713,19 +1717,31 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     }
   }, [chatView, loadSkills, refreshToolIndicator])
 
-  const runAfterLeavingSettings = useCallback((action: () => void) => {
+  const runAfterLeavingSettings = useCallback((
+    action: () => void,
+    options?: { restoreCurrentRoute?: boolean },
+  ) => {
     if (chatView !== 'settings') {
       action()
       return
     }
     if (!settingsRef.current) {
       setChatView('conversation')
-      syncConversationRoute(currentConversationIdRef.current)
-      action()
+      completeSettingsExit(
+        currentConversationIdRef.current,
+        {
+          action,
+          restoreCurrentRoute: options?.restoreCurrentRoute ?? true,
+        },
+        syncConversationRoute,
+      )
       return
     }
-    pendingAfterSettingsCloseRef.current = action
-    settingsRef.current?.requestClose()
+    pendingAfterSettingsCloseRef.current = {
+      action,
+      restoreCurrentRoute: options?.restoreCurrentRoute ?? true,
+    }
+    settingsRef.current?.requestClose({ waitForSave: false })
   }, [chatView, syncConversationRoute])
 
   const handleSettingsChange = useCallback(() => {
@@ -3361,6 +3377,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         trimmed,
         attachments,
         attachmentSkillId,
+        options.planMessageId,
       )
       persistedConversation = updatedConv
       sendAccepted = true
@@ -3676,36 +3693,16 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const handleExecuteAgentPlan = useCallback(async (messageId: string) => {
     const conversation = currentConversation
     if (!conversation) return
-    const planMessage = conversation.messages.find((message) => message.id === messageId)
-    const messagePlan = planMessage?.agent_plan ?? planMessage?.agentPlan ?? null
-    const messagePlanText = messagePlan?.plan?.trim() ?? ''
-    const legacyPlan = conversation.agent_plan_state ?? conversation.agentPlanState ?? null
-    const legacyPlanText = legacyPlan?.plan?.trim() ?? ''
-    const isLegacyPlanMessage = Boolean(
-      planMessage
-      && !isExecutableAgentPlanText(messagePlanText)
-      && isExecutableAgentPlanText(legacyPlanText)
-      && planMessage.role === 'assistant'
-      && planMessage.content.trim() === legacyPlanText,
-    )
-    const planText = isExecutableAgentPlanText(messagePlanText)
-      ? messagePlanText
-      : (isLegacyPlanMessage ? legacyPlanText : '')
-    if (!isExecutableAgentPlanText(planText)) return
     if (isConversationInFlight(inFlightConversationsRef.current, conversation.id)) {
       setStreamErrorForConversation(conversation.id, '该对话正在生成中，请稍后再试')
       return
     }
 
     try {
-      const updated = await chatApi.executeAgentPlan(
-        conversation.id,
-        isExecutableAgentPlanText(messagePlanText) ? messageId : undefined,
-      )
-      applyConversationIfCurrent(conversation.id, updated)
-      refreshSidebar()
-      void refreshContextStats(updated.id)
-      void handleSendMessage('按这条计划开始执行。', [], { conversationOverride: updated })
+      await handleSendMessage('按这条计划开始执行。', [], {
+        conversationOverride: conversation,
+        planMessageId: messageId,
+      })
     } catch (err) {
       console.error('Failed to execute agent plan:', err)
       setStreamErrorForConversation(
@@ -3714,11 +3711,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       )
     }
   }, [
-    applyConversationIfCurrent,
     currentConversation,
     handleSendMessage,
-    refreshContextStats,
-    refreshSidebar,
     setStreamErrorForConversation,
   ])
 
@@ -4781,7 +4775,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         messageCount: conversation?.message_count,
         focusMessageId: focusMessageId || undefined,
       })
-    })
+    }, { restoreCurrentRoute: false })
   }, [handleSelectConversation, occupyConversationInMain, runAfterLeavingSettings])
 
   const handleSidebarNewConversation = useCallback(() => {

@@ -851,7 +851,10 @@ export const InputBar = memo(function InputBar({
     })
   }, [])
 
-  useEffect(() => onComposerTextInsert(insertTextAtEnd), [insertTextAtEnd])
+  useEffect(
+    () => onComposerTextInsert(insertTextAtEnd, draftKeyValue),
+    [draftKeyValue, insertTextAtEnd],
+  )
 
   const syncSlashToken = useCallback((value: string, cursor: number) => {
     const token = findActiveSlashToken(value, cursor)

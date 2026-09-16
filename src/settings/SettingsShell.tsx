@@ -71,6 +71,7 @@ import {
 import { ConnectorsPanel } from './ConnectorsPanel'
 import { WebSearchPanel } from './WebSearchPanel'
 import { defaultChatTools } from './chatToolsShared'
+import { persistThenClose, type SettingsCloseOptions } from './settingsClose'
 
 export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
 
@@ -103,7 +104,7 @@ export interface SettingsShellProps {
 }
 
 export interface SettingsShellHandle {
-  requestClose: () => void
+  requestClose: (options?: SettingsCloseOptions) => void
 }
 
 /** 快捷键作用域。原本是组件体内的局部 type，抽 HotkeysTab 后需要跨模块共享，提到模块作用域。 */
@@ -902,9 +903,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   }, [saveError, saveWarning])
 
   /**
-   * 关闭设置页：先 flush 未落盘改动，再关（不阻塞 UI 等回包）
+   * 关闭设置页：普通关闭等待 flush；切去对话等导航动作立即退场，保存留在后台完成。
    */
-  const handleCloseRequest = useCallback(() => {
+  const handleCloseRequest = useCallback((options?: SettingsCloseOptions) => {
     if (recordingTarget) return
     if (autosaveTimerRef.current) {
       clearTimeout(autosaveTimerRef.current)
@@ -912,7 +913,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     }
     // 即使草稿看起来 pristine，也要走 persist：插件开关可能已写进缓存，
     // persist 会采用那份 plugin MCP，避免把关闭盖回去。
-    void persistSettingsNow().finally(() => onClose())
+    persistThenClose(persistSettingsNow, onClose, options)
   }, [onClose, persistSettingsNow, recordingTarget])
 
   useImperativeHandle(ref, () => ({ requestClose: handleCloseRequest }), [handleCloseRequest])
@@ -1887,7 +1888,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         <nav className="settings-embedded-nav-list settings-embedded-nav-list--footer">
           <button
             type="button"
-            onClick={handleCloseRequest}
+            onClick={() => handleCloseRequest()}
             className="settings-embedded-back"
             title={lang === 'zh' ? '返回对话' : 'Back to chat'}
             data-tauri-drag-region="false"
@@ -2457,7 +2458,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         <div className="kv-title">{t.settings}</div>
         <button
           type="button"
-          onClick={handleCloseRequest}
+          onClick={() => handleCloseRequest()}
           className="kv-titlebar-close"
           data-tauri-drag-region="false"
           aria-label={t.cancel}
