@@ -596,8 +596,45 @@ class SetupUpdateTests(TempTemplatesMixin, unittest.TestCase):
         self.assertEqual(gen_image.detect_mode("custom", "https://gw/v1", None, "gemini-3.1-flash-image"), "gemini")
         self.assertEqual(gen_image.detect_mode("custom", "https://ybw-ai.com", "gemini", "gemini-3.1-flash-image"), "gemini")
         self.assertEqual(gen_image.detect_mode("custom", "https://gw/v1", None, "gpt-image-2"), "sync")
+        self.assertEqual(gen_image.detect_mode("custom", "https://ybw-ai.com", None, "gpt-image-2"), "async")
         self.assertEqual(gen_image.detect_mode("custom", "https://gw/v1", "sync", "grok-imagine-image-2.0"), "sync")
         self.assertEqual(gen_image.detect_mode("grok", "https://api.x.ai/v1", None, "grok-imagine-image-2.0"), "grok")
+
+    def test_official_model_request_shapes(self) -> None:
+        args = gen_image.argparse.Namespace(
+            size="16:9", resolution="4k", quality="high", n=1,
+            image=None, format="webp", timeout=None, poll_interval=1,
+        )
+        gpt = gen_image.build_sync_payload(args, "draw", "gpt-image-2")
+        self.assertEqual(gpt["size"], "3840x2160")
+        self.assertEqual(gpt["quality"], "high")
+        self.assertEqual(gpt["output_format"], "webp")
+
+        dalle = gen_image.build_sync_payload(args, "draw", "dall-e-3")
+        self.assertEqual(dalle["size"], "1792x1024")
+        self.assertEqual(dalle["quality"], "hd")
+        self.assertNotIn("output_format", dalle)
+
+        grok = gen_image.build_grok_payload(args, "draw", "grok-imagine-image-2.0")
+        self.assertEqual(grok["aspect_ratio"], "16:9")
+        self.assertEqual(grok["resolution"], "2k")
+        self.assertEqual(grok["quality"], "medium")
+        legacy_grok = gen_image.build_grok_payload(args, "draw", "grok-imagine-image")
+        self.assertNotIn("quality", legacy_grok)
+
+        for presets in gen_image.GPT_IMAGE_2_SIZE_MAP.values():
+            for value in presets.values():
+                width, height = map(int, value.split("x"))
+                self.assertEqual(width % 16, 0, value)
+                self.assertEqual(height % 16, 0, value)
+                self.assertLessEqual(max(width, height), 3840, value)
+                self.assertLessEqual(max(width, height) / min(width, height), 3, value)
+                self.assertGreaterEqual(width * height, 655_360, value)
+                self.assertLessEqual(width * height, 8_294_400, value)
+
+    def test_host_only_api_base_gets_v1(self) -> None:
+        self.assertEqual(gen_image._api_root("https://gateway.example"), "https://gateway.example/v1")
+        self.assertEqual(gen_image._api_root("https://gateway.example/api"), "https://gateway.example/api")
 
     def test_gemini_request_shapes(self) -> None:
         args = gen_image.argparse.Namespace(size="1:1", resolution="1k")
@@ -615,6 +652,19 @@ class SetupUpdateTests(TempTemplatesMixin, unittest.TestCase):
             official["generationConfig"]["responseFormat"]["image"],
             {"aspectRatio": "1:1", "imageSize": "1K"},
         )
+        self.assertEqual(official["generationConfig"]["responseModalities"], ["IMAGE"])
+
+        gemini_25 = gen_image.build_gemini_payload(args, parts, "gemini-2.5-flash-image")
+        self.assertEqual(
+            gemini_25["generationConfig"]["responseFormat"]["image"],
+            {"aspectRatio": "1:1"},
+        )
+        with self.assertRaisesRegex(gen_image.GenError, "只支持 1K"):
+            gen_image.build_gemini_payload(
+                gen_image.argparse.Namespace(size="1:1", resolution="2k"),
+                parts,
+                "gemini-2.5-flash-image",
+            )
 
         gateway_url = gen_image.gemini_chat_endpoint("https://ybw-ai.com")
         gateway = gen_image.build_gemini_chat_payload(args, "draw a circle", "gemini-3.1-flash-image", [])

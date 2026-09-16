@@ -35,6 +35,38 @@ class GenerationRecoveryTests(unittest.TestCase):
         self.assertEqual(submit.call_count, 2)
         self.assertEqual([p.name for p in result], ["h1.png", "h1-2.png"])
 
+    def test_ybw_gpt_image_uses_openai_async_contract(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(gen, "http_post", return_value={"task_id": "imgtask_1"}) as post, \
+             patch.object(gen, "_poll_task", return_value={
+                 "status": "completed", "result": {"data": [{"b64_json": "aGVsbG8="}]}
+             }) as poll:
+            result = gen.run_async_adapter(
+                "https://ybw-ai.com", "k", args(size="16:9", resolution="4k"),
+                "cat", "gpt-image-2", Path(tmp), "png", "test", "h1",
+            )
+            saved = result[0].read_bytes()
+        self.assertEqual(post.call_args.args[0], "https://ybw-ai.com/v1/images/generations/async")
+        self.assertEqual(post.call_args.args[2]["size"], "3840x2160")
+        self.assertNotIn("resolution", post.call_args.args[2])
+        self.assertEqual(poll.call_args.kwargs["task_path"], "images/tasks")
+        self.assertEqual(saved, b"hello")
+
+    def test_ybw_gpt_edit_uses_multipart_async_endpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.png"
+            source.write_bytes(b"image")
+            with patch.object(gen, "http_post_multipart", return_value={"id": "imgtask_2"}) as post, \
+                 patch.object(gen, "_poll_task", return_value={
+                     "status": "completed", "result": {"data": [{"b64_json": "aGVsbG8="}]}
+                 }):
+                gen.run_async_adapter(
+                    "https://ybw-ai.com", "k", args(image=[str(source)]),
+                    "edit", "gpt-image-2", Path(tmp), "png", "test", "h1",
+                )
+        self.assertEqual(post.call_args.args[0], "https://ybw-ai.com/v1/images/edits/async")
+        self.assertEqual(post.call_args.args[3][0][0], "image[]")
+
     def test_sync_4k_uses_extended_timeout(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(gen, "http_post", return_value={"data": [{"b64_json": "aGVsbG8="}]}) as post:
             gen.run_sync("https://api.example", "k", args(resolution="4k"), "cat", "gpt-image-2", Path(tmp), "png")
@@ -127,11 +159,21 @@ class GenerationRecoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(gen.GenError, "重复"):
                 gen.run_job_pool([job, job], concurrency=2, skip_existing=True, base_url="u", api_key="k", model="m", mode="sync")
 
-    def test_imagen_uses_predict_and_keeps_sample_count(self):
+    def test_private_imagen_compat_uses_predict_and_keeps_sample_count(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(gen, "http_post", return_value={"predictions": [{"bytesBase64Encoded": "aGVsbG8="}]}) as post:
-            gen.run_gemini("https://generativelanguage.googleapis.com/v1beta", "k", args(n=2), "cat", "models/imagen-4.0-generate-001", Path(tmp), "png")
+            gen.run_gemini("https://gateway.example/v1beta", "k", args(n=2, resolution="2k"), "cat", "models/imagen-4.0-generate-001", Path(tmp), "png")
             self.assertTrue(post.call_args.args[0].endswith(":predict"))
             self.assertEqual(post.call_args.args[2]["parameters"]["sampleCount"], 2)
+            self.assertEqual(post.call_args.args[2]["parameters"]["imageSize"], "2K")
+
+    def test_official_imagen_is_retired_without_request(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(gen, "http_post") as post:
+            with self.assertRaisesRegex(gen.GenError, "2026-08-17"):
+                gen.run_gemini(
+                    "https://generativelanguage.googleapis.com/v1beta", "k", args(),
+                    "cat", "models/imagen-4.0-generate-001", Path(tmp), "png",
+                )
+            post.assert_not_called()
 
 
 if __name__ == "__main__":

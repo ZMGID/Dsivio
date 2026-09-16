@@ -340,6 +340,8 @@ def detect_mode(provider: str, base_url: str, explicit_mode: str | None, model: 
         return "gemini-chat" if _host_matches(base_url, "ybw-ai.com") else "gemini"
     if "apimart" in (base_url or "").lower():
         return "async"
+    if _host_matches(base_url, "ybw-ai.com") and is_openai_image_model(model):
+        return "async"
     return "sync"
 
 
@@ -704,6 +706,84 @@ SYNC_SIZE_MAP: dict[str, str] = {
     "16:9": "1536x1024", "2:1": "1536x1024", "21:9": "1536x1024",
 }
 
+# GPT Image 2/2.5 accept custom WxH sizes, unlike GPT Image 1.x's three-value
+# enum. These sizes follow the official multiple-of-16, 1:3..3:1, <=3840-edge,
+# 655,360..8,294,400-pixel constraints. `resolution` is a dsimage preset, not an
+# API field, so it must be resolved before sending the request.
+GPT_IMAGE_2_SIZE_MAP: dict[str, dict[str, str]] = {
+    "1k": {
+        "1:1": "1024x1024", "2:3": "1024x1536", "3:2": "1536x1024",
+        "3:4": "1024x1360", "4:3": "1360x1024", "4:5": "1024x1280",
+        "5:4": "1280x1024", "9:16": "864x1536", "16:9": "1536x864",
+        "1:2": "768x1536", "2:1": "1536x768", "9:21": "656x1536",
+        "21:9": "1536x656",
+    },
+    "2k": {
+        "1:1": "2048x2048", "2:3": "1360x2048", "3:2": "2048x1360",
+        "3:4": "1536x2048", "4:3": "2048x1536", "4:5": "1632x2048",
+        "5:4": "2048x1632", "9:16": "1152x2048", "16:9": "2048x1152",
+        "1:2": "1024x2048", "2:1": "2048x1024", "9:21": "1152x2688",
+        "21:9": "2688x1152",
+    },
+    "4k": {
+        "1:1": "2880x2880", "2:3": "2352x3520", "3:2": "3520x2352",
+        "3:4": "2480x3312", "4:3": "3312x2480", "4:5": "2560x3200",
+        "5:4": "3200x2560", "9:16": "2160x3840", "16:9": "3840x2160",
+        "1:2": "1920x3840", "2:1": "3840x1920", "9:21": "1648x3840",
+        "21:9": "3840x1648",
+    },
+}
+
+
+def _model_name(model: str) -> str:
+    return model.rsplit("/", 1)[-1].lower()
+
+
+def is_gpt_image_2_family(model: str) -> bool:
+    name = _model_name(model)
+    return name == "gpt-image-2" or name.startswith("gpt-image-2.")
+
+
+def is_openai_image_model(model: str) -> bool:
+    name = _model_name(model)
+    return name.startswith("gpt-image") or name.startswith("dall-e")
+
+
+def openai_size(args: argparse.Namespace, model: str) -> str:
+    raw = str(args.size).lower()
+    if "x" in raw or raw == "auto":
+        return raw
+    ratio = size_to_ratio(args.size)
+    name = _model_name(model)
+    if is_gpt_image_2_family(model):
+        return GPT_IMAGE_2_SIZE_MAP.get(args.resolution, GPT_IMAGE_2_SIZE_MAP["1k"]).get(
+            ratio, GPT_IMAGE_2_SIZE_MAP["1k"]["1:1"]
+        )
+    if name.startswith("gpt-image") and args.resolution != "1k":
+        fail(f"{model} 官方 Images API 只支持标准尺寸档；请选择 1k，或改用 gpt-image-2。")
+    if name == "dall-e-3":
+        return {"9:16": "1024x1792", "16:9": "1792x1024"}.get(ratio, "1024x1024")
+    if name == "dall-e-2":
+        fail("DALL-E 2 已从 OpenAI API 下线，请更换 GPT Image 模型。")
+    return sync_size(args.size)
+
+
+def openai_quality(model: str, quality: str | None) -> str | None:
+    if not quality:
+        return None
+    if _model_name(model) == "dall-e-3":
+        return "hd" if quality == "high" else "standard"
+    return quality
+
+
+def _api_root(base_url: str) -> str:
+    """Match Dsivio's provider URL rule: a host-only base gets `/v1`."""
+    root = base_url.rstrip("/")
+    parsed = urllib.parse.urlparse(root)
+    if not parsed.path.rstrip("/"):
+        root += "/v1"
+    return root
+
 
 def sync_size(size: str) -> str:
     """同步端点只接受像素尺寸或 auto；把比例翻译成最接近的档位。"""
@@ -714,9 +794,15 @@ def sync_size(size: str) -> str:
 
 
 def build_sync_payload(args: argparse.Namespace, prompt: str, model: str) -> dict[str, Any]:
-    payload: dict[str, Any] = {"model": model, "prompt": prompt, "n": args.n, "size": sync_size(args.size)}
-    if args.quality:
-        payload["quality"] = args.quality
+    payload: dict[str, Any] = {
+        "model": model, "prompt": prompt, "n": args.n,
+        "size": openai_size(args, model),
+    }
+    quality = openai_quality(model, args.quality)
+    if quality:
+        payload["quality"] = quality
+    if _model_name(model).startswith("gpt-image"):
+        payload["output_format"] = args.format
     return payload
 
 
@@ -735,7 +821,8 @@ def save_sync_images(result: dict[str, Any], output_dir: Path, fmt: str,
                 image_bytes = base64.b64decode(item["b64_json"])
             except (binascii.Error, ValueError) as exc:
                 fail(f"无法解码 b64_json 图片：{exc}")
-            p = output_dir / output_name(name_prefix, index, fmt)
+            suffix = _suffix_from_mime(str(item.get("mime_type") or ""), fmt)
+            p = output_dir / output_name(name_prefix, index, suffix)
             save_image_bytes(p, image_bytes)
             paths.append(p)
         elif item.get("url"):
@@ -752,22 +839,26 @@ def run_sync(base_url: str, api_key: str, args: argparse.Namespace, prompt: str,
              model: str, output_dir: Path, fmt: str,
              label: str = "sync", name_prefix: str | None = None) -> list[Path]:
     images = ref_images(args)
+    root = _api_root(base_url)
     if images:
-        endpoint = f"{base_url}/images/edits"
-        # OpenAI /images/edits：单图字段 image，多图字段 image[]
-        field = "image" if len(images) == 1 else "image[]"
+        endpoint = f"{root}/images/edits"
+        # GPT Image 官方 multipart 字段为可重复的 image[]。
+        field = "image[]" if _model_name(model).startswith("gpt-image") else "image"
         files = []
         for path in images:
             data, mime, filename = read_image_file(path)
             files.append((field, filename, data, mime))
-        fields = {"model": model, "prompt": prompt, "n": str(args.n), "size": sync_size(args.size)}
-        if args.quality:
-            fields["quality"] = args.quality
+        fields = {"model": model, "prompt": prompt, "n": str(args.n), "size": openai_size(args, model)}
+        quality = openai_quality(model, args.quality)
+        if quality:
+            fields["quality"] = quality
+        if _model_name(model).startswith("gpt-image"):
+            fields["output_format"] = args.format
         log(label, f"图生图模式：{len(files)} 张参考图经 {endpoint} 提交...")
         result = http_post_multipart(endpoint, api_key, fields, files, timeout=max(300, resolve_timeout(args)))
         return save_sync_images(result, output_dir, fmt, name_prefix)
     payload = build_sync_payload(args, prompt, model)
-    endpoint = f"{base_url}/images/generations"
+    endpoint = f"{root}/images/generations"
     log(label, f"提交生成请求到 {endpoint}...")
     result = http_post(endpoint, api_key, payload, timeout=max(300, resolve_timeout(args)))
     return save_sync_images(result, output_dir, fmt, name_prefix)
@@ -794,8 +885,11 @@ def grok_resolution(resolution: str) -> str:
     return "2k" if resolution == "4k" else resolution
 
 
-def grok_quality(quality: str | None) -> str | None:
+def grok_quality(model: str, quality: str | None) -> str | None:
     if not quality:
+        return None
+    # xAI documents quality only for grok-imagine-image-2.0.
+    if _model_name(model) != "grok-imagine-image-2.0":
         return None
     return "medium" if quality == "high" else quality
 
@@ -838,7 +932,7 @@ def build_grok_payload(args: argparse.Namespace, prompt: str, model: str) -> dic
         "resolution": grok_resolution(args.resolution),
         "response_format": "b64_json",
     }
-    quality = grok_quality(args.quality)
+    quality = grok_quality(model, args.quality)
     if quality:
         payload["quality"] = quality
     if len(images) == 1:
@@ -855,7 +949,8 @@ def run_grok(base_url: str, api_key: str, args: argparse.Namespace, prompt: str,
         log(label, "Grok 官方接口最高 2k，已把 4k 降为 2k。")
     payload = build_grok_payload(args, prompt, model)
     images = ref_images(args)
-    endpoint = f"{base_url}/images/edits" if images else f"{base_url}/images/generations"
+    root = _api_root(base_url)
+    endpoint = f"{root}/images/edits" if images else f"{root}/images/generations"
     log(label, f"{'图生图' if images else '文生图'}：{endpoint}")
     result = http_post(endpoint, api_key, payload, timeout=max(300, resolve_timeout(args)))
     return save_sync_images(result, output_dir, fmt, name_prefix)
@@ -879,18 +974,29 @@ def gemini_endpoint(base_url: str, model: str) -> str:
     return f"{base_url.rstrip('/')}/models/{model_id}:generateContent"
 
 
-def build_gemini_payload(args: argparse.Namespace, parts: list[dict[str, Any]]) -> dict[str, Any]:
+def gemini_supports_image_size(model: str) -> bool:
+    name = _model_name(model)
+    return ("gemini-3" in name and "flash-lite-image" not in name)
+
+
+def validate_gemini_resolution(model: str, resolution: str) -> None:
+    name = _model_name(model)
+    if (name == "gemini-2.5-flash-image" or "flash-lite-image" in name) and resolution != "1k":
+        fail(f"{model} 官方接口只支持 1K 图片；请选择 1k。")
+
+
+def build_gemini_payload(args: argparse.Namespace, parts: list[dict[str, Any]],
+                         model: str = "gemini-3.1-flash-image") -> dict[str, Any]:
+    validate_gemini_resolution(model, args.resolution)
     ratio = gemini_ratio(args.size)
+    image_config: dict[str, str] = {"aspectRatio": ratio}
+    if gemini_supports_image_size(model):
+        image_config["imageSize"] = GEMINI_SIZE.get(args.resolution, "1K")
     return {
         "contents": [{"parts": parts}],
         "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-            "responseFormat": {
-                "image": {
-                    "aspectRatio": ratio,
-                    "imageSize": GEMINI_SIZE.get(args.resolution, "1K"),
-                },
-            },
+            "responseModalities": ["IMAGE"],
+            "responseFormat": {"image": image_config},
         },
     }
 
@@ -946,17 +1052,28 @@ def run_gemini(base_url: str, api_key: str, args: argparse.Namespace, prompt: st
                label: str = "gemini", name_prefix: str | None = None) -> list[Path]:
     images = ref_images(args)
     if model.split("/")[-1].lower().startswith("imagen-"):
+        if _host_matches(base_url, "googleapis.com"):
+            fail(
+                "Google 官方 Imagen API 已于 2026-08-17 下线；"
+                "请改用 gemini-3.1-flash-image。"
+            )
         if images:
             fail("Imagen 文生图不支持参考图，请选择 Gemini 图片模型进行编辑。")
         if not 1 <= int(args.n) <= 4:
             fail("Imagen 一次仅支持 1 至 4 张图片。")
+        if args.resolution == "4k":
+            fail("Imagen 4 兼容接口最高支持 2K，请选择 1k 或 2k。")
         ratio = gemini_ratio(args.size)
         if ratio not in {"1:1", "3:4", "4:3", "9:16", "16:9"}:
             fail(f"Imagen 不支持画幅 {ratio}。")
         endpoint = gemini_endpoint(base_url, model).replace(":generateContent", ":predict")
         result = http_post(endpoint, api_key, {
             "instances": [{"prompt": prompt}],
-            "parameters": {"sampleCount": args.n, "aspectRatio": ratio},
+            "parameters": {
+                "sampleCount": args.n,
+                "aspectRatio": ratio,
+                "imageSize": GEMINI_SIZE.get(args.resolution, "1K"),
+            },
         }, timeout=max(300, resolve_timeout(args)), auth="gemini")
         predictions = result.get("predictions", [])
         if not predictions or any(not item.get("bytesBase64Encoded") for item in predictions):
@@ -972,7 +1089,7 @@ def run_gemini(base_url: str, api_key: str, args: argparse.Namespace, prompt: st
         log(label, f"图生图模式：{len(images)} 张参考图经 {endpoint} 提交...")
     else:
         log(label, f"提交生成请求到 {endpoint}...")
-    payload = build_gemini_payload(args, parts)
+    payload = build_gemini_payload(args, parts, model)
     timeout = max(300, resolve_timeout(args))
     paths: list[Path] = []
     n = max(1, int(args.n))
@@ -1065,7 +1182,7 @@ def run_gemini_chat(base_url: str, api_key: str, args: argparse.Namespace, promp
     return paths
 
 
-# ── 异步模式（apimart.ai）──────────────────────────────────
+# ── 异步模式（各网关任务协议，不与官方同步 Images API 混用）──
 
 def build_async_payload(args: argparse.Namespace, prompt: str, model: str) -> dict[str, Any]:
     ratio = size_to_ratio(args.size)
@@ -1076,10 +1193,51 @@ def build_async_payload(args: argparse.Namespace, prompt: str, model: str) -> di
     return payload
 
 
+def uses_openai_async_tasks(base_url: str, model: str) -> bool:
+    return _host_matches(base_url, "ybw-ai.com") and is_openai_image_model(model)
+
+
+def _task_id(result: dict[str, Any]) -> str | None:
+    for candidate in (
+        result.get("task_id"), result.get("id"),
+        (result.get("data") or {}).get("task_id") if isinstance(result.get("data"), dict) else None,
+        (result.get("data") or {}).get("id") if isinstance(result.get("data"), dict) else None,
+    ):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    data = result.get("data")
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        candidate = data[0].get("task_id") or data[0].get("id")
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return None
+
+
+def _openai_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Find a standard Images response inside common async task wrappers."""
+    queue = [result]
+    seen: set[int] = set()
+    while queue:
+        item = queue.pop(0)
+        if id(item) in seen:
+            continue
+        seen.add(id(item))
+        data = item.get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            if data[0].get("b64_json") or data[0].get("url"):
+                return item
+        for key in ("result", "data", "output"):
+            nested = item.get(key)
+            if isinstance(nested, dict):
+                queue.append(nested)
+    return None
+
+
 def run_async(base_url: str, api_key: str, payload: dict[str, Any],
               output_dir: Path, fmt: str, poll_interval: int, timeout: int,
               label: str = "async", name_prefix: str | None = None) -> list[Path]:
-    endpoint = f"{base_url}/images/generations"
+    root = _api_root(base_url)
+    endpoint = f"{root}/images/generations"
     log(label, f"提交异步任务到 {endpoint}...")
     result = http_post(endpoint, api_key, payload, timeout=30)
 
@@ -1088,12 +1246,9 @@ def run_async(base_url: str, api_key: str, payload: dict[str, Any],
         error = result.get("error", {})
         fail(f"提交失败（code={code}）：{error.get('message', json.dumps(result))}")
 
-    data = result.get("data")
-    if not isinstance(data, list) or not data:
-        fail(f"提交响应缺少 data 数组：{json.dumps(result)[:300]}")
-    task_id = data[0].get("task_id")
+    task_id = _task_id(result)
     if not task_id:
-        fail(f"提交响应缺少 task_id：{json.dumps(data[0])[:300]}")
+        fail(f"提交响应缺少 task_id：{json.dumps(result)[:300]}")
 
     log(label, f"任务已提交: {task_id}，等待 15s 后开始轮询...")
     time.sleep(15)
@@ -1108,33 +1263,83 @@ def run_async(base_url: str, api_key: str, payload: dict[str, Any],
     return _save_async_images(task_data, output_dir, fmt, name_prefix, label)
 
 
+def run_openai_async(base_url: str, api_key: str, args: argparse.Namespace, prompt: str,
+                     model: str, output_dir: Path, fmt: str, poll_interval: int,
+                     timeout: int, label: str, name_prefix: str | None) -> list[Path]:
+    """sub2api-style OpenAI Images tasks: /async submit + /images/tasks poll."""
+    root = _api_root(base_url)
+    images = ref_images(args)
+    request_args = argparse.Namespace(**vars(args))
+    request_args.n = 1
+    if images:
+        endpoint = f"{root}/images/edits/async"
+        fields = {
+            "model": model, "prompt": prompt, "n": "1",
+            "size": openai_size(request_args, model),
+        }
+        quality = openai_quality(model, request_args.quality)
+        if quality:
+            fields["quality"] = quality
+        if _model_name(model).startswith("gpt-image"):
+            fields["output_format"] = request_args.format
+        files = []
+        for path in images:
+            data, mime, filename = read_image_file(path)
+            files.append(("image[]", filename, data, mime))
+        log(label, f"提交异步编辑任务到 {endpoint}...")
+        submitted = http_post_multipart(endpoint, api_key, fields, files, timeout=30)
+    else:
+        endpoint = f"{root}/images/generations/async"
+        log(label, f"提交异步生成任务到 {endpoint}...")
+        submitted = http_post(endpoint, api_key, build_sync_payload(request_args, prompt, model), timeout=30)
+    immediate = _openai_result(submitted)
+    if immediate is not None:
+        return save_sync_images(immediate, output_dir, fmt, name_prefix)
+    task_id = _task_id(submitted)
+    if not task_id:
+        fail(f"异步提交响应缺少 task_id：{json.dumps(submitted)[:300]}")
+    log(label, f"任务已提交: {task_id}，开始轮询...")
+    task_data = _poll_task(
+        root, api_key, task_id, poll_interval, timeout, label,
+        task_path="images/tasks",
+    )
+    return _save_async_images(task_data, output_dir, fmt, name_prefix, label)
+
+
 def _poll_task(base_url: str, api_key: str, task_id: str,
-               poll_interval: int, timeout: int, label: str = "async") -> dict[str, Any]:
-    url = f"{base_url}/tasks/{task_id}"
+               poll_interval: int, timeout: int, label: str = "async",
+               task_path: str = "tasks") -> dict[str, Any]:
+    url = f"{_api_root(base_url)}/{task_path}/{task_id}"
     start = time.time()
     while True:
         elapsed = time.time() - start
         if elapsed > timeout:
             fail(f"任务 {task_id} 超时（{timeout}s），请稍后手动查询。")
         result = http_get(url, api_key)
-        task_data = result.get("data", {})
-        status = task_data.get("status", "")
-        if status == "completed":
-            return task_data
-        if status == "failed":
+        task_data = result.get("data") if isinstance(result.get("data"), dict) else result
+        status = str(task_data.get("status") or result.get("status") or "").lower()
+        if status in {"completed", "success", "succeeded"} or _openai_result(result) is not None:
+            return result
+        if status in {"failed", "error", "cancelled", "canceled"}:
             root = getattr(_recovery, "root", None)
             if root is not None:
                 (root / f"request-{_recovery.index - 1}.json").unlink(missing_ok=True)
             error = task_data.get("error", {})
-            fail(f"任务 {task_id} 失败：{error.get('message', json.dumps(task_data)[:300])}")
-        progress = task_data.get("progress", 0)
+            message = error.get("message") if isinstance(error, dict) else error
+            fail(f"任务 {task_id} 失败：{message or json.dumps(task_data)[:300]}")
+        progress = task_data.get("progress", result.get("progress", 0))
         log(label, f"轮询中... 状态={status} 进度={progress}% 耗时={elapsed:.0f}s")
         time.sleep(poll_interval)
 
 
 def _save_async_images(task_data: dict[str, Any], output_dir: Path, fmt: str,
                        name_prefix: str | None = None, label: str = "async") -> list[Path]:
+    standard = _openai_result(task_data)
+    if standard is not None:
+        return save_sync_images(standard, output_dir, fmt, name_prefix)
     result = task_data.get("result", {})
+    if isinstance(task_data.get("data"), dict):
+        result = task_data["data"].get("result", result)
     images = result.get("images")
     if not isinstance(images, list) or not images:
         fail(f"任务结果中缺少 images 数组：{json.dumps(task_data)[:300]}")
@@ -1157,12 +1362,18 @@ def _save_async_images(task_data: dict[str, Any], output_dir: Path, fmt: str,
 def run_async_adapter(base_url: str, api_key: str, args: argparse.Namespace, prompt: str,
                       model: str, output_dir: Path, fmt: str,
                       label: str = "async", name_prefix: str | None = None) -> list[Path]:
-    payload = build_async_payload(args, prompt, model)
     paths = []
     for index in range(int(args.n)):
         prefix = name_prefix if index == 0 or name_prefix is None else f"{name_prefix}-{index + 1}"
-        paths.extend(run_async(base_url, api_key, payload, output_dir, fmt,
-                               args.poll_interval, resolve_timeout(args), label, prefix))
+        if uses_openai_async_tasks(base_url, model):
+            paths.extend(run_openai_async(
+                base_url, api_key, args, prompt, model, output_dir, fmt,
+                args.poll_interval, resolve_timeout(args), label, prefix,
+            ))
+        else:
+            payload = build_async_payload(args, prompt, model)
+            paths.extend(run_async(base_url, api_key, payload, output_dir, fmt,
+                                   args.poll_interval, resolve_timeout(args), label, prefix))
     return paths
 
 
@@ -1578,17 +1789,36 @@ def build_check_report(
             f"16:9 → {gemini_ratio('16:9')}"
         )
     elif mode == "async":
-        payload = build_async_payload(ns, "probe", model)
-        urls = payload.get("image_urls") or []
-        if not urls or not str(urls[0]).startswith("data:image/"):
-            fail("异步图生图试装失败：payload 没有 image_urls data URI")
-        lines.append(f"参考图：异步 POST {base_url}/images/generations，image_urls 已带上 data URI")
-        lines.append(f"--size 仍传比例。1:1 → {payload.get('size')}；16:9 → {size_to_ratio('16:9')}")
+        root = _api_root(base_url)
+        if uses_openai_async_tasks(base_url, model):
+            high_size = openai_size(
+                argparse.Namespace(**(vars(ns) | {"size": "16:9", "resolution": "4k"})), model
+            ) if is_gpt_image_2_family(model) else "该模型不支持 4k"
+            lines.append(
+                f"参考图：OpenAI multipart POST {root}/images/edits/async，字段 image[]；"
+                f"轮询 {root}/images/tasks/<task_id>"
+            )
+            lines.append(
+                f"--size 按模型翻译成像素。1:1/1k → {openai_size(ns, model)}；"
+                f"16:9/4k → {high_size}"
+            )
+        else:
+            payload = build_async_payload(ns, "probe", model)
+            urls = payload.get("image_urls") or []
+            if not urls or not str(urls[0]).startswith("data:image/"):
+                fail("异步图生图试装失败：payload 没有 image_urls data URI")
+            lines.append(f"参考图：异步 POST {root}/images/generations，image_urls 已带上 data URI")
+            lines.append(f"--size 仍传比例。1:1 → {payload.get('size')}；16:9 → {size_to_ratio('16:9')}")
     else:
-        lines.append(f"参考图：sync multipart POST {base_url}/images/edits 字段 image（已读入 {filename}）")
+        root = _api_root(base_url)
+        field = "image[]" if _model_name(model).startswith("gpt-image") else "image"
+        high_size = openai_size(
+            argparse.Namespace(**(vars(ns) | {"size": "16:9", "resolution": "4k"})), model
+        ) if is_gpt_image_2_family(model) else "该模型不支持 4k"
+        lines.append(f"参考图：sync multipart POST {root}/images/edits 字段 {field}（已读入 {filename}）")
         lines.append(
-            f"--size 仍传比例，脚本翻译成像素。1:1 → {sync_size('1:1')}；"
-            f"16:9 → {sync_size('16:9')}。不要自己改成 1024x1024 再传。"
+            f"--size 仍传比例，脚本按模型和分辨率翻译成像素。1:1/1k → {openai_size(ns, model)}；"
+            f"16:9/4k → {high_size}。"
         )
     lines.append("通道已收好。出图按 SKILL 替换模板的命令加 --run。")
     return lines
@@ -1640,7 +1870,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--env-file", help="指定 .env 配置文件；不指定时从当前目录向上查找（只认含 IMG_ 配置的），兜底 Skill 目录。")
     parser.add_argument("--mode", choices=API_MODES, help="API 模式。默认按服务商、网关地址和模型名检测；ybw Gemini→gemini-chat，官方 Gemini→gemini。")
     parser.add_argument("--size", default="1:1", help="传比例（1:1、16:9）。脚本按模式翻译；sync 会变成像素。不要先改成 1024x1024。")
-    parser.add_argument("--resolution", default="1k", choices=VALID_RESOLUTIONS, help="异步模式分辨率档位，默认 1k。")
+    parser.add_argument("--resolution", default="1k", choices=VALID_RESOLUTIONS, help="输出分辨率档位，默认 1k；脚本按当前模型翻译成官方字段。")
     parser.add_argument("--quality", choices=("low", "medium", "high"), help="同步模式图片质量参数。")
     parser.add_argument("--n", type=int, default=1, help="同步模式生成图片数量，默认 1。")
     parser.add_argument("--image", action="append", help="参考图路径，可重复传入。母版换货：先母版后产品图。")
