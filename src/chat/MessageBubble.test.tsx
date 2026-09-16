@@ -724,7 +724,7 @@ describe('MessageBubble timeline grouping', () => {
     )
   })
 
-  it('keeps one live Work across presentation cards', () => {
+  it('shares one live Work control across process sections separated by presentations', () => {
     const message: ChatMessage = {
       id: 'msg-5',
       role: 'assistant',
@@ -750,7 +750,8 @@ describe('MessageBubble timeline grouping', () => {
 
     render(<MessageBubble message={message} messageStreaming />)
     const groups = screen.getAllByLabelText('过程分组')
-    expect(groups).toHaveLength(1)
+    expect(groups).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Working' })).toHaveLength(1)
     expect(screen.queryByRole('button', { name: /^Worked/ })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Working' })).toHaveAttribute(
       'aria-expanded',
@@ -877,6 +878,62 @@ describe('MessageBubble 建分支', () => {
 
 
 describe('MessageBubble explicit artifact presentation', () => {
+  it.each(['completed', 'cancelled'])('keeps subsequent work below delivered artifacts through %s and re-expansion', outcome => {
+    const message: ChatMessage = {
+      id: 'delivery-during-work', role: 'assistant', timestamp: 1, content: '',
+      artifacts: [
+        { id: 'preview', name: 'preview.png', mime_type: 'image/png', data_url: 'data:image/png;base64,aA==' },
+        { id: 'report', name: 'report.txt', mime_type: 'text/plain', data_url: 'data:text/plain;base64,aA==' },
+      ],
+      tool_calls: [{ id: 'present', name: 'present_artifacts', source: 'native', status: 'completed',
+        structured_content: { type: 'artifact_presentation', artifactIds: ['preview'], caption: 'First delivery' } }],
+      segments: [
+        { id: 'before', kind: 'reasoning', phase: 'tool_loop', order: 0, text: 'Prepare preview' },
+        { id: 'present', kind: 'tool', phase: 'tool_loop', order: 1, tool_call_id: 'present' },
+      ],
+    }
+    const { container, rerender } = render(<MessageBubble message={message} messageStreaming />)
+    const preview = container.querySelector('img')!
+    const work = screen.getByRole('button', { name: 'Working' })
+    const continuing: ChatMessage = { ...message, segments: [...message.segments!,
+      { id: 'after', kind: 'text', phase: 'tool_loop', order: 2, text: 'Verify video after delivery' },
+      { id: 'verify', kind: 'tool', phase: 'tool_loop', order: 3, tool_call_id: 'verify' },
+      { id: 'second', kind: 'tool', phase: 'tool_loop', order: 4, tool_call_id: 'second' },
+      { id: 'cleanup', kind: 'text', phase: 'tool_loop', order: 5, text: 'Cleanup after second delivery' },
+      { id: 'finish', kind: 'reasoning', phase: 'tool_loop', order: 6, text: 'Ready to finish' },
+    ], tool_calls: [...message.tool_calls!,
+      { id: 'second', name: 'present_artifacts', source: 'native', status: 'completed',
+        structured_content: { type: 'artifact_presentation', artifactIds: ['report'], caption: 'Second delivery' } },
+    ] }
+    const assertOrder = () => {
+      const after = screen.getByText('Verify video after delivery')
+      const second = screen.getByText('Second delivery')
+      const cleanup = screen.getByText('Cleanup after second delivery')
+      expect(preview.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(after.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(second.compareDocumentPosition(cleanup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(container.querySelector('img')).toBe(preview)
+    }
+    rerender(<MessageBubble message={continuing} messageStreaming />)
+    assertOrder()
+    expect(screen.getAllByRole('button', { name: 'Working' })).toEqual([work])
+    fireEvent.click(work)
+    expect(screen.queryByText('Verify video after delivery')).not.toBeInTheDocument()
+    expect(screen.queryByText('Cleanup after second delivery')).not.toBeInTheDocument()
+    expect(preview).toBeVisible()
+    expect(screen.getByText('Second delivery')).toBeVisible()
+    const finished: ChatMessage = { ...continuing, stream_outcome: outcome, segments: [...continuing.segments!,
+      { id: 'final', kind: 'text', phase: 'plain', order: 7, text: 'Final test results' },
+    ] }
+    rerender(<MessageBubble message={finished} />)
+    expect(screen.getByRole('button', { name: /^Worked/ })).toBe(work)
+    expect(screen.getByText('Final test results')).toBeVisible()
+    expect(container.querySelector('img')).toBe(preview)
+    fireEvent.click(work)
+    assertOrder()
+    expect(screen.getByText('Final test results').closest('[aria-label="过程分组"]')).toBeNull()
+  })
+
   it('keeps streaming answer text below the presented image before completion', () => {
     const message: ChatMessage = {
       id: 'streaming-image-answer', role: 'assistant', timestamp: 1, content: '图片说明正在生成',

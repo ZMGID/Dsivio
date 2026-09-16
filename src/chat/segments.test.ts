@@ -73,7 +73,7 @@ function tool(partial: Partial<ToolCallRecord> & Pick<ToolCallRecord, 'id'>): To
 }
 
 describe('groupTimelineSegments', () => {
-  it('keeps deliveries in answer order without splitting the one process', () => {
+  it.each(['running', 'completed', 'stopped'] as const)('keeps process and deliveries in chronological order when %s', state => {
     const items = groupTimelineSegments([
       toolSegment('read', 0, 'read'),
       segment({ id: 'note', kind: 'text', phase: 'tool_loop', order: 1, text: 'Working' }),
@@ -81,9 +81,10 @@ describe('groupTimelineSegments', () => {
       toolSegment('check', 3, 'check'),
       segment({ id: 'answer', kind: 'text', phase: 'plain', order: 4, text: 'Done' }),
       toolSegment('present-b', 5, 'present-b'),
-    ], 'completed', s => s.id.startsWith('present-'))
-    expect(items.map(item => item.type)).toEqual(['group', 'presentation', 'text', 'presentation'])
-    expect(items[0].type === 'group' && items[0].segments.map(s => s.id)).toEqual(['read', 'note', 'check'])
+    ], state, s => s.id.startsWith('present-'))
+    expect(items.map(item => item.type)).toEqual(['group', 'presentation', 'group', 'text', 'presentation'])
+    expect(items[0].type === 'group' && items[0].segments.map(s => s.id)).toEqual(['read', 'note'])
+    expect(items[2].type === 'group' && items[2].segments.map(s => s.id)).toEqual(['check'])
   })
 
   it('folds progress and CLI agent cards into the same process', () => {
@@ -334,13 +335,13 @@ describe('groupTimelineSegments', () => {
     expect(items[0].type === 'group' && items[0].segments.map((s) => s.id)).toEqual(['r', 't1', 't2'])
   })
 
-  it('preserves partial text outside one process when no final answer exists', () => {
+  it('preserves partial text between process sections when no final answer exists', () => {
     const items = groupTimelineSegments([
       toolSegment('t1', 1, 'call-1'),
       segment({ id: 'txt', kind: 'text', order: 2, text: 'between' }),
       toolSegment('t2', 3, 'call-2'),
     ])
-    expect(items.map(item => item.type)).toEqual(['group', 'text'])
+    expect(items.map(item => item.type)).toEqual(['group', 'text', 'group'])
     expect(items[1].type === 'text' && items[1].segment.id).toBe('txt')
   })
 

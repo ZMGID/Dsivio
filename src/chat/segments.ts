@@ -401,7 +401,7 @@ export type TimelineGroupItem =
   | { type: 'presentation'; segment: ChatMessageSegment }
   | { type: 'group'; segments: ChatMessageSegment[] }
 
-/** 一条主代理答复只有一个过程容器，卡片和进度不再切断它。
+/** 过程按交付位置分段展示，各段共享同一个 Work 开关。
  * 过程段在中断后仍属于过程；保留末尾答复和无法判定为过程的部分正文。
  * 这里只改变展示，不改存储正文、复制或模型回放。
  */
@@ -432,11 +432,17 @@ export function groupTimelineSegments(
   const hasCancellationNotice = orderedSegments.some(segment =>
     segment.kind === 'text' && segmentHasContent(segment)
     && /^seg_\d+_cancelled_synthesis$/.test(segment.id))
-  const process: ChatMessageSegment[] = []
+  let process: ChatMessageSegment[] = []
   const body: TimelineGroupItem[] = []
+  const flushProcess = () => {
+    if (!process.length) return
+    body.push({ type: 'group', segments: process })
+    process = []
+  }
   orderedSegments.forEach((segment, index) => {
     if (!segmentHasContent(segment)) return
     if (presentations.has(segment)) {
+      flushProcess()
       body.push({ type: 'presentation', segment })
       return
     }
@@ -451,12 +457,14 @@ export function groupTimelineSegments(
           && (state === 'stopped' || hasCancellationNotice || hasFinalAnswer || index <= lastActivityIndex))
         || (hasFinalAnswer && index <= lastProcessIndex)
     if (segment.kind === 'text' && !foldText) {
+      flushProcess()
       body.push({ type: 'text', segment })
     } else {
       process.push(segment)
     }
   })
-  return process.length ? [{ type: 'group', segments: process }, ...body] : body
+  flushProcess()
+  return body
 }
 
 /** 后端 `started_at` 是 unix 秒；个别路径会写毫秒。 */

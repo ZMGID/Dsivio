@@ -700,14 +700,18 @@ function renderProcessSegments({
 }
 
 /**
- * 一轮过程 = 一个 Codex 式 Working 壳。
- * - 整轮生成中默认展开，工具完成、子代理等待不创建新的壳。
+ * 一轮过程共用一个 Working 开关；产物前后的过程按时间顺序分别展示。
+ * - 整轮生成中默认展开，后续过程不再被搬到已交付产物上方。
  * - 流式结束后默认收起，最终答复始终是容器外的独立正文。
  * - 用户手动点过开关后以用户操作为准。
  * - 折叠态只留 header，不挂组内 ReasoningBlock / ToolCallBlock / 过程旁白。
  */
 function TimelineGroupBlock({
   segments,
+  allProcessSegments,
+  showHeader,
+  userOpen,
+  onToggle,
   toolCalls,
   toolCallById,
   artifacts,
@@ -720,6 +724,10 @@ function TimelineGroupBlock({
   reasoningSegmentCount,
 }: {
   segments: ChatMessageSegment[]
+  allProcessSegments: ChatMessageSegment[]
+  showHeader: boolean
+  userOpen: boolean | null
+  onToggle: () => void
   toolCalls: ToolCallRecord[]
   toolCallById: ReadonlyMap<string, ToolCallRecord>
   artifacts: ChatToolArtifact[]
@@ -733,22 +741,23 @@ function TimelineGroupBlock({
 }) {
   const generating = messageStreaming
   const summary = useMemo(
-    () => summarizeToolGroup(segments, toolCalls, toolCallById),
-    [segments, toolCalls, toolCallById],
+    () => summarizeToolGroup(allProcessSegments, toolCalls, toolCallById),
+    [allProcessSegments, toolCalls, toolCallById],
   )
   const durationMs = useMemo(
-    () => groupWorkDurationMs(segments, toolCalls, toolCallById, reasoningDurationMs),
-    [segments, toolCalls, toolCallById, reasoningDurationMs],
+    () => groupWorkDurationMs(allProcessSegments, toolCalls, toolCallById, reasoningDurationMs),
+    [allProcessSegments, toolCalls, toolCallById, reasoningDurationMs],
   )
   const title = workingGroupTitle(generating, durationMs)
-  const [userOpen, setUserOpen] = useState<boolean | null>(null)
   const renderDetails = userOpen ?? generating
+
+  if (!showHeader && !renderDetails) return null
 
   return (
     <section aria-label="过程分组" className="not-prose">
-      <button
+      {showHeader && <button
         type="button"
-        onClick={() => setUserOpen(current => !(current ?? generating))}
+        onClick={onToggle}
         aria-expanded={renderDetails}
         data-chat-disclosure
         data-tauri-drag-region="false"
@@ -780,7 +789,7 @@ function TimelineGroupBlock({
             </span>
           )}
         </div>
-      </button>
+      </button>}
       <ChatDisclosureBody open={renderDetails} animate={userOpen !== null}>
         {() => (
           <div className="space-y-1.5">
@@ -831,6 +840,7 @@ function TimelineSegments({
   ownerMessageId: string
   onOutlineSourceChange?: (update: MarkdownOutlineSourceUpdate) => void
 }) {
+  const [userOpen, setUserOpen] = useState<boolean | null>(null)
   const prepared = useMemo(() => {
     const ordered = segments
     const toolCallById = new Map<string, ToolCallRecord>()
@@ -872,10 +882,12 @@ function TimelineSegments({
         return Boolean(tool && isArtifactPresentationToolCall(tool))
       },
     )
-    return { toolCallById, citations, reasoningSegmentCount, groupItems }
+    const processGroups = groupItems.filter(item => item.type === 'group')
+    const allProcessSegments = processGroups.flatMap(item => item.segments)
+    return { toolCallById, citations, reasoningSegmentCount, groupItems, processGroups, allProcessSegments }
   }, [segments, toolCalls, completed, messageStreaming])
 
-  const { toolCallById, citations, reasoningSegmentCount, groupItems } = prepared
+  const { toolCallById, citations, reasoningSegmentCount, groupItems, processGroups, allProcessSegments } = prepared
   return (
     <section aria-label="回答时间线" className="space-y-1.5">
       {groupItems.map((item: TimelineGroupItem) => {
@@ -913,23 +925,27 @@ function TimelineSegments({
             </div>
           )
         }
-        const groupKey = `work-${ownerMessageId}`
+        const showHeader = item === processGroups[0]
+        const groupKey = showHeader ? `work-${ownerMessageId}` : `work-after-${item.segments[0].id}`
         return (
-          <div key={groupKey}>
-            <TimelineGroupBlock
-              segments={item.segments}
-              toolCalls={toolCalls}
-              toolCallById={toolCallById}
-              artifacts={artifacts}
-              citations={citations}
-              conversationId={conversationId}
-              messageStreaming={messageStreaming}
-              reasoningStreaming={reasoningStreaming}
-              reasoningDurationMs={reasoningDurationMs}
-              reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
-              reasoningSegmentCount={reasoningSegmentCount}
-            />
-          </div>
+          <TimelineGroupBlock
+            key={groupKey}
+            segments={item.segments}
+            allProcessSegments={allProcessSegments}
+            showHeader={showHeader}
+            userOpen={userOpen}
+            onToggle={() => setUserOpen(current => !(current ?? messageStreaming))}
+            toolCalls={toolCalls}
+            toolCallById={toolCallById}
+            artifacts={artifacts}
+            citations={citations}
+            conversationId={conversationId}
+            messageStreaming={messageStreaming}
+            reasoningStreaming={reasoningStreaming && item === processGroups[processGroups.length - 1]}
+            reasoningDurationMs={reasoningDurationMs}
+            reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
+            reasoningSegmentCount={reasoningSegmentCount}
+          />
         )
       })}
     </section>
