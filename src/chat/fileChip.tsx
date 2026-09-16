@@ -8,7 +8,10 @@ import {
   FileSpreadsheet,
   FileText,
   Presentation,
+  FolderOpen,
 } from 'lucide-react'
+import { useState } from 'react'
+import { DockContextMenu, type DockMenuAnchor } from './dock/DockContextMenu'
 
 type FileKindVisual = {
   Icon: typeof File
@@ -74,19 +77,38 @@ export function FileChip({
   onClick,
   ariaLabel,
   variant = 'card',
+  onRevealLocation,
 }: {
   name: string
   onClick: () => void
   ariaLabel?: string
   variant?: 'card' | 'inline'
+  onRevealLocation?: () => Promise<void>
 }) {
+  const [menuAnchor, setMenuAnchor] = useState<DockMenuAnchor | null>(null)
+  const [locationError, setLocationError] = useState(false)
   const visual = fileKindVisual(name)
   const Icon = visual.Icon
+  const contextMenu = onRevealLocation ? (event: React.MouseEvent) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setLocationError(false)
+    setMenuAnchor({ left: event.clientX, top: event.clientY })
+  } : undefined
+  const menu = <>
+    {menuAnchor && onRevealLocation && <DockContextMenu anchor={menuAnchor} onClose={() => setMenuAnchor(null)} items={[{
+      key: 'reveal', label: '打开所在位置', icon: <FolderOpen size={16} strokeWidth={1.75} />,
+      onSelect: () => { void onRevealLocation().catch(() => setLocationError(true)) },
+    }]} />}
+    {locationError && <span role="status" className="ml-1 text-xs text-neutral-500">无法打开所在位置，请检查文件是否仍存在。</span>}
+  </>
   if (variant === 'inline') {
     return (
+      <>
       <button
         type="button"
         onClick={onClick}
+        onContextMenu={contextMenu}
         className="inline max-w-full cursor-pointer rounded-sm border-0 bg-transparent p-0 text-left align-baseline text-blue-600 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400"
         style={{ font: 'inherit', overflowWrap: 'anywhere' }}
         title={name}
@@ -95,12 +117,16 @@ export function FileChip({
         <Icon aria-hidden="true" size="1em" strokeWidth={1.8} className={`mr-1 inline-block align-[-0.125em] ${visual.iconClass}`} />
         {name}
       </button>
+      {menu}
+      </>
     )
   }
   return (
+    <>
     <button
       type="button"
       onClick={onClick}
+      onContextMenu={contextMenu}
       className="flex h-16 w-[9.5rem] shrink-0 items-center gap-2 rounded-lg border border-neutral-200/90 bg-neutral-50 px-1.5 text-left hover:bg-neutral-100 dark:border-neutral-700 dark:bg-neutral-800 dark:hover:bg-neutral-700/80"
       title={name}
       aria-label={ariaLabel ?? name}
@@ -117,5 +143,7 @@ export function FileChip({
         </span>
       </span>
     </button>
+    {menu}
+    </>
   )
 }

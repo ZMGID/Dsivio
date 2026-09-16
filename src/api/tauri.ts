@@ -448,6 +448,12 @@ export type ChatClipboardFilesResult = {
   error?: string | null
 }
 
+export type ChatClipboardContent =
+  | { kind: 'files'; paths: string[] }
+  | { kind: 'image'; dataBase64: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'empty' }
+
 export function defaultNativeTools(): ChatNativeToolsConfig {
   // Mirror the backend baseline (ChatNativeToolsConfig::default): native tools
   // are ON by default; safety is the execution-time consent gate. web_search
@@ -2476,6 +2482,8 @@ export const api = {
     invoke<ChatPastedImageResult>('chat_save_pasted_attachment', { name, dataBase64 }),
   chatReadClipboardFiles: () =>
     invoke<ChatClipboardFilesResult>('chat_read_clipboard_files'),
+  chatReadClipboard: () => invoke<ChatClipboardContent>('chat_read_clipboard'),
+  chatWriteClipboardText: (text: string) => invoke<void>('chat_write_clipboard_text', { text }),
   // permissionMode 只有计划批准卡会传（三选一里用户选的那一档），决定批准后把 CLI 切到
   // 哪个权限模式。普通审批传 null。
   chatConfirmToolCall: (
