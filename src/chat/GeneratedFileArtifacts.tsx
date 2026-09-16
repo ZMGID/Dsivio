@@ -24,12 +24,12 @@ async function openGeneratedArtifact(artifact: ChatToolArtifact) {
 
 export function ArtifactFileChip({ artifact }: { artifact: ChatToolArtifact }) {
   const [error, setError] = useState(false)
-  return <span className="not-prose inline-flex max-w-full flex-col align-top" data-artifact-id={artifact.id ?? undefined}>
-    <FileChip name={artifact.name} ariaLabel={`打开文件 ${artifact.name}`} onClick={() => {
+  return <span className="not-prose" data-artifact-id={artifact.id ?? undefined}>
+    <FileChip variant="inline" name={artifact.name} ariaLabel={`打开文件 ${artifact.name}`} onClick={() => {
       setError(false)
       void openGeneratedArtifact(artifact).catch(() => setError(true))
     }} />
-    {error && <span role="status" className="text-xs text-neutral-500">文件无法打开，请检查文件是否仍存在。</span>}
+    {error && <span role="status" className="ml-1 text-xs text-neutral-500">文件无法打开，请检查文件是否仍存在。</span>}
   </span>
 }
 

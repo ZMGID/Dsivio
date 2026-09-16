@@ -68,18 +68,35 @@ function fileKindVisual(name: string): FileKindVisual {
   return { Icon: File, label, iconClass: 'text-neutral-500 dark:text-neutral-300', wellClass: 'bg-neutral-500/10 dark:bg-white/10' }
 }
 
-/** 输入框 / 用户气泡 / 助手产物共用的 64px 文件芯片。 */
+/** 上传附件使用卡片，正文产物使用跟随文字行高的链接。 */
 export function FileChip({
   name,
   onClick,
   ariaLabel,
+  variant = 'card',
 }: {
   name: string
   onClick: () => void
   ariaLabel?: string
+  variant?: 'card' | 'inline'
 }) {
   const visual = fileKindVisual(name)
   const Icon = visual.Icon
+  if (variant === 'inline') {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline max-w-full cursor-pointer rounded-sm border-0 bg-transparent p-0 text-left align-baseline text-blue-600 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:text-blue-400"
+        style={{ font: 'inherit', overflowWrap: 'anywhere' }}
+        title={name}
+        aria-label={ariaLabel ?? name}
+      >
+        <Icon aria-hidden="true" size="1em" strokeWidth={1.8} className={`mr-1 inline-block align-[-0.125em] ${visual.iconClass}`} />
+        {name}
+      </button>
+    )
+  }
   return (
     <button
       type="button"
