@@ -32,7 +32,10 @@ pub fn apply_assistant_mcp_restrictions(
             return true;
         }
         match tool.server_id.as_deref() {
-            Some(server_id) => assistant.mcp_server_ids.iter().any(|id| id == server_id),
+            Some(server_id) => assistant
+                .mcp_server_ids
+                .iter()
+                .any(|id| crate::computer_control::mcp_server_ids_equivalent(id, server_id)),
             None => false,
         }
     });
@@ -305,17 +308,16 @@ fn computer_control_system_prompt(
         let cua_server = chat_tools.servers.iter().find(|server| {
             server.enabled
                 && !server.command.trim().is_empty()
-                && (server.id == "computer-control-cua-driver"
-                    || server.id == "plugin-cua-driver"
+                && (crate::computer_control::is_cua_mcp_server_id(&server.id)
                     || server.connector_id.as_deref() == Some("computer-control:cua")
-                    || server.connector_id.as_deref() == Some("plugin:cua-driver"))
+                    || server.connector_id.as_deref()
+                        == Some(crate::computer_control::LEGACY_CUA_MCP_CONNECTOR_ID))
         });
         let mcp_available = cua_server.is_some_and(|server| {
             assistant_snapshot.is_none_or(|assistant| {
-                assistant
-                    .mcp_server_ids
-                    .iter()
-                    .any(|server_id| server_id == &server.id)
+                assistant.mcp_server_ids.iter().any(|server_id| {
+                    crate::computer_control::mcp_server_ids_equivalent(server_id, &server.id)
+                })
             })
         });
         if mcp_available {
@@ -1372,6 +1374,18 @@ mod tests {
             computer_control_system_prompt(&registry, &chat_tools, true, None).expect("Cua prompt");
         assert!(prompt.contains("prefer Cua Driver"), "{prompt}");
 
+        let legacy_assistant = test_assistant_snapshot(
+            vec![crate::computer_control::LEGACY_CUA_MCP_SERVER_ID],
+            vec!["cua-driver"],
+        );
+        assert!(computer_control_system_prompt(
+            &registry,
+            &chat_tools,
+            true,
+            Some(&legacy_assistant),
+        )
+        .is_some());
+
         chat_tools.servers[0].enabled = false;
         assert!(computer_control_system_prompt(&registry, &chat_tools, true, None).is_none());
     }
@@ -1748,6 +1762,18 @@ mod tests {
         assert!(tools
             .iter()
             .any(|t| t.source == "mcp" && t.server_id.as_deref() == Some("demo")));
+    }
+
+    #[test]
+    fn assistant_mcp_restrictions_accept_legacy_cua_id() {
+        let assistant = test_assistant_snapshot(vec!["plugin-cua-driver"], vec![]);
+        let mut cua = test_mcp_tool();
+        cua.server_id = Some("computer-control-cua-driver".to_string());
+        let mut tools = vec![cua];
+
+        apply_assistant_mcp_restrictions(&mut tools, Some(&assistant));
+
+        assert_eq!(tools.len(), 1);
     }
 
     #[test]

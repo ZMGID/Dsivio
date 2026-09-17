@@ -12,6 +12,18 @@ use crate::{proc::NoConsoleWindow, skills::SkillMeta};
 
 static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
 
+pub(crate) const CUA_MCP_SERVER_ID: &str = "computer-control-cua-driver";
+pub(crate) const LEGACY_CUA_MCP_SERVER_ID: &str = "plugin-cua-driver";
+pub(crate) const LEGACY_CUA_MCP_CONNECTOR_ID: &str = "plugin:cua-driver";
+
+pub(crate) fn is_cua_mcp_server_id(id: &str) -> bool {
+    id == CUA_MCP_SERVER_ID || id == LEGACY_CUA_MCP_SERVER_ID
+}
+
+pub(crate) fn mcp_server_ids_equivalent(left: &str, right: &str) -> bool {
+    left == right || (is_cua_mcp_server_id(left) && is_cua_mcp_server_id(right))
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ControlTool {
@@ -261,10 +273,8 @@ pub async fn computer_control_update(
         ControlTool::Cua => {
             // Cua's MCP server is part of the driver binary. Update the binary first,
             // then refresh its separately versioned official Skill pack.
-            state
-                .mcp_disconnect_server("computer-control-cua-driver")
-                .await;
-            state.mcp_disconnect_server("plugin-cua-driver").await;
+            state.mcp_disconnect_server(CUA_MCP_SERVER_ID).await;
+            state.mcp_disconnect_server(LEGACY_CUA_MCP_SERVER_ID).await;
             run("cua-driver", &["update", "--apply", "--json"], None, 300).await?;
             crate::path_env::refresh_path_now();
             run("cua-driver", &["skills", "update"], None, 180).await?;

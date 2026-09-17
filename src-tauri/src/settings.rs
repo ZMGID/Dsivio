@@ -2646,15 +2646,16 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     }
     // Persist only the new single-directory setting after legacy migration.
     settings.chat_tools.native_tools.workspace_roots.clear();
+    let mut migrated_legacy_cua = false;
     for server in &mut settings.chat_tools.servers {
         server.id = server.id.trim().to_string();
-        let is_legacy_cua = server.id == "plugin-cua-driver"
-            || server
-                .connector_id
-                .as_deref()
-                .is_some_and(|id| id.trim() == "plugin:cua-driver");
+        let is_legacy_cua = server.id == crate::computer_control::LEGACY_CUA_MCP_SERVER_ID
+            || server.connector_id.as_deref().is_some_and(|id| {
+                id.trim() == crate::computer_control::LEGACY_CUA_MCP_CONNECTOR_ID
+            });
         if is_legacy_cua {
-            server.id = "computer-control-cua-driver".to_string();
+            migrated_legacy_cua = true;
+            server.id = crate::computer_control::CUA_MCP_SERVER_ID.to_string();
             server.name = "Cua Driver".to_string();
             server.connector_id = None;
             server.transport = "stdio".to_string();
@@ -2740,6 +2741,24 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         .chat_tools
         .servers
         .retain(|server| seen_server_ids.insert(server.id.clone()));
+    if migrated_legacy_cua {
+        let enabled = settings
+            .chat_tools
+            .servers
+            .iter()
+            .find(|server| server.id == crate::computer_control::CUA_MCP_SERVER_ID)
+            .is_some_and(|server| server.enabled);
+        settings
+            .chat_tools
+            .disabled_skill_ids
+            .retain(|id| id != "cua-driver");
+        if !enabled {
+            settings
+                .chat_tools
+                .disabled_skill_ids
+                .push("cua-driver".to_string());
+        }
+    }
 
     // 清理归档目录路径（去除首尾空白）
     settings.image_archive_path = settings.image_archive_path.trim().to_string();
@@ -4622,6 +4641,37 @@ mod tests {
         assert_eq!(server.connector_id, None);
         assert_eq!(server.args, vec!["mcp".to_string()]);
         assert!(server.enabled);
+        assert!(!s
+            .chat_tools
+            .disabled_skill_ids
+            .contains(&"cua-driver".to_string()));
+    }
+
+    #[test]
+    fn sanitize_settings_keeps_disabled_legacy_cua_disabled() {
+        let mut s = Settings::default();
+        s.chat_tools.servers.push(ChatMcpServer {
+            id: "plugin-cua-driver".to_string(),
+            name: "Cua Driver (插件)".to_string(),
+            enabled: false,
+            transport: "stdio".to_string(),
+            command: "cua-driver".to_string(),
+            args: vec!["mcp".to_string()],
+            connector_id: Some("plugin:cua-driver".to_string()),
+            ..Default::default()
+        });
+
+        let s = sanitize_settings(s);
+
+        assert_eq!(
+            s.chat_tools.servers[0].id,
+            crate::computer_control::CUA_MCP_SERVER_ID
+        );
+        assert!(!s.chat_tools.servers[0].enabled);
+        assert!(s
+            .chat_tools
+            .disabled_skill_ids
+            .contains(&"cua-driver".to_string()));
     }
 
     #[test]

@@ -451,8 +451,11 @@ pub fn load_assistant_index(app: &AppHandle) -> Result<ChatAssistantIndex, Strin
     }
 
     let content = fs::read_to_string(&path).map_err(|e| format!("read assistants file: {e}"))?;
-    let index: ChatAssistantIndex =
+    let mut index: ChatAssistantIndex =
         serde_json::from_str(&content).map_err(|e| format!("parse assistants file: {e}"))?;
+    for assistant in &mut index.assistants {
+        canonicalize_cua_mcp_server_ids(&mut assistant.mcp_server_ids);
+    }
     Ok(index)
 }
 
@@ -2287,8 +2290,19 @@ fn normalize_assistant(assistant: &mut ChatAssistant) -> Result<(), String> {
     assistant.provider_id = assistant.provider_id.trim().to_string();
     assistant.model = assistant.model.trim().to_string();
     assistant.mcp_server_ids = normalize_string_list(&assistant.mcp_server_ids, 64, 200);
+    canonicalize_cua_mcp_server_ids(&mut assistant.mcp_server_ids);
     assistant.skill_ids = normalize_string_list(&assistant.skill_ids, 64, 200);
     Ok(())
+}
+
+fn canonicalize_cua_mcp_server_ids(ids: &mut Vec<String>) {
+    for id in ids.iter_mut() {
+        if id.trim() == crate::computer_control::LEGACY_CUA_MCP_SERVER_ID {
+            *id = crate::computer_control::CUA_MCP_SERVER_ID.to_string();
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(id.clone()));
 }
 
 fn normalize_assistant_source(source: &str, built_in: bool) -> String {
@@ -2366,6 +2380,25 @@ async fn move_project_conversations(
 #[cfg(test)]
 mod conversation_workspace_tests {
     use super::*;
+
+    #[test]
+    fn canonicalizes_and_deduplicates_legacy_cua_mcp_ids() {
+        let mut ids = vec![
+            "plugin-cua-driver".to_string(),
+            "computer-control-cua-driver".to_string(),
+            "other".to_string(),
+        ];
+
+        canonicalize_cua_mcp_server_ids(&mut ids);
+
+        assert_eq!(
+            ids,
+            vec![
+                "computer-control-cua-driver".to_string(),
+                "other".to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn messages_match_scans_content_and_reasoning() {
