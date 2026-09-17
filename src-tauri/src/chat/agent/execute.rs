@@ -936,6 +936,9 @@ fn effective_tool_timeout_ms(
     arguments: &Value,
 ) -> u64 {
     let default_timeout_ms = settings.chat_tools.tool_timeout_ms;
+    if tool.source == "mixer" && tool.name == "mixer_video_analysis" {
+        return default_timeout_ms.max(300_000);
+    }
     if tool.source == "mixer" && tool.name == "mixer_generate_image" {
         return default_timeout_ms.max(crate::chat::image_generation::IMAGE_GENERATION_TIMEOUT_MS);
     }

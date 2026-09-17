@@ -165,7 +165,6 @@ type SlashCommandId =
   | 'settings'
   | 'tools'
   | 'attach'
-  | 'video'
 type LocalSlashCommand = SlashCommandDefinition & { id: SlashCommandId; kind: 'action' }
 
 interface ActiveSlashToken {
@@ -175,11 +174,6 @@ interface ActiveSlashToken {
 }
 
 const LOCAL_SLASH_COMMANDS: LocalSlashCommand[] = [
-  {
-    id: 'video', slash: '/video', title: '/video',
-    description: 'Analyze or re-analyze attached videos', category: 'Local', kind: 'action',
-    keywords: ['video', 'analyze', '视频', '分析', '重新分析'],
-  },
   {
     id: 'help',
     slash: '/help',
@@ -432,8 +426,6 @@ export interface InputBarProps {
   layout?: 'footer' | 'inline'
   /** 外部 CLI 模式：斜杠命令直通 Agent，不展示 Kivio 弹层 */
   usesExternalRuntime?: boolean
-  hasVideoHistory?: boolean
-  videoAnalysisEnabled?: boolean
   /** Kivio Chat：不提供 /plan /orchestrate / 技能斜杠（那些是 Agent 能力） */
   usesChatRuntime?: boolean
   externalAgentName?: string | null
@@ -518,8 +510,6 @@ export const InputBar = memo(function InputBar({
   autoFocus,
   layout = 'footer',
   usesExternalRuntime = false,
-  hasVideoHistory = false,
-  videoAnalysisEnabled = true,
   usesChatRuntime = false,
   externalAgentName = null,
   conversationId = null,
@@ -1180,10 +1170,6 @@ export const InputBar = memo(function InputBar({
     setSlashPanelOpen(false)
 
     switch (command.id) {
-      case 'video':
-        setInput('/video ')
-        textareaRef.current?.focus()
-        return
       case 'goal':
         setInput('/goal ')
         requestAnimationFrame(() => {
@@ -1322,13 +1308,9 @@ export const InputBar = memo(function InputBar({
     const quotedBlock = quotes
       .map((q) => q.split('\n').map((line) => `> ${line}`).join('\n'))
       .join('\n\n')
-    const contentWithQuotes = quotedBlock
+    const content = quotedBlock
       ? (trimmed ? `${quotedBlock}\n\n${trimmed}` : quotedBlock)
       : trimmed
-    // Keep the explicit command at the start even when the composer contains quotes.
-    const content = quotedBlock && /^\/video(?:\s|$)/.test(trimmed)
-      ? `/video ${quotedBlock}\n\n${trimmed.slice(6).trim()}`
-      : contentWithQuotes
     if (disabled && onQueue) {
       onQueue(content, attachments)
       clearSentDraft(draftKeyRef.current)
@@ -2177,28 +2159,6 @@ export const InputBar = memo(function InputBar({
                 onRemove={composerLocked ? undefined : removeAttachment}
                 onEditAttachment={setEditingAttachment}
               />
-              {attachments.some(attachment => attachment.type === 'video') && (
-                <p className="mt-2 text-[12px] text-neutral-500">
-                  {gitLang === 'zh'
-                    ? (usesExternalRuntime ? '视频将作为文件路径交给外部 CLI 代理。' : '普通发送不会启动混音器分析；支持视频的主模型可直接读取。当前上下文视频合计最多 14 MiB。')
-                    : (usesExternalRuntime ? 'Video file paths are passed to the external CLI agent.' : 'Sending does not start Mixer analysis. A video-capable main model can read directly. Limit: 14 MiB per context.')}
-                </p>
-              )}
-            </div>
-          )}
-          {!usesExternalRuntime && (hasVideoHistory || attachments.some(a => a.type === 'video')) && (
-            <div className="mb-2 flex items-center gap-2 px-1 text-[12px] text-neutral-500">
-              <button type="button" className="kv-btn sm" disabled={composerLocked || !videoAnalysisEnabled}
-                onClick={() => {
-                  setInput(value => /^\/video(?:\s|$)/.test(value.trim()) ? value : `/video ${value}`)
-                  setSlashPanelOpen(false)
-                  textareaRef.current?.focus()
-                }}>
-                {gitLang === 'zh' ? (hasVideoHistory ? '分析 / 重新分析视频' : '分析视频') : 'Analyze / re-analyze video'}
-              </button>
-              <span>{gitLang === 'zh'
-                ? (videoAnalysisEnabled ? '随下一条消息执行；续聊复用结果。' : '视频分析已关闭，可在设置 > 混音器中启用。')
-                : (videoAnalysisEnabled ? 'Runs with your next message; follow-ups reuse observations.' : 'Video analysis is disabled in Settings > Mixer.')}</span>
             </div>
           )}
           {attachmentError && (

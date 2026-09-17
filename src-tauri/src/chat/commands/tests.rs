@@ -77,6 +77,17 @@ fn text_only_video_replay_preserves_identity_without_opening_missing_files() {
 }
 
 #[test]
+fn video_analysis_tool_is_available_in_chat_and_plan_without_extra_approval() {
+    let tool = crate::chat::video_analysis::tool_definition();
+    assert!(agent_prepare::builtin_tool_bypasses_approval(&tool));
+    let mut tools = vec![tool.clone()];
+    assert!(super::tooling::apply_chat_mode_tool_filter(&mut tools, true, &Default::default()).is_empty());
+    assert_eq!(tools.len(), 1);
+    assert!(super::tooling::apply_agent_plan_tool_filter(&mut tools, true).is_empty());
+    assert_eq!(tools.len(), 1);
+}
+
+#[test]
 fn resolve_thinking_drops_level_for_models_without_effort_knob() {
     // 模型库里 `reasoningEfforts: []` = 没有思考深度旋钮。
     assert_eq!(

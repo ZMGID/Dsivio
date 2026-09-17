@@ -471,9 +471,7 @@ pub(super) async fn complete_assistant_reply_inner(
         &skill_registry,
         &mut effective_chat_tools,
         conversation.assistant_snapshot.as_ref(),
-        if conversation.agent_runtime.is_chat()
-            || crate::chat::video_analysis::is_requested(user_content)
-        {
+        if conversation.agent_runtime.is_chat() {
             ""
         } else {
             user_content
@@ -501,7 +499,7 @@ pub(super) async fn complete_assistant_reply_inner(
             &settings,
             Some(session_model_for_conversation(conversation)),
         ),
-    );
+    ) || video_plan.model.is_some();
     let tool_list = await_chat_tool_discovery(
         state.inner(),
         &conversation.id,
@@ -531,6 +529,9 @@ pub(super) async fn complete_assistant_reply_inner(
     };
     let unavailable_mcp_servers = tool_list.unavailable_mcp_servers;
     let mut tools = tool_list.tools;
+    if video_plan.model.is_some() {
+        tools.push(crate::chat::video_analysis::tool_definition());
+    }
     agent_prepare::apply_assistant_mcp_restrictions(
         &mut tools,
         conversation.assistant_snapshot.as_ref(),
@@ -688,84 +689,9 @@ pub(super) async fn complete_assistant_reply_inner(
             return Err(error);
         }
     };
-    if let Some(ref video_model) = video_plan.model {
-        let mut record = crate::chat::video_analysis::tool_record(
-            &settings,
-            video_model,
-            crate::chat::video_analysis::video_count(&runtime_messages),
-        );
-        let started = Instant::now();
-        emit_chat_stream_delta(
-            app,
-            &run_id,
-            "",
-            None,
-            Some(&tool_segment_for_record(&record, 100, None)),
-        );
-        emit_chat_tool_record(app, &run_id, &record);
-        let analysis = tokio::select! {
-            result = crate::chat::video_analysis::analyze(
-                state.inner(), &settings, video_model, &runtime_messages,
-                &conversation.id, &assistant_message_id, retry_attempts, &language,
-            ) => result,
-            _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
-                finish_auxiliary_vision_tool_record(
-                    &mut record, ToolCallStatus::Cancelled, started, None,
-                    Some("Mixer video analysis cancelled".into()),
-                );
-                emit_chat_tool_record(app, &run_id, &record);
-                if arm.is_some() {
-                    protocol_guard.defer_terminal();
-                    return Ok(ArmReplyOutcome { message: None, run_id: Some(run_id), error: Some("cancelled".into()) });
-                }
-                crate::chat::protocol::finish_run(app, &run_id, "cancelled", "", conversation.revision);
-                return Err("cancelled".into());
-            }
-        };
-        match analysis {
-            Ok(content) => {
-                video_plan.save_report(&mut record, &content);
-                finish_auxiliary_vision_tool_record(
-                    &mut record,
-                    ToolCallStatus::Success,
-                    started,
-                    Some(content.trim().to_string()),
-                    None,
-                );
-                emit_chat_tool_record(app, &run_id, &record);
-                auxiliary_tool_records.push(record);
-                crate::chat::video_analysis::apply_analysis(
-                    &mut runtime_messages,
-                    &content,
-                    &language,
-                );
-            }
-            Err(error) => {
-                finish_auxiliary_vision_tool_record(
-                    &mut record,
-                    ToolCallStatus::Error,
-                    started,
-                    None,
-                    Some(error.clone()),
-                );
-                emit_chat_tool_record(app, &run_id, &record);
-                if arm.is_some() {
-                    protocol_guard.defer_terminal();
-                    return Ok(ArmReplyOutcome {
-                        message: None,
-                        run_id: Some(run_id),
-                        error: Some(error),
-                    });
-                }
-                return Err(error);
-            }
-        }
-    }
-    if video_plan.model.is_none() && !video_plan.send_video && !video_plan.reports.is_empty() {
+    if !video_plan.send_video && !video_plan.reports.is_empty() {
         crate::chat::video_analysis::apply_saved_reports(
-            &mut runtime_messages,
-            &video_plan.reports,
-            &language,
+            &mut runtime_messages, &video_plan.reports, &language,
         );
     }
     let mut fallback_chat_tools = effective_chat_tools.clone();
@@ -871,6 +797,9 @@ pub(super) async fn complete_assistant_reply_inner(
     let executor = RegistryToolExecutor {
         app: app.clone(),
         state: state.inner(),
+        video_analysis: tokio::sync::Mutex::new(crate::chat::video_analysis::VideoTool::new(
+            conversation.clone(), video_plan,
+        )),
     };
     let max_output_tokens = chat_max_output_tokens_on_wire(
         Some(&provider),

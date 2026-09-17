@@ -1297,7 +1297,7 @@ pub(super) fn build_chat_api_messages(
 }
 
 /// Text-only replay must not reopen or encode historical videos just to discard them later.
-pub(super) fn build_chat_api_messages_with_video(
+pub(crate) fn build_chat_api_messages_with_video(
     app: Option<&AppHandle>,
     system_prompt: &str,
     conversation: &Conversation,
@@ -1350,7 +1350,7 @@ pub(super) fn build_chat_api_messages_with_video(
                 if crate::chat::video::mime_for_name(&attachment.name).is_some() {
                     if !include_video {
                         parts.push(serde_json::json!({"type": "text", "text": format!(
-                            "[Video attachment: {} [{}]. Raw video is not included. Match saved observations by attachment ID, not filename. If no observations cover this video, say it has not been analyzed; ask the user to choose Analyze video (/video) or use a video-capable main model. Never invent its contents.]",
+                            "[Video attachment: {} [{}]. Raw video is not included. Match saved observations by attachment ID, not filename. If the current question requires unrecorded video details, call mixer_video_analysis when available. Do not ask the user to select an analysis mode or type a command. If the tool is unavailable, explain that video understanding is unavailable. Never invent contents.]",
                             attachment.name, attachment.id
                         )}));
                         continue;
