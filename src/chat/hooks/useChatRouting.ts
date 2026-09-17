@@ -113,7 +113,7 @@ export function useChatRouting({
         onOpenSessionsSettings?.()
         return
       }
-      // 插件页已取消；旧链接 `#chat/plugins` 重定向到统一工具页
+      // 旧链接 `#chat/plugins` 重定向到设置中的插件管理页
       if (isChatPluginCenterPath(path)) {
         onOpenPluginsSettings?.()
         return
