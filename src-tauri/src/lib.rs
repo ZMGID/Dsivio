@@ -521,6 +521,8 @@ pub fn run() {
             commands::open_data_url_file,
             commands::open_html_preview,
             lens_commands::explain_read_image,
+            lens_commands::lens_read_freeze_frame,
+            lens_commands::lens_read_image,
             commands::fetch_models,
             commands::test_provider_connection,
             commands::test_web_search,

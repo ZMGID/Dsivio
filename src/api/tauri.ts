@@ -2536,6 +2536,11 @@ export const api = {
   onLensCloseRequest: (listener: () => void) =>
     on('lens-close-request', () => listener()),
   lensListWindows: () => invoke<LensWindowInfo[]>('lens_list_windows'),
+  // Tauri's binary IPC uses ArrayBuffer; its fallback transport returns byte arrays.
+  lensReadFreezeFrame: (imageId: string) =>
+    invoke<ArrayBuffer | number[]>('lens_read_freeze_frame', { imageId }),
+  lensReadImage: (imageId: string) =>
+    invoke<ArrayBuffer | number[]>('lens_read_image', { imageId }),
   lensCaptureWindow: (windowId: number) =>
     invoke<{ success: boolean; imageId?: string; error?: string }>('lens_capture_window', { windowId }),
   lensCaptureRegion: (params: {
