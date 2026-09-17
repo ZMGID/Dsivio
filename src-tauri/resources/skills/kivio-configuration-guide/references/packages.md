@@ -20,7 +20,7 @@
 - 技能/命令显示 `<plugin>:<name>`，斜杠推荐 `/plugin:command`；内部 ID 是 `pkg-<UUID>-<原ID>`。禁用表不能写一个猜测的短 ID。
 - MCP ID 带 `plugin-package-<UUID>-` 前缀。启用调用注册，停用/移除调用撤销和断连。技能 source 为 `plugin` 时从所属插件控制，不在普通技能页改。
 - 环境变量缺失、依赖程序缺失须单独处理，导入不会自动安装 Node/Python 等依赖。
-- Hooks 支持 `SessionStart`、`UserPromptSubmit`、`SubagentStart`、`PreToolUse`、`PostToolUse` 的 command 处理器；原生包用 Kivio 工具名和参数，Claude/Codex 格式有工具名兼容转换。详见 Hook 技能。
+- Hooks 支持 `SessionStart`、`UserPromptSubmit`、`SubagentStart`、`PreToolUse`、`PostToolUse` 的 command 处理器；原生包用 Kivio 工具名和参数，Claude/Codex 格式有工具名兼容转换。详见 [Hooks](hooks.md)。
 
 目前不承诺：原生 marketplace、项目范围通用插件、自动更新、依赖自动安装、安装脚本协议、LSP、output styles、平台托管 apps、专有 UI、TOML 子代理、context: fork、内嵌组件 hooks 或额外事件。用户给的是多宿主项目初始化工具时，先核对其产物；它可能不是插件包。
 

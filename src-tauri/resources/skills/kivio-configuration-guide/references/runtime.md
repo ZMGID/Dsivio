@@ -1,11 +1,6 @@
----
-name: kivio-diagnosing-runtime
-description: 排查 Kivio 内置 Agent、只读 Chat 与外部 CLI 的配置/能力差异：CLI 检测不到、模型或扩展不生效、导入会话不能换后端、工具不可用。用于调试 Kivio 自身运行环境，非普通应用代码排错。
----
-
 # Kivio 运行时与能力诊断
 
-依据 Kivio 2.9.6（2026-09-06）。先读本轮运行环境和工具清单；有 `kivio_inspect` 时用 `topic:status` 取应用版本、目录、全局开关和脱敏供应商信息。返回的是应用默认值，不一定是当前会话选项。
+`kivio_inspect` 的 `topic:status` 返回应用默认值；当前会话选项以本轮上下文为准。
 
 ## 选择正确的配置层
 
@@ -34,6 +29,6 @@ description: 排查 Kivio 内置 Agent、只读 Chat 与外部 CLI 的配置/能
 - 规划模式会过滤有副作用工具；没有本机工具时先查运行时、模型工具能力、全局开关、会话授权和助手白名单。不要把权限失败当作提示词不够强。
 - 新装扩展/新工具通常下一轮才进入工具快照。说明实际激活阶段，不伪造调用结果。
 
-供应商/系统提示词/设置路径需要细查时，加载 `kivio-configuration-guide` 的配置地图。当前操作工具只管理扩展，不提供修改 CLI 登录、全量供应商或热键的接口；对应操作走已存在的设置入口。
+供应商/系统提示词/设置路径需要细查时，读 [配置地图](configuration-map.md)。当前操作工具只管理扩展，不提供修改 CLI 登录、全量供应商或热键的接口；对应操作走已存在的设置入口。
 
 源码：`src-tauri/src/external_agents/{registry,detection,overrides,provider_profile,skill_stage}.rs`；`chat/commands/tooling.rs`；`chat/agent/prepare.rs`；`docs/adr/0001-imported-cli-conversations-stay-on-their-cli.md` 与 `0002-imported-history-is-a-snapshot.md`。

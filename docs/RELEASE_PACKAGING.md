@@ -65,7 +65,18 @@ GitHub release packaging (this is the official path — do not build installers 
 
 ## Resources That Must Be Packaged
 
-`src-tauri/tauri.conf.json` controls app resources. At minimum, document Skill releases must include:
+`src-tauri/tauri.conf.json` controls app resources.
+
+After Tauri copies resources, `src-tauri/build.rs` prunes files no longer present
+in the source from the profile's `skills/` and `licenses/` directories. Keep
+these directory mappings aligned with `bundle.resources`; this prevents retired
+skills from surviving incremental builds. Resource roots are watched for additions
+and removals. The cleanup does not touch user-installed skills or app data.
+
+Validate this behavior with `cargo test --test bundled-resources` (on Windows,
+use `scripts/win-cargo-test.ps1 --test bundled-resources`).
+
+At minimum, document Skill releases must include:
 
 ```json
 "resources": {
@@ -168,4 +179,3 @@ A README-only bump is docs; `.github/workflows/ci.yml` skips `**.md` / `docs/**`
 ## Common Failure To Avoid
 
 Do not treat "Skill files are bundled" as equivalent to "the host can parse those documents." `SKILL.md` only tells the model to use host `read`/`bash` tools. If Python or a PDF/Office CLI is missing, the agent should say so rather than inventing contents.
-
