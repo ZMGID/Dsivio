@@ -46,17 +46,6 @@ fn same_rules_input(a: &Brief, b: &Brief) -> bool {
         && a.style == b.style
 }
 
-fn unresolved(task: &Task) -> bool {
-    latest(task).values().any(|r| {
-        (r.remote_id.is_some() || r.download_url.is_some())
-            && r.path.is_none()
-            && !r
-                .error
-                .as_deref()
-                .is_some_and(|e| e.starts_with("远程图片任务失败"))
-    })
-}
-
 fn latest(task: &Task) -> HashMap<(String, String), &ImageResult> {
     let mut results = HashMap::new();
     for result in &task.results {
@@ -85,16 +74,6 @@ pub(super) fn save_brief(task: &mut Task, mut brief: Brief) -> Result<(), String
         .filter(|p| task.brief.products.iter().any(|old| old == *p))
         .map(|p| p.id.clone())
         .collect();
-    if unresolved(task)
-        && (!same_rules
-            || task
-                .brief
-                .products
-                .iter()
-                .any(|p| !unchanged.contains(&p.id)))
-    {
-        return Err("已有远程图片尚未完成，请先恢复查询，再修改素材或制作要求".into());
-    }
     let previous_revision = task.revision;
     task.revision += 1;
     task.plans
@@ -219,13 +198,6 @@ pub(super) fn validate_action(task: &Task, action: &Action) -> Result<(), String
                 return Err("请选择 1–2 款不同的现有商品试做".into());
             }
         }
-    }
-    if matches!(
-        action.kind.as_str(),
-        "workflow_build" | "workflow_refine" | "workflow_edit"
-    ) && unresolved(task)
-    {
-        return Err("已有远程图片尚未完成，请先恢复查询，再修改共用规则和重新试品".into());
     }
     Ok(())
 }

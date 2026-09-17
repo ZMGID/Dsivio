@@ -12,8 +12,8 @@ use super::lifecycle::{
 };
 use super::state::{
     default_binary_filename, is_enabled, kivio_binary_path, meta_path, plugin_dir, probe_version,
-    read_meta, refresh_process_path_for_detection, resolve_binary, resolve_binary_cached, resolve_binary_for_status,
-    skill_dir, write_meta, PluginMeta,
+    read_meta, refresh_process_path_for_detection, resolve_binary, resolve_binary_cached,
+    resolve_binary_for_status, skill_dir, write_meta, PluginMeta,
 };
 use crate::proc::NoConsoleWindow;
 use crate::state::AppState;
@@ -1273,9 +1273,12 @@ mod skill_sync_tests {
         let mut catalog = catalog_plugin("cua-driver").unwrap().clone();
         catalog.id = "test-external-install-without-meta";
         catalog.binary = "test-external-install-without-meta";
-        catalog.known_binary_paths = Box::leak(vec![
-            &*Box::leak(executable.to_string_lossy().into_owned().into_boxed_str()),
-        ].into_boxed_slice());
+        catalog.known_binary_paths = Box::leak(
+            vec![&*Box::leak(
+                executable.to_string_lossy().into_owned().into_boxed_str(),
+            )]
+            .into_boxed_slice(),
+        );
         let status = super::status_for_cached(&catalog);
         assert!(status.installed);
         assert!(!status.enabled);

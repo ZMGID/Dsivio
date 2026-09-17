@@ -308,12 +308,10 @@ mod tests {
         let mut cache = SkillRunCache::default();
         cache.set_allowed_skill_ids(Some(vec!["h3-prompt-writing".to_string()]));
         assert!(cache.skill_id_allowed("h3-prompt-writing"));
-        assert!(cache.skill_id_allowed(
-            "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-h3-prompt-writing"
-        ));
-        assert!(!cache.skill_id_allowed(
-            "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-ecom-h3-video"
-        ));
+        assert!(
+            cache.skill_id_allowed("pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-h3-prompt-writing")
+        );
+        assert!(!cache.skill_id_allowed("pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-ecom-h3-video"));
     }
 
     #[test]

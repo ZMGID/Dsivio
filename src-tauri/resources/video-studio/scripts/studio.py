@@ -45,8 +45,8 @@ def submission_failure(error):
     }
     rejected = status in reasons or bool(getattr(error, 'not_submitted', False))
     reason = reasons.get(status, '连接未建立，请检查服务地址和网络后重试。') if rejected else (
-        '服务返回异常，尚不能确认是否已接单。暂不重复提交，避免重复生成。' if status else
-        '没有收到可识别的任务编号，可能是响应格式不兼容或连接中断。暂不重复提交，避免重复生成。')
+        '视频提交失败，可重试或更换服务。' if status else
+        '未收到任务编号，可重试或更换服务。')
     if status and 'prompt length exceeds the maximum allowed length' in str(error).lower():
         reason = '供应商返回提示词长度错误：Prompt length exceeds the maximum allowed length of 4096。服务未说明按字符还是字节计数。'
     return {'state': 'rejected' if rejected else 'uncertain', 'httpStatus': status,
@@ -475,7 +475,7 @@ def handle(action, data):
     if action == 'preflight':
         if data.get('revision') != t['revision']:
             raise ValueError('任务已在其他窗口更新，请重新打开任务')
-        if t['status'] in ('submitting', 'running', 'uncertain'):
+        if t['status'] in ('submitting', 'running'):
             raise ValueError('生成尚未结束，请等待完成后再改')
         if data.get('operation') == 'analyze':
             if not t['brief'].get('source', '').strip():
@@ -492,9 +492,14 @@ def handle(action, data):
     if data.get('revision') != t['revision']:
         raise ValueError('任务已在其他窗口更新，请重新打开任务')
     if action in ('save', 'plan_result', 'approve', 'prompt_result', 'quote', 'analysis_result'):
-        if t['status'] in ('submitting', 'running', 'uncertain'):
+        if t['status'] in ('submitting', 'running'):
             raise ValueError('生成尚未结束，请等待完成后再改')
+    if action in ('save', 'plan_result', 'submit') and t.get('remote'):
+        t.setdefault('attempts', []).append({key: t[key] for key in
+            ('remote', 'requested', 'submission', 'error', 'status', 'script', 'prompt') if key in t})
     if action == 'save':
+        t.pop('submission', None)
+        t.pop('error', None)
         t.update(brief=import_brief(data['brief']), script=data.get('script', ''), concepts=[], approved=False, prompt='', quote=None, status='draft')
         t.pop('remote', None)
     elif action in ('plan_result', 'analysis_result'):
@@ -535,7 +540,7 @@ def handle(action, data):
         t['quote']['model'] = get_provider(route).get('model')
     elif action == 'submit':
         b, route = validate(t)
-        if t['status'] in ('submitting', 'running', 'uncertain'):
+        if t['status'] in ('submitting', 'running'):
             raise ValueError('任务已经提交，请查看结果或继续查询')
         if route == 'grok' and t['approved']:
             t['prompt'] = t['script']

@@ -2180,8 +2180,14 @@ async fn run_loop_context_reported_anchor_wins_then_missing_usage_falls_back() {
         .expect("run completes");
     let ticks = host.recorded_context_ticks();
     assert!(ticks.len() >= 2, "{ticks:?}");
-    assert_eq!(ticks[0].0, 10, "larger estimate must not override reported usage");
-    assert!(ticks[1].0 > 10, "missing usage must not retain a stale anchor: {ticks:?}");
+    assert_eq!(
+        ticks[0].0, 10,
+        "larger estimate must not override reported usage"
+    );
+    assert!(
+        ticks[1].0 > 10,
+        "missing usage must not retain a stale anchor: {ticks:?}"
+    );
     assert!(result.last_step_usage.is_none());
 }
 

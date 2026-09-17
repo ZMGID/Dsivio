@@ -365,7 +365,18 @@ describe('制作、试品、反馈和持续出图', () => {
     expect(within(dialog).queryByRole('button', { name: '冻结为样图模板' })).not.toBeInTheDocument()
   })
 
-  it('resumes persisted remote images and disables shared refinement while they are unresolved', async () => {
+  it('lets the user regenerate a remote result without recovering it first', async () => {
+    const initial = task()
+    initial.results[0] = { ...initial.results[0], path: null, remoteId: 'old-job', error: '等待超时' }
+    load(initial)
+    vi.mocked(api.imageStudioAction).mockResolvedValue(initial)
+    render(<ImageStudio />)
+    fireEvent.click(await screen.findByRole('button', { name: '重新生成' }))
+    await waitFor(() => expect(api.imageStudioAction).toHaveBeenCalledWith('workflow', 2,
+      expect.objectContaining({ kind: 'retry', productId: 'a', slotId: 'h1' })))
+  })
+
+  it('keeps recovery available without blocking shared refinement', async () => {
     const initial = task()
     initial.results[0] = {
       ...initial.results[0],
@@ -379,7 +390,7 @@ describe('制作、试品、反馈和持续出图', () => {
     fireEvent.change(await screen.findByLabelText('模板要怎么改'), {
       target: { value: '修改标题大小' },
     })
-    expect(screen.getByRole('button', { name: '修改模板并重新试做' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '修改模板并重新试做' })).toBeEnabled()
     fireEvent.click(screen.getByRole('button', { name: '恢复查询' }))
     await waitFor(() =>
       expect(api.imageStudioAction).toHaveBeenCalledWith(

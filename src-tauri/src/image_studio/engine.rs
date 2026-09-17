@@ -67,10 +67,12 @@ pub fn resolve_protocol(provider: &ModelProvider, model: &str) -> String {
         || name.contains("nano-banana")
         || name.starts_with("imagen")
     {
-        return if host_matches(&base, "ybw-ai.com") {
-            "gemini-chat".into()
-        } else {
+        return if provider.api_format_kind() == ProviderApiFormat::Gemini
+            || host_matches(&base, "googleapis.com")
+        {
             "gemini".into()
+        } else {
+            "gemini-chat".into()
         };
     }
     if uses_async_image_gateway(&base, &name) {
@@ -167,19 +169,11 @@ pub fn validate(cfg: &StudioConfig, brief: &Brief) -> Result<(), String> {
 fn allowed_image_output(model: &str, protocol: &str, ratio: &str, resolution: &str) -> bool {
     let name = model.to_ascii_lowercase();
     if name.contains("gpt-image-2") {
-        return matches!(
-            (ratio, resolution),
-            ("1:1", "1k")
-                | ("1:1", "2k")
-                | ("2:3", "1k")
-                | ("3:2", "1k")
-                | ("9:16", "1k")
-                | ("9:16", "2k")
-                | ("9:16", "4k")
-                | ("16:9", "1k")
-                | ("16:9", "2k")
-                | ("16:9", "4k")
-        );
+        return matches!(resolution, "1k" | "2k" | "4k")
+            && matches!(
+                ratio,
+                "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9"
+            );
     }
     if name.contains("dall-e-3") {
         return resolution == "1k" && matches!(ratio, "1:1" | "9:16" | "16:9");
@@ -188,17 +182,27 @@ fn allowed_image_output(model: &str, protocol: &str, ratio: &str, resolution: &s
         return resolution == "1k" && matches!(ratio, "1:1" | "2:3" | "3:2");
     }
     if protocol == "grok" || name.starts_with("grok") || name.contains("grok-imagine") {
-        return matches!(
-            grok_ratio(ratio).as_str(),
-            "1:1" | "2:3" | "3:4" | "9:16" | "3:2" | "4:3" | "16:9"
-        ) && grok_resolution(resolution) != "4k";
+        return resolution != "4k"
+            && matches!(
+                grok_ratio(ratio).as_str(),
+                "1:1" | "2:3" | "3:4" | "9:16" | "3:2" | "4:3" | "16:9"
+            );
     }
-    if protocol == "gemini"
-        || protocol == "gemini-chat"
-        || name.contains("gemini")
-        || name.starts_with("imagen")
-    {
+    if name.starts_with("imagen") {
         return resolution != "4k" && matches!(ratio, "1:1" | "3:4" | "9:16" | "4:3" | "16:9");
+    }
+    if protocol == "gemini" || protocol == "gemini-chat" || name.contains("gemini") {
+        let supported_resolution =
+            if name.contains("gemini-2.5-flash-image") || name.contains("flash-lite-image") {
+                resolution == "1k"
+            } else {
+                matches!(resolution, "1k" | "2k" | "4k")
+            };
+        return supported_resolution
+            && matches!(
+                ratio,
+                "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9"
+            );
     }
     resolution != "4k" && matches!(ratio, "1:1" | "9:16" | "16:9")
 }
@@ -379,7 +383,27 @@ pub async fn submit(
     let resolved_brief = resolved_gen_brief(cfg, brief, plan)?;
     let brief = &resolved_brief;
     validate(cfg, brief)?;
-    if plan.refs.len() > if cfg.protocol == "grok" { 5 } else { 16 } {
+    let name = cfg
+        .model
+        .rsplit('/')
+        .next()
+        .unwrap_or(&cfg.model)
+        .to_ascii_lowercase();
+    if name.starts_with("imagen-") {
+        if host_matches(&p.base_url.to_ascii_lowercase(), "googleapis.com") {
+            return Err("Google 官方 Imagen 4 已于 2026-08-17 下线，请改用 Gemini 图片模型".into());
+        }
+        if !plan.refs.is_empty() {
+            return Err("Imagen 只支持文生图；改图请使用 Gemini 图片模型".into());
+        }
+    }
+    if name == "dall-e-2" {
+        return Err("DALL-E 2 已从 OpenAI API 下线，请更换 GPT Image 模型".into());
+    }
+    if name == "dall-e-3" && !plan.refs.is_empty() {
+        return Err("DALL-E 3 不支持改图，请更换 GPT Image 模型".into());
+    }
+    if plan.refs.len() > reference_image_limit(&name, &cfg.protocol) {
         return Err("参考图数量超出该接口限制，请减少参考素材".into());
     }
     let images: Vec<String> = plan
@@ -390,11 +414,16 @@ pub async fn submit(
     let refs = !images.is_empty();
     let suffix = match cfg.protocol.as_str() {
         "gemini" => format!(
-            "models/{}:generateContent",
-            cfg.model.rsplit('/').next().unwrap_or(&cfg.model)
+            "models/{}:{}",
+            cfg.model.rsplit('/').next().unwrap_or(&cfg.model),
+            if name.starts_with("imagen-") {
+                "predict"
+            } else {
+                "generateContent"
+            }
         ),
         "gemini-chat" => "chat/completions".into(),
-        "async" => async_submit_path(&p.base_url, &cfg.model).into(),
+        "async" => async_submit_path(&p.base_url, &cfg.model, refs).into(),
         _ => {
             if refs {
                 "images/edits".into()
@@ -412,14 +441,20 @@ pub async fn submit(
         task_id,
     );
     let b = brief;
-    if cfg.protocol == "openai" && refs {
+    let async_openai_edit =
+        cfg.protocol == "async" && refs && uses_openai_async_task(&p.base_url, &cfg.model);
+    if refs && (cfg.protocol == "openai" || async_openai_edit) {
         let size = images_size(&cfg.model, &b.ratio, &b.resolution);
         let mut form = reqwest::multipart::Form::new()
             .text("model", cfg.model.clone())
             .text("prompt", plan.prompt.clone())
             .text("n", "1")
-            .text("size", size)
-            .text("quality", "high");
+            .text("size", size);
+        if async_openai_edit {
+            form = form.text("quality", "high").text("output_format", "png");
+        } else {
+            form = form.text("quality", "high");
+        }
         for (i, path) in plan.refs.iter().enumerate() {
             let bytes = fs::read(storage::resolve(path)?).map_err(|e| e.to_string())?;
             let mime = images[i]
@@ -438,14 +473,7 @@ pub async fn submit(
                 .file_name(format!("reference-{i}.{ext}"))
                 .mime_str(mime)
                 .map_err(|e| e.to_string())?;
-            form = form.part(
-                if plan.refs.len() == 1 {
-                    "image"
-                } else {
-                    "image[]"
-                },
-                part,
-            );
+            form = form.part(openai_edit_image_field(&cfg.model, plan.refs.len()), part);
         }
         req = req.multipart(form);
     } else {
@@ -457,19 +485,27 @@ pub async fn submit(
                 grok_generation_payload(&cfg.model, &plan.prompt, &b.ratio, &b.resolution, &images)
             }
             "gemini" => {
-                let mut parts = vec![json!({"text":plan.prompt})];
-                for u in &images {
-                    let (header, data) = u.split_once(',').ok_or("图片编码失败")?;
-                    parts.push(json!({"inline_data":{"mime_type":header.trim_start_matches("data:").trim_end_matches(";base64"),"data":data}}));
+                if name.starts_with("imagen-") {
+                    imagen_payload(&plan.prompt, &b.ratio, &b.resolution)
+                } else {
+                    let mut parts = vec![json!({"text":plan.prompt})];
+                    for u in &images {
+                        let (header, data) = u.split_once(',').ok_or("图片编码失败")?;
+                        parts.push(json!({"inline_data":{"mime_type":header.trim_start_matches("data:").trim_end_matches(";base64"),"data":data}}));
+                    }
+                    gemini_payload(&cfg.model, parts, &b.ratio, &b.resolution)
                 }
-                json!({"contents":[{"parts":parts}],"generationConfig":{"responseModalities":["TEXT","IMAGE"],"responseFormat":{"image":{"aspectRatio":b.ratio,"imageSize":b.resolution.to_uppercase()}}}})
             }
             "gemini-chat" => {
                 let mut content = vec![json!({"type":"text","text":plan.prompt})];
                 for u in &images {
                     content.push(json!({"type":"image_url","image_url":{"url":u}}));
                 }
-                json!({"model":cfg.model,"messages":[{"role":"user","content":content}],"stream":false,"generationConfig":{"responseModalities":["IMAGE"],"imageConfig":{"aspectRatio":b.ratio,"imageSize":b.resolution.to_uppercase()}}})
+                let mut image_config = json!({"aspectRatio":b.ratio});
+                if gemini_supports_image_size(&cfg.model) {
+                    image_config["imageSize"] = json!(b.resolution.to_uppercase());
+                }
+                json!({"model":cfg.model,"messages":[{"role":"user","content":content}],"stream":false,"generationConfig":{"responseModalities":["IMAGE"],"imageConfig":image_config}})
             }
             _ => {
                 async_generation_payload(&cfg.model, &plan.prompt, &b.ratio, &b.resolution, &images)
@@ -565,12 +601,83 @@ fn async_images_size(model: &str, ratio: &str, resolution: &str) -> Option<Strin
     None
 }
 
-/// Official gpt-image-2 sizes from the OpenAI image-prompting guide, plus `1536x864`.
+fn reference_image_limit(model: &str, protocol: &str) -> usize {
+    if model.starts_with("imagen-") {
+        0
+    } else if protocol == "grok" {
+        5
+    } else if model.contains("gemini-2.5-flash-image") {
+        3
+    } else if model.contains("gemini") || model.contains("nano-banana") {
+        14
+    } else {
+        16
+    }
+}
+
+fn gemini_supports_image_size(model: &str) -> bool {
+    let name = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    name.contains("gemini-3") && !name.contains("flash-lite-image")
+}
+
+pub(super) fn gemini_payload(
+    model: &str,
+    parts: Vec<Value>,
+    ratio: &str,
+    resolution: &str,
+) -> Value {
+    let mut image = json!({"aspectRatio": ratio});
+    if gemini_supports_image_size(model) {
+        image["imageSize"] = json!(resolution.to_uppercase());
+    }
+    json!({
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+            "responseFormat": {"image": image},
+        },
+    })
+}
+
+pub(super) fn imagen_payload(prompt: &str, ratio: &str, resolution: &str) -> Value {
+    json!({
+        "instances": [{"prompt": prompt}],
+        "parameters": {
+            "sampleCount": 1,
+            "aspectRatio": ratio,
+            "imageSize": resolution.to_uppercase(),
+        },
+    })
+}
+
+/// Official gpt-image-2 family sizes. Every dimension is divisible by 16 and
+/// stays inside the documented 1:3..3:1 and maximum-edge constraints.
 pub(super) fn gpt_image_size(ratio: &str, resolution: &str) -> String {
     match (ratio, resolution) {
+        ("1:1", "4k") => "2880x2880",
         ("1:1", "2k") => "2048x2048",
+        ("2:3", "4k") => "2352x3520",
+        ("2:3", "2k") => "1360x2048",
         ("2:3", _) => "1024x1536",
+        ("3:2", "4k") => "3520x2352",
+        ("3:2", "2k") => "2048x1360",
         ("3:2", _) => "1536x1024",
+        ("3:4", "4k") => "2480x3312",
+        ("3:4", "2k") => "1536x2048",
+        ("3:4", _) => "1024x1360",
+        ("4:3", "4k") => "3312x2480",
+        ("4:3", "2k") => "2048x1536",
+        ("4:3", _) => "1360x1024",
+        ("4:5", "4k") => "2560x3200",
+        ("4:5", "2k") => "1632x2048",
+        ("4:5", _) => "1024x1280",
+        ("5:4", "4k") => "3200x2560",
+        ("5:4", "2k") => "2048x1632",
+        ("5:4", _) => "1280x1024",
         ("9:16", "2k") => "1152x2048",
         ("9:16", "4k") => "2160x3840",
         ("9:16", _) => "864x1536",
@@ -743,6 +850,12 @@ async fn extract(app: &AppHandle, v: &Value) -> Result<Vec<u8>, String> {
         }
     }
     if let Some(s) = v
+        .pointer("/predictions/0/bytesBase64Encoded")
+        .and_then(Value::as_str)
+    {
+        return STANDARD.decode(s).map_err(|_| "Imagen 图片编码无效".into());
+    }
+    if let Some(s) = v
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
     {
@@ -812,11 +925,27 @@ fn uses_openai_async_task(base_url: &str, model: &str) -> bool {
     !base.contains("apimart") && (name.contains("gpt-image") || name.starts_with("dall-e"))
 }
 
-pub(super) fn async_submit_path(base_url: &str, model: &str) -> &'static str {
+pub(super) fn async_submit_path(
+    base_url: &str,
+    model: &str,
+    has_reference_images: bool,
+) -> &'static str {
     if uses_openai_async_task(base_url, model) {
-        "images/generations/async"
+        if has_reference_images {
+            "images/edits/async"
+        } else {
+            "images/generations/async"
+        }
     } else {
         "images/generations"
+    }
+}
+
+pub(super) fn openai_edit_image_field(model: &str, image_count: usize) -> &'static str {
+    if model.to_ascii_lowercase().contains("gpt-image") || image_count > 1 {
+        "image[]"
+    } else {
+        "image"
     }
 }
 

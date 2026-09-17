@@ -354,6 +354,25 @@ class WorkspaceTests(unittest.TestCase):
         self.assertFalse(t['submission']['retryable'])
         request.assert_called_once()
 
+    def test_failed_submission_can_be_edited_or_explicitly_retried(self):
+        t = self.approved()
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', side_effect=studio.grok.ApiError('upstream unavailable', http_status=502)):
+            t = self.action(t, 'submit')
+        self.assertEqual(t['status'], 'uncertain')
+        with patch.object(studio.grok.GrokVideoClient, 'create_video', return_value='manual-retry') as submit:
+            retried = self.action(t, 'submit')
+        submit.assert_called_once()
+        self.assertEqual(retried['remote']['id'], 'manual-retry')
+        self.assertEqual(retried['attempts'][0]['submission']['httpStatus'], 502)
+        retried['status'] = 'uncertain'
+        studio.persist(retried)
+        edited = self.action(retried, 'save', brief={**self.brief, 'route': 'minimax', 'resolution': '768P'}, script='保留的方案')
+        self.assertEqual(edited['brief']['route'], 'minimax')
+        self.assertEqual(edited['script'], '保留的方案')
+        self.assertNotIn('remote', edited)
+        self.assertNotIn('submission', edited)
+        self.assertFalse(edited['approved'])
+
     def test_edit_invalidates_approval_prompt_and_quote(self):
         t = self.approved()
         t = self.action(t, 'save', brief=self.brief, script='new script')
@@ -375,14 +394,13 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(self.action(t, 'submit')['status'], 'running')
             network.assert_called_once()
 
-    def test_lost_receipt_is_not_resubmitted(self):
+    def test_lost_receipt_can_be_explicitly_resubmitted(self):
         t = self.approved()
         with patch.object(studio.grok.GrokVideoClient, 'create_video', side_effect=TimeoutError) as network:
             t = self.action(t, 'submit', confirmSpend=True)
             self.assertEqual(t['status'], 'uncertain')
-            with self.assertRaises(ValueError):
-                self.action(t, 'submit', confirmSpend=True)
-            self.assertEqual(network.call_count, 1)
+            self.action(t, 'submit', confirmSpend=True)
+            self.assertEqual(network.call_count, 2)
 
     def test_remote_id_durable_before_recovery(self):
         t = self.approved()

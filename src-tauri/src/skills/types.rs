@@ -146,9 +146,8 @@ impl SkillRegistry {
                 || record.meta.id == slug
                 || record.meta.name == needle
                 || slugify(&record.meta.name) == slug
-                || packaged_skill_original_id(&record.meta.id).is_some_and(|orig| {
-                    orig == needle || orig == slug || slugify(orig) == slug
-                })
+                || packaged_skill_original_id(&record.meta.id)
+                    .is_some_and(|orig| orig == needle || orig == slug || slugify(orig) == slug)
         })
     }
 

@@ -128,7 +128,7 @@ export default function VideoStudio() {
   const isAnalysis = view === 'analysis' || view === 'remake'
   const locked =
     !!task &&
-    ['submitting', 'running', 'uncertain'].includes(task.status)
+    ['submitting', 'running'].includes(task.status)
   const dropReadyRef = useRef({ accept: false, busy: false })
   const briefRef = useRef(brief)
   const viewRef = useRef(view)
@@ -299,7 +299,7 @@ export default function VideoStudio() {
       setView(latest.brief.mode)
       setEditingScript(false)
       setStep(latest.prompt || latest.output ? 2 : latest.script || latest.concepts?.length ? 1 : 0)
-      if (draft?.dirty && draft.task?.revision === latest.revision && !['submitting', 'running', 'uncertain'].includes(latest.status)) {
+      if (draft?.dirty && draft.task?.revision === latest.revision && !['submitting', 'running'].includes(latest.status)) {
         setBrief(draft.brief)
         setScript(draft.script)
         setDirty(true)
@@ -1551,6 +1551,7 @@ export default function VideoStudio() {
                     </div>}
                     {!locked && (
                       <div className="vs-actions">
+                        <Button disabled={!!busy} onClick={() => setStep(0)}>返回修改 / 更换服务</Button>
                         <Button
                           disabled={!native || !!busy || dirty || !task?.prompt}
                           onClick={() => void run('quote')}
@@ -1567,7 +1568,7 @@ export default function VideoStudio() {
                           }
                           onClick={() => void run('submit')}
                         >
-                          {task?.submission?.retryable ? '重试生成' : route === 'comfy' ? '开始生成' : '生成视频'}
+                          {task?.submission?.retryable || task?.status === 'uncertain' || task?.status === 'failed' ? '重试生成' : route === 'comfy' ? '开始生成' : '生成视频'}
                         </Button>
                       </div>
                     )}
@@ -1582,7 +1583,7 @@ export default function VideoStudio() {
                       <h3>{videoTaskStatus(task)}</h3>
                       {task.remote.id && <p className="vs-path">任务编号：{task.remote.id}</p>}
                       {task.status === 'uncertain' ? <>
-                        <p role="alert">{task.submission?.reason || '这次提交没有记录到任务编号或具体接口错误，暂时无法确认服务是否接单。'}</p>
+                        <p role="alert">视频提交失败。可以重试，也可以返回修改素材、方案或更换服务。</p>
                         {task.submission?.httpStatus && <small>HTTP {task.submission.httpStatus}</small>}
                         <Button onClick={() => selectView('settings')}>检查视频设置</Button>
                       </> : task.error && <p role="alert">{task.error}</p>}
@@ -1638,7 +1639,7 @@ export default function VideoStudio() {
         {(view === 'creation' || view === 'analysis' || view === 'remake') && <ExecutionStatus
           active={!!busy || task?.status === 'running' || task?.status === 'submitting'}
           title={busy || (task ? videoTaskStatus(task) : 'AI 执行状态')}
-          detail={error || task?.error || (busy
+          detail={error || (task?.status === 'uncertain' ? '提交失败，可重试、返回修改或更换服务。' : task?.error) || (busy
             ? '操作完成后会显示结果；等待时间不代表完成比例。'
             : task?.status === 'running' ? `${task.remote?.download_url ? '视频已生成，正在下载成片' : '视频服务正在生成'}${task.remote?.id ? ` · 任务编号 ${task.remote.id}` : ''}`
             : task?.output ? '成片已保存，可在生成与成片中查看。'

@@ -80,15 +80,23 @@ pub fn ensure_builtin(id: &str, source: &Path) -> Result<Resolved, String> {
     if id == crate::video_studio::PACKAGE_ID {
         for retired in ["STUDIO.md", "scripts/studio.py", "scripts/model_catalog.py"] {
             let path = dir.join("content").join(retired);
-            if path.exists() { fs::remove_file(path).map_err(|e| e.to_string())?; }
+            if path.exists() {
+                fs::remove_file(path).map_err(|e| e.to_string())?;
+            }
         }
     }
     copy_tree(source, &dir.join("content"), &mut (100 * 1024 * 1024), 0)?;
     let package = Package {
-        id: id.into(), name: "dsvideo".into(), description: "内置视频 Skill 与 MCP 插件".into(),
-        version: None, format: "codex".into(), source: "builtin:dsvideo".into(), revision: None,
+        id: id.into(),
+        name: "dsvideo".into(),
+        description: "内置视频 Skill 与 MCP 插件".into(),
+        version: None,
+        format: "codex".into(),
+        source: "builtin:dsvideo".into(),
+        revision: None,
         enabled: previous.map(|p| p.package.enabled).unwrap_or(true),
-        components: BTreeMap::new(), diagnostics: vec![],
+        components: BTreeMap::new(),
+        diagnostics: vec![],
     };
     let resolved = resolve(&dir.join("content"), package, &dir.join("data"))?;
     write_json(&dir.join("record.json"), &resolved.package)?;
@@ -1190,7 +1198,12 @@ mod tests {
         assert_eq!(server.env["CACHE"], format!("{}/cache", plain.display()));
         assert_eq!(server.env["OTHER"], format!("{}/other", plain.display()));
         assert_eq!(server.cwd.as_deref(), plain.to_str());
-        for key in ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", "PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"] {
+        for key in [
+            "PLUGIN_ROOT",
+            "CLAUDE_PLUGIN_ROOT",
+            "PLUGIN_DATA",
+            "CLAUDE_PLUGIN_DATA",
+        ] {
             assert_eq!(server.env[key], plain.to_string_lossy());
         }
     }

@@ -28,12 +28,12 @@ pub(crate) fn chat_classify_attachment_paths(
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .filter(|name| is_attachable_file_name(name))?;
-            let kind = if source.is_dir() {
-                "directory"
-            } else {
-                "file"
-            };
-            Some(ClassifiedAttachmentPath { path, name, kind: kind.to_string() })
+            let kind = if source.is_dir() { "directory" } else { "file" };
+            Some(ClassifiedAttachmentPath {
+                path,
+                name,
+                kind: kind.to_string(),
+            })
         })
         .collect())
 }
