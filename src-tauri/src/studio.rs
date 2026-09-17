@@ -94,7 +94,6 @@ fn validate_draft(domain: &str, value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

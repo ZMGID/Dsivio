@@ -297,7 +297,10 @@ pub struct CapturedCommand {
     pub stderr: String,
 }
 
-fn deny_unsafe_command(command: &str, allow_host_python_package_install: bool) -> Result<(), String> {
+fn deny_unsafe_command(
+    command: &str,
+    allow_host_python_package_install: bool,
+) -> Result<(), String> {
     let lowered = command.to_ascii_lowercase();
     for denied in COMMAND_DENYLIST {
         if lowered.contains(denied) {
@@ -931,16 +934,10 @@ pub async fn bash_output(
     loop {
         let (status, new_text, new_offset, command) =
             snapshot_bash_output(state, job_id, since_offset, conversation_id)?;
-        let ready = status.is_terminal()
-            || wait_ms == 0
-            || tokio::time::Instant::now() >= deadline;
+        let ready = status.is_terminal() || wait_ms == 0 || tokio::time::Instant::now() >= deadline;
         if ready {
             return Ok(format_bash_output(
-                job_id,
-                &command,
-                &status,
-                new_text,
-                new_offset,
+                job_id, &command, &status, new_text, new_offset,
             ));
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -949,11 +946,7 @@ pub async fn bash_output(
         ));
         if slice.is_zero() {
             return Ok(format_bash_output(
-                job_id,
-                &command,
-                &status,
-                new_text,
-                new_offset,
+                job_id, &command, &status, new_text, new_offset,
             ));
         }
         tokio::time::sleep(slice).await;
@@ -1130,9 +1123,7 @@ async fn exec_shell_command(
             }
         }
     } else {
-        let result = wait
-            .await
-            .map_err(|err| format!("Command failed: {err}"))?;
+        let result = wait.await.map_err(|err| format!("Command failed: {err}"))?;
         kill_on_cancel.disarm();
         result
     };
@@ -1191,9 +1182,15 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn pipeline_failure_is_not_hidden_by_tee_or_tail() {
-        let output = build_shell_command("printf 'provider failed\\n' >&2; (exit 7) | cat").output().await.unwrap();
+        let output = build_shell_command("printf 'provider failed\\n' >&2; (exit 7) | cat")
+            .output()
+            .await
+            .unwrap();
         assert_eq!(output.status.code(), Some(7));
-        let output = build_shell_command("printf ok | cat").output().await.unwrap();
+        let output = build_shell_command("printf ok | cat")
+            .output()
+            .await
+            .unwrap();
         assert!(output.status.success());
     }
 
@@ -2082,10 +2079,7 @@ mod tests {
 
     fn read_pid_file(path: &Path) -> Option<u32> {
         let raw = std::fs::read_to_string(path).ok()?;
-        raw.trim()
-            .trim_start_matches('\u{feff}')
-            .parse()
-            .ok()
+        raw.trim().trim_start_matches('\u{feff}').parse().ok()
     }
 
     fn process_is_running(pid: u32) -> bool {
@@ -2142,9 +2136,8 @@ mod tests {
         };
         #[cfg(not(target_os = "windows"))]
         let fut = {
-            let command = format!(
-                "echo $$ > '{leader_path}'; sleep 60 & echo $! > '{child_path}'; sleep 60"
-            );
+            let command =
+                format!("echo $$ > '{leader_path}'; sleep 60 & echo $! > '{child_path}'; sleep 60");
             exec_shell_command(build_shell_command(&command), dir.clone(), None, None)
         };
         // spawn+abort 才会真正 drop future；`tokio::pin!` 后 `drop(pin)` 只丢掉指针。

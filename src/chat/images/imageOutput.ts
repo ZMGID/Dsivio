@@ -1,4 +1,14 @@
-export const IMAGE_RATIOS = ['1:1', '2:3', '3:4', '4:5', '9:16', '3:2', '4:3', '5:4', '16:9'] as const
+export const IMAGE_RATIOS = [
+  '1:1',
+  '2:3',
+  '3:4',
+  '4:5',
+  '9:16',
+  '3:2',
+  '4:3',
+  '5:4',
+  '16:9',
+] as const
 export const IMAGE_RESOLUTIONS = ['1k', '2k', '4k'] as const
 
 export type ImageOutputSpec = {
@@ -8,7 +18,12 @@ export type ImageOutputSpec = {
   height: number
 }
 
-const spec = (ratio: string, resolution: string, width = 0, height = 0): ImageOutputSpec => ({
+const spec = (
+  ratio: string,
+  resolution: string,
+  width = 0,
+  height = 0,
+): ImageOutputSpec => ({
   ratio,
   resolution,
   width,
@@ -19,8 +34,25 @@ const spec = (ratio: string, resolution: string, width = 0, height = 0): ImageOu
 const GPT_IMAGE_2 = [
   spec('1:1', '1k', 1024, 1024),
   spec('1:1', '2k', 2048, 2048),
+  spec('1:1', '4k', 2880, 2880),
   spec('2:3', '1k', 1024, 1536),
+  spec('2:3', '2k', 1360, 2048),
+  spec('2:3', '4k', 2352, 3520),
   spec('3:2', '1k', 1536, 1024),
+  spec('3:2', '2k', 2048, 1360),
+  spec('3:2', '4k', 3520, 2352),
+  spec('3:4', '1k', 1024, 1360),
+  spec('3:4', '2k', 1536, 2048),
+  spec('3:4', '4k', 2480, 3312),
+  spec('4:3', '1k', 1360, 1024),
+  spec('4:3', '2k', 2048, 1536),
+  spec('4:3', '4k', 3312, 2480),
+  spec('4:5', '1k', 1024, 1280),
+  spec('4:5', '2k', 1632, 2048),
+  spec('4:5', '4k', 2560, 3200),
+  spec('5:4', '1k', 1280, 1024),
+  spec('5:4', '2k', 2048, 1632),
+  spec('5:4', '4k', 3200, 2560),
   spec('9:16', '1k', 864, 1536),
   spec('9:16', '2k', 1152, 2048),
   spec('9:16', '4k', 2160, 3840),
@@ -44,31 +76,70 @@ const DALL_E_3 = [
 
 /** xAI Imagine: aspect_ratio + resolution `1k` | `2k`. dsimage maps the rest. */
 const GROK_RATIOS = ['1:1', '2:3', '3:4', '9:16', '3:2', '4:3', '16:9'] as const
-const GROK_RATIO_FALLBACK: Record<string, string> = { '5:4': '4:3', '4:5': '3:4', '9:21': '9:16' }
-const GROK = GROK_RATIOS.flatMap((ratio) => [spec(ratio, '1k'), spec(ratio, '2k')])
+const GROK_RATIO_FALLBACK: Record<string, string> = {
+  '5:4': '4:3',
+  '4:5': '3:4',
+  '9:21': '9:16',
+}
+const GROK = GROK_RATIOS.flatMap((ratio) => [
+  spec(ratio, '1k'),
+  spec(ratio, '2k'),
+])
 
-function grokMappedOutput(ratio: string, resolution: string): { ratio: string; resolution: string } {
+function grokMappedOutput(
+  ratio: string,
+  resolution: string,
+): { ratio: string; resolution: string } {
   return {
     ratio: GROK_RATIO_FALLBACK[ratio] || ratio,
-    resolution: resolution === '4k' ? '2k' : resolution,
+    resolution,
   }
 }
 
 function isGrokImage(model?: string, protocol?: string): boolean {
   const name = (model || '').toLowerCase()
-  return protocol === 'grok' || name.startsWith('grok') || name.includes('grok-imagine')
+  return (
+    protocol === 'grok' ||
+    name.startsWith('grok') ||
+    name.includes('grok-imagine')
+  )
 }
 
-const GEMINI_RATIOS = ['1:1', '3:4', '9:16', '4:3', '16:9'] as const
-const GEMINI = GEMINI_RATIOS.flatMap((ratio) => [spec(ratio, '1k'), spec(ratio, '2k')])
+const GEMINI_RATIOS = [
+  '1:1',
+  '2:3',
+  '3:2',
+  '3:4',
+  '4:3',
+  '4:5',
+  '5:4',
+  '9:16',
+  '16:9',
+] as const
+const GEMINI = GEMINI_RATIOS.flatMap((ratio) => [
+  spec(ratio, '1k'),
+  spec(ratio, '2k'),
+  spec(ratio, '4k'),
+])
+const GEMINI_1K = GEMINI_RATIOS.map((ratio) => spec(ratio, '1k'))
+const IMAGEN_RATIOS = ['1:1', '3:4', '9:16', '4:3', '16:9'] as const
+const IMAGEN = IMAGEN_RATIOS.flatMap((ratio) => [
+  spec(ratio, '1k'),
+  spec(ratio, '2k'),
+])
 
-const GENERIC = ['1:1', '9:16', '16:9'].flatMap((ratio) => [spec(ratio, '1k'), spec(ratio, '2k')])
+const GENERIC = ['1:1', '9:16', '16:9'].flatMap((ratio) => [
+  spec(ratio, '1k'),
+  spec(ratio, '2k'),
+])
 
 export function imageOutputKey(ratio: string, resolution: string): string {
   return `${resolution}:${ratio}`
 }
 
-export function parseImageOutputKey(value: string): { ratio: string; resolution: string } | null {
+export function parseImageOutputKey(
+  value: string,
+): { ratio: string; resolution: string } | null {
   const sep = value.indexOf(':')
   if (sep <= 0) return null
   const resolution = value.slice(0, sep)
@@ -76,28 +147,59 @@ export function parseImageOutputKey(value: string): { ratio: string; resolution:
   return ratio && resolution ? { ratio, resolution } : null
 }
 
-export function listImageOutputs(model?: string, protocol?: string): ImageOutputSpec[] {
+export function listImageOutputs(
+  model?: string,
+  protocol?: string,
+): ImageOutputSpec[] {
   const name = (model || '').toLowerCase()
   if (name.includes('gpt-image-2')) return GPT_IMAGE_2
   if (name.includes('dall-e-3')) return DALL_E_3
-  if (name.includes('gpt-image') || name.startsWith('dall-e')) return GPT_IMAGE_1
+  if (name.includes('gpt-image') || name.startsWith('dall-e'))
+    return GPT_IMAGE_1
   if (isGrokImage(name, protocol)) return GROK
-  if (protocol === 'gemini' || protocol === 'gemini-chat' || name.includes('gemini') || name.startsWith('imagen')) {
+  if (name.startsWith('imagen')) return IMAGEN
+  if (
+    name.includes('gemini-2.5-flash-image') ||
+    name.includes('flash-lite-image')
+  )
+    return GEMINI_1K
+  if (
+    protocol === 'gemini' ||
+    protocol === 'gemini-chat' ||
+    name.includes('gemini')
+  ) {
     return GEMINI
   }
   if (protocol === 'openai') return GPT_IMAGE_1
   return GENERIC
 }
 
-export function imageOutputSpec(ratio: string, resolution: string, model?: string, protocol?: string): ImageOutputSpec {
+export function imageOutputSpec(
+  ratio: string,
+  resolution: string,
+  model?: string,
+  protocol?: string,
+): ImageOutputSpec {
   const key = imageOutputKey(ratio, resolution)
   return (
-    listImageOutputs(model, protocol).find((item) => imageOutputKey(item.ratio, item.resolution) === key)
-    || spec(ratio, resolution, ratio === '1:1' ? 1024 : 0, ratio === '1:1' ? 1024 : 0)
+    listImageOutputs(model, protocol).find(
+      (item) => imageOutputKey(item.ratio, item.resolution) === key,
+    ) ||
+    spec(
+      ratio,
+      resolution,
+      ratio === '1:1' ? 1024 : 0,
+      ratio === '1:1' ? 1024 : 0,
+    )
   )
 }
 
-export function imageOutputPixels(ratio: string, resolution: string, model?: string, protocol?: string): [number, number] {
+export function imageOutputPixels(
+  ratio: string,
+  resolution: string,
+  model?: string,
+  protocol?: string,
+): [number, number] {
   const item = imageOutputSpec(ratio, resolution, model, protocol)
   return [item.width, item.height]
 }
@@ -119,7 +221,8 @@ export function imageOutputGroup(ratio: string): string {
 
 export function imageOutputLabel(item: ImageOutputSpec): string {
   const shape = imageOutputShape(item.ratio)
-  if (item.width && item.height) return `${item.width}×${item.height} · ${shape}`
+  if (item.width && item.height)
+    return `${item.width}×${item.height} · ${shape}`
   return `${item.resolution.toUpperCase()} · ${shape}`
 }
 
@@ -129,9 +232,13 @@ export function isAllowedImageOutput(
   model?: string,
   protocol?: string,
 ): boolean {
-  const mapped = isGrokImage(model, protocol) ? grokMappedOutput(ratio, resolution) : { ratio, resolution }
+  const mapped = isGrokImage(model, protocol)
+    ? grokMappedOutput(ratio, resolution)
+    : { ratio, resolution }
   const key = imageOutputKey(mapped.ratio, mapped.resolution)
-  return listImageOutputs(model, protocol).some((item) => imageOutputKey(item.ratio, item.resolution) === key)
+  return listImageOutputs(model, protocol).some(
+    (item) => imageOutputKey(item.ratio, item.resolution) === key,
+  )
 }
 
 export function imageOutputChoices(
@@ -142,7 +249,10 @@ export function imageOutputChoices(
 ): ImageOutputSpec[] {
   const allowed = listImageOutputs(model, protocol)
   const key = imageOutputKey(ratio, resolution)
-  if (allowed.some((item) => imageOutputKey(item.ratio, item.resolution) === key)) return allowed
+  if (
+    allowed.some((item) => imageOutputKey(item.ratio, item.resolution) === key)
+  )
+    return allowed
   return [...allowed, imageOutputSpec(ratio, resolution, model, protocol)]
 }
 
@@ -150,8 +260,14 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)]
 }
 
-export function imageOutputRatios(model?: string, protocol?: string, current?: string): string[] {
-  const ratios = unique(listImageOutputs(model, protocol).map((item) => item.ratio))
+export function imageOutputRatios(
+  model?: string,
+  protocol?: string,
+  current?: string,
+): string[] {
+  const ratios = unique(
+    listImageOutputs(model, protocol).map((item) => item.ratio),
+  )
   return current && !ratios.includes(current) ? [...ratios, current] : ratios
 }
 
@@ -161,8 +277,12 @@ export function imageOutputResolutions(
   ratio: string,
   resolution?: string,
 ): ImageOutputSpec[] {
-  const matched = listImageOutputs(model, protocol).filter((item) => item.ratio === ratio)
-  const options = matched.length ? matched : [imageOutputSpec(ratio, resolution || '1k', model, protocol)]
+  const matched = listImageOutputs(model, protocol).filter(
+    (item) => item.ratio === ratio,
+  )
+  const options = matched.length
+    ? matched
+    : [imageOutputSpec(ratio, resolution || '1k', model, protocol)]
   if (resolution && !options.some((item) => item.resolution === resolution)) {
     return [...options, imageOutputSpec(ratio, resolution, model, protocol)]
   }
@@ -177,16 +297,31 @@ export function snapImageOutput(
 ): { ratio: string; resolution: string } {
   if (isGrokImage(model, protocol)) {
     const mapped = grokMappedOutput(ratio, resolution)
-    if (isAllowedImageOutput(mapped.ratio, mapped.resolution, model, protocol)) return mapped
+    if (isAllowedImageOutput(mapped.ratio, mapped.resolution, model, protocol))
+      return mapped
+    const sameMappedRatio = listImageOutputs(model, protocol).find(
+      (item) => item.ratio === mapped.ratio,
+    )
+    if (sameMappedRatio)
+      return {
+        ratio: sameMappedRatio.ratio,
+        resolution: sameMappedRatio.resolution,
+      }
   }
-  if (isAllowedImageOutput(ratio, resolution, model, protocol)) return { ratio, resolution }
-  const sameRatio = listImageOutputs(model, protocol).find((item) => item.ratio === ratio)
-  if (sameRatio) return { ratio: sameRatio.ratio, resolution: sameRatio.resolution }
+  if (isAllowedImageOutput(ratio, resolution, model, protocol))
+    return { ratio, resolution }
+  const sameRatio = listImageOutputs(model, protocol).find(
+    (item) => item.ratio === ratio,
+  )
+  if (sameRatio)
+    return { ratio: sameRatio.ratio, resolution: sameRatio.resolution }
   const first = listImageOutputs(model, protocol)[0]
   return { ratio: first.ratio, resolution: first.resolution }
 }
 
 export function imageResolutionLabel(item: ImageOutputSpec): string {
   const tier = item.resolution.toUpperCase()
-  return item.width && item.height ? `${tier} · ${item.width}×${item.height}` : tier
+  return item.width && item.height
+    ? `${tier} · ${item.width}×${item.height}`
+    : tier
 }

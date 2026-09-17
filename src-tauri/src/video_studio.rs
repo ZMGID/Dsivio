@@ -553,6 +553,9 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
         true,
     )
     .await?;
+    if action == "plan" {
+        planning::validate_result(&result)?;
+    }
     if action == "plan" && planning_revision(input["note"].as_str(), Some("")).is_none() {
         if let Some(concepts) = result["concepts"].as_array() {
             if concepts.len() != 3

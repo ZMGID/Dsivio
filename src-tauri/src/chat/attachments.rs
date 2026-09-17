@@ -843,7 +843,10 @@ pub(crate) fn merge_folder_attachments_as_additional_directories(
     primary: Option<&str>,
 ) -> Vec<AdditionalDirectory> {
     let mut entries = existing;
-    for attachment in attachments.iter().filter(|attachment| is_folder_attachment(attachment)) {
+    for attachment in attachments
+        .iter()
+        .filter(|attachment| is_folder_attachment(attachment))
+    {
         let mut attempt = entries.clone();
         attempt.push(AdditionalDirectory {
             path: attachment.path.clone(),
@@ -1003,7 +1006,8 @@ pub(crate) fn compose_user_content_for_api(
         .iter()
         .any(|attachment| is_folder_attachment(attachment));
     let has_files = real_attachments.iter().any(|attachment| {
-        !matches!(attachment.attachment_type.as_str(), "image" | "video") && !is_folder_attachment(attachment)
+        !matches!(attachment.attachment_type.as_str(), "image" | "video")
+            && !is_folder_attachment(attachment)
     });
     let attachment_lines = real_attachments
         .iter()

@@ -397,7 +397,8 @@ fn workflow_append_preserves_approval_and_only_new_products_need_generation() {
     workflow::validate_action(&task, &workflow_action("workflow_produce")).unwrap();
     task.plans = ["a", "b", "next-product"]
         .iter()
-        .map(|id| ImagePlan { output: None,
+        .map(|id| ImagePlan {
+            output: None,
             product_id: id.to_string(),
             slot_id: "h1".into(),
             purpose: "主图".into(),
@@ -514,7 +515,7 @@ fn workflow_latest_failed_edit_cannot_be_hidden_by_saving_or_older_success() {
 }
 
 #[test]
-fn workflow_remote_attempt_survives_append_and_blocks_rule_or_source_replacement() {
+fn workflow_remote_attempt_survives_edits_without_blocking() {
     let mut task = workflow_fixture();
     let mut remote = result("a", task.revision, None);
     remote.remote_id = Some("remote-id".into());
@@ -532,14 +533,12 @@ fn workflow_remote_attempt_survives_append_and_blocks_rule_or_source_replacement
     );
     let mut refine = workflow_action("workflow_refine");
     refine.note = "更换背景".into();
-    assert!(workflow::validate_action(&task, &refine)
-        .unwrap_err()
-        .contains("恢复查询"));
+    workflow::validate_action(&task, &refine).unwrap();
     let mut changed = task.brief.clone();
     changed.products.remove(0);
-    assert!(workflow::save_brief(&mut task, changed)
-        .unwrap_err()
-        .contains("恢复查询"));
+    let mut edited = task.clone();
+    workflow::save_brief(&mut edited, changed).unwrap();
+    assert_eq!(edited.results.last().unwrap().remote_id.as_deref(), Some("remote-id"));
     let mut resume = workflow_action("resume");
     resume.result_id = task.results.last().unwrap().id.clone();
     workflow::validate_action(&task, &resume).unwrap();
@@ -684,7 +683,10 @@ fn relay_gpt_image_uses_async_instead_of_a_sync_wait() {
         base_url: "https://img.hezu.ink/v1".into(),
         ..official.clone()
     };
-    assert_eq!(engine::resolve_protocol(&sync_relay, "gpt-image-2"), "openai");
+    assert_eq!(
+        engine::resolve_protocol(&sync_relay, "gpt-image-2"),
+        "openai"
+    );
     let mut stale = StudioConfig {
         protocol: "async".into(),
         model: "gpt-image-2".into(),
@@ -704,6 +706,18 @@ fn relay_gpt_image_uses_async_instead_of_a_sync_wait() {
     );
     assert_eq!(
         engine::resolve_protocol(&official, "gemini-3.1-flash-image"),
+        "gemini-chat"
+    );
+    let google: crate::settings::ModelProvider = serde_json::from_value(json!({
+        "id": "google",
+        "name": "Gemini",
+        "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+        "apiKeys": ["k"],
+        "apiFormat": "gemini"
+    }))
+    .unwrap();
+    assert_eq!(
+        engine::resolve_protocol(&google, "gemini-3.1-flash-image"),
         "gemini"
     );
     let mut cfg = StudioConfig {
@@ -731,7 +745,8 @@ fn relay_gpt_image_uses_async_instead_of_a_sync_wait() {
 
 #[test]
 fn async_gpt_image_sends_pixel_size_not_a_ratio() {
-    let payload = engine::async_generation_payload("gpt-image-2", "anime portrait", "1:1", "1k", &[]);
+    let payload =
+        engine::async_generation_payload("gpt-image-2", "anime portrait", "1:1", "1k", &[]);
     assert_eq!(payload["size"], "1024x1024");
     assert!(payload.get("resolution").is_none());
     assert!(payload.get("quality").is_none());
@@ -754,20 +769,64 @@ fn gpt_image_sizes_meet_the_documented_pixel_contract() {
     assert_eq!(engine::gpt_image_size("16:9", "2k"), "2048x1152");
     assert_eq!(engine::gpt_image_size("16:9", "4k"), "3840x2160");
     assert_eq!(engine::gpt_image_size("9:16", "4k"), "2160x3840");
+    assert_eq!(engine::gpt_image_size("4:3", "1k"), "1360x1024");
+    assert_eq!(engine::gpt_image_size("4:5", "2k"), "1632x2048");
+    assert_eq!(engine::gpt_image_size("1:1", "4k"), "2880x2880");
+}
+
+#[test]
+fn google_payloads_match_generate_content_and_imagen_predict() {
+    let gemini = engine::gemini_payload(
+        "gemini-3.1-flash-image",
+        vec![json!({"text":"cat"})],
+        "2:3",
+        "4k",
+    );
+    assert_eq!(
+        gemini["generationConfig"]["responseModalities"],
+        json!(["IMAGE"])
+    );
+    assert_eq!(
+        gemini["generationConfig"]["responseFormat"]["image"]["aspectRatio"],
+        "2:3"
+    );
+    assert_eq!(
+        gemini["generationConfig"]["responseFormat"]["image"]["imageSize"],
+        "4K"
+    );
+    let gemini_25 = engine::gemini_payload(
+        "gemini-2.5-flash-image",
+        vec![json!({"text":"cat"})],
+        "1:1",
+        "1k",
+    );
+    assert!(gemini_25["generationConfig"]["responseFormat"]["image"]
+        .get("imageSize")
+        .is_none());
+    let imagen = engine::imagen_payload("cat", "3:4", "2k");
+    assert_eq!(imagen["instances"][0]["prompt"], "cat");
+    assert_eq!(imagen["parameters"]["sampleCount"], 1);
+    assert_eq!(imagen["parameters"]["aspectRatio"], "3:4");
+    assert_eq!(imagen["parameters"]["imageSize"], "2K");
 }
 
 #[test]
 fn relay_gpt_image_uses_the_gateway_async_task_api() {
     assert_eq!(
-        engine::async_submit_path("https://ybw-ai.com/v1", "gpt-image-2"),
+        engine::async_submit_path("https://ybw-ai.com/v1", "gpt-image-2", false),
         "images/generations/async"
     );
+    assert_eq!(
+        engine::async_submit_path("https://ybw-ai.com/v1", "gpt-image-2", true),
+        "images/edits/async"
+    );
+    assert_eq!(engine::openai_edit_image_field("gpt-image-2", 1), "image[]");
     assert_eq!(
         engine::async_poll_path("https://ybw-ai.com/v1", "gpt-image-2", "imgtask_1"),
         "images/tasks/imgtask_1"
     );
     assert_eq!(
-        engine::async_submit_path("https://api.apimart.ai/v1", "gpt-image-2"),
+        engine::async_submit_path("https://api.apimart.ai/v1", "gpt-image-2", true),
         "images/generations"
     );
     let submit = json!({
@@ -776,13 +835,19 @@ fn relay_gpt_image_uses_the_gateway_async_task_api() {
         "poll_url": "/v1/images/tasks/imgtask_1",
         "status": "processing"
     });
-    assert_eq!(engine::remote_task_id(&submit).as_deref(), Some("imgtask_1"));
+    assert_eq!(
+        engine::remote_task_id(&submit).as_deref(),
+        Some("imgtask_1")
+    );
     let done = json!({
         "status": "completed",
         "image_url": "https://cdn.example/a.png",
         "result": {"data": [{"url": "https://cdn.example/a.png"}]}
     });
-    assert_eq!(engine::image_download_url(&done), Some("https://cdn.example/a.png"));
+    assert_eq!(
+        engine::image_download_url(&done),
+        Some("https://cdn.example/a.png")
+    );
     assert_eq!(engine::remote_task_status(&submit), "processing");
     assert_eq!(engine::remote_task_status(&done), "completed");
     assert_eq!(
@@ -818,10 +883,15 @@ fn provider_capabilities_are_enforced_instead_of_silently_downgrading() {
     b.resolution = "4k".into();
     assert!(engine::validate(&c, &b).is_err());
     c.protocol = "grok".into();
-    assert!(engine::validate(&c, &b).is_ok());
+    assert!(engine::validate(&c, &b).is_err());
     c.protocol = "gemini".into();
+    c.model = "gemini-2.5-flash-image".into();
     assert!(engine::validate(&c, &b).is_err());
     b.resolution = "2k".into();
+    assert!(engine::validate(&c, &b).is_err());
+    c.model = "gemini-3.1-flash-image".into();
+    assert!(engine::validate(&c, &b).is_ok());
+    b.resolution = "4k".into();
     assert!(engine::validate(&c, &b).is_ok());
     c.protocol = "async".into();
     c.model = "gpt-image-2".into();
@@ -844,10 +914,8 @@ fn grok_multi_image_edits_identify_the_target_and_product_refs() {
         engine::grok_prompt("Edit the FIRST image using the second image", 2),
         "Edit <IMAGE_0> using <IMAGE_1>"
     );
-    assert!(
-        engine::grok_prompt("Preserve the product", 3)
-            .contains("Use reference images in order: <IMAGE_0> <IMAGE_1> <IMAGE_2>.")
-    );
+    assert!(engine::grok_prompt("Preserve the product", 3)
+        .contains("Use reference images in order: <IMAGE_0> <IMAGE_1> <IMAGE_2>."));
     assert_eq!(
         engine::grok_prompt("Single reference", 1),
         "Single reference"
@@ -1021,7 +1089,8 @@ impl generation::Backend for GenerationBackend {
 
 fn generation_plans(task: &Task, count: usize) -> Vec<ImagePlan> {
     (0..count)
-        .map(|i| ImagePlan { output: None,
+        .map(|i| ImagePlan {
+            output: None,
             slot_id: format!("h{i}"),
             ..task.plans[0].clone()
         })
@@ -1305,9 +1374,9 @@ fn auto_edits_route_logo_to_each_target_and_preserve_delivery_dimensions() {
     task.brief.language = "auto".into();
     task.brief.requirement = "把后面两张图片的标志替换为图一的 Logo".into();
     let mut assets = Vec::new();
-    for (i,(w,h)) in [(64,64),(320,480),(640,360)].into_iter().enumerate() {
+    for (i, (w, h)) in [(64, 64), (320, 480), (640, 360)].into_iter().enumerate() {
         let path = base.join(format!("{i}.png"));
-        image::DynamicImage::new_rgb8(w,h).save(&path).unwrap();
+        image::DynamicImage::new_rgb8(w, h).save(&path).unwrap();
         assets.push(storage::import_asset(&path).unwrap());
     }
     task.brief.products[0].assets = assets.clone();
@@ -1315,35 +1384,74 @@ fn auto_edits_route_logo_to_each_target_and_preserve_delivery_dimensions() {
         {"target":2,"ratio":"2:3","resolution":"1k"},
         {"target":3,"ratio":"16:9","resolution":"1k"}
     ]});
-    let plans = agent::resolve_gen_outputs(&task.brief,&task.brief.products[0],&out).unwrap();
-    assert_eq!(plans.len(),2);
+    let plans = agent::resolve_gen_outputs(&task.brief, &task.brief.products[0], &out).unwrap();
+    assert_eq!(plans.len(), 2);
     for (index, plan) in plans.iter().enumerate() {
         assert!(plan.prompt.starts_with(&task.brief.requirement));
-        assert!(plan.prompt.contains(&format!("只输出图{}",index+2)));
-        assert_eq!(plan.refs.len(),3);
+        assert!(plan.prompt.contains(&format!("只输出图{}", index + 2)));
+        assert_eq!(plan.refs.len(), 3);
         assert!(!plan.prompt.contains("文字语言设置：auto"));
     }
-    assert_eq!((plans[0].output.as_ref().unwrap().width,plans[0].output.as_ref().unwrap().height),(320,480));
-    assert_eq!((plans[1].output.as_ref().unwrap().width,plans[1].output.as_ref().unwrap().height),(640,360));
-    let cfg = StudioConfig { provider_id:"test".into(),model:"gpt-image-2".into(),protocol:"openai".into(),output_root:base.join("out").to_string_lossy().into(),..Default::default() };
-    assert_eq!(engine::resolved_gen_brief(&cfg,&task.brief,&plans[1]).unwrap().ratio,"16:9");
+    assert_eq!(
+        (
+            plans[0].output.as_ref().unwrap().width,
+            plans[0].output.as_ref().unwrap().height
+        ),
+        (320, 480)
+    );
+    assert_eq!(
+        (
+            plans[1].output.as_ref().unwrap().width,
+            plans[1].output.as_ref().unwrap().height
+        ),
+        (640, 360)
+    );
+    let cfg = StudioConfig {
+        provider_id: "test".into(),
+        model: "gpt-image-2".into(),
+        protocol: "openai".into(),
+        output_root: base.join("out").to_string_lossy().into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        engine::resolved_gen_brief(&cfg, &task.brief, &plans[1])
+            .unwrap()
+            .ratio,
+        "16:9"
+    );
     let mut manual = task.brief.clone();
     manual.ratio = "1:1".into();
     manual.resolution = "1k".into();
-    assert_eq!(engine::resolved_gen_brief(&cfg,&manual,&plans[1]).unwrap().ratio,"1:1");
+    assert_eq!(
+        engine::resolved_gen_brief(&cfg, &manual, &plans[1])
+            .unwrap()
+            .ratio,
+        "1:1"
+    );
     manual.count = 3;
-    assert!(agent::resolve_gen_outputs(&manual,&task.brief.products[0],&out).is_err());
-    assert!(agent::resolve_gen_outputs(&task.brief,&task.brief.products[0],&json!({"outputs":[{"target":99}]})).is_err());
+    assert!(agent::resolve_gen_outputs(&manual, &task.brief.products[0], &out).is_err());
+    assert!(agent::resolve_gen_outputs(
+        &task.brief,
+        &task.brief.products[0],
+        &json!({"outputs":[{"target":99}]})
+    )
+    .is_err());
     task.plans = plans;
-    output::prepare(&mut task,&cfg).unwrap();
+    output::prepare(&mut task, &cfg).unwrap();
     let mut generated = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::new_rgb8(1536,864).write_to(&mut generated,image::ImageFormat::Png).unwrap();
-    let mut saved = result(&task.plans[1].product_id,task.revision,None);
+    image::DynamicImage::new_rgb8(1536, 864)
+        .write_to(&mut generated, image::ImageFormat::Png)
+        .unwrap();
+    let mut saved = result(&task.plans[1].product_id, task.revision, None);
     saved.slot_id = task.plans[1].slot_id.clone();
-    engine::store_image_in(&task,&mut saved,generated.get_ref()).unwrap();
-    assert_eq!((saved.width,saved.height),(640,360));
-    let file = output::directory(&task).unwrap().join(output::original_relative(&task,&saved,"png"));
-    assert_eq!(image::image_dimensions(file).unwrap(),(640,360));
-    for asset in assets { fs::remove_file(storage::resolve(&asset.path).unwrap()).unwrap(); }
+    engine::store_image_in(&task, &mut saved, generated.get_ref()).unwrap();
+    assert_eq!((saved.width, saved.height), (640, 360));
+    let file = output::directory(&task)
+        .unwrap()
+        .join(output::original_relative(&task, &saved, "png"));
+    assert_eq!(image::image_dimensions(file).unwrap(), (640, 360));
+    for asset in assets {
+        fs::remove_file(storage::resolve(&asset.path).unwrap()).unwrap();
+    }
     fs::remove_dir_all(base).unwrap();
 }

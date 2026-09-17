@@ -881,6 +881,8 @@ export default function ImageStudio() {
                       <span className="is-count">{results.filter((result) => result.path).length} 张</span>
                     </div>
                     <div className="is-actions">
+                      <Button size="sm" disabled={busy} onClick={() => setStage('brief')}>返回修改</Button>
+                      <Button size="sm" disabled={busy} onClick={() => setSettingsOpen(true)}>更换模型 / 供应商</Button>
                       {!busy && task && (task.error || task.status === 'stopped') && results.length > 0 && <Button size="sm" onClick={() => void act({ kind: 'start' })}><RefreshCw size={14} />继续生成</Button>}
                       {!!plans.length && <Button size="sm" variant="ghost" onClick={() => setStage('plan')}>查看画面安排</Button>}
                       <Button
@@ -1028,6 +1030,9 @@ export default function ImageStudio() {
                                       : '单页重试'}
                                   </Button>
                                 )}
+                                {!r.path && (r.remoteId || r.downloadUrl) && <Button size="sm"
+                                  disabled={busy || dirty || r.revision !== task?.revision}
+                                  onClick={() => void act({ kind: 'retry', productId: r.productId, slotId: r.slotId })}>重新生成</Button>}
                                 {r.review && (
                                   <span className="is-reviewed">
                                     <Check size={12} />

@@ -207,13 +207,6 @@ pub fn image_studio_save(
         }
     };
     output::prepare(&mut t, &storage::config()?)?;
-    if preparation::unresolved(&t) && {
-        let mut previous = t.brief.clone();
-        previous.name = brief.name.clone();
-        previous != brief
-    } {
-        return Err("商品素材仍有未完成的生成请求，请先继续当前任务".into());
-    }
     if brief.feature == "workflow" {
         workflow::save_brief(&mut t, brief)?;
         storage::save_task(&mut t)?;
@@ -794,25 +787,6 @@ async fn execute_step(
     for plan in &mut plans {
         stopped(flag)?;
         if retry {
-            if t.results
-                .iter()
-                .rev()
-                .find(|r| {
-                    r.product_id == plan.product_id
-                        && r.slot_id == plan.slot_id
-                        && r.revision == t.revision
-                })
-                .is_some_and(|r| {
-                    (r.remote_id.is_some() || r.download_url.is_some())
-                        && r.path.is_none()
-                        && !r
-                            .error
-                            .as_deref()
-                            .is_some_and(|e| e.starts_with("远程图片任务失败"))
-                })
-            {
-                return Err("该页已有远程任务，请先恢复查询，避免重复计费".into());
-            }
             if let Some(p) = t.brief.products.iter().find(|p| p.id == plan.product_id) {
                 t.approved_groups.retain(|g| g != &group_of(p));
             }

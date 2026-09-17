@@ -107,11 +107,11 @@ export const videoRatios = {
 export const videoStatus: Record<string, string> = {
   draft: '草稿',
   approved: '剧本已确认',
-  submitting: '提交中 · 请勿重复生成',
+  submitting: '提交中',
   running: '生成中',
   succeeded: '已完成',
   failed: '生成失败',
-  uncertain: '未收到提交结果',
+  uncertain: '提交失败',
 }
 
 export const languages = [

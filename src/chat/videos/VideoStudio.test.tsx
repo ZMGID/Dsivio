@@ -558,6 +558,18 @@ describe('video confirmation and monitoring', () => {
     fireEvent.click(screen.getByRole('button', { name: '查询进度 / 恢复结果' }))
     await waitFor(() => expect(vi.mocked(api.videoStudioTask).mock.calls.map(c => c[0])).toEqual(['get', 'poll']))
   })
+  it('lets a failed submission return to editable settings and retry explicitly', async () => {
+    const task: VideoTask = { ...readyTask(), status: 'uncertain', approved: true, prompt: '保留的方案',
+      brief: { ...readyTask().brief, request: '展示商品' },
+      remote: { route: 'grok', base_url: 'https://api.x.ai' } }
+    seed(task, 2)
+    render(<VideoStudio />)
+    expect(screen.getByRole('button', { name: '重试生成' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '返回修改 / 更换服务' }))
+    expect(screen.getByRole('tab', { name: /素材与要求/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('button', { name: '帮我设计视频' })).toBeEnabled()
+    expect(api.videoStudioTask).not.toHaveBeenCalled()
+  })
   it('does not poll or resubmit a task with an uncertain submission', async () => {
     vi.useFakeTimers()
     seed({ ...readyTask(), status: 'uncertain' }, 2)

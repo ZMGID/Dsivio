@@ -211,7 +211,11 @@ fn binary_in_path(binary: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    if !candidate.metadata().ok().is_some_and(|m| m.permissions().mode() & 0o111 != 0) {
+                    if !candidate
+                        .metadata()
+                        .ok()
+                        .is_some_and(|m| m.permissions().mode() & 0o111 != 0)
+                    {
                         continue;
                     }
                 }
@@ -439,7 +443,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("中文用户 with spaces");
         std::fs::create_dir(&bin).unwrap();
-        let name = if cfg!(windows) { "fixture-driver.exe" } else { "fixture-driver" };
+        let name = if cfg!(windows) {
+            "fixture-driver.exe"
+        } else {
+            "fixture-driver"
+        };
         let original = dir.path().join("original");
         std::fs::write(&original, b"not an executable program").unwrap();
         #[cfg(unix)]
@@ -450,7 +458,10 @@ mod tests {
         let linked = bin.join(name);
         std::fs::hard_link(&original, &linked).unwrap();
         let path = std::env::join_paths([dir.path().join("missing"), bin]).unwrap();
-        assert_eq!(binary_in_path("fixture-driver", &path), Some(linked.clone()));
+        assert_eq!(
+            binary_in_path("fixture-driver", &path),
+            Some(linked.clone())
+        );
         std::fs::remove_file(linked).unwrap();
         assert_eq!(binary_in_path("fixture-driver", &path), None);
     }

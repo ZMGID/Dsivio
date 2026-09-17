@@ -1056,7 +1056,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     }
     if has_image_generation {
         bullets.push(
-            "When the user asks to create, generate, draw, or edit an image, call mixer_generate_image; do not merely describe it. Pass paths or artifact_ids to edit existing images; this turn's attached images are used automatically if omitted.".to_string(),
+            "For image generation or editing requests, prefer the `dsimage` Skill: if it is listed in Agent Skills, activate it first and follow its workflow instead of calling mixer_generate_image directly. Use mixer_generate_image only when dsimage is unavailable or disabled, or when the active dsimage instructions explicitly require that tool. When falling back to mixer_generate_image, pass paths or artifact_ids to edit existing images; this turn's attached images are used automatically if omitted. Never merely describe an image when an enabled path can produce it.".to_string(),
         );
     }
     if has_advisor {
@@ -1982,10 +1982,13 @@ mod tests {
     }
 
     #[test]
-    fn native_tools_prompt_tells_model_to_edit_images_via_mixer() {
+    fn native_tools_prompt_prefers_dsimage_before_mixer() {
         let prompt =
             native_tools_prompt(&["mixer_generate_image".to_string()], false).expect("prompt");
         assert!(prompt.contains("mixer_generate_image"), "{prompt}");
+        assert!(prompt.contains("prefer the `dsimage` Skill"), "{prompt}");
+        assert!(prompt.contains("activate it first"), "{prompt}");
+        assert!(prompt.contains("only when dsimage is unavailable or disabled"), "{prompt}");
         assert!(prompt.contains("edit"), "{prompt}");
         assert!(prompt.contains("artifact_ids"), "{prompt}");
     }

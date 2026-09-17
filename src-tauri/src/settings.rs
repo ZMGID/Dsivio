@@ -2329,7 +2329,10 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
 
         sanitize_default_model_selection(&mut settings.default_models.chat, &settings.providers);
         sanitize_default_model_selection(&mut settings.default_models.vision, &settings.providers);
-        sanitize_default_model_selection(&mut settings.default_models.video_analysis, &settings.providers);
+        sanitize_default_model_selection(
+            &mut settings.default_models.video_analysis,
+            &settings.providers,
+        );
         sanitize_default_model_selection(
             &mut settings.default_models.title_summary,
             &settings.providers,

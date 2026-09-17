@@ -700,12 +700,25 @@ impl AppState {
     }
 
     pub fn has_chat_pending_input(&self, conversation_id: &str) -> bool {
-        self.pending_chat_steering.lock().unwrap_or_else(|e| e.into_inner()).get(conversation_id).is_some_and(|messages| !messages.is_empty())
-            || self.pending_chat_follow_up.lock().unwrap_or_else(|e| e.into_inner()).get(conversation_id).is_some_and(|messages| !messages.is_empty())
+        self.pending_chat_steering
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(conversation_id)
+            .is_some_and(|messages| !messages.is_empty())
+            || self
+                .pending_chat_follow_up
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(conversation_id)
+                .is_some_and(|messages| !messages.is_empty())
     }
 
     pub fn has_chat_active_generation(&self, conversation_id: &str) -> bool {
-        self.chat_active_generations.lock().unwrap_or_else(|e| e.into_inner()).get(conversation_id).is_some_and(|active| !active.is_empty())
+        self.chat_active_generations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(conversation_id)
+            .is_some_and(|active| !active.is_empty())
     }
 
     /// run 结束时丢掉没来得及消费的插话——否则它会漏进**下一条** run 的第一轮。
@@ -760,13 +773,23 @@ impl AppState {
             .remove(conversation_id);
     }
 
-    pub fn set_goal_user_queue_pending(&self, conversation_id:&str, pending:bool){
-        let mut queued=self.pending_goal_user_queue.lock().unwrap_or_else(|e|e.into_inner());
-        if pending{queued.insert(conversation_id.to_string());}else{queued.remove(conversation_id);}
+    pub fn set_goal_user_queue_pending(&self, conversation_id: &str, pending: bool) {
+        let mut queued = self
+            .pending_goal_user_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if pending {
+            queued.insert(conversation_id.to_string());
+        } else {
+            queued.remove(conversation_id);
+        }
     }
 
-    pub fn has_goal_user_queue_pending(&self, conversation_id:&str)->bool{
-        self.pending_goal_user_queue.lock().unwrap_or_else(|e|e.into_inner()).contains(conversation_id)
+    pub fn has_goal_user_queue_pending(&self, conversation_id: &str) -> bool {
+        self.pending_goal_user_queue
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(conversation_id)
     }
 
     /// 对话被删除时清理其按 conversation_id 累积的运行态痕迹：活跃 generation 集合、
@@ -788,7 +811,7 @@ impl AppState {
             .retain(|(conv, _)| conv != conversation_id);
         self.clear_chat_steering(conversation_id);
         self.clear_chat_follow_up(conversation_id);
-        self.set_goal_user_queue_pending(conversation_id,false);
+        self.set_goal_user_queue_pending(conversation_id, false);
     }
 
     /// 尝试占用某个对话的某条 run 回复槽位。同会话允许多条 run 并存（多模型一问多答）；

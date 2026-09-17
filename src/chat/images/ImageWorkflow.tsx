@@ -96,9 +96,6 @@ export function ImageWorkflow({
   const selectedSamplesMatch =
     !!workflow && [...sampleIds].sort().join(',') === [...workflow.sampleIds].sort().join(',')
   const complete = !!task && workflowSamplesComplete(task) && selectedSamplesMatch
-  const unresolved = results.some(
-    (r) => (r.remoteId || r.downloadUrl) && !r.path && !r.error?.startsWith('远程图片任务失败'),
-  )
   const successful = results.filter((r) => r.path)
   const productionPending = template
     ? brief.products.reduce(
@@ -419,7 +416,7 @@ export function ImageWorkflow({
               </div>
               <Button
                 variant="primary"
-                disabled={busy || !!configurationIssue || !input.sources.length || !brief.requirement.trim() || unresolved}
+                disabled={busy || !!configurationIssue || !input.sources.length || !brief.requirement.trim()}
                 onClick={() => void onAction({ kind: 'workflow_build' })}
               >
                 <Sparkles size={15} />
@@ -452,7 +449,7 @@ export function ImageWorkflow({
             <RulesEditor
               key={`${task?.id}-${workflow?.ruleVersion}`}
               template={template}
-              busy={busy || !current || unresolved}
+              busy={busy || !current}
               onAction={onAction}
             />
           </details>
@@ -695,6 +692,8 @@ export function ImageWorkflow({
                               </Button>
                             )
                           )}
+                          {result && !result.path && remote && <Button size="sm" disabled={busy || dirty || !current}
+                            onClick={() => void onAction({ kind: 'retry', productId: product.id, slotId: slot.id })}>重新生成</Button>}
                           <Button
                             size="sm"
                             disabled={busy || !current}
@@ -726,15 +725,12 @@ export function ImageWorkflow({
           </Field>
           <Button
             variant="primary"
-            disabled={busy || !!configurationIssue || !current || !feedback.trim() || unresolved}
+            disabled={busy || !!configurationIssue || !current || !feedback.trim()}
             onClick={() => void onAction({ kind: 'workflow_refine', note: feedback })}
           >
             <Sparkles size={14} />
             修改模板并重新试做
           </Button>
-          {unresolved && (
-            <p className="iw-hint">先恢复查询未完成的远程图片，再修改规则，以保留本次生成结果。</p>
-          )}
         </section>
       )}
 
