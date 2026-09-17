@@ -725,7 +725,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [disabledSkillIds, setDisabledSkillIds] = useState<string[]>([])
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>(() => {
     const path = hashPath()
-    if (isChatPluginCenterPath(path)) return 'computerControl'
+    if (isChatPluginCenterPath(path)) return 'plugins'
     if (isChatSessionCenterPath(path)) return 'sessions'
     return 'chat'
   })
@@ -1470,7 +1470,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   }, [])
 
   const openEmbeddedSettingsForPlugins = useCallback(() => {
-    setSettingsInitialTab('computerControl')
+    setSettingsInitialTab('plugins')
     setChatView('settings')
     setHash('#chat/settings')
   }, [])

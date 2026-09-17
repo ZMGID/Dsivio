@@ -32,7 +32,7 @@ import { rebaseDraftAgainstCache } from './rebaseSettingsDraft'
 import { i18n } from './i18n'
 import {
   GeneralIcon, HotkeysIcon, TranslateIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
-  AgentIcon, WebSearchIcon, ConnectorsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
+  AgentIcon, WebSearchIcon, PluginsIcon, ConnectorsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
 } from './NavIcons'
 import { SessionCenter, type SessionCenterProps } from '../chat/SessionCenter'
 import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, resolveSettingsSaveEcho, stableStringify } from './utils'
@@ -74,7 +74,7 @@ import { WebSearchPanel } from './WebSearchPanel'
 import { defaultChatTools } from './chatToolsShared'
 import { persistThenClose, type SettingsCloseOptions } from './settingsClose'
 
-export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'sessions' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 // UI 字号：以 px 展示、以整体缩放（zoom）实现。CSS 全是 px 硬编码，做不了真正的 rem 基准字号，
@@ -1771,6 +1771,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'externalAgents' as const, label: t.tabExternalAgents, icon: AgentIcon },
     { id: 'computerControl' as const, label: lang === 'zh' ? '电脑操控' : 'Computer control', icon: Monitor },
     { id: 'hooks' as const, label: t.tabHooks, icon: HooksIcon },
+    { id: 'plugins' as const, label: t.tabPlugins, icon: PluginsIcon },
     { id: 'connectors' as const, label: t.tabConnectors, icon: ConnectorsIcon },
     { id: 'sessions' as const, label: t.tabSessions, icon: SessionsIcon },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: WebSearchIcon },
@@ -1826,6 +1827,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     hooks: {
       title: t.tabHooks,
       subtitle: t.hooksPageSubtitle,
+    },
+    plugins: {
+      title: t.tabPlugins,
+      subtitle: lang === 'zh' ? '导入、启用和管理插件包。' : 'Import, enable, and manage plugin packages.',
     },
     connectors: {
       title: t.tabConnectors,
@@ -2158,15 +2163,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             )}
 
             {activeTab === 'computerControl' && (
-              <>
-                <ComputerControlTab
-                  onRequestAiInstall={onRequestPluginAiInstall}
-                  lang={lang}
-                  tools={settings.chatTools || defaultChatTools()}
-                  onChange={updateChatTools}
-                />
-                <PluginPackages lang={lang} />
-              </>
+              <ComputerControlTab
+                onRequestAiInstall={onRequestPluginAiInstall}
+                lang={lang}
+                tools={settings.chatTools || defaultChatTools()}
+                onChange={updateChatTools}
+              />
+            )}
+
+            {activeTab === 'plugins' && (
+              <PluginPackages lang={lang} />
             )}
 
             {/* ===== Hooks 标签页（对话生命周期） ===== */}
