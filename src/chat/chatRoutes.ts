@@ -28,7 +28,7 @@ export function isChatSkillCenterPath(path: string): boolean {
   return path === 'chat/skill' || path.startsWith('chat/skill/')
 }
 
-/** @deprecated 插件页已取消；保留判定用于把旧 `#chat/plugins` 重定向到设置 → 电脑操控。 */
+/** @deprecated 插件已迁入设置；保留判定用于把旧 `#chat/plugins` 重定向到设置 → 插件。 */
 export function isChatPluginCenterPath(path: string): boolean {
   return path === 'chat/plugins' || path.startsWith('chat/plugins/')
 }
