@@ -74,29 +74,26 @@ export function MixerTab({
             }}
           />
         </SettingRow>
-        <SettingRow
-          label={lang === 'zh' ? '启用视频分析' : 'Enable video analysis'}
-          description={lang === 'zh' ? '仅主动选择分析视频时调用；续聊复用已有结果。关闭后不会调用辅助模型。' : 'Runs only when explicitly requested. Follow-ups reuse saved observations. Disable to prevent auxiliary calls.'}
-        >
-          <Toggle
-            checked={settings.chat?.videoAnalysisEnabled !== false}
-            onChange={(videoAnalysisEnabled) => onUpdateChat({ videoAnalysisEnabled })}
+        <SettingRow label={t.videoAnalysisModel} description={t.videoAnalysisModelHint}>
+          <ModelPairSelect
+            providerId={settings.defaultModels.videoAnalysis?.providerId || ''}
+            model={settings.defaultModels.videoAnalysis?.model || ''}
+            providers={settings.providers}
+            inheritLabel={t.mixerAutoVisionModel}
+            offOption={{
+              label: lang === 'zh' ? '关闭' : 'Off',
+              selected: settings.chat?.videoAnalysisEnabled === false,
+              onSelect: () => onUpdateChat({ videoAnalysisEnabled: false }),
+            }}
+            filterModel={(provider, model) =>
+              resolveModelInfo(model, provider.modelOverrides, provider).capabilities?.videoInput === true
+            }
+            onChange={(providerId, model) => {
+              onUpdateDefaultModel('videoAnalysis', providerId, model)
+              onUpdateChat({ videoAnalysisEnabled: true })
+            }}
           />
         </SettingRow>
-        {settings.chat?.videoAnalysisEnabled !== false && (
-          <SettingRow label={t.videoAnalysisModel} description={t.videoAnalysisModelHint}>
-            <ModelPairSelect
-              providerId={settings.defaultModels.videoAnalysis?.providerId || ''}
-              model={settings.defaultModels.videoAnalysis?.model || ''}
-              providers={settings.providers}
-              inheritLabel={t.mixerAutoVisionModel}
-              filterModel={(provider, model) =>
-                resolveModelInfo(model, provider.modelOverrides, provider).capabilities?.videoInput === true
-              }
-              onChange={(providerId, model) => onUpdateDefaultModel('videoAnalysis', providerId, model)}
-            />
-          </SettingRow>
-        )}
         <SettingRow
           label={t.defaultTitleSummaryModel}
         >

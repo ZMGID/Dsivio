@@ -33,10 +33,21 @@ function renderTab(overrides: Record<string, unknown> = {}) {
 describe('MixerTab', () => {
   it('可以关闭视频分析，且不清空已选模型', async () => {
     const props = renderTab()
-    const row = screen.getByText('启用视频分析').closest('.kv-row')!
-    await userEvent.click(within(row as HTMLElement).getByRole('switch'))
+    expect(screen.queryByText('启用视频分析')).toBeNull()
+    const row = screen.getByText(t.videoAnalysisModel).closest('.kv-row')!
+    await userEvent.click(within(row as HTMLElement).getByRole('button'))
+    expect(screen.getAllByRole('option')[0]).toHaveTextContent('关闭')
+    await userEvent.click(screen.getByRole('option', { name: '关闭' }))
     expect(props.onUpdateChat).toHaveBeenCalledWith({ videoAnalysisEnabled: false })
     expect(props.onUpdateDefaultModel).not.toHaveBeenCalled()
+  })
+  it('关闭后仍显示下拉菜单，选择自动可重新启用', async () => {
+    const props = renderTab({ chat: { videoAnalysisEnabled: false } })
+    const row = screen.getByText(t.videoAnalysisModel).closest('.kv-row')!
+    await userEvent.click(within(row as HTMLElement).getByRole('button', { name: '关闭' }))
+    await userEvent.click(screen.getByRole('option', { name: t.mixerAutoVisionModel }))
+    expect(props.onUpdateChat).toHaveBeenCalledWith({ videoAnalysisEnabled: true })
+    expect(props.onUpdateDefaultModel).toHaveBeenCalledWith('videoAnalysis', '', '')
   })
   it('视频分析只列出支持视频的模型，选择后写入独立槽位', async () => {
     const props = renderTab({ providers: [makeProvider({

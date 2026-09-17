@@ -11,8 +11,8 @@ separate model capability from image input.
 - Enable **Video Input** in the model details. Known supported Gemini and Kimi
   models have defaults; fetching the Kimi model catalog also imports
   `supports_video_in`. Existing explicit capability overrides take precedence.
-- **Settings > Mixer > Enable video analysis** controls whether auxiliary video
-  analysis may run. Disabling it prevents auxiliary calls and preserves the model
+- **Settings > Mixer > Video analysis model > Off** disables auxiliary video
+  analysis. Off is the first dropdown option; it prevents auxiliary calls and preserves the model
   selection and saved reports. A capable main model always receives videos
   directly, even with an explicit auxiliary selection. Auto picks an enabled,
   credentialed model with video input; an explicit selection takes priority over
