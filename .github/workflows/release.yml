@@ -81,6 +81,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Check application icons
+        run: npm run icons:check
+
+      - name: Check desktop package version and resources
+        shell: bash
+        run: npm run package:check -- --version "$RELEASE_TAG"
+
+      - name: Test desktop packaging checks
+        run: npm run test:packaging
+
       - name: Build Swift sidecar
         # macOS: real kivio-ocr-helper. Windows: empty stub for externalBin.
         run: npm run build:swift
@@ -103,7 +113,7 @@ jobs:
           tauriScript: npx tauri
           args: ${{ matrix.args }}
 
-      - name: Verify bundled skills in macOS DMG
+      - name: Verify bundled resources in macOS DMG
         if: matrix.platform == 'macos-latest'
         shell: bash
         run: |
@@ -114,6 +124,7 @@ jobs:
           hdiutil attach -nobrowse -readonly -mountpoint "$mount_dir" "$dmg"
           trap 'hdiutil detach "$mount_dir"; rmdir "$mount_dir"' EXIT
           resources="$mount_dir/Kivio Desktop.app/Contents/Resources"
+          node scripts/check-desktop-package.mjs --resources-dir "$resources"
           for skill in pdf docx xlsx obsidian-markdown obsidian-bases json-canvas obsidian-cli; do
             test -s "$resources/skills/$skill/SKILL.md"
             echo "Verified: skills/$skill/SKILL.md"
@@ -122,7 +133,7 @@ jobs:
             test -d "$resources/skills/$skill/references"
           done
 
-      - name: Verify bundled skills in Windows installer
+      - name: Verify bundled resources in Windows installer
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
@@ -138,6 +149,10 @@ jobs:
             if (-not $match) { throw "Missing bundled skill: $skill" }
             Write-Host "Verified: skills/$skill/SKILL.md"
           }
+          $pdf = $files | Where-Object { $_.FullName -match '[\\/]skills[\\/]pdf[\\/]SKILL\.md$' } | Select-Object -First 1
+          $resources = $pdf.Directory.Parent.Parent.FullName
+          & node scripts/check-desktop-package.mjs --resources-dir $resources
+          if ($LASTEXITCODE -ne 0) { throw 'Installer resources do not match the source.' }
 
       - name: Package and upload Windows portable zip
         if: matrix.platform == 'windows-latest'

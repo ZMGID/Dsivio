@@ -2,6 +2,10 @@
 mod resources;
 
 fn main() {
+    // tauri-build does not track the ICO used by the Windows resource compiler.
+    // Without this, incremental builds can keep the old icon inside the EXE.
+    println!("cargo:rerun-if-changed=icons");
+
     // Tauri 构建脚本：在编译时生成 Tauri 应用所需的上下文和资源配置
     tauri_build::build();
 

@@ -45,6 +45,28 @@ pub(crate) fn apply_launch_at_startup(app: &AppHandle, enabled: bool) -> Result<
     Ok(())
 }
 
+/// Windows owns the effective startup state (including Task Manager overrides).
+/// Only an explicit preference change may write it; unrelated saves must not
+/// undo the user's OS-level choice. Other platforms retain their existing policy.
+pub(crate) fn should_apply_launch_at_startup(previous: Option<bool>, enabled: bool) -> bool {
+    !cfg!(target_os = "windows") || previous.is_some_and(|previous| previous != enabled)
+}
+
+pub(crate) fn initialize_launch_at_startup(
+    app: &AppHandle,
+    settings: &mut Settings,
+) -> Result<(), String> {
+    if should_apply_launch_at_startup(None, settings.launch_at_startup) {
+        return apply_launch_at_startup(app, settings.launch_at_startup);
+    }
+    let enabled = app.autolaunch().is_enabled().map_err(|e| e.to_string())?;
+    if settings.launch_at_startup != enabled {
+        settings.launch_at_startup = enabled;
+        persist_settings(app, settings)?;
+    }
+    Ok(())
+}
+
 /// 获取当前应用设置
 #[tauri::command]
 pub(crate) fn get_settings(app: AppHandle, state: State<AppState>) -> Settings {
@@ -163,7 +185,12 @@ async fn apply_settings(
     if preserve_oauth {
         crate::mcp::manager::preserve_live_oauth(&mut sanitized, &previous_settings);
     }
-    apply_launch_at_startup(app, sanitized.launch_at_startup)?;
+    if should_apply_launch_at_startup(
+        Some(previous_settings.launch_at_startup),
+        sanitized.launch_at_startup,
+    ) {
+        apply_launch_at_startup(app, sanitized.launch_at_startup)?;
+    }
     {
         let mut guard = state.settings_write();
         *guard = sanitized.clone();
@@ -1209,6 +1236,22 @@ pub(crate) fn open_permission_settings(kind: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn launch_at_startup_policy_respects_system_overrides() {
+        use super::should_apply_launch_at_startup;
+        for enabled in [false, true] {
+            assert_eq!(
+                should_apply_launch_at_startup(None, enabled),
+                !cfg!(target_os = "windows")
+            );
+            assert_eq!(
+                should_apply_launch_at_startup(Some(enabled), enabled),
+                !cfg!(target_os = "windows")
+            );
+            assert!(should_apply_launch_at_startup(Some(!enabled), enabled));
+        }
+    }
+
     use super::connection_test_url_and_body;
     use super::dedup_preserve_order;
     use super::local_file_path_from_href;

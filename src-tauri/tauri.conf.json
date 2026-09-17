@@ -43,9 +43,6 @@
       "../docs/licenses": "licenses"
     },
     "windows": {
-      "wix": {
-        "version": "2.8.2"
-      },
       "nsis": {
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser"
