@@ -1140,7 +1140,7 @@ function MarkdownArtifactReference({ url, label, image }: { url: string; label: 
     return <MarkdownArtifactImage rawSrc={artifact.name} alt={label || artifact.name}
       artifact={artifact} conversationId={context.conversationId} onImageClick={context.onImageClick} />
   }
-  return <ArtifactFileChip artifact={artifact} conversationId={context.conversationId} />
+  return <ArtifactFileChip artifact={artifact} conversationId={context.conversationId} variant="inline" />
 }
 
 const streamdownPlugins = {

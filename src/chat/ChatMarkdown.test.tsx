@@ -44,6 +44,7 @@ describe('ChatMarkdown artifact 图片', () => {
     ]} />)
     const image = container.querySelector('img')!
     const video = screen.getByRole('button', { name: '打开文件 demo.mp4' })
+    expect(video.className).not.toContain('h-16')
     expect(image).toHaveAttribute('src', 'data:image/png;base64,BBBB')
     expect(image.compareDocumentPosition(screen.getByText('Between')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.getByText('Between').compareDocumentPosition(video) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
