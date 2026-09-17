@@ -60,6 +60,23 @@ fn resolve_thinking_maps_levels_and_defaults_to_high() {
 }
 
 #[test]
+fn text_only_video_replay_preserves_identity_without_opening_missing_files() {
+    let conversation: Conversation = serde_json::from_value(serde_json::json!({
+        "id": "video-replay", "title": "video", "provider_id": "main", "model": "text",
+        "created_at": 1, "updated_at": 1,
+        "messages": [{"id": "u1", "role": "user", "content": "Hello", "timestamp": 1,
+            "attachments": [{"id": "v1", "type": "video", "name": "clip.mp4", "path": "missing.mp4"}]}]
+    })).unwrap();
+    let messages = super::context::build_chat_api_messages_with_video(
+        None, "system", &conversation, Some(0), None, &[], false,
+    ).unwrap();
+    assert_eq!(crate::chat::video_analysis::video_count(&messages), 0);
+    assert!(messages[1]["content"][0]["text"].as_str().unwrap().contains("clip.mp4 [v1]"));
+    assert_eq!(messages[1]["content"][1]["text"], "Hello");
+    assert_eq!(conversation.messages[0].attachments.len(), 1);
+}
+
+#[test]
 fn resolve_thinking_drops_level_for_models_without_effort_knob() {
     // 模型库里 `reasoningEfforts: []` = 没有思考深度旋钮。
     assert_eq!(

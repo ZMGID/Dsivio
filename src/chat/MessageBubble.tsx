@@ -194,6 +194,8 @@ function ArtifactImage({
         src={src}
         alt={label || name}
         name={artifact.name}
+        path={artifact.path ?? artifact.filePath ?? artifact.localPath}
+        conversationId={conversationId}
         onOpenViewer={openViewer}
       />
       {label ? (
@@ -313,7 +315,7 @@ function ArtifactPresentationBlock({
   if (presentation.mode === 'prepare') {
     return <details className="not-prose my-1 text-xs text-neutral-500">
       <summary className="cursor-pointer">已准备 {selectedIds.length} 个文件</summary>
-      <GeneratedFileArtifacts artifacts={selected} includeImages />
+      <GeneratedFileArtifacts artifacts={selected} includeImages conversationId={conversationId} />
       {missingCount > 0 && <span>{missingCount} 个文件不可用</span>}
     </details>
   }
@@ -326,7 +328,7 @@ function ArtifactPresentationBlock({
         </div>
       ) : null}
       <GeneratedImageArtifacts artifacts={selected} conversationId={conversationId} />
-      <GeneratedFileArtifacts artifacts={selected} />
+      <GeneratedFileArtifacts artifacts={selected} conversationId={conversationId} />
       {missingCount > 0 ? (
         <div className="mt-2 inline-flex items-center gap-1.5 text-[11.5px] text-neutral-400 dark:text-neutral-500">
           <AlertCircle size={12} strokeWidth={1.9} />
@@ -986,7 +988,7 @@ function TimelineSegments({
         <GeneratedFileArtifacts artifacts={fallbackIds.flatMap(id => {
           const artifact = artifactById.get(id)
           return artifact ? [artifact] : []
-        })} includeImages />
+        })} includeImages conversationId={conversationId} />
         {fallbackIds.some(id => !artifactById.has(id)) && <span role="status">部分文件不可用</span>}
       </section>}
     </section>
@@ -1348,7 +1350,7 @@ function MessageBubbleComponent({
                 conversationId={conversationId}
               />
             )}
-            {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} />}
+            {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} conversationId={conversationId} />}
           </>
         ) : (
           (hasAnswerContent || hasGeneratedImages || hasGeneratedFiles) && (
@@ -1373,7 +1375,7 @@ function MessageBubbleComponent({
                   conversationId={conversationId}
                 />
               )}
-              {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} />}
+              {hasGeneratedFiles && <GeneratedFileArtifacts artifacts={generatedFileArtifacts} conversationId={conversationId} />}
             </section>
           )
         )}

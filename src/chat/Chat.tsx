@@ -725,11 +725,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [disabledSkillIds, setDisabledSkillIds] = useState<string[]>([])
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>(() => {
     const path = hashPath()
-    if (isChatPluginCenterPath(path)) return 'plugins'
+    if (isChatPluginCenterPath(path)) return 'computerControl'
     if (isChatSessionCenterPath(path)) return 'sessions'
     return 'chat'
   })
   const [uiLang, setUiLang] = useState<Lang>('zh')
+  const [videoAnalysisEnabled, setVideoAnalysisEnabled] = useState(true)
   const [extensionsNavItem, setExtensionsNavItem] = useState<ExtensionsNavItem | null>(null)
   const [enabledTools, setEnabledTools] = useState<ChatToolDefinition[]>([])
   const [mcpServers, setMcpServers] = useState<ChatMcpServer[]>([])
@@ -1469,7 +1470,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   }, [])
 
   const openEmbeddedSettingsForPlugins = useCallback(() => {
-    setSettingsInitialTab('plugins')
+    setSettingsInitialTab('computerControl')
     setChatView('settings')
     setHash('#chat/settings')
   }, [])
@@ -1512,6 +1513,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     try {
       const settings = await getSettingsCached()
       setUiLang((settings.settingsLanguage as Lang) || 'zh')
+      setVideoAnalysisEnabled(settings.chat?.videoAnalysisEnabled !== false)
       const last = loadLastModel()
       const preferred = resolvePreferredChatModel({
         providers: settings.providers || [],
@@ -1588,10 +1590,11 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     return subscribeSettings((next) => {
       setMcpServers(next.chatTools?.servers ?? [])
       setUiLang((next.settingsLanguage as Lang) || 'zh')
+      setVideoAnalysisEnabled(next.chat?.videoAnalysisEnabled !== false)
     })
   }, [])
 
-  // 空闲预取各中心页 chunk，避免首次切到设置/专家/技能/插件时才触发 lazy import 而转圈；
+  // 空闲预取各中心页 chunk，避免首次切到设置/专家/技能/MCP 时才触发 lazy import 而转圈；
   // 预取后切换时 Suspense 不再挂起，chat-motion-view-in 动画得以播在真实内容上（而非 spinner）。
   useEffect(() => {
     return scheduleIdleTask(() => {
@@ -1703,7 +1706,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     }, 220)
   }, [loadSkills, refreshToolIndicator, syncConversationRoute])
 
-  // 中心页（技能/MCP/插件/专家）没有自己的返回按钮，离开靠侧栏选会话/新建等任意路径。
+  // 中心页（技能/MCP/专家）没有自己的返回按钮，离开靠侧栏选会话/新建等任意路径。
   // 统一在「回到会话视图」这个转变点刷新技能列表与工具指示器，
   // 保证中心页里的启停/增删在回到聊天后立即生效（替代原各页 onClose 的刷新职责）。
   const prevChatViewRef = useRef(chatView)
@@ -4863,7 +4866,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     setSearchOpen(false)
   }, [runAfterLeavingSettings])
 
-  // 中心页（专家/技能/MCP/插件）去掉了整行「返回聊天」顶栏后，窗口顶部不再可拖拽；
+  // 中心页（专家/技能/MCP）去掉了整行「返回聊天」顶栏后，窗口顶部不再可拖拽；
   // 且侧栏收起时页面上没有任何展开侧栏/离开中心页的入口（会被困住）。
   // 用一条浮在内容 padding 区上的细拖拽带兜底：始终可拖动窗口，
   // 侧栏收起时在带内浮出「展开侧栏 + 新建聊天」，与会话页收起态的顶栏行为一致。
@@ -5039,6 +5042,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const handleCloseImageViewer = useCallback(() => setImageViewerItem(null), [])
 
   const inputBarProps = useMemo<InputBarProps>(() => ({
+    videoAnalysisEnabled,
+    hasVideoHistory: currentConversation?.messages.some(m => m.attachments?.some(a => /\.(mp4|mpeg|mpg|mov|avi|flv|webm|wmv|3gp|3gpp)$/i.test(a.name))) ?? false,
     onSend: handleSendMessage,
     onQueue: handleQueueMessage,
     disabled: isCurrentConversationBusy(),
@@ -5155,6 +5160,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     uiLang,
     usesChatRuntime,
     usesExternalRuntime,
+    videoAnalysisEnabled,
   ])
 
   const messageListProps = useMemo<MessageListProps>(() => ({
@@ -5452,7 +5458,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             onClose={handleSettingsClose}
             onSettingsChange={handleSettingsChange}
             onReady={emitContentReady}
-            onRequestPluginAiInstall={handleRequestPluginAiInstall}
             sessionLibrary={{
               currentConversationId: currentConversation?.id,
               generatingConversationIds,
@@ -5462,6 +5467,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
               onConversationsChanged: refreshSidebar,
             }}
             onRender={onChatPerfProfiler}
+            onRequestPluginAiInstall={handleRequestPluginAiInstall}
           />
         ) : chatView === 'assistants' ? (
           <div key="center" className={centerPageClass}>

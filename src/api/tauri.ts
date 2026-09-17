@@ -457,6 +457,12 @@ export type ChatClassifiedAttachmentPath = {
   kind: 'file' | 'directory'
 }
 
+export type ChatClipboardContent =
+  | { kind: 'files'; paths: string[] }
+  | { kind: 'image'; dataBase64: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'empty' }
+
 export function defaultNativeTools(): ChatNativeToolsConfig {
   // Mirror the backend baseline (ChatNativeToolsConfig::default): native tools
   // are ON by default; safety is the execution-time consent gate. web_search
@@ -506,6 +512,7 @@ export type ChatModeConfig = {
 }
 
 export type ChatConfig = {
+  videoAnalysisEnabled?: boolean
   streamEnabled?: boolean
   thinkingEnabled?: boolean
   maxOutputTokens?: number
@@ -1272,6 +1279,12 @@ export type PluginActionResult = {
   status: PluginStatus
 }
 
+export type ControlToolStatus = {
+  currentVersion: string
+  latestVersion: string | null
+  updateAvailable: boolean
+}
+
 /** 笔记元信息（列表用） */
 export type NoteMeta = {
   id: string
@@ -1790,6 +1803,7 @@ export function normalizeSettings(settings: Settings): Settings {
     chatModel: effectiveChatModel.model,
     defaultModels,
     chat: {
+      videoAnalysisEnabled: current.chat?.videoAnalysisEnabled ?? true,
       streamEnabled: current.chat?.streamEnabled ?? current.lens?.streamEnabled ?? true,
       thinkingEnabled: current.chat?.thinkingEnabled ?? current.lens?.thinkingEnabled ?? true,
       maxOutputTokens: current.chat?.maxOutputTokens ?? 16384,
@@ -2450,6 +2464,14 @@ export const api = {
   },
   chatMcpListTools: (cachedOnly = false) =>
     invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null; discoveryPending?: boolean }>('chat_mcp_list_tools', { cachedOnly }),
+  computerControlCheck: (tool: 'cua' | 'playwright') =>
+    invoke<string>('computer_control_check', { tool }),
+  computerControlStatus: (tool: 'cua' | 'playwright') =>
+    invoke<ControlToolStatus>('computer_control_status', { tool }),
+  computerControlInstall: (tool: 'cua' | 'playwright') =>
+    invoke<SkillMeta>('computer_control_install', { tool }),
+  computerControlUpdate: (tool: 'cua' | 'playwright') =>
+    invoke<SkillMeta>('computer_control_update', { tool }),
   chatMcpTestServer: (server: ChatMcpServer, timeoutMs?: number) =>
     invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null }>(
       'chat_mcp_test_server',
@@ -2527,6 +2549,8 @@ export const api = {
     invoke<ChatClipboardFilesResult>('chat_read_clipboard_files'),
   chatClassifyAttachmentPaths: (paths: string[]) =>
     invoke<ChatClassifiedAttachmentPath[]>('chat_classify_attachment_paths', { paths }),
+  chatReadClipboard: () => invoke<ChatClipboardContent>('chat_read_clipboard'),
+  chatWriteClipboardText: (text: string) => invoke<void>('chat_write_clipboard_text', { text }),
   // permissionMode 只有计划批准卡会传（三选一里用户选的那一档），决定批准后把 CLI 切到
   // 哪个权限模式。普通审批传 null。
   chatConfirmToolCall: (

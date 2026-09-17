@@ -80,10 +80,18 @@ export function MixerTab({
             model={settings.defaultModels.videoAnalysis?.model || ''}
             providers={settings.providers}
             inheritLabel={t.mixerAutoVisionModel}
+            offOption={{
+              label: lang === 'zh' ? '关闭' : 'Off',
+              selected: settings.chat?.videoAnalysisEnabled === false,
+              onSelect: () => onUpdateChat({ videoAnalysisEnabled: false }),
+            }}
             filterModel={(provider, model) =>
               resolveModelInfo(model, provider.modelOverrides, provider).capabilities?.videoInput === true
             }
-            onChange={(providerId, model) => onUpdateDefaultModel('videoAnalysis', providerId, model)}
+            onChange={(providerId, model) => {
+              onUpdateDefaultModel('videoAnalysis', providerId, model)
+              onUpdateChat({ videoAnalysisEnabled: true })
+            }}
           />
         </SettingRow>
         <SettingRow

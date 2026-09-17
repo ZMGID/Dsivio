@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { useState } from 'react'
 import { artifactDataUrl, isFileArtifact } from './artifacts'
 import { FileChip } from './fileChip'
+import { fileLocationAction } from './fileLocation'
 import type { ChatToolArtifact } from './types'
 
 function artifactPath(artifact: ChatToolArtifact): string {
@@ -22,18 +23,18 @@ async function openGeneratedArtifact(artifact: ChatToolArtifact) {
   await invoke('open_data_url_file', { name: artifact.name ?? 'file.bin', dataUrl })
 }
 
-export function ArtifactFileChip({ artifact }: { artifact: ChatToolArtifact }) {
+export function ArtifactFileChip({ artifact, conversationId }: { artifact: ChatToolArtifact; conversationId?: string | null }) {
   const [error, setError] = useState(false)
-  return <span className="not-prose inline-flex max-w-full flex-col align-top" data-artifact-id={artifact.id ?? undefined}>
-    <FileChip name={artifact.name} ariaLabel={`打开文件 ${artifact.name}`} onClick={() => {
+  return <span className="not-prose" data-artifact-id={artifact.id ?? undefined}>
+    <FileChip variant="inline" name={artifact.name} onRevealLocation={fileLocationAction(artifactPath(artifact), conversationId)} ariaLabel={`打开文件 ${artifact.name}`} onClick={() => {
       setError(false)
       void openGeneratedArtifact(artifact).catch(() => setError(true))
     }} />
-    {error && <span role="status" className="text-xs text-neutral-500">文件无法打开，请检查文件是否仍存在。</span>}
+    {error && <span role="status" className="ml-1 text-xs text-neutral-500">文件无法打开，请检查文件是否仍存在。</span>}
   </span>
 }
 
-export function GeneratedFileArtifacts({ artifacts, includeImages = false }: { artifacts: ChatToolArtifact[]; includeImages?: boolean }) {
+export function GeneratedFileArtifacts({ artifacts, includeImages = false, conversationId }: { artifacts: ChatToolArtifact[]; includeImages?: boolean; conversationId?: string | null }) {
   const fileArtifacts = includeImages ? artifacts : artifacts.filter(isFileArtifact)
   if (fileArtifacts.length === 0) return null
 
@@ -43,6 +44,7 @@ export function GeneratedFileArtifacts({ artifacts, includeImages = false }: { a
         <ArtifactFileChip
           key={`${artifact.path || artifact.name}-${index}`}
           artifact={artifact}
+          conversationId={conversationId}
         />
       ))}
     </div>
