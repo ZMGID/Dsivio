@@ -1114,6 +1114,8 @@ function MarkdownArtifactImage({
         src={src}
         alt={alt}
         name={artifact?.name ?? rawSrc}
+        path={artifact?.path ?? artifact?.filePath ?? artifact?.localPath ?? rawSrc}
+        conversationId={conversationId}
         onOpenViewer={openViewer}
         className="mb-2 mr-2"
       />
@@ -1138,7 +1140,7 @@ function MarkdownArtifactReference({ url, label, image }: { url: string; label: 
     return <MarkdownArtifactImage rawSrc={artifact.name} alt={label || artifact.name}
       artifact={artifact} conversationId={context.conversationId} onImageClick={context.onImageClick} />
   }
-  return <ArtifactFileChip artifact={artifact} />
+  return <ArtifactFileChip artifact={artifact} conversationId={context.conversationId} />
 }
 
 const streamdownPlugins = {

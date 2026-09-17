@@ -7,6 +7,7 @@ pub mod automation;
 pub mod capture_geometry;
 pub mod chat;
 pub mod commands;
+mod computer_control;
 pub mod connectors;
 pub mod dock;
 pub mod external_agents;
@@ -571,12 +572,15 @@ pub fn run() {
             chat::commands::interaction::chat_follow_up_message,
             chat::commands::attachments::chat_read_attachment,
             chat::commands::attachments::chat_open_attachment,
+            chat::commands::attachments::chat_reveal_attachment,
             chat::commands::attachments::chat_open_generated_artifact,
             chat::commands::attachments::chat_reveal_generated_artifact,
             chat::commands::attachments::chat_save_pasted_image,
             chat::commands::attachments::chat_save_pasted_attachment,
             chat::commands::attachments::chat_read_clipboard_files,
             chat::commands::attachments::chat_classify_attachment_paths,
+            chat::commands::attachments::chat_read_clipboard,
+            chat::commands::attachments::chat_write_clipboard_text,
             chat::commands::mutations::chat_delete_conversation,
             chat::commands::mutations::chat_update_conversation,
             chat::commands::title::chat_regenerate_title,
@@ -635,6 +639,10 @@ pub fn run() {
             chat::memory::chat_memory_open_folder,
             mcp::registry::chat_mcp_list_tools,
             mcp::registry::chat_mcp_test_server,
+            computer_control::computer_control_check,
+            computer_control::computer_control_status,
+            computer_control::computer_control_install,
+            computer_control::computer_control_update,
             mcp::registry::chat_mcp_import_json,
             mcp::registry::chat_cli_import_scan,
             mcp::registry::chat_mcp_server_status,

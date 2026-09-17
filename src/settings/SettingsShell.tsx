@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useMemo, useRef, useReducer } from 'react'
 import {
-  X, RefreshCw,
+  X, RefreshCw, Monitor,
   Download, Upload, ArrowLeft,
 } from 'lucide-react'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -32,9 +32,8 @@ import { rebaseDraftAgainstCache } from './rebaseSettingsDraft'
 import { i18n } from './i18n'
 import {
   GeneralIcon, HotkeysIcon, TranslateIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
-  AgentIcon, WebSearchIcon, PluginsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
+  AgentIcon, WebSearchIcon, ConnectorsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
 } from './NavIcons'
-import { PluginCenter, type PluginCenterSection } from '../chat/PluginCenter'
 import { SessionCenter, type SessionCenterProps } from '../chat/SessionCenter'
 import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, resolveSettingsSaveEcho, stableStringify } from './utils'
 import { type ProviderPreset } from './providerPresets'
@@ -52,6 +51,8 @@ import { MemoryTab } from './tabs/MemoryTab'
 import { ChatTab } from './tabs/ChatTab'
 import { ProvidersTab } from './tabs/ProvidersTab'
 import { HooksTab } from './tabs/HooksTab'
+import { PluginPackages } from '../chat/PluginPackages'
+import { ComputerControlTab } from './tabs/ComputerControlTab'
 import { AppearanceGroup, BehaviorGroup, PermissionsGroup } from './tabs/GeneralTab'
 import { AppInfoGroup, UpdateGroup } from './tabs/AboutTab'
 import { MEMORY_L1_MAX_BYTES, utf8ByteLength, type MemoryLayerKey } from './memoryLayers'
@@ -73,7 +74,7 @@ import { WebSearchPanel } from './WebSearchPanel'
 import { defaultChatTools } from './chatToolsShared'
 import { persistThenClose, type SettingsCloseOptions } from './settingsClose'
 
-export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'sessions' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 // UI 字号：以 px 展示、以整体缩放（zoom）实现。CSS 全是 px 硬编码，做不了真正的 rem 基准字号，
@@ -87,11 +88,10 @@ export interface SettingsShellProps {
   onReady?: () => void
   reserveTrafficLightSpace?: boolean
   /** 打开设置面板时选中的侧栏项（如 Chat 内嵌设置默认 AI 客户端） */
+  onRequestPluginAiInstall?: (pluginId: string) => void | Promise<void>
   initialTab?: SettingsTab
   /** embedded 单页模式：隐藏左侧设置导航，只显示 initialTab 对应页（如从扩展点「知识库」进入） */
   hideNav?: boolean
-  /** 插件页「让 AI 代装」：由 Chat 宿主开新对话并发送 install brief */
-  onRequestPluginAiInstall?: (pluginId: string) => void | Promise<void>
   /** 对话库（原扩展中心页）嵌在设置里，选中一条对话时由 Chat 宿主切回去 */
   sessionLibrary?: {
     currentConversationId?: string
@@ -270,15 +270,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [initialSettingsSnapshot, setInitialSettingsSnapshot] = useState('')
   const [loading, setLoading] = useState(true)
   const [appVersion, setAppVersion] = useState('')
-  const [activeTab, setActiveTab] = useState<Exclude<SettingsTab, 'connectors'>>(initialTab === 'connectors' ? 'plugins' : initialTab ?? 'general')
-  const [pluginSection, setPluginSection] = useState<PluginCenterSection>(initialTab === 'connectors' ? 'connectors' : 'plugins')
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'general')
   const navigateToSettingsTab = useCallback((tab: SettingsTab) => {
-    if (tab === 'connectors') {
-      setPluginSection('connectors')
-      setActiveTab('plugins')
-    } else {
-      setActiveTab(tab)
-    }
+    setActiveTab(tab)
   }, [])
   // 用量统计页内的二级视图：用量统计 / 请求调试（请求调试原为独立导航项，现并入用量统计）
   const [usageView, setUsageView] = useState<'stats' | 'debug'>('stats')
@@ -368,7 +362,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     initialSettingsSnapshotRef.current = initialSettingsSnapshot
   }, [initialSettingsSnapshot])
 
-  // 设置页 keep-alive：其它面（插件开关、MCP、收藏、语言、聊天模型）会写 settings，
+  // 设置页 keep-alive：其它页面（工具开关、MCP、收藏、语言、聊天模型）会写 settings，
   // 草稿必须按字段跟缓存对齐，否则整份自动保存会把那些改动盖回去。
   useEffect(() => {
     return subscribeSettings((fresh) => {
@@ -911,7 +905,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       clearTimeout(autosaveTimerRef.current)
       autosaveTimerRef.current = null
     }
-    // 即使草稿看起来 pristine，也要走 persist：插件开关可能已写进缓存，
+    // 即使草稿看起来 pristine，也要走 persist：工具开关可能已写进缓存，
     // persist 会采用那份 plugin MCP，避免把关闭盖回去。
     persistThenClose(persistSettingsNow, onClose, options)
   }, [onClose, persistSettingsNow, recordingTarget])
@@ -1775,8 +1769,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'memory' as const, label: t.tabMemory, icon: MemoryIcon },
     { id: 'mixer' as const, label: t.tabMixer, icon: MixerIcon },
     { id: 'externalAgents' as const, label: t.tabExternalAgents, icon: AgentIcon },
+    { id: 'computerControl' as const, label: lang === 'zh' ? '电脑操控' : 'Computer control', icon: Monitor },
     { id: 'hooks' as const, label: t.tabHooks, icon: HooksIcon },
-    { id: 'plugins' as const, label: t.tabPlugins, icon: PluginsIcon },
+    { id: 'connectors' as const, label: t.tabConnectors, icon: ConnectorsIcon },
     { id: 'sessions' as const, label: t.tabSessions, icon: SessionsIcon },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: WebSearchIcon },
     { id: 'usage' as const, label: lang === 'zh' ? '用量统计' : 'Usage', icon: UsageIcon },
@@ -1818,6 +1813,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
         ? '按副任务路由模型：视觉、标题总结、上下文压缩、生图。'
         : 'Route models by side task: vision, title summaries, context compression, and image generation.',
     },
+    computerControl: {
+      title: lang === 'zh' ? '电脑操控' : 'Computer control',
+      subtitle: lang === 'zh' ? '管理桌面、浏览器和文档操作工具。' : 'Manage desktop, browser, and document control tools.',
+    },
     externalAgents: {
       title: t.tabExternalAgents,
       subtitle: lang === 'zh'
@@ -1828,9 +1827,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       title: t.tabHooks,
       subtitle: t.hooksPageSubtitle,
     },
-    plugins: {
-      title: pluginSection === 'plugins' ? t.tabPlugins : pluginSection === 'apps' ? t.pluginCenterApps : t.tabConnectors,
-      subtitle: pluginSection === 'plugins' ? t.pluginCenterPluginsSubtitle : pluginSection === 'apps' ? t.pluginCenterAppsSubtitle : t.pluginCenterConnectorsSubtitle,
+    connectors: {
+      title: t.tabConnectors,
+      subtitle: t.pluginCenterConnectorsSubtitle,
     },
     sessions: {
       title: t.tabSessions,
@@ -2158,6 +2157,18 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               />
             )}
 
+            {activeTab === 'computerControl' && (
+              <>
+                <ComputerControlTab
+                  onRequestAiInstall={onRequestPluginAiInstall}
+                  lang={lang}
+                  tools={settings.chatTools || defaultChatTools()}
+                  onChange={updateChatTools}
+                />
+                <PluginPackages lang={lang} />
+              </>
+            )}
+
             {/* ===== Hooks 标签页（对话生命周期） ===== */}
             {activeTab === 'hooks' && (
               <HooksTab
@@ -2167,34 +2178,25 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               />
             )}
 
-            {/* ===== 插件、第三方应用与连接器 ===== */}
-            {activeTab === 'plugins' && (
-              <PluginCenter
-                section={pluginSection}
-                onSectionChange={setPluginSection}
+            {activeTab === 'connectors' && (
+              <ConnectorsPanel
+                servers={chatTools.servers}
+                updateChatTools={updateChatTools}
+                obsidianVaultPath={settings?.obsidianVaultPath ?? ''}
+                onObsidianVaultPathChange={(path) => updateSettings({ obsidianVaultPath: path })}
                 lang={lang}
-                onRequestAiInstall={onRequestPluginAiInstall}
-                connectors={
-                  <ConnectorsPanel
-                    servers={chatTools.servers}
-                    updateChatTools={updateChatTools}
-                    obsidianVaultPath={settings?.obsidianVaultPath ?? ''}
-                    onObsidianVaultPathChange={(path) => updateSettings({ obsidianVaultPath: path })}
-                    lang={lang}
-                    testServer={async (server) => {
-                      try {
-                        const result = await api.chatMcpTestServer(server, settings?.chatTools?.toolTimeoutMs)
-                        return {
-                          ok: result.success,
-                          message: result.error || '',
-                          tools: result.tools,
-                        }
-                      } catch {
-                        return null
-                      }
-                    }}
-                  />
-                }
+                testServer={async (server) => {
+                  try {
+                    const result = await api.chatMcpTestServer(server, settings?.chatTools?.toolTimeoutMs)
+                    return {
+                      ok: result.success,
+                      message: result.error || '',
+                      tools: result.tools,
+                    }
+                  } catch {
+                    return null
+                  }
+                }}
               />
             )}
 

@@ -30,7 +30,7 @@ use super::agent_host::{ChatAgentHost, RegistryToolExecutor};
 use super::catalog::{
     chat_memory_prompt_for_request, is_builder_conversation, project_prompt_context_for,
 };
-use super::context::{build_chat_api_messages, resolve_usage_anchor};
+use super::context::{build_chat_api_messages_with_video, resolve_usage_anchor};
 use super::direct_image::complete_direct_image_generation_reply;
 use super::interaction::{emit_chat_stream_delta, emit_chat_tool_record, wait_for_chat_cancel};
 use super::messages::{
@@ -223,19 +223,9 @@ pub(super) async fn complete_assistant_reply_inner(
     }
 
     let last_user_idx = conversation.messages.iter().rposition(|m| m.role == "user");
-    let has_video = conversation
-        .messages
-        .iter()
-        .skip(super::context::context_replay_start_index(conversation))
-        .filter(|message| message.role == "user")
-        .flat_map(|message| &message.attachments)
-        .any(|attachment| crate::chat::video::mime_for_name(&attachment.name).is_some());
-    let auxiliary_video_model = crate::chat::video_analysis::select_model(
-        &settings,
-        &provider,
-        &resolved_model,
-        has_video,
-    )?;
+    let video_plan =
+        crate::chat::video_analysis::plan(&settings, &provider, &resolved_model, conversation)?;
+    let has_video = video_plan.has_video;
     if has_video {
         if model_can_generate_images_directly(&provider, &resolved_model) {
             return Err("视频输入请选择视频理解模型，直接生图模式暂不支持视频。".into());
@@ -481,7 +471,9 @@ pub(super) async fn complete_assistant_reply_inner(
         &skill_registry,
         &mut effective_chat_tools,
         conversation.assistant_snapshot.as_ref(),
-        if conversation.agent_runtime.is_chat() {
+        if conversation.agent_runtime.is_chat()
+            || crate::chat::video_analysis::is_requested(user_content)
+        {
             ""
         } else {
             user_content
@@ -674,13 +666,14 @@ pub(super) async fn complete_assistant_reply_inner(
         _ => system_prompt,
     };
 
-    let mut runtime_messages = match build_chat_api_messages(
+    let mut runtime_messages = match build_chat_api_messages_with_video(
         Some(app),
         &system_prompt,
         conversation,
         last_user_idx,
         last_user_content_for_main,
         main_image_paths,
+        video_plan.send_video,
     ) {
         Ok(messages) => messages,
         Err(error) => {
@@ -695,10 +688,10 @@ pub(super) async fn complete_assistant_reply_inner(
             return Err(error);
         }
     };
-    if let Some(video_model) = auxiliary_video_model {
+    if let Some(ref video_model) = video_plan.model {
         let mut record = crate::chat::video_analysis::tool_record(
             &settings,
-            &video_model,
+            video_model,
             crate::chat::video_analysis::video_count(&runtime_messages),
         );
         let started = Instant::now();
@@ -712,7 +705,7 @@ pub(super) async fn complete_assistant_reply_inner(
         emit_chat_tool_record(app, &run_id, &record);
         let analysis = tokio::select! {
             result = crate::chat::video_analysis::analyze(
-                state.inner(), &settings, &video_model, &runtime_messages,
+                state.inner(), &settings, video_model, &runtime_messages,
                 &conversation.id, &assistant_message_id, retry_attempts, &language,
             ) => result,
             _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
@@ -731,6 +724,7 @@ pub(super) async fn complete_assistant_reply_inner(
         };
         match analysis {
             Ok(content) => {
+                video_plan.save_report(&mut record, &content);
                 finish_auxiliary_vision_tool_record(
                     &mut record,
                     ToolCallStatus::Success,
@@ -766,6 +760,13 @@ pub(super) async fn complete_assistant_reply_inner(
                 return Err(error);
             }
         }
+    }
+    if video_plan.model.is_none() && !video_plan.send_video && !video_plan.reports.is_empty() {
+        crate::chat::video_analysis::apply_saved_reports(
+            &mut runtime_messages,
+            &video_plan.reports,
+            &language,
+        );
     }
     let mut fallback_chat_tools = effective_chat_tools.clone();
     if skill_id.is_some() && fallback_chat_tools.skill_fallback_mode == "progressive" {

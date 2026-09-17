@@ -31,6 +31,7 @@ import {
 import { ChatAttachments } from './ChatAttachments'
 import { PastedTextEditorModal } from './PastedTextEditorModal'
 import { ComposerAddMenu } from './ComposerAddMenu'
+import { useComposerContextMenu, type ComposerPasteTarget } from './useComposerContextMenu'
 import { SourcesButton } from './SourcesButton'
 import { onComposerInsert, onComposerTextInsert } from './composerInsert'
 import { draftKey, getComposerDraft, migrateNewChatDraft, setComposerDraft } from './composerDraft'
@@ -164,6 +165,7 @@ type SlashCommandId =
   | 'settings'
   | 'tools'
   | 'attach'
+  | 'video'
 type LocalSlashCommand = SlashCommandDefinition & { id: SlashCommandId; kind: 'action' }
 
 interface ActiveSlashToken {
@@ -173,6 +175,11 @@ interface ActiveSlashToken {
 }
 
 const LOCAL_SLASH_COMMANDS: LocalSlashCommand[] = [
+  {
+    id: 'video', slash: '/video', title: '/video',
+    description: 'Analyze or re-analyze attached videos', category: 'Local', kind: 'action',
+    keywords: ['video', 'analyze', '视频', '分析', '重新分析'],
+  },
   {
     id: 'help',
     slash: '/help',
@@ -425,6 +432,8 @@ export interface InputBarProps {
   layout?: 'footer' | 'inline'
   /** 外部 CLI 模式：斜杠命令直通 Agent，不展示 Kivio 弹层 */
   usesExternalRuntime?: boolean
+  hasVideoHistory?: boolean
+  videoAnalysisEnabled?: boolean
   /** Kivio Chat：不提供 /plan /orchestrate / 技能斜杠（那些是 Agent 能力） */
   usesChatRuntime?: boolean
   externalAgentName?: string | null
@@ -514,6 +523,8 @@ export const InputBar = memo(function InputBar({
   autoFocus,
   layout = 'footer',
   usesExternalRuntime = false,
+  hasVideoHistory = false,
+  videoAnalysisEnabled = true,
   usesChatRuntime = false,
   externalAgentName = null,
   conversationId = null,
@@ -1204,6 +1215,10 @@ export const InputBar = memo(function InputBar({
     setSlashPanelOpen(false)
 
     switch (command.id) {
+      case 'video':
+        setInput('/video ')
+        textareaRef.current?.focus()
+        return
       case 'goal':
         setInput('/goal ')
         requestAnimationFrame(() => {
@@ -1342,9 +1357,13 @@ export const InputBar = memo(function InputBar({
     const quotedBlock = quotes
       .map((q) => q.split('\n').map((line) => `> ${line}`).join('\n'))
       .join('\n\n')
-    const content = quotedBlock
+    const contentWithQuotes = quotedBlock
       ? (trimmed ? `${quotedBlock}\n\n${trimmed}` : quotedBlock)
       : trimmed
+    // Keep the explicit command at the start even when the composer contains quotes.
+    const content = quotedBlock && /^\/video(?:\s|$)/.test(trimmed)
+      ? `/video ${quotedBlock}\n\n${trimmed.slice(6).trim()}`
+      : contentWithQuotes
     if (disabled && onQueue) {
       onQueue(content, attachments)
       clearSentDraft(draftKeyRef.current)
@@ -1507,8 +1526,12 @@ export const InputBar = memo(function InputBar({
     syncSlashToken(el.value, el.selectionStart)
   }
 
-  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (composerLocked || !isTauriRuntime()) return
+  const handlePaste = async (
+    e: { clipboardData: Pick<DataTransfer, 'files' | 'getData'>; preventDefault: () => void },
+    menuTarget?: ComposerPasteTarget,
+    knownNativePaths?: string[],
+  ) => {
+    if (composerLocked || optimizeBusy || (!isTauriRuntime() && !menuTarget)) return
 
     const attachableClipboardFiles = Array.from(e.clipboardData.files).filter(isAttachableClipboardFile)
     const textarea = textareaRef.current
@@ -1525,16 +1548,19 @@ export const InputBar = memo(function InputBar({
       e.preventDefault()
     }
 
-    const nativeFiles: Array<{ path: string; name: string; kind?: 'file' | 'directory' }> = []
+    const nativeFiles: Array<{ path: string; name: string; kind?: 'file' | 'directory' }> = knownNativePaths?.length ? await api.chatClassifyAttachmentPaths(knownNativePaths) : []
     try {
-      const native = await api.chatReadClipboardFiles()
-      if (native.success && native.files?.length) {
-        nativeFiles.push(...native.files)
+      if (!knownNativePaths && isTauriRuntime()) {
+        const native = await api.chatReadClipboardFiles()
+        if (native.success && native.files?.length) {
+          nativeFiles.push(...native.files)
+        }
       }
     } catch (err) {
       console.error('Failed to read clipboard files:', err)
     }
 
+    if (menuTarget && !menuTarget.isCurrent()) return
     const hasNativeFiles = nativeFiles.length > 0
     const hasClipboardFiles = attachableClipboardFiles.length > 0
 
@@ -1551,11 +1577,11 @@ export const InputBar = memo(function InputBar({
             content: clipText,
           },
         ])
-      }
+      } else if (clipText) menuTarget?.insertText(clipText)
       return
     }
 
-    if (hasNativeFiles && textarea) {
+    if (hasNativeFiles && textarea && !menuTarget) {
       // 等浏览器默认粘贴与 React onChange 完成后，只在内容完全等于“插入了文件名”时撤销。
       window.setTimeout(() => {
         undoAccidentalFilenamePaste(
@@ -1625,7 +1651,7 @@ export const InputBar = memo(function InputBar({
         return
       }
 
-      addAttachments(pastedAttachments)
+      if (!menuTarget || menuTarget.isCurrent()) addAttachments(pastedAttachments)
     } catch (err) {
       console.error('Failed to paste chat attachment:', err)
       setAttachmentError(
@@ -1633,6 +1659,49 @@ export const InputBar = memo(function InputBar({
       )
     }
   }
+
+  const composerContextMenu = useComposerContextMenu({
+    textareaRef, scopeKey: draftKeyValue, readOnly: composerLocked || optimizeBusy,
+    onError: setAttachmentError,
+    onPaste: async (target) => {
+      // 桌面端全部走系统剪贴板；WebView 的 read/readText 会弹出网站权限请求。
+      let nativePaths: string[] = []
+      const clipboard = new DataTransfer()
+      if (isTauriRuntime()) {
+        const content = await api.chatReadClipboard()
+        if (!target.isCurrent()) return
+        if (content.kind === 'files') nativePaths = content.paths
+        if (content.kind === 'text') clipboard.setData('text/plain', content.text)
+        if (content.kind === 'image') {
+          const bytes = Uint8Array.from(atob(content.dataBase64), char => char.charCodeAt(0))
+          clipboard.items.add(new File([bytes], 'pasted-image.png', { type: 'image/png' }))
+        }
+        await handlePaste({ clipboardData: clipboard, preventDefault: () => {} }, target, nativePaths)
+        return
+      }
+      if (!target.isCurrent()) return
+      if (!nativePaths.length) {
+        if (navigator.clipboard?.read) {
+          const items = await navigator.clipboard.read()
+          for (const item of items) {
+            const imageType = item.types.find(type => type.startsWith('image/'))
+            if (imageType) {
+              const blob = await item.getType(imageType)
+              clipboard.items.add(new File([blob], `pasted-image.${imageExtensionForMime(imageType)}`, { type: imageType }))
+            } else if (item.types.includes('text/plain')) {
+              clipboard.setData('text/plain', await (await item.getType('text/plain')).text())
+            }
+          }
+        } else if (navigator.clipboard?.readText) {
+          clipboard.setData('text/plain', await navigator.clipboard.readText())
+        } else {
+          throw new Error('Clipboard is unavailable')
+        }
+      }
+      if (!target.isCurrent()) return
+      await handlePaste({ clipboardData: clipboard, preventDefault: () => {} }, target, nativePaths)
+    },
+  })
 
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== id))
@@ -2156,10 +2225,25 @@ export const InputBar = memo(function InputBar({
               {attachments.some(attachment => attachment.type === 'video') && (
                 <p className="mt-2 text-[12px] text-neutral-500">
                   {gitLang === 'zh'
-                    ? (usesExternalRuntime ? '视频将作为文件路径交给外部 CLI 代理。' : '请选择支持视频输入的模型。当前上下文视频合计最多 14 MiB。')
-                    : (usesExternalRuntime ? 'Video file paths are passed to the external CLI agent.' : 'Choose a video-capable model. Videos in the current context can total up to 14 MiB.')}
+                    ? (usesExternalRuntime ? '视频将作为文件路径交给外部 CLI 代理。' : '普通发送不会启动混音器分析；支持视频的主模型可直接读取。当前上下文视频合计最多 14 MiB。')
+                    : (usesExternalRuntime ? 'Video file paths are passed to the external CLI agent.' : 'Sending does not start Mixer analysis. A video-capable main model can read directly. Limit: 14 MiB per context.')}
                 </p>
               )}
+            </div>
+          )}
+          {!usesExternalRuntime && (hasVideoHistory || attachments.some(a => a.type === 'video')) && (
+            <div className="mb-2 flex items-center gap-2 px-1 text-[12px] text-neutral-500">
+              <button type="button" className="kv-btn sm" disabled={composerLocked || !videoAnalysisEnabled}
+                onClick={() => {
+                  setInput(value => /^\/video(?:\s|$)/.test(value.trim()) ? value : `/video ${value}`)
+                  setSlashPanelOpen(false)
+                  textareaRef.current?.focus()
+                }}>
+                {gitLang === 'zh' ? (hasVideoHistory ? '分析 / 重新分析视频' : '分析视频') : 'Analyze / re-analyze video'}
+              </button>
+              <span>{gitLang === 'zh'
+                ? (videoAnalysisEnabled ? '随下一条消息执行；续聊复用结果。' : '视频分析已关闭，可在设置 > 混音器中启用。')
+                : (videoAnalysisEnabled ? 'Runs with your next message; follow-ups reuse observations.' : 'Video analysis is disabled in Settings > Mixer.')}</span>
             </div>
           )}
           {attachmentError && (
@@ -2224,6 +2308,7 @@ export const InputBar = memo(function InputBar({
                 aria-busy={sendPending || optimizeBusy}
                 onChange={handleInput}
                 onPaste={(e) => void handlePaste(e)}
+                onContextMenu={composerContextMenu.onContextMenu}
                 onKeyDown={handleKeyDown}
                 onSelect={handleSelect}
                 onScroll={syncSlashHighlightScroll}
@@ -2254,6 +2339,7 @@ export const InputBar = memo(function InputBar({
                     : 'text-neutral-900 dark:text-neutral-100'
                 } ${optimizing ? 'is-optimizing' : ''} ${optimizeMotion === 'out' ? 'is-optimize-out' : ''} ${optimizeMotion === 'in' ? 'is-optimize-reveal' : ''}`}
               />
+              {composerContextMenu.menu}
             </div>
 
             {/* 发送 / 停止：绝对定位在输入行右侧。两按钮共存于同一槽位，做 opacity+scale

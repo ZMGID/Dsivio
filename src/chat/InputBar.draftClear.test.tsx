@@ -58,6 +58,22 @@ function RewindFirstMessage({ conversationId }: { conversationId: string }) {
 }
 
 describe('InputBar 发送清草稿', () => {
+  it('显示自定义编辑菜单，拦截原生菜单且不冒泡到全局', () => {
+    const blockContextMenu = vi.fn((event: Event) => event.preventDefault())
+    document.addEventListener('contextmenu', blockContextMenu)
+    try {
+      render(<InputBar onSend={() => {}} conversationId="composer-context-menu" />)
+      const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+      fireEvent(screen.getByRole('textbox'), event)
+      expect(event.defaultPrevented).toBe(true)
+      expect(blockContextMenu).not.toHaveBeenCalled()
+      expect(screen.getByRole('menu')).toHaveClass('kv-menu')
+      expect(screen.getByRole('menuitem', { name: '粘贴' })).toBeVisible()
+    } finally {
+      document.removeEventListener('contextmenu', blockContextMenu)
+    }
+  })
+
   it('回到首条消息后，原文会进入新挂载的欢迎页输入框', () => {
     render(<RewindFirstMessage conversationId="c-rewind-first-message" />)
 
