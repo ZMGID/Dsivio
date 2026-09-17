@@ -32,9 +32,10 @@ import { rebaseDraftAgainstCache } from './rebaseSettingsDraft'
 import { i18n } from './i18n'
 import {
   GeneralIcon, HotkeysIcon, TranslateIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
-  AgentIcon, WebSearchIcon, PluginsIcon, ConnectorsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
+  AgentIcon, WebSearchIcon, PluginsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
 } from './NavIcons'
 import { SessionCenter, type SessionCenterProps } from '../chat/SessionCenter'
+import { PluginCenter, type PluginCenterSection } from '../chat/PluginCenter'
 import { buildHotkey, formatHotkeyError, getPlatform, isProviderEnabled, resolveSettingsSaveEcho, stableStringify } from './utils'
 import { type ProviderPreset } from './providerPresets'
 import { ProviderModelsPicker } from './ProviderModelsPicker'
@@ -51,7 +52,6 @@ import { MemoryTab } from './tabs/MemoryTab'
 import { ChatTab } from './tabs/ChatTab'
 import { ProvidersTab } from './tabs/ProvidersTab'
 import { HooksTab } from './tabs/HooksTab'
-import { PluginPackages } from '../chat/PluginPackages'
 import { ComputerControlTab } from './tabs/ComputerControlTab'
 import { AppearanceGroup, BehaviorGroup, PermissionsGroup } from './tabs/GeneralTab'
 import { AppInfoGroup, UpdateGroup } from './tabs/AboutTab'
@@ -270,9 +270,15 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const [initialSettingsSnapshot, setInitialSettingsSnapshot] = useState('')
   const [loading, setLoading] = useState(true)
   const [appVersion, setAppVersion] = useState('')
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab ?? 'general')
+  const [activeTab, setActiveTab] = useState<Exclude<SettingsTab, 'connectors'>>(initialTab === 'connectors' ? 'plugins' : initialTab ?? 'general')
+  const [pluginSection, setPluginSection] = useState<PluginCenterSection>(initialTab === 'connectors' ? 'connectors' : 'plugins')
   const navigateToSettingsTab = useCallback((tab: SettingsTab) => {
-    setActiveTab(tab)
+    if (tab === 'connectors') {
+      setPluginSection('connectors')
+      setActiveTab('plugins')
+    } else {
+      setActiveTab(tab)
+    }
   }, [])
   // 用量统计页内的二级视图：用量统计 / 请求调试（请求调试原为独立导航项，现并入用量统计）
   const [usageView, setUsageView] = useState<'stats' | 'debug'>('stats')
@@ -1772,7 +1778,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'computerControl' as const, label: lang === 'zh' ? '电脑操控' : 'Computer control', icon: Monitor },
     { id: 'hooks' as const, label: t.tabHooks, icon: HooksIcon },
     { id: 'plugins' as const, label: t.tabPlugins, icon: PluginsIcon },
-    { id: 'connectors' as const, label: t.tabConnectors, icon: ConnectorsIcon },
     { id: 'sessions' as const, label: t.tabSessions, icon: SessionsIcon },
     { id: 'webSearch' as const, label: t.tabWebSearch, icon: WebSearchIcon },
     { id: 'usage' as const, label: lang === 'zh' ? '用量统计' : 'Usage', icon: UsageIcon },
@@ -1829,12 +1834,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       subtitle: t.hooksPageSubtitle,
     },
     plugins: {
-      title: t.tabPlugins,
-      subtitle: lang === 'zh' ? '导入、启用和管理插件包。' : 'Import, enable, and manage plugin packages.',
-    },
-    connectors: {
-      title: t.tabConnectors,
-      subtitle: t.pluginCenterConnectorsSubtitle,
+      title: pluginSection === 'plugins' ? t.tabPlugins : t.tabConnectors,
+      subtitle: pluginSection === 'plugins' ? t.pluginCenterPluginsSubtitle : t.pluginCenterConnectorsSubtitle,
     },
     sessions: {
       title: t.tabSessions,
@@ -2171,10 +2172,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               />
             )}
 
-            {activeTab === 'plugins' && (
-              <PluginPackages lang={lang} />
-            )}
-
             {/* ===== Hooks 标签页（对话生命周期） ===== */}
             {activeTab === 'hooks' && (
               <HooksTab
@@ -2184,25 +2181,33 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               />
             )}
 
-            {activeTab === 'connectors' && (
-              <ConnectorsPanel
-                servers={chatTools.servers}
-                updateChatTools={updateChatTools}
-                obsidianVaultPath={settings?.obsidianVaultPath ?? ''}
-                onObsidianVaultPathChange={(path) => updateSettings({ obsidianVaultPath: path })}
+            {/* ===== 插件与连接器；第三方应用入口已删除 ===== */}
+            {activeTab === 'plugins' && (
+              <PluginCenter
+                section={pluginSection}
+                onSectionChange={setPluginSection}
                 lang={lang}
-                testServer={async (server) => {
-                  try {
-                    const result = await api.chatMcpTestServer(server, settings?.chatTools?.toolTimeoutMs)
-                    return {
-                      ok: result.success,
-                      message: result.error || '',
-                      tools: result.tools,
-                    }
-                  } catch {
-                    return null
-                  }
-                }}
+                connectors={
+                  <ConnectorsPanel
+                    servers={chatTools.servers}
+                    updateChatTools={updateChatTools}
+                    obsidianVaultPath={settings?.obsidianVaultPath ?? ''}
+                    onObsidianVaultPathChange={(path) => updateSettings({ obsidianVaultPath: path })}
+                    lang={lang}
+                    testServer={async (server) => {
+                      try {
+                        const result = await api.chatMcpTestServer(server, settings?.chatTools?.toolTimeoutMs)
+                        return {
+                          ok: result.success,
+                          message: result.error || '',
+                          tools: result.tools,
+                        }
+                      } catch {
+                        return null
+                      }
+                    }}
+                  />
+                }
               />
             )}
 

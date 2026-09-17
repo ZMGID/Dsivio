@@ -1200,7 +1200,7 @@ describe('MessageBubble explicit artifact presentation', () => {
     expect(screen.getByRole('button', { name: /report\.txt/ })).toBeInTheDocument()
   })
 
-  it('lays presented images out as wrapping tiles and files as inline links', () => {
+  it('lays presented images out as wrapping tiles and files as compact chips', () => {
     const message: ChatMessage = {
       id: 'msg-mixed-artifacts',
       role: 'assistant',
@@ -1258,8 +1258,8 @@ describe('MessageBubble explicit artifact presentation', () => {
     expect(images[0]?.closest('.flex-wrap')).not.toBeNull()
     expect(images[0]?.closest('button')?.style.width).toBe('128px')
     expect(images[0]?.closest('button')?.className ?? '').not.toContain('h-16')
-    expect(screen.getByRole('button', { name: '打开文件 简历.pdf' }).className).toContain('inline')
-    expect(screen.getByRole('button', { name: '打开文件 notes.md' }).className).toContain('inline')
+    expect(screen.getByRole('button', { name: '打开文件 简历.pdf' }).className).toContain('h-16')
+    expect(screen.getByRole('button', { name: '打开文件 notes.md' }).className).toContain('h-16')
     expect(container.textContent).not.toContain('%PDF')
   })
 })
