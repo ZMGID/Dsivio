@@ -85,6 +85,18 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
     numeric_version(latest) > numeric_version(current)
 }
 
+fn validate_self_update_result(
+    result: Result<String, String>,
+    previous_version: &str,
+    observed_version: &str,
+) -> Result<(), String> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(_) if is_newer_version(observed_version, previous_version) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 async fn read_output(mut stream: impl AsyncRead + Unpin) -> Result<String, String> {
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 8192];
@@ -263,7 +275,7 @@ pub async fn computer_control_update(
     let _guard = INSTALL_LOCK
         .try_lock()
         .map_err(|_| "Another computer-control installation is running")?;
-    computer_control_check(tool).await?;
+    let previous_version = extract_version(&computer_control_check(tool).await?);
 
     let home = directories::BaseDirs::new()
         .ok_or("Home directory unavailable")?
@@ -275,8 +287,10 @@ pub async fn computer_control_update(
             // then refresh its separately versioned official Skill pack.
             state.mcp_disconnect_server(CUA_MCP_SERVER_ID).await;
             state.mcp_disconnect_server(LEGACY_CUA_MCP_SERVER_ID).await;
-            run("cua-driver", &["update", "--apply", "--json"], None, 300).await?;
+            let update_result = run("cua-driver", &["update", "--apply", "--json"], None, 300).await;
             crate::path_env::refresh_path_now();
+            let observed_version = extract_version(&computer_control_check(tool).await?);
+            validate_self_update_result(update_result, &previous_version, &observed_version)?;
             run("cua-driver", &["skills", "update"], None, 180).await?;
             home.join(".cua-driver/skills/cua-driver")
         }
@@ -321,5 +335,15 @@ mod tests {
         assert!(is_newer_version("0.28.2", "0.28.1"));
         assert!(!is_newer_version("0.28.1", "0.28.2"));
         assert!(!is_newer_version("0.28.2", "0.28.2"));
+    }
+
+    #[test]
+    fn accepts_self_update_when_the_binary_was_replaced_despite_process_error() {
+        assert!(validate_self_update_result(
+            Err("installer process exited unsuccessfully".to_string()),
+            "0.28.1",
+            "0.28.2",
+        )
+        .is_ok());
     }
 }

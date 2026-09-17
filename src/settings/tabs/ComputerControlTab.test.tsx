@@ -190,4 +190,21 @@ describe('ComputerControlTab', () => {
     fireEvent.click(button)
     await waitFor(() => expect(api.computerControlUpdate).toHaveBeenCalledWith('cua'))
   })
+
+  it('shows the backend error when a native tool update fails', async () => {
+    vi.mocked(api.computerControlStatus).mockImplementation(async tool => {
+      if (tool === 'cua') return { currentVersion: '0.28.1', latestVersion: '0.28.2', updateAvailable: true }
+      throw new Error('playwright-cli not found')
+    })
+    vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [cuaSkill] })
+    vi.mocked(api.computerControlUpdate).mockRejectedValue(new Error('installer exited with code 1'))
+    const tools = defaultChatTools()
+    tools.enabled = true
+    tools.servers = [cuaMcp]
+
+    render(<ComputerControlTab lang="zh" tools={tools} onChange={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: '更新' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('更新失败：installer exited with code 1')
+  })
 })

@@ -227,8 +227,18 @@ export function ComputerControlTab({ lang, tools, onChange }: {
       if (!mounted.current) return
       setNativeControlEnabled(tool, skill.id, true)
       await reload(false)
-    } catch {
-      if (mounted.current) setError(zh ? '更新失败，请稍后重试。' : 'Update failed. Please try again.')
+    } catch (cause) {
+      console.error('Failed to update computer-control tool:', cause)
+      const detail = typeof cause === 'string'
+        ? cause
+        : cause instanceof Error
+          ? cause.message
+          : ''
+      if (mounted.current) {
+        setError(detail
+          ? `${zh ? '更新失败' : 'Update failed'}：${detail.slice(0, 240)}`
+          : (zh ? '更新失败，请稍后重试。' : 'Update failed. Please try again.'))
+      }
     } finally {
       if (mounted.current) setUpdating(null)
     }
