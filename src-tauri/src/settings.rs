@@ -1952,7 +1952,7 @@ pub fn skill_global_unavailable_error(
     if !crate::plugins::plugin_skill_available(skill_id) {
         if let Some(plugin_id) = crate::plugins::skill_owned_by_plugin(skill_id) {
             return Some(format!(
-                "Skill is managed by plugin «{plugin_id}» — enable it in 扩展 → 插件: {skill_name}"
+                "Skill belongs to operation tool «{plugin_id}» — enable it in 设置 → 电脑操控: {skill_name}"
             ));
         }
         return Some(format!("Skill is unavailable: {skill_name}"));
@@ -2648,6 +2648,23 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     settings.chat_tools.native_tools.workspace_roots.clear();
     for server in &mut settings.chat_tools.servers {
         server.id = server.id.trim().to_string();
+        let is_legacy_cua = server.id == "plugin-cua-driver"
+            || server
+                .connector_id
+                .as_deref()
+                .is_some_and(|id| id.trim() == "plugin:cua-driver");
+        if is_legacy_cua {
+            server.id = "computer-control-cua-driver".to_string();
+            server.name = "Cua Driver".to_string();
+            server.connector_id = None;
+            server.transport = "stdio".to_string();
+            if server.command.trim().is_empty() {
+                server.command = "cua-driver".to_string();
+            }
+            if server.args.is_empty() {
+                server.args = vec!["mcp".to_string()];
+            }
+        }
         if server.id.is_empty() {
             server.id = format!("mcp-{}", uuid::Uuid::new_v4());
         }
@@ -2718,6 +2735,11 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             }
         });
     }
+    let mut seen_server_ids = std::collections::HashSet::new();
+    settings
+        .chat_tools
+        .servers
+        .retain(|server| seen_server_ids.insert(server.id.clone()));
 
     // 清理归档目录路径（去除首尾空白）
     settings.image_archive_path = settings.image_archive_path.trim().to_string();
@@ -4577,6 +4599,29 @@ mod tests {
         let server = &s.chat_tools.servers[0];
         assert_eq!(server.transport, "stdio");
         assert_eq!(server.command, "npx");
+    }
+
+    #[test]
+    fn sanitize_settings_moves_cua_mcp_out_of_plugins() {
+        let mut s = Settings::default();
+        s.chat_tools.servers.push(ChatMcpServer {
+            id: "plugin-cua-driver".to_string(),
+            name: "Cua Driver (插件)".to_string(),
+            enabled: true,
+            transport: "stdio".to_string(),
+            command: "cua-driver".to_string(),
+            args: vec!["mcp".to_string()],
+            connector_id: Some("plugin:cua-driver".to_string()),
+            ..Default::default()
+        });
+
+        let s = sanitize_settings(s);
+        let server = &s.chat_tools.servers[0];
+        assert_eq!(server.id, "computer-control-cua-driver");
+        assert_eq!(server.name, "Cua Driver");
+        assert_eq!(server.connector_id, None);
+        assert_eq!(server.args, vec!["mcp".to_string()]);
+        assert!(server.enabled);
     }
 
     #[test]

@@ -2409,6 +2409,10 @@ export const api = {
   },
   chatMcpListTools: (cachedOnly = false) =>
     invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null; discoveryPending?: boolean }>('chat_mcp_list_tools', { cachedOnly }),
+  computerControlCheck: (tool: 'cua' | 'playwright') =>
+    invoke<string>('computer_control_check', { tool }),
+  computerControlInstall: (tool: 'cua' | 'playwright') =>
+    invoke<SkillMeta>('computer_control_install', { tool }),
   chatMcpTestServer: (server: ChatMcpServer, timeoutMs?: number) =>
     invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null }>(
       'chat_mcp_test_server',

@@ -274,6 +274,60 @@ fn project_context_prompt(project: &ProjectPromptContext) -> String {
     }
 }
 
+fn computer_control_system_prompt(
+    registry: &skills::SkillRegistry,
+    chat_tools: &ChatToolsConfig,
+    tools_available: bool,
+    assistant_snapshot: Option<&ChatAssistantSnapshot>,
+) -> Option<String> {
+    if !tools_available
+        || !chat_tools.enabled
+        || !chat_tools.native_tools.skill_runtime
+        || !chat_tools.native_tools.run_command
+        || !chat_tools.native_tools.read_file
+    {
+        return None;
+    }
+
+    let skill_available = |skill_id: &str| {
+        registry.find(skill_id).is_some()
+            && skill_allowed_for_conversation(chat_tools, assistant_snapshot, skill_id, false)
+    };
+    let mut lines = Vec::new();
+
+    if skill_available("playwright-cli") {
+        lines.push(
+            "- Browser interaction: prefer Playwright CLI over generic web tools; activate the `playwright-cli` skill before using it.",
+        );
+    }
+
+    if skill_available("cua-driver") {
+        let cua_server = chat_tools.servers.iter().find(|server| {
+            server.enabled
+                && !server.command.trim().is_empty()
+                && (server.id == "computer-control-cua-driver"
+                    || server.id == "plugin-cua-driver"
+                    || server.connector_id.as_deref() == Some("computer-control:cua")
+                    || server.connector_id.as_deref() == Some("plugin:cua-driver"))
+        });
+        let mcp_available = cua_server.is_some_and(|server| {
+            assistant_snapshot.is_none_or(|assistant| {
+                assistant
+                    .mcp_server_ids
+                    .iter()
+                    .any(|server_id| server_id == &server.id)
+            })
+        });
+        if mcp_available {
+            lines.push(
+                "- Desktop application interaction: prefer Cua Driver; activate the `cua-driver` skill and use its enabled MCP tools.",
+            );
+        }
+    }
+
+    (!lines.is_empty()).then(|| format!("Enabled computer-control tools:\n{}", lines.join("\n")))
+}
+
 pub fn build_chat_system_prompt_with_segments(
     language: &str,
     has_image: bool,
@@ -445,6 +499,21 @@ pub fn build_chat_system_prompt_with_segments(
                 "runtime_context",
                 "Runtime context",
                 text,
+            );
+        }
+
+        if let Some(text) = computer_control_system_prompt(
+            registry,
+            chat_tools,
+            tools_available,
+            assistant_snapshot,
+        ) {
+            append_context_segment(
+                &mut prompt,
+                &mut segments,
+                "runtime_context",
+                "Runtime context",
+                &text,
             );
         }
     }
@@ -1140,6 +1209,27 @@ mod tests {
         }
     }
 
+    fn test_skill_record(id: &str) -> skills::SkillRecord {
+        skills::SkillRecord {
+            meta: skills::SkillMeta {
+                id: id.to_string(),
+                name: id.to_string(),
+                description: String::new(),
+                source: "user".to_string(),
+                path: None,
+                recommended_tools: Vec::new(),
+                disable_model_invocation: false,
+                files: Vec::new(),
+                triggers: Vec::new(),
+                argument_hint: None,
+                arguments: Vec::new(),
+            },
+            location: std::path::PathBuf::new(),
+            base_dir: std::path::PathBuf::new(),
+            body: String::new(),
+        }
+    }
+
     fn test_mcp_tool() -> ChatToolDefinition {
         ChatToolDefinition {
             id: "mcp__demo__search".to_string(),
@@ -1199,6 +1289,91 @@ mod tests {
         assert!(prompt.contains("bash"));
         assert!(!prompt.contains("web_search"));
         assert!(!prompt.contains("web_fetch"));
+    }
+
+    #[test]
+    fn chat_prompt_mentions_enabled_playwright_cli() {
+        let registry = skills::SkillRegistry {
+            records: vec![test_skill_record("playwright-cli")],
+            warnings: Vec::new(),
+        };
+        let mut chat_tools = crate::settings::ChatToolsConfig::default();
+        chat_tools.enabled = true;
+        chat_tools.native_tools.skill_runtime = true;
+        chat_tools.native_tools.run_command = true;
+        chat_tools.native_tools.read_file = true;
+
+        let build = |chat_tools: &crate::settings::ChatToolsConfig| {
+            build_chat_system_prompt(
+                "zh-CN",
+                false,
+                false,
+                &registry,
+                chat_tools,
+                true,
+                &["bash".to_string(), "read".to_string()],
+                None,
+                None,
+                None,
+                None,
+                "",
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &[],
+            )
+        };
+
+        let prompt = build(&chat_tools);
+        assert!(
+            prompt.contains("Enabled computer-control tools"),
+            "{prompt}"
+        );
+        assert!(
+            prompt.contains("prefer Playwright CLI over generic web tools"),
+            "{prompt}"
+        );
+
+        chat_tools.disabled_skill_ids = vec!["playwright-cli".to_string()];
+        let disabled_prompt = build(&chat_tools);
+        assert!(
+            !disabled_prompt.contains("prefer Playwright CLI"),
+            "{disabled_prompt}"
+        );
+    }
+
+    #[test]
+    fn computer_control_prompt_requires_cua_skill_and_mcp() {
+        let registry = skills::SkillRegistry {
+            records: vec![test_skill_record("cua-driver")],
+            warnings: Vec::new(),
+        };
+        let mut chat_tools = crate::settings::ChatToolsConfig::default();
+        chat_tools.enabled = true;
+        chat_tools.native_tools.skill_runtime = true;
+        chat_tools.native_tools.run_command = true;
+        chat_tools.native_tools.read_file = true;
+        chat_tools.servers.push(crate::settings::ChatMcpServer {
+            id: "computer-control-cua-driver".to_string(),
+            name: "Cua Driver".to_string(),
+            enabled: true,
+            command: "cua-driver".to_string(),
+            args: vec!["mcp".to_string()],
+            ..Default::default()
+        });
+
+        let prompt =
+            computer_control_system_prompt(&registry, &chat_tools, true, None).expect("Cua prompt");
+        assert!(prompt.contains("prefer Cua Driver"), "{prompt}");
+
+        chat_tools.servers[0].enabled = false;
+        assert!(computer_control_system_prompt(&registry, &chat_tools, true, None).is_none());
     }
 
     #[test]

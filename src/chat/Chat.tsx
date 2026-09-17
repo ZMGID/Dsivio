@@ -292,7 +292,6 @@ const ChatSettingsPane = memo(function ChatSettingsPane({
   onClose,
   onSettingsChange,
   onReady,
-  onRequestPluginAiInstall,
   sessionLibrary,
   onRender,
 }: {
@@ -304,7 +303,6 @@ const ChatSettingsPane = memo(function ChatSettingsPane({
   onClose: () => void
   onSettingsChange: () => void
   onReady: () => void
-  onRequestPluginAiInstall: (pluginId: string) => void | Promise<void>
   sessionLibrary: NonNullable<SettingsShellProps['sessionLibrary']>
   onRender: ProfilerOnRenderCallback
 }) {
@@ -324,7 +322,6 @@ const ChatSettingsPane = memo(function ChatSettingsPane({
             onClose={onClose}
             onSettingsChange={onSettingsChange}
             onReady={onReady}
-            onRequestPluginAiInstall={onRequestPluginAiInstall}
             sessionLibrary={sessionLibrary}
           />
         </Profiler>
@@ -718,7 +715,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [disabledSkillIds, setDisabledSkillIds] = useState<string[]>([])
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>(() => {
     const path = hashPath()
-    if (isChatPluginCenterPath(path)) return 'plugins'
+    if (isChatPluginCenterPath(path)) return 'computerControl'
     if (isChatSessionCenterPath(path)) return 'sessions'
     return 'chat'
   })
@@ -1451,7 +1448,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   }, [])
 
   const openEmbeddedSettingsForPlugins = useCallback(() => {
-    setSettingsInitialTab('plugins')
+    setSettingsInitialTab('computerControl')
     setChatView('settings')
     setHash('#chat/settings')
   }, [])
@@ -1575,7 +1572,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     })
   }, [])
 
-  // 空闲预取各中心页 chunk，避免首次切到设置/专家/技能/插件时才触发 lazy import 而转圈；
+  // 空闲预取各中心页 chunk，避免首次切到设置/专家/技能/MCP 时才触发 lazy import 而转圈；
   // 预取后切换时 Suspense 不再挂起，chat-motion-view-in 动画得以播在真实内容上（而非 spinner）。
   useEffect(() => {
     return scheduleIdleTask(() => {
@@ -1687,7 +1684,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     }, 220)
   }, [loadSkills, refreshToolIndicator, syncConversationRoute])
 
-  // 中心页（技能/MCP/插件/专家）没有自己的返回按钮，离开靠侧栏选会话/新建等任意路径。
+  // 中心页（技能/MCP/专家）没有自己的返回按钮，离开靠侧栏选会话/新建等任意路径。
   // 统一在「回到会话视图」这个转变点刷新技能列表与工具指示器，
   // 保证中心页里的启停/增删在回到聊天后立即生效（替代原各页 onClose 的刷新职责）。
   const prevChatViewRef = useRef(chatView)
@@ -3462,69 +3459,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const handleSendMessageRef = useRef(handleSendMessage)
   handleSendMessageRef.current = handleSendMessage
 
-  /** 设置 → 插件「让 AI 代装」：取规范 brief → 回聊天 → 新开对话并自动发送安装任务 */
-  const handleRequestPluginAiInstall = useCallback(async (pluginId: string) => {
-    const startingConversationId = currentConversationIdRef.current
-    const brief = await api.pluginsInstallBrief(pluginId)
-    if (currentConversationIdRef.current !== startingConversationId) return
-    setExtensionsNavItem(null)
-    setSettingsExiting(false)
-    setChatView('conversation')
-    setAssistantStreamStatsByMessageId({})
-    let targetConversationId: string | null = null
-    try {
-      let conv = await chatApi.createConversation(
-        activeProviderId || undefined,
-        activeModel || undefined,
-        selectedProject?.name,
-        selectedProject?.id ?? null,
-        undefined,
-        selectedSet?.id ?? null,
-      )
-      try {
-        conv = await chatApi.updateConversation(conv.id, {
-          title: brief.conversationTitle,
-        })
-      } catch {
-        // 标题失败不阻断
-      }
-      targetConversationId = conv.id
-      refreshSidebar()
-      if (currentConversationIdRef.current === startingConversationId) {
-        currentConversationIdRef.current = conv.id
-        applyConversation(conv)
-        restoreStreamingPreview(conv.id)
-        syncConversationRoute(conv.id)
-      }
-      const accepted = await handleSendMessageRef.current(brief.userMessage, [], {
-        forceNewConversation: false,
-        conversationOverride: conv,
-      })
-      if (!accepted) {
-        throw new Error('发送安装任务失败（可能当前模型未配置或正在生成）')
-      }
-    } catch (err) {
-      console.error('Failed to start plugin install chat:', err)
-      if (
-        currentConversationIdRef.current === startingConversationId
-        || currentConversationIdRef.current === targetConversationId
-      ) {
-        setStreamError(typeof err === 'string' ? err : (err as Error).message || '无法开始插件安装对话')
-      }
-      throw err
-    }
-  }, [
-    activeModel,
-    activeProviderId,
-    applyConversation,
-    refreshSidebar,
-    restoreStreamingPreview,
-    selectedProject?.id,
-    selectedProject?.name,
-    selectedSet?.id,
-    syncConversationRoute,
-  ])
-
   // 历史预置（Lens「在 AI 客户端继续」交接）：用最新 reactive 值（provider/model/project）创建带历史的新会话。
   // 同 handleSendMessageRef 思路用 ref 持有，保持 drainExternalSends 稳定身份。
   const importExternalConversation = useCallback(async (
@@ -4841,7 +4775,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     setSearchOpen(false)
   }, [runAfterLeavingSettings])
 
-  // 中心页（专家/技能/MCP/插件）去掉了整行「返回聊天」顶栏后，窗口顶部不再可拖拽；
+  // 中心页（专家/技能/MCP）去掉了整行「返回聊天」顶栏后，窗口顶部不再可拖拽；
   // 且侧栏收起时页面上没有任何展开侧栏/离开中心页的入口（会被困住）。
   // 用一条浮在内容 padding 区上的细拖拽带兜底：始终可拖动窗口，
   // 侧栏收起时在带内浮出「展开侧栏 + 新建聊天」，与会话页收起态的顶栏行为一致。
@@ -5427,7 +5361,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             onClose={handleSettingsClose}
             onSettingsChange={handleSettingsChange}
             onReady={emitContentReady}
-            onRequestPluginAiInstall={handleRequestPluginAiInstall}
             sessionLibrary={{
               currentConversationId: currentConversation?.id,
               generatingConversationIds,
