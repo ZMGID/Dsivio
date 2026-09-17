@@ -503,6 +503,7 @@ export type ChatModeConfig = {
 }
 
 export type ChatConfig = {
+  videoAnalysisEnabled?: boolean
   streamEnabled?: boolean
   thinkingEnabled?: boolean
   maxOutputTokens?: number
@@ -1774,6 +1775,7 @@ export function normalizeSettings(settings: Settings): Settings {
     chatModel: effectiveChatModel.model,
     defaultModels,
     chat: {
+      videoAnalysisEnabled: current.chat?.videoAnalysisEnabled ?? true,
       streamEnabled: current.chat?.streamEnabled ?? current.lens?.streamEnabled ?? true,
       thinkingEnabled: current.chat?.thinkingEnabled ?? current.lens?.thinkingEnabled ?? true,
       maxOutputTokens: current.chat?.maxOutputTokens ?? 16384,

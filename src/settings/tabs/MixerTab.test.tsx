@@ -31,6 +31,13 @@ function renderTab(overrides: Record<string, unknown> = {}) {
 }
 
 describe('MixerTab', () => {
+  it('可以关闭视频分析，且不清空已选模型', async () => {
+    const props = renderTab()
+    const row = screen.getByText('启用视频分析').closest('.kv-row')!
+    await userEvent.click(within(row as HTMLElement).getByRole('switch'))
+    expect(props.onUpdateChat).toHaveBeenCalledWith({ videoAnalysisEnabled: false })
+    expect(props.onUpdateDefaultModel).not.toHaveBeenCalled()
+  })
   it('视频分析只列出支持视频的模型，选择后写入独立槽位', async () => {
     const props = renderTab({ providers: [makeProvider({
       name: 'Relay',
@@ -106,8 +113,8 @@ describe('MixerTab', () => {
 
   it('打开顾问开关会落到第一个可用供应商的首个模型', async () => {
     const props = renderTab()
-    const toggles = screen.getAllByRole('switch')
-    await userEvent.click(toggles[0])
+    const row = screen.getByText(t.defaultAdvisorModel).closest('.kv-row')!
+    await userEvent.click(within(row as HTMLElement).getByRole('switch'))
     expect(props.onUpdateDefaultModel).toHaveBeenCalledWith('advisor', 'p1', 'gpt-4o')
   })
 

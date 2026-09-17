@@ -1290,6 +1290,22 @@ pub(super) fn build_chat_api_messages(
     last_user_api_content: Option<&str>,
     last_user_image_paths: &[PathBuf],
 ) -> Result<Vec<Value>, String> {
+    build_chat_api_messages_with_video(
+        app, system_prompt, conversation, last_user_idx,
+        last_user_api_content, last_user_image_paths, true,
+    )
+}
+
+/// Text-only replay must not reopen or encode historical videos just to discard them later.
+pub(super) fn build_chat_api_messages_with_video(
+    app: Option<&AppHandle>,
+    system_prompt: &str,
+    conversation: &Conversation,
+    last_user_idx: Option<usize>,
+    last_user_api_content: Option<&str>,
+    last_user_image_paths: &[PathBuf],
+    include_video: bool,
+) -> Result<Vec<Value>, String> {
     let mut messages = vec![serde_json::json!({
         "role": "system",
         "content": system_prompt,
@@ -1329,20 +1345,26 @@ pub(super) fn build_chat_api_messages(
         }
         let mut parts = Vec::new();
         if message.role == "user" {
-            if let Some(app) = app {
-                for attachment in &message.attachments {
-                    // Extension fallback supports videos saved by older versions as ordinary files.
-                    if crate::chat::video::mime_for_name(&attachment.name).is_some() {
-                        let path = crate::chat::attachments::resolve_attachment_file_path(
-                            app,
-                            Some(&conversation.id),
-                            &attachment.path,
-                        )?;
-                        parts.push(crate::chat::video::content_part(
-                            &path,
-                            &mut remaining_video_bytes,
-                        )?);
+            for attachment in &message.attachments {
+                // Extension fallback supports videos saved by older versions as ordinary files.
+                if crate::chat::video::mime_for_name(&attachment.name).is_some() {
+                    if !include_video {
+                        parts.push(serde_json::json!({"type": "text", "text": format!(
+                            "[Video attachment: {} [{}]. Raw video is not included. Match saved observations by attachment ID, not filename. If no observations cover this video, say it has not been analyzed; ask the user to choose Analyze video (/video) or use a video-capable main model. Never invent its contents.]",
+                            attachment.name, attachment.id
+                        )}));
+                        continue;
                     }
+                    let Some(app) = app else { continue };
+                    let path = crate::chat::attachments::resolve_attachment_file_path(
+                        app,
+                        Some(&conversation.id),
+                        &attachment.path,
+                    )?;
+                    parts.push(crate::chat::video::content_part(
+                        &path,
+                        &mut remaining_video_bytes,
+                    )?);
                 }
             }
         }

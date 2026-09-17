@@ -756,6 +756,9 @@ impl Default for LensConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ChatConfig {
+    /// Allow explicitly requested Mixer video analysis. Never starts on attachment alone.
+    #[serde(default = "default_true")]
+    pub video_analysis_enabled: bool,
     #[serde(default = "default_true")]
     pub stream_enabled: bool,
     #[serde(default = "default_true")]
@@ -823,6 +826,7 @@ impl Default for ChatModeConfig {
 impl Default for ChatConfig {
     fn default() -> Self {
         Self {
+            video_analysis_enabled: true,
             stream_enabled: true,
             thinking_enabled: true,
             max_output_tokens: default_chat_max_output_tokens(),
