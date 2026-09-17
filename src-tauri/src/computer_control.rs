@@ -1,8 +1,8 @@
 //! Setup only: agents use the installed CLIs through the existing shell + skills.
 use std::{path::Path, process::Stdio, time::Duration};
 
-use serde::Deserialize;
-use tauri::AppHandle;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, State};
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     sync::Mutex,
@@ -26,6 +26,51 @@ impl ControlTool {
             Self::Playwright => "playwright-cli",
         }
     }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlToolStatus {
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub update_available: bool,
+}
+
+#[derive(Deserialize)]
+struct CuaUpdateStatus {
+    current_version: Option<String>,
+    latest_version: Option<String>,
+    update_available: bool,
+}
+
+fn extract_version(output: &str) -> String {
+    output
+        .split_whitespace()
+        .find_map(|part| {
+            let candidate = part.trim_start_matches('v').trim_matches(|c: char| {
+                !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
+            });
+            let mut numbers = candidate.split('.');
+            let valid = numbers
+                .by_ref()
+                .take(3)
+                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+            (valid && candidate.matches('.').count() >= 1).then(|| candidate.to_string())
+        })
+        .unwrap_or_else(|| output.trim().to_string())
+}
+
+fn numeric_version(version: &str) -> Vec<u64> {
+    version
+        .trim_start_matches('v')
+        .split(['.', '-', '+'])
+        .take(3)
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect()
+}
+
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    numeric_version(latest) > numeric_version(current)
 }
 
 async fn read_output(mut stream: impl AsyncRead + Unpin) -> Result<String, String> {
@@ -90,6 +135,50 @@ pub async fn computer_control_check(tool: ControlTool) -> Result<String, String>
 }
 
 #[tauri::command]
+pub async fn computer_control_status(tool: ControlTool) -> Result<ControlToolStatus, String> {
+    let current_version = extract_version(&computer_control_check(tool).await?);
+    let mut latest_version = None;
+    let mut update_available = false;
+
+    match tool {
+        ControlTool::Cua => {
+            if let Ok(output) = run("cua-driver", &["check-update", "--json"], None, 30).await {
+                if let Ok(status) = serde_json::from_str::<CuaUpdateStatus>(&output) {
+                    latest_version = status.latest_version;
+                    update_available = status.update_available;
+                    if latest_version.is_none() {
+                        latest_version = status.current_version;
+                    }
+                }
+            }
+        }
+        ControlTool::Playwright => {
+            if let Ok(output) = run("npm", &["view", "@playwright/cli", "version"], None, 30).await
+            {
+                let latest = extract_version(&output);
+                update_available = is_newer_version(&latest, &current_version);
+                latest_version = Some(latest);
+            }
+        }
+    }
+
+    Ok(ControlToolStatus {
+        current_version,
+        latest_version,
+        update_available,
+    })
+}
+
+fn import_control_skill(app: AppHandle, source: &Path) -> Result<SkillMeta, String> {
+    let result = crate::skills::chat_skills_import(app, source.to_string_lossy().into_owned());
+    result.skill.filter(|_| result.success).ok_or_else(|| {
+        result
+            .error
+            .unwrap_or_else(|| "Skill installation failed".into())
+    })
+}
+
+#[tauri::command]
 pub async fn computer_control_install(
     app: AppHandle,
     tool: ControlTool,
@@ -150,10 +239,77 @@ pub async fn computer_control_install(
     };
     // Reuse the normal importer: retain upstream references and expose the skill
     // in ~/.kivio/skills, where existing discovery and enable/disable already work.
-    let result = crate::skills::chat_skills_import(app, source.to_string_lossy().into_owned());
-    result.skill.filter(|_| result.success).ok_or_else(|| {
-        result
-            .error
-            .unwrap_or_else(|| "Skill installation failed".into())
-    })
+    import_control_skill(app, &source)
+}
+
+#[tauri::command]
+pub async fn computer_control_update(
+    app: AppHandle,
+    state: State<'_, crate::state::AppState>,
+    tool: ControlTool,
+) -> Result<SkillMeta, String> {
+    let _guard = INSTALL_LOCK
+        .try_lock()
+        .map_err(|_| "Another computer-control installation is running")?;
+    computer_control_check(tool).await?;
+
+    let home = directories::BaseDirs::new()
+        .ok_or("Home directory unavailable")?
+        .home_dir()
+        .to_path_buf();
+    let source = match tool {
+        ControlTool::Cua => {
+            // Cua's MCP server is part of the driver binary. Update the binary first,
+            // then refresh its separately versioned official Skill pack.
+            state
+                .mcp_disconnect_server("computer-control-cua-driver")
+                .await;
+            state.mcp_disconnect_server("plugin-cua-driver").await;
+            run("cua-driver", &["update", "--apply", "--json"], None, 300).await?;
+            crate::path_env::refresh_path_now();
+            run("cua-driver", &["skills", "update"], None, 180).await?;
+            home.join(".cua-driver/skills/cua-driver")
+        }
+        ControlTool::Playwright => {
+            run(
+                "npm",
+                &["install", "-g", "@playwright/cli@latest"],
+                None,
+                300,
+            )
+            .await?;
+            crate::path_env::refresh_path_now();
+            let staging = home.join(".kivio/tool-setup/playwright");
+            std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+            run(
+                "playwright-cli",
+                &["install", "--skills"],
+                Some(&staging),
+                120,
+            )
+            .await?;
+            staging.join(".claude/skills/playwright-cli")
+        }
+    };
+
+    computer_control_check(tool).await?;
+    import_control_skill(app, &source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_cli_versions() {
+        assert_eq!(extract_version("cua-driver 0.28.2"), "0.28.2");
+        assert_eq!(extract_version("0.1.20"), "0.1.20");
+    }
+
+    #[test]
+    fn compares_numeric_versions() {
+        assert!(is_newer_version("0.28.2", "0.28.1"));
+        assert!(!is_newer_version("0.28.1", "0.28.2"));
+        assert!(!is_newer_version("0.28.2", "0.28.2"));
+    }
 }

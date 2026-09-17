@@ -7,7 +7,7 @@ import { ComputerControlTab } from './ComputerControlTab'
 vi.mock('../../api/tauri', async importOriginal => ({
   ...await importOriginal<typeof import('../../api/tauri')>(),
   api: {
-    computerControlCheck: vi.fn(), computerControlInstall: vi.fn(), chatSkillsList: vi.fn(),
+    computerControlCheck: vi.fn(), computerControlStatus: vi.fn(), computerControlInstall: vi.fn(), computerControlUpdate: vi.fn(), chatSkillsList: vi.fn(),
     pluginsList: vi.fn(), pluginsRunOfficialInstall: vi.fn(), pluginsSetEnabled: vi.fn(), openExternal: vi.fn(),
   },
 }))
@@ -29,8 +29,8 @@ describe('ComputerControlTab', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     window.sessionStorage.clear()
-    vi.mocked(api.computerControlCheck).mockImplementation(async tool => {
-      if (tool === 'cua') return 'cua-driver 0.28.1'
+    vi.mocked(api.computerControlStatus).mockImplementation(async tool => {
+      if (tool === 'cua') return { currentVersion: '0.28.1', latestVersion: '0.28.1', updateAvailable: false }
       throw new Error('playwright-cli not found')
     })
     vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [] })
@@ -85,7 +85,7 @@ describe('ComputerControlTab', () => {
   })
 
   it('uses the existing disabledSkillIds switch', async () => {
-    vi.mocked(api.computerControlCheck).mockResolvedValue('1.0.0')
+    vi.mocked(api.computerControlStatus).mockResolvedValue({ currentVersion: '1.0.0', latestVersion: '1.0.0', updateAvailable: false })
     vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [playwrightSkill] })
     const tools = defaultChatTools()
     tools.enabled = true
@@ -142,12 +142,12 @@ describe('ComputerControlTab', () => {
     })
     render(<ComputerControlTab lang="zh" tools={defaultChatTools()} onChange={vi.fn()} />)
     const toggle = await screen.findByRole('switch', { name: 'ego lite 控制' })
-    vi.mocked(api.computerControlCheck).mockClear()
+    vi.mocked(api.computerControlStatus).mockClear()
     vi.mocked(api.chatSkillsList).mockClear()
     vi.mocked(api.pluginsList).mockClear()
     fireEvent.click(toggle)
     await waitFor(() => expect(api.pluginsSetEnabled).toHaveBeenCalledWith('ego-lite', false))
-    expect(api.computerControlCheck).not.toHaveBeenCalled()
+    expect(api.computerControlStatus).not.toHaveBeenCalled()
     expect(api.chatSkillsList).not.toHaveBeenCalled()
     expect(api.pluginsList).not.toHaveBeenCalled()
   })
@@ -161,15 +161,33 @@ describe('ComputerControlTab', () => {
     const first = render(<ComputerControlTab lang="zh" tools={tools} onChange={vi.fn()} />)
     await screen.findByText('v0.28.1 · 1 Skill · 1 MCP')
     first.unmount()
-    vi.mocked(api.computerControlCheck).mockClear()
+    vi.mocked(api.computerControlStatus).mockClear()
     vi.mocked(api.chatSkillsList).mockClear()
     vi.mocked(api.pluginsList).mockClear()
 
     render(<ComputerControlTab lang="zh" tools={tools} onChange={vi.fn()} />)
     expect(screen.queryByText('正在检测…')).toBeNull()
     expect(screen.getByText('v0.28.1 · 1 Skill · 1 MCP')).toBeTruthy()
-    expect(api.computerControlCheck).not.toHaveBeenCalled()
+    expect(api.computerControlStatus).not.toHaveBeenCalled()
     expect(api.chatSkillsList).not.toHaveBeenCalled()
     expect(api.pluginsList).not.toHaveBeenCalled()
+  })
+
+  it('updates the Cua binary, MCP runtime, and official skill when a release is available', async () => {
+    vi.mocked(api.computerControlStatus).mockImplementation(async tool => {
+      if (tool === 'cua') return { currentVersion: '0.28.1', latestVersion: '0.28.2', updateAvailable: true }
+      throw new Error('playwright-cli not found')
+    })
+    vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [cuaSkill] })
+    vi.mocked(api.computerControlUpdate).mockResolvedValue(cuaSkill)
+    const tools = defaultChatTools()
+    tools.enabled = true
+    tools.servers = [cuaMcp]
+
+    render(<ComputerControlTab lang="zh" tools={tools} onChange={vi.fn()} />)
+    const button = await screen.findByRole('button', { name: '更新' })
+    expect(button).toHaveAttribute('title', '最新版本 v0.28.2')
+    fireEvent.click(button)
+    await waitFor(() => expect(api.computerControlUpdate).toHaveBeenCalledWith('cua'))
   })
 })

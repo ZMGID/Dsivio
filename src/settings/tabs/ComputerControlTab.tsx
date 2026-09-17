@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileSpreadsheet, Globe2, Monitor, RefreshCw } from 'lucide-react'
-import { api, type ChatMcpServer, type ChatToolsConfig, type PluginStatus, type SkillMeta } from '../../api/tauri'
+import { api, type ChatMcpServer, type ChatToolsConfig, type ControlToolStatus, type PluginStatus, type SkillMeta } from '../../api/tauri'
 import { refreshSettings } from '../../api/settingsCache'
 import { Button } from '../../components/Button'
 import { Toggle } from '../components'
@@ -11,6 +11,7 @@ type Tool = NativeTool | 'ego-lite' | 'officecli'
 
 type ControlDetectionSnapshot = {
   versions: Partial<Record<NativeTool, string>>
+  updates: Partial<Record<NativeTool, ControlToolStatus>>
   skills: SkillMeta[]
   plugins: PluginStatus[]
   skillScanPaths: string[]
@@ -72,7 +73,7 @@ function readDetectionCache(paths: string[]): ControlDetectionSnapshot | null {
     const raw = window.sessionStorage.getItem(CONTROL_CACHE_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<ControlDetectionSnapshot>
-    if (!parsed.versions || !Array.isArray(parsed.skills) || !Array.isArray(parsed.plugins) || !Array.isArray(parsed.skillScanPaths)) {
+    if (!parsed.versions || !parsed.updates || !Array.isArray(parsed.skills) || !Array.isArray(parsed.plugins) || !Array.isArray(parsed.skillScanPaths)) {
       return null
     }
     if (scanPathKey(parsed.skillScanPaths) !== scanPathKey(paths)) return null
@@ -106,17 +107,19 @@ function detectControls(skillScanPaths: string[]): Promise<ControlDetectionSnaps
   const promise = Promise.all([
     Promise.all(CONTROL_TOOLS.filter(tool => tool.kind === 'native').map(async tool => {
       try {
-        const version = await api.computerControlCheck(tool.id)
-        return [tool.id, formatControlVersion(version)] as const
+        const status = await api.computerControlStatus(tool.id)
+        return [tool.id, status] as const
       } catch {
-        return [tool.id, ''] as const
+        return [tool.id, null] as const
       }
     })),
     api.chatSkillsList(skillScanPaths).catch(() => ({ success: false, skills: [] as SkillMeta[] })),
     api.pluginsList().catch(() => [] as PluginStatus[]),
   ]).then(([cliResults, skillResult, plugins]) => {
+    const updates = Object.fromEntries(cliResults.filter((entry): entry is readonly [NativeTool, ControlToolStatus] => entry[1] !== null))
     const snapshot: ControlDetectionSnapshot = {
-      versions: Object.fromEntries(cliResults),
+      versions: Object.fromEntries(cliResults.map(([id, status]) => [id, status ? formatControlVersion(status.currentVersion) : ''])),
+      updates,
       skills: skillResult.skills,
       plugins,
       skillScanPaths: [...skillScanPaths],
@@ -139,10 +142,12 @@ export function ComputerControlTab({ lang, tools, onChange }: {
   const zh = lang === 'zh'
   const initialCache = useRef(readDetectionCache(tools.skillScanPaths)).current
   const [versions, setVersions] = useState<Partial<Record<NativeTool, string>>>(initialCache?.versions ?? {})
+  const [updates, setUpdates] = useState<Partial<Record<NativeTool, ControlToolStatus>>>(initialCache?.updates ?? {})
   const [skills, setSkills] = useState<SkillMeta[]>(initialCache?.skills ?? [])
   const [plugins, setPlugins] = useState<PluginStatus[]>(initialCache?.plugins ?? [])
   const [loading, setLoading] = useState(initialCache === null)
   const [installing, setInstalling] = useState<Tool | null>(null)
+  const [updating, setUpdating] = useState<NativeTool | null>(null)
   const [error, setError] = useState('')
   const latest = useRef({ tools, onChange })
   const mounted = useRef(false)
@@ -153,6 +158,7 @@ export function ComputerControlTab({ lang, tools, onChange }: {
     const snapshot = await detectControls(latest.current.tools.skillScanPaths)
     if (!mounted.current) return
     setVersions(snapshot.versions)
+    setUpdates(snapshot.updates)
     setSkills(snapshot.skills)
     setPlugins(snapshot.plugins)
     setLoading(false)
@@ -213,6 +219,21 @@ export function ComputerControlTab({ lang, tools, onChange }: {
     }
   }
 
+  const update = async (tool: NativeTool) => {
+    setUpdating(tool)
+    setError('')
+    try {
+      const skill = await api.computerControlUpdate(tool)
+      if (!mounted.current) return
+      setNativeControlEnabled(tool, skill.id, true)
+      await reload(false)
+    } catch {
+      if (mounted.current) setError(zh ? '更新失败，请稍后重试。' : 'Update failed. Please try again.')
+    } finally {
+      if (mounted.current) setUpdating(null)
+    }
+  }
+
   const setPluginEnabled = async (id: 'ego-lite' | 'officecli', enabled: boolean) => {
     setInstalling(id)
     setError('')
@@ -256,6 +277,7 @@ export function ComputerControlTab({ lang, tools, onChange }: {
               const version = tool.kind === 'plugin'
                 ? (plugin?.version ? formatControlVersion(plugin.version) : '')
                 : versions[tool.id] ?? ''
+              const updateStatus = tool.kind === 'native' ? updates[tool.id] : undefined
               const ready = tool.kind === 'plugin'
                 ? installed === true
                 : !!version && !!skill && (tool.id !== 'cua' || !!mcp)
@@ -286,15 +308,28 @@ export function ComputerControlTab({ lang, tools, onChange }: {
                     {loading ? (
                       <RefreshCw size={14} className="animate-spin text-neutral-400" aria-label={zh ? '正在检测' : 'Checking'} />
                     ) : ready ? (
-                      <Toggle
-                        checked={enabled}
-                        disabled={installing !== null}
-                        ariaLabel={`${tool.name} ${zh ? '控制' : 'control'}`}
-                        onChange={value => {
-                          if (tool.kind === 'plugin') void setPluginEnabled(tool.id, value)
-                          else setNativeControlEnabled(tool.id, skill!.id, value)
-                        }}
-                      />
+                      <>
+                        {tool.kind === 'native' && updateStatus?.updateAvailable && (
+                          <Button
+                            size="sm"
+                            disabled={installing !== null || updating !== null}
+                            title={updateStatus.latestVersion ? `${zh ? '最新版本' : 'Latest'} v${updateStatus.latestVersion}` : undefined}
+                            onClick={() => { void update(tool.id) }}
+                          >
+                            {updating === tool.id && <RefreshCw size={12} className="animate-spin" />}
+                            {updating === tool.id ? (zh ? '更新中…' : 'Updating…') : (zh ? '更新' : 'Update')}
+                          </Button>
+                        )}
+                        <Toggle
+                          checked={enabled}
+                          disabled={installing !== null || updating !== null}
+                          ariaLabel={`${tool.name} ${zh ? '控制' : 'control'}`}
+                          onChange={value => {
+                            if (tool.kind === 'plugin') void setPluginEnabled(tool.id, value)
+                            else setNativeControlEnabled(tool.id, skill!.id, value)
+                          }}
+                        />
+                      </>
                     ) : (
                       <Button
                         size="sm"

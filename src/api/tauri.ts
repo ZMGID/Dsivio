@@ -1257,6 +1257,12 @@ export type PluginActionResult = {
   status: PluginStatus
 }
 
+export type ControlToolStatus = {
+  currentVersion: string
+  latestVersion: string | null
+  updateAvailable: boolean
+}
+
 /** 笔记元信息（列表用） */
 export type NoteMeta = {
   id: string
@@ -2411,8 +2417,12 @@ export const api = {
     invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null; discoveryPending?: boolean }>('chat_mcp_list_tools', { cachedOnly }),
   computerControlCheck: (tool: 'cua' | 'playwright') =>
     invoke<string>('computer_control_check', { tool }),
+  computerControlStatus: (tool: 'cua' | 'playwright') =>
+    invoke<ControlToolStatus>('computer_control_status', { tool }),
   computerControlInstall: (tool: 'cua' | 'playwright') =>
     invoke<SkillMeta>('computer_control_install', { tool }),
+  computerControlUpdate: (tool: 'cua' | 'playwright') =>
+    invoke<SkillMeta>('computer_control_update', { tool }),
   chatMcpTestServer: (server: ChatMcpServer, timeoutMs?: number) =>
     invoke<{ success: boolean; tools: ChatToolDefinition[]; error?: string | null }>(
       'chat_mcp_test_server',
