@@ -12,6 +12,18 @@ use crate::{proc::NoConsoleWindow, skills::SkillMeta};
 
 static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
 
+pub(crate) const CUA_MCP_SERVER_ID: &str = "computer-control-cua-driver";
+pub(crate) const LEGACY_CUA_MCP_SERVER_ID: &str = "plugin-cua-driver";
+pub(crate) const LEGACY_CUA_MCP_CONNECTOR_ID: &str = "plugin:cua-driver";
+
+pub(crate) fn is_cua_mcp_server_id(id: &str) -> bool {
+    id == CUA_MCP_SERVER_ID || id == LEGACY_CUA_MCP_SERVER_ID
+}
+
+pub(crate) fn mcp_server_ids_equivalent(left: &str, right: &str) -> bool {
+    left == right || (is_cua_mcp_server_id(left) && is_cua_mcp_server_id(right))
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ControlTool {
@@ -71,6 +83,18 @@ fn numeric_version(version: &str) -> Vec<u64> {
 
 fn is_newer_version(latest: &str, current: &str) -> bool {
     numeric_version(latest) > numeric_version(current)
+}
+
+fn validate_self_update_result(
+    result: Result<String, String>,
+    previous_version: &str,
+    observed_version: &str,
+) -> Result<(), String> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(_) if is_newer_version(observed_version, previous_version) => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 async fn read_output(mut stream: impl AsyncRead + Unpin) -> Result<String, String> {
@@ -251,7 +275,7 @@ pub async fn computer_control_update(
     let _guard = INSTALL_LOCK
         .try_lock()
         .map_err(|_| "Another computer-control installation is running")?;
-    computer_control_check(tool).await?;
+    let previous_version = extract_version(&computer_control_check(tool).await?);
 
     let home = directories::BaseDirs::new()
         .ok_or("Home directory unavailable")?
@@ -261,12 +285,12 @@ pub async fn computer_control_update(
         ControlTool::Cua => {
             // Cua's MCP server is part of the driver binary. Update the binary first,
             // then refresh its separately versioned official Skill pack.
-            state
-                .mcp_disconnect_server("computer-control-cua-driver")
-                .await;
-            state.mcp_disconnect_server("plugin-cua-driver").await;
-            run("cua-driver", &["update", "--apply", "--json"], None, 300).await?;
+            state.mcp_disconnect_server(CUA_MCP_SERVER_ID).await;
+            state.mcp_disconnect_server(LEGACY_CUA_MCP_SERVER_ID).await;
+            let update_result = run("cua-driver", &["update", "--apply", "--json"], None, 300).await;
             crate::path_env::refresh_path_now();
+            let observed_version = extract_version(&computer_control_check(tool).await?);
+            validate_self_update_result(update_result, &previous_version, &observed_version)?;
             run("cua-driver", &["skills", "update"], None, 180).await?;
             home.join(".cua-driver/skills/cua-driver")
         }
@@ -311,5 +335,15 @@ mod tests {
         assert!(is_newer_version("0.28.2", "0.28.1"));
         assert!(!is_newer_version("0.28.1", "0.28.2"));
         assert!(!is_newer_version("0.28.2", "0.28.2"));
+    }
+
+    #[test]
+    fn accepts_self_update_when_the_binary_was_replaced_despite_process_error() {
+        assert!(validate_self_update_result(
+            Err("installer process exited unsuccessfully".to_string()),
+            "0.28.1",
+            "0.28.2",
+        )
+        .is_ok());
     }
 }

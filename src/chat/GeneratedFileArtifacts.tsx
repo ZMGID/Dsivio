@@ -23,10 +23,18 @@ async function openGeneratedArtifact(artifact: ChatToolArtifact) {
   await invoke('open_data_url_file', { name: artifact.name ?? 'file.bin', dataUrl })
 }
 
-export function ArtifactFileChip({ artifact, conversationId }: { artifact: ChatToolArtifact; conversationId?: string | null }) {
+export function ArtifactFileChip({
+  artifact,
+  conversationId,
+  variant = 'card',
+}: {
+  artifact: ChatToolArtifact
+  conversationId?: string | null
+  variant?: 'card' | 'inline'
+}) {
   const [error, setError] = useState(false)
   return <span className="not-prose" data-artifact-id={artifact.id ?? undefined}>
-    <FileChip variant="inline" name={artifact.name} onRevealLocation={fileLocationAction(artifactPath(artifact), conversationId)} ariaLabel={`打开文件 ${artifact.name}`} onClick={() => {
+    <FileChip variant={variant} name={artifact.name} onRevealLocation={fileLocationAction(artifactPath(artifact), conversationId)} ariaLabel={`打开文件 ${artifact.name}`} onClick={() => {
       setError(false)
       void openGeneratedArtifact(artifact).catch(() => setError(true))
     }} />

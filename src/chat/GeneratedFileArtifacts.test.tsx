@@ -50,6 +50,8 @@ describe('GeneratedFileArtifacts compact chips', () => {
 
     const pdfButton = screen.getByRole('button', { name: '打开文件 简历.pdf' })
     const mdButton = screen.getByRole('button', { name: '打开文件 english_essay.md' })
+    expect(pdfButton.className).toContain('h-16')
+    expect(mdButton.className).toContain('h-16')
     expect(pdfButton).toHaveTextContent('简历.pdf')
     expect(mdButton).toHaveTextContent('english_essay.md')
     expect(container.textContent).not.toContain('%PDF')
