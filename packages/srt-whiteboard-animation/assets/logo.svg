@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<title>白板手绘动画</title>
+<rect width="64" height="64" rx="14" fill="#F5EBD7"/>
+<rect x="10" y="13" width="43" height="33" rx="5" fill="#FFFCF5" stroke="#514C45" stroke-width="3"/>
+<path d="M25 46v7m14-7v7M20 54h24" stroke="#514C45" stroke-width="3" stroke-linecap="round"/>
+<path d="m19 34 7-8 7 6 9-12" stroke="#D88B4B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="m40 40 10-15 5 4-10 15-7 3 2-7Z" fill="#EDB75E" stroke="#514C45" stroke-width="2.5" stroke-linejoin="round"/>
+<path d="m40 40 5 4" stroke="#514C45" stroke-width="2"/>
+</svg>

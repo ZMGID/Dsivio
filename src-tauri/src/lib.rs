@@ -24,6 +24,7 @@ pub mod offline_models;
 mod opencode_free;
 pub mod path_env;
 pub mod plugins;
+pub mod market;
 pub mod proc;
 pub mod prompts;
 pub mod provider_oauth;
@@ -654,6 +655,7 @@ pub fn run() {
             connectors::connector_oauth_connect,
             connectors::obsidian::list_obsidian_vaults_cmd,
             plugins::plugins_list,
+            market::market_command,
             plugins::packages::plugin_packages_list,
             plugins::packages::plugin_packages_import,
             plugins::packages::plugin_packages_set_enabled,

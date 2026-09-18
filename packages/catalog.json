@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "categories": [
+    { "id": "images", "name": "图片" },
+    { "id": "videos", "name": "视频" },
+    { "id": "other", "name": "其他" }
+  ],
+  "packages": []
+}

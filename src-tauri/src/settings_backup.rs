@@ -117,6 +117,10 @@ pub(crate) fn parse(
             .clone(),
     )
     .map_err(|_| "应用设置格式不正确".to_string())?;
+    // Older exports do not know about shared capabilities; retain the recipient's registry.
+    if value["settings"].get("capabilityConfigText").is_none() {
+        settings.capability_config_text = local.capability_config_text.clone();
+    }
     if complete_onboarding {
         settings.onboarding_status = "completed".into();
     }
@@ -374,6 +378,20 @@ mod tests {
             "comfy":{"base_url":"http://localhost:8188"}
         }})).unwrap();
         make_backup(&settings, image, video).unwrap()
+    }
+
+    #[test]
+    fn capability_text_roundtrips_verbatim_in_company_json() {
+        let mut packet = company_backup();
+        let text = "生图\n地址：https://example.com/v1\n密钥：company-secret\n模型：image-model\n";
+        packet["settings"]["capabilityConfigText"] = json!(text);
+        let imported = parse(&packet.to_string(), &Settings::default(), false).unwrap();
+        let exported = make_backup(&imported.settings, imported.image.unwrap(), imported.video.unwrap()).unwrap();
+        assert_eq!(exported["settings"]["capabilityConfigText"], text);
+        let mut old = packet;
+        old["settings"].as_object_mut().unwrap().remove("capabilityConfigText");
+        let retained = parse(&old.to_string(), &imported.settings, false).unwrap();
+        assert_eq!(retained.settings.capability_config_text, text);
     }
 
     #[test]

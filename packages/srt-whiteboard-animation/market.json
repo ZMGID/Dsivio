@@ -1,0 +1,47 @@
+{
+  "manifest": {
+    "schemaVersion": 1,
+    "id": "srt-whiteboard-animation",
+    "version": "0.1.0",
+    "name": "SRT 白板手绘动画（试用）",
+    "summary": "上传 SRT 字幕，制作跟随讲解逐步绘制、上色的白板手绘动画，导出 MP4。",
+    "categoryIds": [
+      "videos"
+    ],
+    "compatibility": {
+      "minAppVersion": "1.0.1",
+      "platforms": [
+        "macos-arm64"
+      ]
+    },
+    "notices": [
+      "适合知识讲解、故事口播和课程字幕。",
+      "先确认分镜、线稿和预览，再渲染成片；支持多幕合并。"
+    ],
+    "welcome": "上传 SRT 字幕，告诉我视频用途，我先给出分镜。",
+    "inputHint": "把这份 SRT 字幕做成暖米黄色背景的白板手绘动画，先给我看分镜。",
+    "verification": [],
+    "icon": "assets/logo.svg"
+  },
+  "example": {
+    "schemaVersion": 1,
+    "messages": [
+      {
+        "role": "user",
+        "text": "把这份 SRT 字幕做成白板手绘动画。"
+      },
+      {
+        "role": "assistant",
+        "text": "我先按字幕内容划分场景，给你看分镜和配图方案。确认后再制作线稿。"
+      },
+      {
+        "role": "user",
+        "text": "分镜可以，画面用暖米黄色背景，跟着讲解逐步画出来。"
+      },
+      {
+        "role": "assistant",
+        "text": "好的，先做线稿和绘制顺序预览，确认后导出 MP4。"
+      }
+    ]
+  }
+}

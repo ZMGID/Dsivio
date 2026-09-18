@@ -995,6 +995,9 @@ async fn call_skill_tool(
             .cloned()
             .ok_or_else(|| format!("Skill not found: {skill_name}"))?
     };
+    if !crate::plugins::packages::skill_available(&record.meta.id) {
+        return Err("该 Skill 所属应用已关闭".into());
+    }
     if let Some(err) = crate::settings::skill_global_unavailable_error(
         &settings.chat_tools,
         &record.meta.id,

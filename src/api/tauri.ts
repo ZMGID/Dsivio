@@ -1127,6 +1127,7 @@ export type WebSearchConfig = {
 }
 
 export type Settings = {
+  capabilityConfigText?: string
   hotkey: string
   chatHotkey: string
   /** 关闭 AI 客户端（chat 窗口）的全局热键。 */
