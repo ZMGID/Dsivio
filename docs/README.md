@@ -9,6 +9,8 @@
 | 理解架构、代码约定和关键约束 | [CLAUDE.md](../CLAUDE.md) |
 | 从 Kivio 同步公共功能更新 | [上游同步](upstream-sync.md) |
 | 统一产品用语 | [CONTEXT.md](../CONTEXT.md) |
+| 制作和发布内部市场 package | [Package 规范 v1](agents/dsivio-package-format.md)、[内容目录与模板](../packages/README.md) |
+| 开发应用市场前端 | [前端交接文档](prd/package-market-frontend-handoff.md) |
 | 理解聊天模型协议 | [模型适配器契约](../src-tauri/src/chat/model/README.md) |
 | 修改图片功能 | [图片工作台实现](prd/image-studio-implementation.md)、[保存目录规范](prd/image-studio-folder-convention.md) |
 | 修改视频功能与打包运行环境 | [视频工作台](video-studio.md) |

@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dsivio market catalog v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "categories",
+    "packages"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "categories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "version",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+          },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "repository",
+              "revision",
+              "directory"
+            ],
+            "properties": {
+              "repository": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+              },
+              "revision": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[a-f0-9]{40}$"
+              },
+              "directory": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^packages/[a-z0-9]+(-[a-z0-9]+)*$"
+              }
+            }
+          }
+        }
+      },
+      "minItems": 0
+    }
+  }
+}

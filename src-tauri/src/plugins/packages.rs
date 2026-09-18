@@ -538,6 +538,12 @@ pub fn active() -> Vec<Resolved> {
     packages.sort_by(|a, b| a.package.id.cmp(&b.package.id));
     packages
 }
+pub fn skill_available(skill_id: &str) -> bool {
+    match skill_id.strip_prefix("pkg-").and_then(|v|v.get(..36)).filter(|v|uuid::Uuid::parse_str(v).is_ok()) {
+        Some(owner) => owner_enabled(owner),
+        None => true,
+    }
+}
 pub fn owner_enabled(id: &str) -> bool {
     package_dir(id)
         .ok()
@@ -804,6 +810,8 @@ async fn set_enabled(
             .servers
             .retain(|s| !s.id.starts_with(&prefix));
         if enabled {
+            let skill_prefix = format!("pkg-{id}-");
+            next.chat_tools.disabled_skill_ids.retain(|skill| !skill.starts_with(&skill_prefix));
             next.chat_tools.enabled = true;
             next.chat_tools.native_tools.skill_runtime = true;
             next.chat_tools.servers.extend(resolved.servers);
@@ -1008,6 +1016,25 @@ pub fn component_markdown(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn package_skill_toggle_is_checked_live_for_cached_ids() {
+        let root = tempfile::tempdir().unwrap();
+        let _guard = TestPackagesRoot::new(root.path());
+        let owner = "eea61064-f6f3-47b0-8ad6-f8a5e220c085";
+        let skill = format!("pkg-{owner}-hypit");
+        let path = root.path().join(owner).join("record.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        write_json(&path, &json!({"enabled":true})).unwrap();
+        assert!(skill_available(&skill));
+        write_json(&path, &json!({"enabled":false})).unwrap();
+        assert!(!skill_available(&skill));
+        write_json(&path, &json!({"enabled":true})).unwrap();
+        assert!(skill_available(&skill));
+        fs::remove_file(path).unwrap();
+        assert!(!skill_available(&skill));
+        assert!(skill_available("ordinary-skill"));
+    }
+
     #[test]
     fn native_manifest_rejects_unknown_versions_fields_and_bad_paths() {
         let base = json!({"schemaVersion":1,"name":"native-example","version":"1.0.0"});

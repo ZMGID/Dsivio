@@ -24,6 +24,7 @@ import {
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatImagesPath,
+  isChatMarketPath,
   isChatVideosPath,
   isChatOnboardingRoute,
   isChatPluginCenterPath,
@@ -42,6 +43,9 @@ import { withExternalModel } from './externalModelEffort'
 import { findUnavailableRecommendedTools } from './toolAvailability'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
 import { StudioPage } from './StudioPage'
+import { MarketPage } from './market/MarketPage'
+import { marketApi, useMarket } from './market/api'
+import type { MarketLocal } from './market/types'
 import {
   beginConversationTransition,
   cancelConversationTransition,
@@ -240,7 +244,7 @@ const AutomationCenter = lazy(() => import('./automation/AutomationCenter').then
 
 const VideoStudio = lazy(() => import('./videos/VideoStudio'))
 const ImageStudio = lazy(() => import('./images/ImageStudio'))
-type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'onboarding' | 'images' | 'videos'
+type ChatView = 'conversation' | 'settings' | 'assistants' | 'skill' | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'onboarding' | 'images' | 'videos' | 'market'
 
 interface ChatProps {
   onSettingsChange: () => void
@@ -617,6 +621,7 @@ type SendMessageOptions = {
 const NO_QUEUED_MESSAGES: QueuedMessage[] = []
 
 export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
+  const { snapshot: marketSnapshot } = useMarket()
   useChatPerfRenderProbe('Chat', { view: hashPath() })
   useChatPerfLongTaskProbe()
   const [chatView, setChatView] = useState<ChatView>(() => {
@@ -628,6 +633,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (isChatMcpCenterPath(path)) return 'mcp'
     if (isChatKnowledgeCenterPath(path)) return 'knowledge'
     if (isChatNotesPath(path)) return 'notes'
+    if (isChatMarketPath(path)) return 'market'
     if (isChatImagesPath(path)) return 'images'
     if (isChatVideosPath(path)) return 'videos'
     if (isChatAutomationsPath(path)) return 'automations'
@@ -1450,7 +1456,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     return ''
   }, [effectiveSkillId, effectiveSkillRecommendedTools.length, enabledToolCount, toolsDisabledReason, toolsRequested, unavailableRecommendedTools])
 
-  const sendDisabledReason = effectiveSkillRecommendedTools.length > 0 ? toolStatusHint : ''
+  const boundMarketApp = marketSnapshot.installed.find(item => item.skillId && item.skillId === storedActiveSkillId)
+  const sendDisabledReason = storedActiveSkillId && (!effectiveSkillId || (boundMarketApp && (!boundMarketApp.enabled || boundMarketApp.status !== 'ready')))
+    ? '本次对话的应用尚未加载，请在输入框旁的应用菜单加载后继续。'
+    : effectiveSkillRecommendedTools.length > 0 ? toolStatusHint : ''
 
 
   // 路由簇抽成 useChatRouting（见 hooks/useChatRouting.ts）。
@@ -1711,11 +1720,14 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     const prev = prevChatViewRef.current
     prevChatViewRef.current = chatView
     if (chatView !== 'conversation' || prev === chatView) return
-    if (prev === 'skill' || prev === 'mcp' || prev === 'assistants' || prev === 'knowledge' || prev === 'settings') {
+    if (prev === 'skill' || prev === 'mcp' || prev === 'assistants' || prev === 'knowledge' || prev === 'settings' || prev === 'market') {
       void loadSkills()
       void refreshToolIndicator()
     }
   }, [chatView, loadSkills, refreshToolIndicator])
+
+  const marketSkillState = marketSnapshot.installed.map(item => `${item.id}:${item.enabled}:${item.status}:${item.pluginId}`).join('|')
+  useEffect(() => { void loadSkills() }, [marketSkillState, loadSkills])
 
   const runAfterLeavingSettings = useCallback((
     action: () => void,
@@ -3547,6 +3559,67 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     syncConversationRoute,
   ])
 
+  const handleMarketInstall = useCallback(async (id: string) => {
+    if (usesExternalRuntime || usesChatRuntime || draftAgentRuntime.kind !== 'builtin') throw new Error('请先切换到内置 Agent 模式，再安装应用。')
+    if (!activeProviderId || !activeModel) throw new Error('请先配置对话模型，再安装应用。')
+    if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再开始安装。')
+    const startingHash = window.location.hash
+    const prepared = await marketApi.prepare(id)
+    if (!prepared.brief.trim()) throw new Error('请先填写 INSTALL.md。')
+    let previous: Conversation | null = null
+    if (prepared.local.conversationId) {
+      previous = await chatApi.getConversation(prepared.local.conversationId)
+      if (previous.messages.length) {
+        if (window.location.hash === startingHash) syncConversationRoute(previous.id)
+        return
+      }
+    }
+    let conv = previous ?? await chatApi.createConversation(activeProviderId, activeModel, selectedProject?.name, selectedProject?.id ?? null)
+    conv = await chatApi.updateConversation(conv.id, { title: `安装应用 · ${prepared.local.manifest.name}` })
+    await marketApi.attachConversation(id, conv.id)
+    if (window.location.hash === startingHash) {
+      currentConversationIdRef.current = conv.id
+      applyConversation(conv)
+      setChatView('conversation')
+      syncConversationRoute(conv.id)
+    }
+    refreshSidebar()
+    const accepted = await handleSendMessageRef.current(prepared.brief, [], { forceNewConversation: false, conversationOverride: conv })
+    if (!accepted) throw new Error('安装消息未发送，请重试。')
+  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, isCurrentConversationBusy, selectedProject, applyConversation, syncConversationRoute, refreshSidebar])
+
+  const handleMarketUse = useCallback(async (item: MarketLocal, newChat: boolean) => {
+    if (usesExternalRuntime || usesChatRuntime || draftAgentRuntime.kind !== 'builtin') throw new Error('请先切换到内置 Agent 模式，再使用应用。')
+    if (!item.skillId || item.status !== 'ready') throw new Error('应用尚未完成安装验收。')
+    if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再切换应用。')
+    const startingHash = window.location.hash
+    if (!item.enabled) await marketApi.setEnabled(item.id, true)
+    await loadSkills()
+    let conv = !newChat && currentConversation ? currentConversation : await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined, selectedProject?.name, selectedProject?.id ?? null)
+    conv = await chatApi.updateConversation(conv.id, { activeSkillId: item.skillId, assistantId: null, ...(newChat ? { title: item.manifest.name } : {}) })
+    if (window.location.hash === startingHash) {
+      currentConversationIdRef.current = conv.id
+      applyConversation(conv)
+      setChatView('conversation')
+      syncConversationRoute(conv.id)
+    }
+    refreshSidebar()
+  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, currentConversation, isCurrentConversationBusy, selectedProject, loadSkills, applyConversation, syncConversationRoute, refreshSidebar])
+
+  const handleMarketUninstall = useCallback(async (id: string) => {
+    if (usesExternalRuntime || usesChatRuntime || draftAgentRuntime.kind !== 'builtin') throw new Error('请切换到内置 Agent 模式卸载应用。')
+    if (!activeProviderId || !activeModel) throw new Error('请先配置对话模型。')
+    if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再卸载。')
+    let conv = await chatApi.createConversation(activeProviderId, activeModel, selectedProject?.name, selectedProject?.id ?? null)
+    conv = await chatApi.updateConversation(conv.id, { title: '卸载应用' })
+    await marketApi.prepareRemove(id, conv.id)
+    currentConversationIdRef.current = conv.id
+    applyConversation(conv)
+    setChatView('conversation')
+    syncConversationRoute(conv.id)
+    refreshSidebar()
+  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, isCurrentConversationBusy, selectedProject, applyConversation, syncConversationRoute, refreshSidebar])
+
   // 历史预置（Lens「在 AI 客户端继续」交接）：用最新 reactive 值（provider/model/project）创建带历史的新会话。
   // 同 handleSendMessageRef 思路用 ref 持有，保持 drainExternalSends 稳定身份。
   const importExternalConversation = useCallback(async (
@@ -5132,6 +5205,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     handleExternalPresetChange,
     handleOpenChatSettings,
     handleOpenDockGit,
+    handleMarketInstall,
+    handleMarketUse,
+    marketSnapshot,
+    storedActiveSkillId,
+    currentConversationIsBlank,
+    uiLang,
     handleQueueMessage,
     handleSelectAssistant,
     handleSendMessage,
@@ -5413,6 +5492,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           videosActive={chatView === 'videos'}
           onOpenImages={() => setHash('#chat/images')}
           imagesActive={chatView === 'images'}
+          onOpenMarket={() => setHash('#chat/market')}
+          marketActive={chatView === 'market'}
           onOpenSettings={handleSidebarOpenSettings}
           onSelectLang={handleSidebarSelectLang}
           onOpenUsage={handleSidebarOpenUsage}
@@ -5509,6 +5590,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           >
             <Suspense fallback={null}><VideoStudio /></Suspense>
           </StudioPage>
+        ) : chatView === 'market' ? (
+          <StudioPage sidebarCollapsed={sidebarCollapsed} onToggleSidebar={handleTitlebarToggleSidebar} onNewConversation={handleTitlebarNewConversation}><MarketPage lang={uiLang} onUninstall={handleMarketUninstall} onInstall={handleMarketInstall} onUse={handleMarketUse} /></StudioPage>
         ) : chatView === 'images' ? (
           <StudioPage
             key="center"

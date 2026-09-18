@@ -713,7 +713,17 @@ pub fn build_chat_system_prompt_with_segments(
         }
 
         let fallback = chat_tools.skill_fallback_mode.as_str();
-        if let Some(skill_id) = active_skill_id.filter(|id| !id.trim().is_empty()) {
+        // Market entry bodies are the package author's DSIVIO.md, loaded directly.
+        let market_entry = active_skill_detail.filter(|skill| {
+            skill.meta.id.starts_with("pkg-") && skill.meta.path.as_deref().is_some_and(|path| {
+                path.replace('\\', "/").ends_with("/skills/market-entry/SKILL.md")
+            })
+        });
+        if let Some(skill) = market_entry {
+            if !skill.body.trim().is_empty() {
+                append_context_segment(&mut prompt, &mut segments, "skills", "Skills", &skill.body);
+            }
+        } else if let Some(skill_id) = active_skill_id.filter(|id| !id.trim().is_empty()) {
             let mut skill_prompt = format!("User pinned skill for this message: {skill_id}");
             if matches!(fallback, "skill_md_only" | "legacy_full_body")
                 && active_skill_detail.is_some_and(|skill| !skill.body.trim().is_empty())
@@ -749,7 +759,7 @@ pub fn build_chat_system_prompt_with_segments(
             );
         }
 
-        if matches!(fallback, "skill_md_only" | "legacy_full_body") {
+        if market_entry.is_none() && matches!(fallback, "skill_md_only" | "legacy_full_body") {
             if let Some(skill) = active_skill_detail {
                 if !skill.body.trim().is_empty() {
                     append_context_segment(
@@ -1241,6 +1251,26 @@ mod tests {
             location: std::path::PathBuf::new(),
             base_dir: std::path::PathBuf::new(),
             body: String::new(),
+        }
+    }
+
+    #[test]
+    fn market_entry_injects_document_once_without_activation_prompt() {
+        let registry = skills::SkillRegistry::default();
+        let mut record = test_skill_record("pkg-test-market-entry");
+        record.meta.path = Some("/packages/test/content/skills/market-entry/SKILL.md".into());
+        let skill = skills::SkillDetail { meta: record.meta, body: "制作视频时，优先使用 Hypit。".into() };
+        for fallback in ["progressive", "skill_md_only", "legacy_full_body"] {
+            let mut config = crate::settings::ChatToolsConfig::default();
+            config.skill_fallback_mode = fallback.into();
+            let prompt = build_chat_system_prompt(
+                "zh-CN", false, true, &registry, &config, true, &[],
+                Some(&skill.meta.id), Some(&skill), None, None, "", false,
+                None, None, None, None, None, None, None, None, &[],
+            );
+            assert_eq!(prompt.matches(&skill.body).count(), 1);
+            assert!(!prompt.contains("User pinned skill for this message"));
+            assert!(!prompt.contains("Active Skill:"));
         }
     }
 

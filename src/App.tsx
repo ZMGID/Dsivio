@@ -267,6 +267,8 @@ function App() {
     const settings = await getSettingsCached()
     const nextMode = (settings.theme || 'system') as 'system' | 'light' | 'dark'
     setThemeMode(nextMode)
+    // Reuse the explicit theme before React/settings load on the next refresh.
+    try { localStorage.setItem('dsivio-theme-mode', nextMode) } catch { /* Storage may be unavailable. */ }
     setTranslucentSidebar(settings.translucentSidebar)
     const isDark = nextMode === 'dark' || (nextMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
     if (isDark) {

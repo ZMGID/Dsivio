@@ -16,6 +16,7 @@ import {
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatImagesPath,
+  isChatMarketPath,
   isChatVideosPath,
   isChatOnboardingRoute,
   isChatPluginCenterPath,
@@ -43,6 +44,7 @@ describe('chatRoutes 判定', () => {
       ['chat/knowledge', isChatKnowledgeCenterPath],
       ['chat/notes', isChatNotesPath],
       ['chat/images', isChatImagesPath],
+      ['chat/market', isChatMarketPath],
       ['chat/videos', isChatVideosPath],
       ['chat/onboarding', isChatOnboardingRoute],
       ['chat/popout', isChatPopoutRoute],
@@ -181,4 +183,10 @@ describe('setHash / conversationHash', () => {
     window.removeEventListener('hashchange', onChange)
     expect(fired).toBe(0)
   })
+})
+
+it('应用详情不会被识别为会话 ID', () => {
+  withHash('#chat/market/image-app')
+  expect(isChatMarketPath(hashPath())).toBe(true)
+  expect(getRouteConversationId()).toBeNull()
 })

@@ -1,5 +1,5 @@
 //! Small, live-state operations for the bundled Kivio configuration skills.
-//! No generic settings replacement, CLI execution, or credential dumping.
+//! No generic settings replacement. Capability services explicitly expose configured keys to package agents.
 mod skill_install;
 #[cfg(test)]
 mod tests;
@@ -14,15 +14,15 @@ use crate::mcp::types::{ChatToolDefinition, McpToolCallResult};
 use crate::settings::{ChatMcpServer, Settings};
 
 pub fn inspect_definition() -> ChatToolDefinition {
-    definition("kivio_inspect", "Read Kivio's current configuration, skills, plugin packages, MCP summaries or hook status without exposing credentials or connecting servers. Use the kivio-configuration-guide skill for self-configuration requests. Disk/registry presence does not prove a capability is usable in this conversation.", json!({
-        "type":"object", "properties":{"topic":{"type":"string","enum":["status","skills","plugins","mcp","hooks"]}}, "additionalProperties":false
+    definition("kivio_inspect", "Read Kivio's current configuration, skills, plugin packages, MCP summaries or hook status without connecting servers. The capabilities topic returns the user-authored capability configuration text verbatim INCLUDING any API keys for package setup and execution; other topics redact credentials. Use the kivio-configuration-guide skill for self-configuration requests. Disk/registry presence does not prove a capability is usable in this conversation.", json!({
+        "type":"object", "properties":{"topic":{"type":"string","enum":["status","skills","plugins","mcp","hooks","capabilities"]}}, "additionalProperties":false
     }), false)
 }
 
 pub fn configure_definition() -> ChatToolDefinition {
     definition("kivio_configure", "Install or configure Kivio extensions using live application services. First load the relevant kivio configuration skill and inspect current state. Acts on the user's requested resources only. New skills/plugins/MCP tools are usable on the next turn. MCP tests may launch a process/connect a service. Config JSON is read from config_path; no whole-settings replacement. Requires the host command tool toggle and normal session consent.", json!({
         "type":"object", "properties":{
-            "action":{"type":"string","enum":["skill_install","skill_set_enabled","skill_settings","plugin_import","plugin_set_enabled","plugin_remove","mcp_upsert","mcp_remove","mcp_test","hooks_save"]},
+            "action":{"type":"string","enum":["skill_install","skill_set_enabled","skill_settings","plugin_import","plugin_set_enabled","plugin_remove","mcp_upsert","mcp_remove","mcp_test","hooks_save","market_finalize","market_remove"]},
             "source":{"type":"string","description":"skill_install: local skill directory or one-skill ZIP; plugin_import: local package root or HTTPS Git URL"},
             "scope":{"type":"string","enum":["user","project"],"description":"skill_install only; default user. project requires a project conversation."},
             "replace":{"type":"boolean","description":"skill_install only; explicit replacement keeps a recoverable backup outside scan roots"},
@@ -102,6 +102,11 @@ enum Action {
     McpTest {
         id: String,
     },
+    MarketRemove { id: String },
+    MarketFinalize {
+        id: String,
+        config_path: String,
+    },
     HooksSave {
         config_path: String,
     },
@@ -130,6 +135,9 @@ pub fn inspect(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
         let args: InspectArgs =
             serde_json::from_value(ctx.arguments.clone()).map_err(|e| e.to_string())?;
         let settings = ctx.state.settings_read().clone();
+        if args.topic == "capabilities" {
+            return Ok(text_tool_result(settings.capability_config_text.clone()));
+        }
         let value = match args.topic.as_str() {
             "status" => status_summary(&settings, cwd(&ctx).as_deref()),
             "skills" => {
@@ -221,6 +229,11 @@ pub fn configure(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
 
 async fn configure_action(ctx: &NativeCallCtx<'_>, action: Action) -> Result<Value, String> {
     match action {
+        Action::MarketRemove { id } => crate::market::finish_remove(ctx.app, ctx.state, &ctx.native_ctx.ok_or("Missing conversation")?.conversation_id, &id).await,
+        Action::MarketFinalize { id, config_path } => {
+            let config = crate::native_tools::resolve_tool_read_path(ctx.workspace, &config_path)?;
+            crate::market::finalize(ctx.app, ctx.state, &ctx.native_ctx.ok_or("Missing conversation")?.conversation_id, &id, &config).await
+        }
         Action::SkillInstall {
             source,
             scope,

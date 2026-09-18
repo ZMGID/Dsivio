@@ -11,7 +11,9 @@
         var ua = navigator.userAgent
         if (/Windows/i.test(ua)) document.documentElement.classList.add('windows')
         else if (/Mac|iPhone|iPad|iPod/i.test(ua)) document.documentElement.classList.add('macos')
-        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        var themeMode = 'system'
+        try { themeMode = localStorage.getItem('dsivio-theme-mode') || 'system' } catch (_) {}
+        if (themeMode === 'dark' || (themeMode !== 'light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
           document.documentElement.classList.add('dark')
         }
       })()

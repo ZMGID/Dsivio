@@ -1635,6 +1635,7 @@ pub struct Settings {
     pub translator_prompt: Option<String>,
     #[serde(default)]
     pub providers: Vec<ModelProvider>,
+    pub capability_config_text: String,
     #[serde(default)]
     pub screenshot_translation: ScreenshotTranslationConfig,
     #[serde(default)]
@@ -1872,6 +1873,7 @@ impl Default for Settings {
             default_models: DefaultModelsConfig::default(),
             translator_prompt: None,
             providers: vec![],
+            capability_config_text: String::new(),
             screenshot_translation: ScreenshotTranslationConfig::default(),
             screenshot_annotate: ScreenshotAnnotateConfig::default(),
             lens: LensConfig::default(),

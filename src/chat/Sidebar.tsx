@@ -7,6 +7,7 @@ import {
   FolderPlus,
   Layers,
   LayoutGrid,
+  Store,
   MoreHorizontal,
   NotebookPen,
   Image as ImageIcon,
@@ -213,6 +214,8 @@ export interface SidebarProps {
   videosActive?: boolean
   onOpenImages?: () => void
   imagesActive?: boolean
+  onOpenMarket?: () => void
+  marketActive?: boolean
   onSelectLang: (lang: Lang) => void
   onOpenUsage: () => void
   settingsActive?: boolean
@@ -627,6 +630,8 @@ export const Sidebar = memo(function Sidebar({
   videosActive = false,
   onOpenImages,
   imagesActive = false,
+  onOpenMarket,
+  marketActive = false,
   onSelectLang,
   onOpenUsage,
   settingsActive = false,
@@ -1425,6 +1430,7 @@ export const Sidebar = memo(function Sidebar({
           onClick={onOpenImages}
           active={imagesActive}
         />}
+        {onOpenMarket && <NavRow icon={<Store size={17} strokeWidth={1.75} />} label={lang === 'en' ? 'App market' : '应用市场'} onClick={onOpenMarket} active={marketActive} />}
         <ExtensionsNav
           activeItem={extensionsActive}
           onSelectItem={onOpenExtensionsItem}

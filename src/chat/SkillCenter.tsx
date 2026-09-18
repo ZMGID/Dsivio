@@ -31,7 +31,6 @@ import { Select, Toggle } from '../settings/components'
 import { useT, type I18n } from '../settings/i18n'
 import { Button, IconButton } from '../components/Button'
 import { SkillStoreBrowser } from './SkillStoreBrowser'
-import { CompanySkillSquare } from './CompanySkillSquare'
 import { SkillIcon } from '../settings/NavIcons'
 
 interface SkillCenterProps {
@@ -343,7 +342,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
   const [skillsLoading, setSkillsLoading] = useState(false)
   const [skillError, setSkillError] = useState('')
   const [query, setQuery] = useState('')
-  const [view, setView] = useState<'installed' | 'square' | 'store' | 'import' | 'advanced'>('installed')
+  const [view, setView] = useState<'installed' | 'store' | 'import' | 'advanced'>('installed')
   const [selectedSkillPreview, setSelectedSkillPreview] = useState<SkillDetail | null>(null)
   // 从本地 CLI（Claude Code / Codex / OpenCode）的技能目录导入
   const [cliSkills, setCliSkills] = useState<CliSkillGroups | null>(null)
@@ -485,20 +484,6 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
         : [...disabled, skillId]
     persistChatTools({ disabledSkillIds: next })
   }, [persistChatTools])
-
-  const handleSquareLoaded = useCallback(async (skillId: string) => {
-    const fresh = await refreshSettings()
-    const tools = fresh.chatTools ?? defaultChatTools()
-    const saved = await saveSettingsCached({
-      ...fresh,
-      chatTools: { ...tools, disabledSkillIds: (tools.disabledSkillIds ?? []).filter((id) => id !== skillId) },
-    })
-    settingsRef.current = saved
-    setSettings(saved)
-    const refreshed = await refreshChatSkills()
-    onSkillsChanged?.()
-    if (!refreshed) throw new Error(t.chatSkillListLoadFailed)
-  }, [onSkillsChanged, refreshChatSkills, t])
 
   const handlePreviewSkill = useCallback(async (skillId: string) => {
     setSkillError('')
@@ -752,7 +737,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
 
           {/* Tab 行 */}
           <div className="mt-5 flex flex-wrap items-center gap-1 border-b border-neutral-200 dark:border-neutral-800">
-            {([['installed', t.chatSkillTabInstalled], ['square', t.chatSkillTabSquare], ['store', t.chatSkillTabStore], ['import', t.chatSkillTabImport], ['advanced', t.chatSkillTabAdvanced]] as const).map(([id, label]) => (
+            {([['installed', t.chatSkillTabInstalled], ['store', t.chatSkillTabStore], ['import', t.chatSkillTabImport], ['advanced', t.chatSkillTabAdvanced]] as const).map(([id, label]) => (
               <button
                 key={id}
                 type="button"
@@ -775,12 +760,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
             ))}
           </div>
 
-          {view === 'square' ? (
-            <div key="square" className="chat-motion-tab-in mt-5">
-              {skillError && <p role="alert" className="mb-4 text-[12px] text-red-600 dark:text-red-400">{skillError}</p>}
-              <CompanySkillSquare skills={skills} disabledSkillIds={disabledSkillIds} loading={skillsLoading || !settings || Boolean(skillError)} onLoaded={handleSquareLoaded} />
-            </div>
-          ) : view === 'store' ? (
+          {view === 'store' ? (
             <div key="store" className="chat-motion-tab-in mt-5 flex min-h-[420px] flex-col">
               <SkillStoreBrowser onInstalled={() => void refreshChatSkills()} />
             </div>
