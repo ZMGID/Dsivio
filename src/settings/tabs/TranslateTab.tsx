@@ -44,6 +44,7 @@ export function TranslateTab({
               { value: 'ko', label: t.langKo },
               { value: 'fr', label: t.langFr },
               { value: 'de', label: t.langDe },
+              { value: 'pt', label: t.langPt },
             ]}
           />
         </SettingRow>
