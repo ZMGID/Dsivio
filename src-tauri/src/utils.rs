@@ -94,6 +94,7 @@ pub fn language_name(code: &str) -> &'static str {
         "ko" => "Korean",
         "fr" => "French",
         "de" => "German",
+        "pt" => "Portuguese",
         _ => "English",
     }
 }

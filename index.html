@@ -29,6 +29,7 @@
         color: #0e1013;
         --speed: 1;
       }
+      #kv-boot-splash[hidden] { display: none; }
       html.dark #kv-boot-splash {
         background: #090a0d;
         color: #f6f7f9;
@@ -67,9 +68,10 @@
       (function () {
         var path = (location.hash || '').replace('#', '').split('?')[0]
         var isChat = path === 'chat' || (path.indexOf('chat/') === 0 && path.indexOf('chat/popout') !== 0)
-        if (!isChat) return
         var el = document.getElementById('kv-boot-splash')
         if (!el) return
+        // 翻译器、Lens 和弹出窗共用入口，但不参与 Chat 启动动画的关闭流程。
+        if (!isChat) { el.remove(); return }
         el.hidden = false
         el.dataset.shownAt = String(performance.now())
       })()
