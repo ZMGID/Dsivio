@@ -1,11 +1,6 @@
----
-name: kivio-diagnosing-mcp
-description: 为 Kivio 添加、修改、测试 MCP server，排查连不上、认证失败、找不到工具或安装后工具没出现；区分独立 MCP、插件所属 MCP、连接器和外部 CLI 原生 MCP。
----
-
 # Kivio MCP 配置与排障
 
-依据 Kivio 2.9.6（2026-09-06）。先确认目标是 Kivio 的 MCP，还是当前外部 CLI 的 MCP。独立 MCP 保存在 `<app_data>/settings.json` 的 `settings.chatTools.servers`。不要把 Claude/Codex 的 server map 原样塞入该数组，也不写不存在的顶层 `mcpServers`。
+独立 MCP 位于 `<app_data>/settings.json` 的 `settings.chatTools.servers` 数组，与外部 CLI 的 server map 格式不同。
 
 先用 `kivio_inspect {"topic":"mcp"}` 读脱敏摘要。`managed:true` 的 server 应回到插件或连接器管理，不能为了修复它新建第二份独立 server。
 

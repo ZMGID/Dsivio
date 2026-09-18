@@ -57,7 +57,7 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_single_instance::init as init_single_instance;
 
 use api::build_http_client;
-use commands::apply_launch_at_startup;
+use commands::initialize_launch_at_startup;
 use native_tools::cleanup_stale_sandbox_exports;
 use screenshot::cleanup_orphan_temp_files;
 use settings::load_settings;
@@ -294,8 +294,8 @@ pub fn run() {
 
             let mut settings = load_settings(&app.handle());
             video_studio::sync_settings(&mut settings);
-            if let Err(err) = apply_launch_at_startup(&app.handle(), settings.launch_at_startup) {
-                eprintln!("Failed to apply launch-at-startup setting: {err}");
+            if let Err(err) = initialize_launch_at_startup(&app.handle(), &mut settings) {
+                eprintln!("Failed to initialize launch-at-startup setting: {err}");
             }
             // 开机自启带 `--from-autostart` 时不弹窗；用户显式打开「启动后最小化到托盘」时
             // 任何启动路径都不弹（含参数丢失的自启、开始菜单快捷方式）。
@@ -473,6 +473,8 @@ pub fn run() {
             commands::open_data_url_file,
             commands::open_html_preview,
             lens_commands::explain_read_image,
+            lens_commands::lens_read_freeze_frame,
+            lens_commands::lens_read_image,
             commands::fetch_models,
             commands::test_provider_connection,
             commands::test_web_search,

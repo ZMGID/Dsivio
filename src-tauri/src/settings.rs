@@ -758,7 +758,7 @@ impl Default for LensConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ChatConfig {
-    /// Allow explicitly requested Mixer video analysis. Never starts on attachment alone.
+    /// Expose video analysis to the main agent. Never starts on attachment alone.
     #[serde(default = "default_true")]
     pub video_analysis_enabled: bool,
     #[serde(default = "default_true")]
