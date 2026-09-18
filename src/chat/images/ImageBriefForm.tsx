@@ -16,14 +16,12 @@ function templateHaystack(item: ImageTemplate): string {
 function TemplateSearchList({
   choices,
   value,
-  busy,
   onChange,
   emptyLabel,
   listLabel = '套图模板',
 }: {
   choices: ImageTemplate[]
   value: string
-  busy: boolean
   onChange: (id: string) => void
   emptyLabel?: string
   listLabel?: string
@@ -37,14 +35,14 @@ function TemplateSearchList({
     <div className="if-template-search">
       <label className="if-template-search-field">
         <Search size={14} strokeWidth={2} aria-hidden />
-        <input className="kv-input" type="search" disabled={busy} value={query}
+        <input className="kv-input" type="search"  value={query}
           onChange={(event) => setQuery(event.target.value)} placeholder="搜索模板" aria-label="搜索模板" />
       </label>
       {filtered.length || (emptyLabel && !query.trim()) ? (
         <div className="if-template-list custom-scrollbar" role="listbox" aria-label={listLabel}>
           {emptyLabel && !query.trim() && (
             <button type="button" role="option" aria-selected={!value}
-              className={`if-template-option${!value ? ' is-active' : ''}`} disabled={busy}
+              className={`if-template-option${!value ? ' is-active' : ''}`}
               onClick={() => onChange('')}>
               <strong>{emptyLabel}</strong>
               <small>按页选择样图，不使用模板</small>
@@ -55,7 +53,7 @@ function TemplateSearchList({
             const purposes = item.data.slots.slice(0, 3).map((slot) => (slot.purpose || '商品图').split('·')[0].trim())
             return (
               <button key={item.id} type="button" role="option" aria-selected={selected}
-                className={`if-template-option${selected ? ' is-active' : ''}`} disabled={busy}
+                className={`if-template-option${selected ? ' is-active' : ''}`}
                 onClick={() => onChange(item.id)}>
                 <strong>{item.data.name}</strong>
                 <small>{item.data.slots.length} 张 · {purposes.join(' / ')}</small>
@@ -161,7 +159,7 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
                       <div className="if-example" key={asset.id}>
                         <AssetImage path={asset.path} name={asset.name} />
                         <small>第 {index + 1} 页</small>
-                        <IconButton label={`移除样图 ${index + 1}`} disabled={busy}
+                        <IconButton label={`移除样图 ${index + 1}`}
                           onClick={() => onChange({ workflowInput: { mode: 'replace', sources: sources.filter((item) => item.id !== asset.id) } })}>
                           <X size={12} />
                         </IconButton>
@@ -170,7 +168,7 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
                   </div>
                   <div className="if-drop-bar">
                     <small>{dropActive && dropTarget === 'examples' ? '松开即可继续导入' : '还可以按页继续添加'}</small>
-                    <Button size="sm" disabled={busy} onClick={onImportExamples}><ImagePlus size={16} />添加样图</Button>
+                    <Button size="sm"  onClick={onImportExamples}><ImagePlus size={16} />添加样图</Button>
                   </div>
                 </>
               ) : (
@@ -181,17 +179,17 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
                     <small>PNG、JPG、WebP</small>
                   </div>
                   <div className="if-upload-actions">
-                    <Button className="if-upload-button" disabled={busy} onClick={onImportExamples}>选择现成套图</Button>
+                    <Button className="if-upload-button"  onClick={onImportExamples}>选择现成套图</Button>
                   </div>
                 </div>
               ))}
               <p className="if-replace-label">已有换货模板</p>
-              <TemplateSearchList choices={choices} value={brief.templateId || ''} busy={busy}
+              <TemplateSearchList choices={choices} value={brief.templateId || ''}
                 onChange={updateTemplate} listLabel="换货模板" emptyLabel={brief.templateId ? '改回上传样图' : undefined} />
             </div>
           )}
           {brief.feature === 'smart' && (
-            <TemplateSearchList choices={choices} value={brief.templateId || ''} busy={busy} onChange={updateTemplate} />
+            <TemplateSearchList choices={choices} value={brief.templateId || ''} onChange={updateTemplate} />
           )}
         </section>
       )}
@@ -206,8 +204,8 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
               <span className="if-upload-icon"><ImagePlus size={25} strokeWidth={1.5} /></span>
               <div className="if-upload-copy"><strong>{dropActive ? '松开即可导入' : quick ? '拖入参考图片' : '拖入商品图片或文件夹'}</strong><small>PNG、JPG、WebP</small></div>
               <div className="if-upload-actions">
-                <Button className="if-upload-button" disabled={busy} onClick={() => onImport(batch)}>{batch ? '选择商品文件夹' : '选择图片'}</Button>
-                {!quick && !batch && <Button variant="ghost" size="sm" disabled={busy} onClick={() => onImport(true)}><FolderOpen size={14} />导入文件夹</Button>}
+                <Button className="if-upload-button"  onClick={() => onImport(batch)}>{batch ? '选择商品文件夹' : '选择图片'}</Button>
+                {!quick && !batch && <Button variant="ghost" size="sm"  onClick={() => onImport(true)}><FolderOpen size={14} />导入文件夹</Button>}
               </div>
             </>
           ) : brief.products.map((product) => (
@@ -217,7 +215,7 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
                 {product.assets.filter((asset) => !asset.name.startsWith('__dsimage_')).map((asset) => (
                   <div className="if-asset" key={asset.id}>
                     <AssetImage path={asset.path} name={asset.name} />
-                    <IconButton label={`移除素材 ${asset.name}`} disabled={busy} onClick={() => removeAsset(product.id, asset)}><X size={12} /></IconButton>
+                    <IconButton label={`移除素材 ${asset.name}`}  onClick={() => removeAsset(product.id, asset)}><X size={12} /></IconButton>
                   </div>
                 ))}
               </div>
@@ -227,32 +225,32 @@ export function ImageBriefForm({ configurationIssue, model, protocol, brief, tem
         {!!brief.products.length && (
           <div className="if-drop-bar">
             <small>{dropActive && dropTarget !== 'examples' ? '松开即可继续导入' : '还可以把图片继续拖进来'}</small>
-            <Button size="sm" disabled={busy} onClick={() => onImport(batch)}><Plus size={14} />添加素材</Button>
+            <Button size="sm"  onClick={() => onImport(batch)}><Plus size={14} />添加素材</Button>
           </div>
         )}
       </section>
       <section className="if-requirements">
-        <RequirementComposer label="图片要求" disabled={busy} value={brief.requirement}
+        <RequirementComposer label="图片要求"  value={brief.requirement}
           onChange={requirement => onChange({ requirement })}
           preferredAssistantId={brief.assistantId} onAssistantChange={assistantId => onChange({ assistantId })}
           mediaPaths={collectBriefImagePaths(brief)} placeholder={quick ? '例如：把背景换成浅色木桌，保留商品原样，不要文字。' : replace ? '有哪些额外要求？不填则保留原版式，只替换商品。' : brief.feature === 'smart' ? '有哪些额外要求？不填则沿用模板。' : batch ? '例如：这批商品用于店铺上新，每款做一套主图、卖点和场景图。' : '例如：设计一套简洁的电商主图，突出材质和容量，使用中文。'} />
       </section>
       <div className="if-options">
-        <Field label={quick ? '张数' : '每款张数'}>{quick ? <StudioSelect value={brief.count} disabled={busy} onChange={e => onChange({ count: Number(e.target.value) })}>
+        <Field label={quick ? '张数' : '每款张数'}>{quick ? <StudioSelect value={brief.count}  onChange={e => onChange({ count: Number(e.target.value) })}>
           <option value={0}>Auto</option>{Array.from({ length: 30 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
-        </StudioSelect> : <input className="kv-input" type="number" min={1} max={30} disabled={busy || !!template || (replace && !!sources.length)}
+        </StudioSelect> : <input className="kv-input" type="number" min={1} max={30} disabled={!!template || (replace && !!sources.length)}
           value={pages} onChange={(e) => onChange({ count: Math.max(1, Math.min(30, Number(e.target.value) || 1)) })} />}</Field>
-        <Field label="比例"><ImageRatioSelect allowAuto={quick} disabled={busy} model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
+        <Field label="比例"><ImageRatioSelect allowAuto={quick}  model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
           onChange={(output) => onChange(output)} /></Field>
-        <Field label="分辨率"><ImageResolutionSelect allowAuto={quick} disabled={busy} model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
+        <Field label="分辨率"><ImageResolutionSelect allowAuto={quick}  model={model} protocol={protocol} ratio={brief.ratio} resolution={brief.resolution}
           onChange={(output) => onChange(output)} /></Field>
-        <Field label="图内文字"><ImageLanguageSelect allowAuto={quick} disabled={busy} allowFollowExample={replace} inheritedValue={template?.data.language} value={brief.language} onChange={(language) => onChange({ language })} /></Field>
+        <Field label="图内文字"><ImageLanguageSelect allowAuto={quick}  allowFollowExample={replace} inheritedValue={template?.data.language} value={brief.language} onChange={(language) => onChange({ language })} /></Field>
       </div>
       <details className="if-more">
         <summary>更多设置</summary>
-        <Field label="统一风格（可选）"><textarea className="kv-textarea custom-scrollbar" rows={2} disabled={busy} value={brief.style} onChange={(e) => onChange({ style: e.target.value })} placeholder="有特别的色调、背景或排版要求，可以在这里补充" /></Field>
+        <Field label="统一风格（可选）"><textarea className="kv-textarea custom-scrollbar" rows={2}  value={brief.style} onChange={(e) => onChange({ style: e.target.value })} placeholder="有特别的色调、背景或排版要求，可以在这里补充" /></Field>
         {brief.products.map((product) => <Field key={product.id} label={brief.products.length > 1 ? `${product.name} 的商品信息（可选）` : '商品信息（可选）'}>
-          <textarea className="kv-textarea custom-scrollbar" rows={2} disabled={busy} value={product.facts} placeholder="可补充图片看不出的信息，例如尺寸、容量"
+          <textarea className="kv-textarea custom-scrollbar" rows={2}  value={product.facts} placeholder="可补充图片看不出的信息，例如尺寸、容量"
             onChange={(e) => onChange({ products: brief.products.map((item) => item.id === product.id ? { ...item, facts: e.target.value } : item) })} />
         </Field>)}
       </details>

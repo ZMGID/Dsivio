@@ -4,7 +4,10 @@ use std::time::Duration;
 use tauri::{AppHandle, State};
 use tokio::time::timeout;
 
-use crate::chat::agent::{execute::truncate_chars, stop as agent_stop};
+use crate::chat::agent::execute::truncate_chars;
+use crate::chat::model::{
+    generate_request_from_openai_messages, GenerateOptions, GenerateRequestContext,
+};
 use crate::chat::model_metadata::model_can_generate_images_directly;
 use crate::chat::ChatMessage;
 use crate::settings::{SessionModel, Settings};
@@ -26,7 +29,8 @@ pub(super) struct PromptOptimizeCallSpec {
 pub(super) const fn prompt_optimize_call_spec() -> PromptOptimizeCallSpec {
     PromptOptimizeCallSpec {
         thinking_enabled: true,
-        max_output_tokens: 2048,
+        // 思考 token 也占输出额度，不能只按最终改写的长度分配。
+        max_output_tokens: 16_384,
         label: "Chat prompt optimize",
     }
 }
@@ -405,22 +409,25 @@ async fn optimize_prompt_with_model(
             "content": user_content,
         }),
     ];
-    let mut spec = prompt_optimize_call_spec();
-    if purpose == "video_brief" {
-        spec.max_output_tokens = 4096;
-    }
-    let message = crate::chat::agent::planning::call_chat_completion_message_streamed(
-        state,
-        &provider,
+    let spec = prompt_optimize_call_spec();
+    let request = generate_request_from_openai_messages(
         &model,
         messages,
         None,
-        retry_attempts,
-        spec.thinking_enabled,
-        spec.max_output_tokens,
-        conversation_id,
-        "",
+        GenerateOptions {
+            thinking_enabled: spec.thinking_enabled,
+            max_tokens: spec.max_output_tokens,
+            ..GenerateOptions::default()
+        },
         spec.label,
+        GenerateRequestContext::new(Some(conversation_id), Some("")),
+    );
+    // 保留完整输出的结束原因；转换成 assistant message 会丢掉 length。
+    let output = crate::chat::agent::planning::generate_via_stream_collect(
+        state,
+        &provider,
+        retry_attempts,
+        request,
     )
     .await
     .map_err(|err| {
@@ -430,8 +437,26 @@ async fn optimize_prompt_with_model(
             &format!("Prompt optimize failed: {err}"),
         )
     })?;
-    let raw = agent_stop::assistant_content_from_api_message(&message);
-    sanitize_optimized_prompt(&raw).ok_or_else(|| {
+    if output.finish_reason.as_deref() == Some("length") {
+        return Err(localize(
+            &language,
+            "优化结果达到模型输出上限，内容未完成，已保留原文。请重试或更换优化模型。",
+            "The rewrite reached the model's output limit and is incomplete. Your original text was kept. Retry or choose another optimization model.",
+        ));
+    }
+    if output.cancelled
+        || matches!(
+            output.finish_reason.as_deref(),
+            Some("cancelled" | "incomplete" | "content_filter")
+        )
+    {
+        return Err(localize(
+            &language,
+            "模型未完成优化，已保留原文。请重试或更换优化模型。",
+            "The model did not complete the rewrite. Your original text was kept. Retry or choose another optimization model.",
+        ));
+    }
+    sanitize_optimized_prompt(&output.text).ok_or_else(|| {
         localize(
             &language,
             "模型没有返回可用的优化结果",
@@ -503,7 +528,7 @@ pub(crate) async fn chat_optimize_prompt(
         .filter(|path| !path.is_empty())
         .collect();
     match timeout(
-        Duration::from_secs(45),
+        Duration::from_secs(120),
         optimize_prompt_with_model(
             &settings,
             state.inner(),
@@ -585,7 +610,7 @@ mod tests {
     fn prompt_optimize_call_spec_stays_stream_friendly() {
         let spec = prompt_optimize_call_spec();
         assert!(spec.thinking_enabled);
-        assert_eq!(spec.max_output_tokens, 2048);
+        assert_eq!(spec.max_output_tokens, 16_384);
         assert_eq!(spec.label, "Chat prompt optimize");
     }
 
@@ -815,6 +840,8 @@ mod tests {
         let bodies = captured.lock().unwrap_or_else(|e| e.into_inner()).clone();
         assert_eq!(bodies.len(), 1, "exactly one optimize request");
         let body = &bodies[0];
+        let request: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(request["max_tokens"], 16_384);
         assert!(
             body.contains("\"stream\":true"),
             "prompt optimize must stream; body={body}"
@@ -828,6 +855,82 @@ mod tests {
             body.contains("optimize-model") && body.contains("提问优化助手"),
             "request should use the Chinese builtin prompt against optimize-model; body={body}"
         );
+    }
+
+    #[tokio::test]
+    async fn prompt_optimize_rejects_truncated_streams_in_both_api_formats() {
+        for format in ["openai_chat", "openai_responses"] {
+            let events = if format == "openai_responses" {
+                vec![
+                    serde_json::json!({
+                        "type": "response.output_text.delta",
+                        "delta": "Step 1: 真实情境与稀缺性分析\n- 突发诱饵：",
+                    })
+                    .to_string(),
+                    serde_json::json!({
+                        "type": "response.incomplete",
+                        "response": {
+                            "status": "incomplete",
+                            "incomplete_details": { "reason": "max_output_tokens" },
+                            "usage": {
+                                "input_tokens": 2246,
+                                "output_tokens": 4096,
+                                "output_tokens_details": { "reasoning_tokens": 4077 },
+                            },
+                        },
+                    })
+                    .to_string(),
+                ]
+            } else {
+                vec![
+                    serde_json::json!({
+                        "choices": [{
+                            "delta": { "content": "Step 1: 真实情境与稀缺性分析\n- 突发诱饵：" },
+                            "finish_reason": "length",
+                        }],
+                    })
+                    .to_string(),
+                    "[DONE]".to_string(),
+                ]
+            };
+            let (base_url, captured) = start_sse_mock(events);
+            let state = test_app_state();
+            let mut settings = Settings::default();
+            let mut provider = test_provider(&base_url);
+            provider.api_format = format.to_string();
+            settings.providers = vec![provider];
+            settings.default_models.prompt_optimize.provider_id = "optimize-provider".into();
+            settings.default_models.prompt_optimize.model = "optimize-model".into();
+            settings.retry_enabled = false;
+
+            let err = optimize_prompt_with_model(
+                &settings,
+                &state,
+                "",
+                None,
+                "宣传这个",
+                "",
+                "video_brief",
+                None,
+                &[],
+            )
+            .await
+            .expect_err("partial text must not be returned as a successful rewrite");
+            assert!(
+                err.contains("输出上限") && err.contains("保留原文"),
+                "{format}: {err}"
+            );
+            let bodies = captured.lock().unwrap();
+            assert_eq!(bodies.len(), 1);
+            let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+            let limit_key = if format == "openai_responses" {
+                "max_output_tokens"
+            } else {
+                "max_tokens"
+            };
+            assert_eq!(body[limit_key], 16_384);
+            assert_eq!(body["stream"], true);
+        }
     }
 
     const TINY_PNG: &[u8] = &[

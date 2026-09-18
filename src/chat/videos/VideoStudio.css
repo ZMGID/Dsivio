@@ -313,12 +313,37 @@
   color: var(--text-muted);
   font-size: 11px;
 }
-.video-studio .vs-video {
-  display: block;
+.video-studio .vs-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 24px;
+}
+.video-studio .vs-result-preview {
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 100%;
-  max-height: 500px;
-  margin: 16px 0;
+}
+.video-studio .vs-result-preview .vs-video {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: min(300px, 50vh);
+  margin: 0;
   border-radius: 8px;
+  object-fit: contain;
+  background: #111;
+}
+.video-studio .vs-result-info {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.video-studio .vs-result-info .vs-actions {
+  justify-content: flex-start;
+  padding-top: 8px;
+  margin-top: 0;
+  border-top: 0;
 }
 @media (max-width: 1000px) {
   .video-studio .vs-layout {

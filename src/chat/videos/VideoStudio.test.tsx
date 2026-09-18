@@ -19,6 +19,7 @@ vi.mock('../../api/tauri', () => ({
     videoStudioImage: vi.fn(async () => ''),
     videoStudioTask: vi.fn(),
     videoStudioPreview: vi.fn(async () => ''),
+    videoStudioPoster: vi.fn(async () => ''),
     videoStudioOpen: vi.fn(async () => {}),
   },
 }))
@@ -80,21 +81,24 @@ describe('shared video workspace navigation', () => {
   it.each([
     { route: '', resolution: '', reason: '请选择生成服务' },
     { route: 'grok', resolution: '', reason: '请选择当前服务支持的生成清晰度' },
-  ])('blocks planning and step shortcuts with missing selections: $reason', async ({ route, resolution, reason }) => {
+  ])('allows planning and freely switching pages with missing selections: $reason', async ({ route, resolution, reason }) => {
     const brief = { ...newVideoBrief(), request: '展示背包', route, resolution }
     localStorage.setItem('dsivio-video-drafts-v1', JSON.stringify({ creation: { brief, script: '', step: 0, dirty: true } }))
     vi.mocked(api.videoStudioTask).mockClear()
     render(<VideoStudio />)
     const start = await screen.findByRole('button', { name: '帮我设计视频' })
-    expect(start).toBeDisabled()
+    expect(start).toBeEnabled()
     expect(screen.getByText(reason)).toBeTruthy()
     const plan = screen.getByRole('tab', { name: /拍摄方案/ })
     const output = screen.getByRole('tab', { name: /生成与成片/ })
-    expect(plan).toBeDisabled()
-    expect(output).toBeDisabled()
-    fireEvent.click(start)
+    expect(plan).toBeEnabled()
+    expect(output).toBeEnabled()
     fireEvent.click(plan)
+    expect(screen.getByLabelText('视频方案')).toBeEnabled()
     fireEvent.click(output)
+    expect(output).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '生成视频' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(reason)
     expect(api.videoStudioTask).not.toHaveBeenCalled()
   })
   it('opens older chat-created tasks from a dedicated searchable library while keeping the rail bounded', async () => {
@@ -399,6 +403,104 @@ describe('video confirmation and monitoring', () => {
   function readyTask(): VideoTask {
     return { id: 'confirmed-task', revision: 1, updatedAt: 0, brief: { ...newVideoBrief(), route: 'grok', resolution: '720p' }, script: '0–10秒：商品展示', prompt: '', approved: false, status: 'draft' }
   }
+  it.each(['grok', 'minimax'] as const)('%s generates the current edited plan without a separate approval click', async route => {
+    let task = readyTask()
+    task.brief = { ...task.brief, route, resolution: route === 'grok' ? '720p' : '768P' }
+    seed(task)
+    vi.mocked(api.videoStudioTask).mockImplementation(async (action, input) => {
+      if (action === 'save') task = { ...task, revision: 2, script: input.script as string, brief: input.brief as VideoTask['brief'] }
+      if (action === 'approve') task = { ...task, revision: 3, approved: true, prompt: route === 'grok' ? task.script : '' }
+      if (action === 'prompt_result') task = { ...task, revision: 4, prompt: input.prompt as string }
+      if (action === 'submit') task = { ...task, status: 'running' }
+      return task
+    })
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('button', { name: '编辑全文' }))
+    fireEvent.change(screen.getByLabelText('视频方案'), { target: { value: '用户修改后的镜头' } })
+    fireEvent.click(screen.getByRole('tab', { name: /生成与成片/ }))
+    fireEvent.click(screen.getByRole('button', { name: '生成视频' }))
+    await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('submit', expect.objectContaining({ confirmSpend: true })))
+    expect(task.prompt).toBe('用户修改后的镜头')
+    expect(vi.mocked(api.videoStudioTask).mock.calls.filter(([action]) => action === 'submit')).toHaveLength(1)
+  })
+  it('allows editing a running generation and submits a new task while retaining the old receipt', async () => {
+    const running = { ...readyTask(), status: 'running', approved: true, prompt: '旧提示词', remote: { route: 'grok' as const, id: 'old-remote', base_url: 'https://api.x.ai' } }
+    seed(running, 2)
+    let next = { ...readyTask(), id: 'new-generation' }
+    vi.mocked(api.videoStudioTask).mockImplementation(async (action, input) => {
+      if (input.id === running.id) return running
+      if (action === 'create') next = { ...next, brief: input.brief as VideoTask['brief'] }
+      if (action === 'save') next = { ...next, script: input.script as string }
+      if (action === 'approve') next = { ...next, approved: true, prompt: next.script }
+      if (action === 'submit') next = { ...next, status: 'running' }
+      return next
+    })
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('tab', { name: /素材与要求/ }))
+    fireEvent.change(screen.getByLabelText('这次要拍什么'), { target: { value: '新的拍摄要求' } })
+    fireEvent.click(screen.getByRole('tab', { name: /拍摄方案/ }))
+    fireEvent.click(screen.getByRole('button', { name: '编辑全文' }))
+    fireEvent.change(screen.getByLabelText('视频方案'), { target: { value: '新的镜头方案' } })
+    fireEvent.click(screen.getByRole('tab', { name: /生成与成片/ }))
+    fireEvent.click(screen.getByRole('button', { name: '生成视频' }))
+    await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('submit', expect.objectContaining({ id: next.id })))
+    expect(api.videoStudioTask).not.toHaveBeenCalledWith('save', expect.objectContaining({ id: running.id }))
+    expect(running.remote.id).toBe('old-remote')
+    expect(next.brief.request).toBe('新的拍摄要求')
+    expect(next.prompt).toBe('新的镜头方案')
+  })
+  it('keeps new edits when an older AI plan finishes and does not switch the selected page', async () => {
+    const original = { ...readyTask(), brief: { ...readyTask().brief, request: '原要求' } }
+    seed(original, 0)
+    let finish!: (task: VideoTask) => void
+    vi.mocked(api.videoStudioTask).mockImplementation(async action => action === 'plan'
+      ? new Promise<VideoTask>(resolve => { finish = resolve }) : original)
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('button', { name: '帮我设计视频' }))
+    await waitFor(() => expect(finish).toBeTypeOf('function'))
+    expect(screen.getByRole('button', { name: '新建' })).toBeEnabled()
+    fireEvent.change(screen.getByLabelText('这次要拍什么'), { target: { value: '生成期间输入的新要求' } })
+    fireEvent.click(screen.getByRole('tab', { name: /生成与成片/ }))
+    await act(async () => finish({ ...original, revision: 2, script: '旧请求返回的方案' }))
+    expect(screen.getByRole('tab', { name: /生成与成片/ })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: /素材与要求/ }))
+    expect(screen.getByLabelText('这次要拍什么')).toHaveValue('生成期间输入的新要求')
+    const draft = JSON.parse(localStorage.getItem('dsivio-video-drafts-v1')!).creation
+    expect(draft.brief.request).toBe('生成期间输入的新要求')
+    expect(draft.task).toBeUndefined()
+  })
+  it('keeps page navigation available while saving and never reopens the task after new is clicked', async () => {
+    const original = { ...readyTask(), brief: { ...readyTask().brief, request: '原要求' } }
+    seed(original, 0)
+    let finish!: (task: VideoTask) => void
+    vi.mocked(api.videoStudioTask).mockImplementation(async action => action === 'get'
+      ? new Promise<VideoTask>(resolve => { finish = resolve }) : { ...original, script: '后台方案' })
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('button', { name: '帮我设计视频' }))
+    await waitFor(() => expect(finish).toBeTypeOf('function'))
+    expect(screen.getByRole('button', { name: '视频设置' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '新建' }))
+    fireEvent.change(screen.getByLabelText('这次要拍什么'), { target: { value: '新任务的要求' } })
+    await act(async () => finish(original))
+    expect(screen.getByLabelText('这次要拍什么')).toHaveValue('新任务的要求')
+    expect(screen.getByRole('tab', { name: /素材与要求/ })).toHaveAttribute('aria-selected', 'true')
+    expect(JSON.parse(localStorage.getItem('dsivio-video-drafts-v1')!).creation.task).toBeUndefined()
+  })
+  it('updates a finished background plan without pulling the user off the selected page', async () => {
+    const original = { ...readyTask(), brief: { ...readyTask().brief, request: '原要求' } }
+    seed(original, 0)
+    let finish!: (task: VideoTask) => void
+    vi.mocked(api.videoStudioTask).mockImplementation(async action => action === 'plan'
+      ? new Promise<VideoTask>(resolve => { finish = resolve }) : original)
+    render(<VideoStudio />)
+    fireEvent.click(screen.getByRole('button', { name: '帮我设计视频' }))
+    await waitFor(() => expect(finish).toBeTypeOf('function'))
+    fireEvent.click(screen.getByRole('tab', { name: /生成与成片/ }))
+    await act(async () => finish({ ...original, revision: 2, script: '新方案' }))
+    expect(screen.getByRole('tab', { name: /生成与成片/ })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: /拍摄方案/ }))
+    expect(screen.getByText('新方案')).toBeInTheDocument()
+  })
   it.each(['grok', 'minimax', 'comfy'] as const)('%s uses the original prompt without planning or conversion', async route => {
     const original = '  固定机位，产品保持参考图外观。\nSay exactly: "Hello".  '
     let task: VideoTask = { ...readyTask(), brief: { ...newVideoBrief(), route,
@@ -453,7 +555,7 @@ describe('video confirmation and monitoring', () => {
     expect(api.videoStudioTask).toHaveBeenCalledWith('save', expect.objectContaining({ script: '手动修改：保留客厅场景' }))
     expect(api.videoStudioTask).toHaveBeenCalledWith('revise', { id: task.id, revision: 2, note: '开头改成鞋子特写' })
     expect(screen.getByLabelText('修改要求')).toHaveValue('')
-    expect(screen.getByRole('button', { name: '确认方案' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '去生成' })).toBeEnabled()
     expect(vi.mocked(api.videoStudioTask).mock.calls.some(([action]) => ['approve', 'prepare', 'submit'].includes(action))).toBe(false)
   })
   it('keeps the existing plan and revision instructions when AI revision fails', async () => {
@@ -468,7 +570,7 @@ describe('video confirmation and monitoring', () => {
     expect(screen.getByText(task.script)).toBeTruthy()
     expect(screen.getByRole('button', { name: '让 AI 修改' })).toBeEnabled()
   })
-  it.each(['grok', 'minimax'] as const)('%s only converts H3 and submits after cost confirmation', async route => {
+  it.each(['grok', 'minimax'] as const)('%s prepares automatically on generation without a confirmation or quote step', async route => {
     let task = readyTask()
     task.brief.route = route
     task.brief.resolution = route === 'minimax' ? '768P' : '720p'
@@ -479,17 +581,17 @@ describe('video confirmation and monitoring', () => {
         task.approved = true
         if (route === 'grok') task.prompt = task.script
       }
-      if (action === 'prepare') task.prompt = 'Approved product shot'
+      if (action === 'prompt_result') task.prompt = task.script
       if (action === 'quote') task.quote = { currency: 'USD', estimated_cost: { [task.brief.resolution]: '1.40' }, note: '预计费用', at: Date.now() }
       if (action === 'submit') task.status = 'running'
       return task
     })
     render(<VideoStudio />)
-    fireEvent.click(screen.getByRole('button', { name: '确认方案' }))
-    await screen.findByText('官方参考 1.40 USD')
-    expect(vi.mocked(api.videoStudioTask).mock.calls.map(c => c[0])).toEqual(route === 'grok' ? ['get', 'approve', 'quote'] : ['get', 'approve', 'prepare', 'quote'])
+    fireEvent.click(screen.getByRole('button', { name: '去生成' }))
+    expect(api.videoStudioTask).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '生成视频' }))
     await waitFor(() => expect(api.videoStudioTask).toHaveBeenCalledWith('submit', expect.objectContaining({ confirmSpend: true })))
+    expect(vi.mocked(api.videoStudioTask).mock.calls.map(c => c[0])).toEqual(route === 'grok' ? ['get', 'approve', 'submit'] : ['get', 'approve', 'prompt_result', 'submit'])
   })
   it('allows generation when the shared catalog has no price', async () => {
     const task: VideoTask = { ...readyTask(), approved: true, status: 'approved', prompt: 'Approved shot', quote: { pricingStatus: 'unknown', note: '暂无价格数据，以供应商实际计费为准。', at: Date.now() } }
@@ -578,7 +680,7 @@ describe('video confirmation and monitoring', () => {
     expect(api.videoStudioTask).not.toHaveBeenCalled()
   })
 
-  it('puts the finished video first and revises the shooting plan on the same task', async () => {
+  it('puts generation specs and status before the finished video and revises the same task', async () => {
     const task: VideoTask = {
       ...readyTask(),
       approved: true,
@@ -605,7 +707,9 @@ describe('video confirmation and monitoring', () => {
     render(<VideoStudio />)
     const result = await screen.findByRole('heading', { name: '生成结果' })
     const spec = screen.getByRole('heading', { name: '生成规格' })
-    expect(result.compareDocumentPosition(spec) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const status = screen.getByRole('heading', { name: '已完成' })
+    expect(spec.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(status.compareDocumentPosition(result) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.getByRole('heading', { name: '保存为成片验证模板' })).toBeTruthy()
     fireEvent.change(screen.getByLabelText('需要修改的地方'), { target: { value: '书包要完整入画' } })
     fireEvent.click(screen.getByRole('button', { name: '按意见改写拍摄方案' }))
@@ -686,6 +790,7 @@ describe('video settings and stable result controls', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.mocked(api.videoStudioPreview).mockReset().mockResolvedValue('data:video/mp4;base64,AAAA')
+    vi.mocked(api.videoStudioPoster).mockReset().mockResolvedValue('data:image/jpeg;base64,AAAA')
     vi.mocked(api.videoStudioOpen).mockReset().mockResolvedValue(undefined)
   })
   it('inherits the previous task service and resolution when starting a new task', async () => {
@@ -711,6 +816,7 @@ describe('video settings and stable result controls', () => {
     const { container } = render(<VideoStudio />)
     await waitFor(() => expect(container.querySelector('video')).not.toBeNull())
     const player = container.querySelector('video')
+    await waitFor(() => expect(player).toHaveAttribute('poster', 'data:image/jpeg;base64,AAAA'))
     fireEvent.click(screen.getByRole('button', { name: '打开本地成片' }))
     await waitFor(() => expect(api.videoStudioOpen).toHaveBeenCalledWith('stable-output'))
     await act(async () => {})
@@ -721,6 +827,7 @@ describe('video settings and stable result controls', () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem('dsivio-video-drafts-v1')!).creation.task.revision).toBe(2))
     expect(container.querySelector('video')).toBe(player)
     expect(api.videoStudioPreview).toHaveBeenCalledTimes(1)
+    expect(api.videoStudioPoster).toHaveBeenCalledTimes(1)
   })
   it('shows preview errors instead of silently removing the player', async () => {
     const task: VideoTask = { id: 'preview-failure', revision: 1, updatedAt: 1, brief: { ...newVideoBrief(), route: 'grok', resolution: '720p', request: 'product' }, script: 'script', prompt: 'script', approved: true, status: 'succeeded', output: '/tmp/missing.mp4' }
@@ -729,6 +836,16 @@ describe('video settings and stable result controls', () => {
     vi.mocked(api.videoStudioBootstrap).mockResolvedValue({ tasks: [task], config: {}, templates: [], root: '', configPath: '', dependencies: { python: '', comfy: true, node: true, ffmpeg: true } })
     render(<VideoStudio />)
     expect(await screen.findByText('成片文件不存在')).toBeTruthy()
+    expect(await screen.findByRole('img', { name: '成片首帧' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '打开本地成片' })).toBeEnabled()
+  })
+  it('allows playback when thumbnail extraction fails', async () => {
+    const task: VideoTask = { id: 'poster-failure', revision: 1, updatedAt: 1, brief: newVideoBrief(), script: 'script', prompt: 'script', approved: true, status: 'succeeded', output: '/tmp/output.mp4' }
+    localStorage.setItem('dsivio-video-drafts-v1', JSON.stringify({ creation: { brief: task.brief, task, script: task.script, step: 2, dirty: false } }))
+    vi.mocked(api.videoStudioPoster).mockRejectedValueOnce('无法读取首帧')
+    vi.mocked(api.videoStudioBootstrap).mockResolvedValue({ tasks: [task], config: {}, templates: [], root: '', configPath: '', dependencies: { python: '', comfy: true, node: true, ffmpeg: true } })
+    render(<VideoStudio />)
+    expect(await screen.findByLabelText('成片预览')).toHaveAttribute('src', 'data:video/mp4;base64,AAAA')
     expect(screen.getByRole('button', { name: '打开本地成片' })).toBeEnabled()
   })
 })
