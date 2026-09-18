@@ -24,8 +24,7 @@ env:
 
 jobs:
   create-release:
-    # Both platform jobs upload into this release. Creating it first avoids a
-    # race where two tauri-action steps try to open the same tag.
+    # Create the release before uploading the Windows installer.
     runs-on: ubuntu-latest
     steps:
       - name: Ensure GitHub Release exists
@@ -78,6 +77,17 @@ jobs:
       - name: Prepare and verify bundled MCP runtimes
         run: npm run build:video-runtime
 
+      - name: Check application icons
+        run: npm run icons:check
+
+      - name: Check desktop package version and resources
+        shell: bash
+        run: npm run package:check -- --version "$RELEASE_TAG"
+
+      - name: Test desktop packaging checks
+        run: npm run test:packaging
+
+
       - name: Build and publish Windows installer
         uses: tauri-apps/tauri-action@v0
         env:
@@ -95,7 +105,7 @@ jobs:
           tauriScript: npx tauri
           args: --bundles nsis
 
-      - name: Verify bundled skills in Windows installer
+      - name: Verify bundled resources in Windows installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -114,3 +124,7 @@ jobs:
             if (-not $match) { throw "Missing bundled skill: $skill" }
             Write-Host "Verified: skills/$skill/SKILL.md"
           }
+          $pdf = $files | Where-Object { $_.FullName -match '[\\/]skills[\\/]pdf[\\/]SKILL\.md$' } | Select-Object -First 1
+          $resources = $pdf.Directory.Parent.Parent.FullName
+          & node scripts/check-desktop-package.mjs --resources-dir $resources
+          if ($LASTEXITCODE -ne 0) { throw 'Installer resources do not match the source.' }

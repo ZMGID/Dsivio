@@ -34,6 +34,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Check application icons
+        run: npm run icons:check
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -44,6 +47,9 @@ jobs:
 
       - name: Build and verify bundled MCP runtimes
         run: npm run build:video-runtime
+
+      - name: Check prepared package resources
+        run: npm run package:check && npm run test:packaging
 
       - name: Lint
         run: npm run lint

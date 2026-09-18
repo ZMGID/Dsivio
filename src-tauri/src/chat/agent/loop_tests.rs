@@ -3853,6 +3853,44 @@ async fn a_successful_run_never_cancels_hooks() {
 
 /// Smoke: plain chat with no tools returns a completed answer.
 #[tokio::test]
+async fn video_analysis_runs_only_when_the_main_model_calls_the_tool() {
+    for calls_video in [false, true] {
+        let final_answer = MockResponse::Sse(vec![
+            r#"{"choices":[{"delta":{"content":"Answer from the available context."}}]}"#.into(),
+            "[DONE]".into(),
+        ]);
+        let mut responses = Vec::new();
+        if calls_video {
+            responses.push(MockResponse::Sse(vec![
+                r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_video","type":"function","function":{"name":"mixer_video_analysis","arguments":"{\"question\":\"What happens in the clip?\"}"}}]}}]}"#.into(),
+                "[DONE]".into(),
+            ]));
+        }
+        responses.push(final_answer);
+        let server = MockModelServer::start(responses);
+        let state = test_app_state();
+        let mut config = test_run_config(&state, &server.base_url);
+        config.tools = vec![crate::chat::video_analysis::tool_definition()];
+        config.effective_chat_tools.max_tool_rounds = Some(2);
+        config.runtime_messages = vec![serde_json::json!({
+            "role": "user", "content": "Tell me about the attached video."
+        })];
+        let host = TestHost::default();
+        let executor = RecordingExecutor::default();
+        let result = run_agent_loop(config, &host, &executor).await.unwrap();
+        assert_eq!(result.stream_outcome, "completed");
+        if calls_video {
+            assert_eq!(executor.events(), vec!["start:mixer_video_analysis", "finish:mixer_video_analysis"]);
+            assert_eq!(result.tool_records[0].status, ToolCallStatus::Success);
+            assert!(server.captured_bodies()[1].contains("result:mixer_video_analysis"));
+        } else {
+            assert!(executor.events().is_empty());
+            assert!(result.tool_records.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn run_loop_smoke_plain_answer_completes() {
     let server = MockModelServer::start(vec![MockResponse::Sse(vec![
         r#"{"choices":[{"delta":{"content":"你好，我是 Kivio。"}}]}"#.to_string(),

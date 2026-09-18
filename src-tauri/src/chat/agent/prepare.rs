@@ -92,7 +92,7 @@ pub fn available_builtin_tool_names(tools: &[ChatToolDefinition]) -> Vec<String>
 pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
     // Builtin name set = static native registry (17 native + todo/ask_user)
     // plus the non-native builtin sources listed here.
-    const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image"];
+    const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image", "mixer_video_analysis"];
     // 模型按 wire 名（保留名别名）调用——反查回内部名再比对注册表。
     let function_name = crate::mcp::types::resolve_reserved_wire_alias(function_name);
     let is_builtin = crate::mcp::native_registry::find_entry(function_name).is_some()
@@ -118,6 +118,9 @@ pub fn is_kivio_builtin_tool(tool: &ChatToolDefinition) -> bool {
 }
 
 pub fn builtin_tool_bypasses_approval(tool: &ChatToolDefinition) -> bool {
+    if tool.source == "mixer" && tool.name == "mixer_video_analysis" {
+        return true;
+    }
     if tool.source == "skill" && is_native_skill_tool_name(&tool.name) {
         return true;
     }
@@ -1036,6 +1039,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     let has_web_search = has("web_search");
     let has_web_fetch = has("web_fetch");
     let has_image_generation = has("mixer_generate_image");
+    let has_video_analysis = has("mixer_video_analysis");
     let has_advisor = has("advisor");
     let has_present_artifacts = has("present_artifacts");
     let has_write = has("write");
@@ -1124,6 +1128,9 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
         bullets.push(
             "Keep internal QA screenshots, extracted frames, intermediate exports, drafts, and failed attempts in the work log by default. In your final answer, select only the deliverables and evidence the user needs. Put [label](artifact:art_ID) for a file or ![description](artifact:art_ID) for an image beside the relevant explanation, using exact art_ IDs from tool results. Do not put every generated file into a gallery or repeat a file card already referenced in the answer. To obtain an ID for a selected existing local file, you MUST call present_artifacts with paths; its default mode prepare registers files without expanding previews. Files with existing IDs can be referenced directly. Use present_artifacts with mode preview only when the user explicitly asks to see work now or needs to inspect alternatives to decide how to continue. Reading or analyzing a file does NOT display it. Never invent file IDs or paths, and never pass file contents, base64, or data URLs as identifiers.".to_string(),
         );
+    }
+    if has_video_analysis {
+        bullets.push("When the user's request needs video details not already in saved observations, call mixer_video_analysis yourself. Do not ask the user to choose an analysis mode or type a command. Reuse observations for follow-ups; unrelated messages need no analysis.".to_string());
     }
     if has_image_generation {
         bullets.push(

@@ -251,6 +251,9 @@ fn chat_mode_allows_tool(
     tool: &ChatToolDefinition,
     config: &crate::settings::ChatModeConfig,
 ) -> bool {
+    if tool.source == "mixer" && tool.name == "mixer_video_analysis" {
+        return true;
+    }
     if tool.source == "native" && crate::chat::ask_user::is_ask_user_tool_name(&tool.name) {
         return true;
     }
@@ -271,6 +274,9 @@ fn chat_mode_allows_tool(
 }
 
 fn agent_plan_allows_tool(tool: &ChatToolDefinition) -> bool {
+    if tool.source == "mixer" && tool.name == "mixer_video_analysis" {
+        return true;
+    }
     if tool.source == "native" && crate::chat::ask_user::is_ask_user_tool_name(&tool.name) {
         return true;
     }

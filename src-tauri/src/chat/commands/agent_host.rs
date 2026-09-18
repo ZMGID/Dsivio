@@ -337,6 +337,7 @@ impl crate::chat::agent::AgentHost for ProbeAgentHost<'_> {
 pub(super) struct RegistryToolExecutor<'a> {
     pub(super) app: AppHandle,
     pub(super) state: &'a AppState,
+    pub(super) video_analysis: tokio::sync::Mutex<crate::chat::video_analysis::VideoTool>,
 }
 impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
     fn call<'a>(
@@ -361,6 +362,10 @@ impl crate::chat::agent::ToolExecutor for RegistryToolExecutor<'_> {
                         );
                     }
                 }
+            }
+            if tool.source == "mixer" && tool.name == "mixer_video_analysis" {
+                return self.video_analysis.lock().await
+                    .call(&self.app, self.state, ctx, &arguments).await;
             }
             let native_ctx = mcp::registry::NativeToolContext {
                 // Conversation-scoped tools (todo / native workspace) target the

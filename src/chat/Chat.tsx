@@ -730,7 +730,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     return 'chat'
   })
   const [uiLang, setUiLang] = useState<Lang>('zh')
-  const [videoAnalysisEnabled, setVideoAnalysisEnabled] = useState(true)
   const [extensionsNavItem, setExtensionsNavItem] = useState<ExtensionsNavItem | null>(null)
   const [enabledTools, setEnabledTools] = useState<ChatToolDefinition[]>([])
   const [mcpServers, setMcpServers] = useState<ChatMcpServer[]>([])
@@ -1513,7 +1512,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     try {
       const settings = await getSettingsCached()
       setUiLang((settings.settingsLanguage as Lang) || 'zh')
-      setVideoAnalysisEnabled(settings.chat?.videoAnalysisEnabled !== false)
       const last = loadLastModel()
       const preferred = resolvePreferredChatModel({
         providers: settings.providers || [],
@@ -1590,7 +1588,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     return subscribeSettings((next) => {
       setMcpServers(next.chatTools?.servers ?? [])
       setUiLang((next.settingsLanguage as Lang) || 'zh')
-      setVideoAnalysisEnabled(next.chat?.videoAnalysisEnabled !== false)
     })
   }, [])
 
@@ -5042,8 +5039,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const handleCloseImageViewer = useCallback(() => setImageViewerItem(null), [])
 
   const inputBarProps = useMemo<InputBarProps>(() => ({
-    videoAnalysisEnabled,
-    hasVideoHistory: currentConversation?.messages.some(m => m.attachments?.some(a => /\.(mp4|mpeg|mpg|mov|avi|flv|webm|wmv|3gp|3gpp)$/i.test(a.name))) ?? false,
     onSend: handleSendMessage,
     onQueue: handleQueueMessage,
     disabled: isCurrentConversationBusy(),
@@ -5160,7 +5155,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     uiLang,
     usesChatRuntime,
     usesExternalRuntime,
-    videoAnalysisEnabled,
   ])
 
   const messageListProps = useMemo<MessageListProps>(() => ({

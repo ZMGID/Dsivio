@@ -21,6 +21,10 @@ path = "src/main.rs"
 name = "export-chat-protocol"
 path = "src/bin/export_chat_protocol.rs"
 
+[[test]]
+name = "bundled-resources"
+path = "build_support/resources.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

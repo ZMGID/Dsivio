@@ -1,11 +1,4 @@
----
-name: kivio-diagnosing-commands
-description: 创建或排查 Kivio 自定义斜杠命令、skill triggers 和插件 commands，解决 /命令 不触发、参数未替换、同名冲突；不用于调试普通 Shell 命令。
----
-
 # Kivio 斜杠命令
-
-依据 Kivio 2.9.6（2026-09-06）。先确认这是内置 Agent 的 skill 触发器、插件命令还是外部 CLI 原生命令。外部 CLI 自己的 `/命令` 不由 Kivio skill 目录负责。
 
 ## 新建一个个人命令
 
@@ -41,6 +34,6 @@ arguments: [focus]
 
 用 `kivio_inspect {"topic":"skills"}` 看 command/skill 的真实 ID、source 和 path，再检查正文 frontmatter、triggers、开关与当前助手白名单。已安装却不触发时测试下一轮；同一轮 registry 已缓存。检查是否被前端内置命令拦截，优先换独特名字而不是占用内置命令。
 
-没有可调用工具或当前是 Kivio Chat 时，不声称命令已执行。创建好命令后分别验证“目录发现”和“输入 `/命令 参数` 后正文按预期展开”，不要只检查文件存在。
+创建好命令后分别验证“目录发现”和“输入 `/命令 参数` 后正文按预期展开”，不要只检查文件存在。
 
 源码：`src-tauri/src/skills/{types,parse,runtime,discover}.rs`；`src-tauri/src/chat/commands/tooling.rs::try_apply_skill_slash_trigger`；`src/chat` 的命令选择器。
