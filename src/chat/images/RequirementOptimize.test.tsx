@@ -192,6 +192,27 @@ describe('RequirementOptimize', () => {
 })
 
 describe('optimization draft safety', () => {
+  it('keeps the draft when the backend rejects a truncated rewrite and allows retry', async () => {
+    getAssistants.mockResolvedValue([])
+    const message = '优化结果达到模型输出上限，内容未完成，已保留原文。'
+    optimizePrompt.mockRejectedValueOnce(new Error(message))
+    const change = vi.fn()
+    const onError = vi.fn()
+    render(<RequirementOptimize value="宣传这个" purpose="video_brief" onChange={change} onError={onError} />)
+    fireEvent.click(screen.getByRole('button', { name: '优化提示词' }))
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(message))
+    expect(change).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: '撤销优化' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '优化提示词' })).toBeEnabled()
+
+    optimizePrompt.mockResolvedValueOnce('完整的视频要求')
+    fireEvent.click(screen.getByRole('button', { name: '优化提示词' }))
+    await waitFor(() => expect(change).toHaveBeenCalledWith('完整的视频要求'))
+    expect(optimizePrompt).toHaveBeenLastCalledWith('宣传这个', null, {
+      assistantId: null, purpose: 'video_brief', mediaPaths: [],
+    })
+  })
+
   it('does not overwrite edits made while the request is running', async () => {
     getAssistants.mockResolvedValue([])
     let finish!: (value: string) => void

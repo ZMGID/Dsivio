@@ -5,6 +5,7 @@ No credentials in task files. Submission is persisted BEFORE the network call;
 an uncertain submission is never automatically repeated.
 """
 import argparse
+import base64
 import importlib.util
 import hashlib
 import json
@@ -277,6 +278,23 @@ def probe_video(path):
             'hasAudio': any(stream.get('codec_type') == 'audio' for stream in data['streams'])}
 
 
+def output_poster(t):
+    """Read the actual first video frame without changing the task or output."""
+    if not t.get('output'):
+        raise ValueError('任务还没有本地成片')
+    source = Path(t['output']).resolve(strict=True)
+    if not source.is_relative_to(ROOT.resolve()):
+        raise ValueError('成片必须位于视频工作区内')
+    result = subprocess.run(
+        ['ffmpeg', '-v', 'error', '-i', str(source), '-map', '0:v:0',
+         '-vf', 'scale=640:640:force_original_aspect_ratio=decrease',
+         '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', '3', 'pipe:1'],
+        capture_output=True, timeout=30, check=True)
+    if not result.stdout:
+        raise ValueError('无法读取成片首帧')
+    return 'data:image/jpeg;base64,' + base64.b64encode(result.stdout).decode('ascii')
+
+
 def prepare_grok_frame(t):
     """Fit a source image onto the requested canvas without stretching the product.
 
@@ -472,6 +490,8 @@ def handle(action, data):
         raise ValueError('VIDEO_TASK_NOT_FOUND: 视频任务不存在或已删除，请从保留的素材重新创建任务。') from None
     if action == 'get':
         return t
+    if action == 'poster':
+        return output_poster(t)
     if action == 'preflight':
         if data.get('revision') != t['revision']:
             raise ValueError('任务已在其他窗口更新，请重新打开任务')
@@ -480,6 +500,9 @@ def handle(action, data):
         if data.get('operation') == 'analyze':
             if not t['brief'].get('source', '').strip():
                 raise ValueError('请先添加参考视频')
+        elif data.get('operation') in ('plan', 'revise'):
+            if not t['brief'].get('request', '').strip() and not t['brief'].get('template') and not t.get('script', '').strip() and not t['brief'].get('images'):
+                raise ValueError('请填写拍摄要求或添加商品素材')
         else:
             _, route = validate(t)
             if route != 'comfy' and not get_provider(route).get('api_key'):

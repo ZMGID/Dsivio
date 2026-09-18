@@ -47,7 +47,7 @@ type Props = {
   draftSaved: boolean
   onChange: (patch: Partial<ImageBrief>) => void
   onAction: (action: ImageAction) => Promise<void>
-  perform: (fn: () => Promise<void>) => Promise<void>
+  perform: (fn: (current: () => boolean) => Promise<void>) => Promise<void>
   onNew: () => void
   onOpenResult: (result: ImageResult) => void
   onExport: () => void
@@ -127,7 +127,7 @@ export function ImageWorkflow({
       products: brief.products.map((p) => (p.id === id ? { ...p, ...patch } : p)),
     })
   const importImages = (target: 'source' | 'product' | 'folder', productId?: string) =>
-    perform(async () => {
+    perform(async current => {
       const paths = await open(
         target === 'folder'
           ? { directory: true, multiple: true, title: '每个商品放一个文件夹，可一次选择多款' }
@@ -147,6 +147,7 @@ export function ImageWorkflow({
         Array.isArray(paths) ? paths : [paths],
         target === 'folder',
       )
+      if (!current()) return
       const assets = products.flatMap((p) => p.assets)
       if (target === 'source') {
         if (input.sources.length + assets.length > 30) throw new Error('原始参考素材最多 30 张')
@@ -184,7 +185,7 @@ export function ImageWorkflow({
           <p>把现成套图或设计要求做成模板，下次换商品继续用。</p>
         </div>
         <div className="is-actions">
-          <Button size="sm" variant="ghost" disabled={busy} onClick={onNew}>
+          <Button size="sm" variant="ghost"  onClick={onNew}>
             新流程
           </Button>
           <span className="if-draft-status">{task && !dirty ? '已保存' : draftSaved ? '草稿保存在本机' : '草稿保存失败'}</span>
@@ -228,7 +229,6 @@ export function ImageWorkflow({
                 name="workflow-start"
                 aria-label="商品照片"
                 checked={input.mode === 'smart'}
-                disabled={busy}
                 onChange={() => onChange({ workflowInput: { ...input, mode: 'smart' }, language: brief.language === '跟随样图' ? 'zh-CN' : brief.language })}
               />
               <ImageIcon size={16} strokeWidth={1.6} />
@@ -241,7 +241,6 @@ export function ImageWorkflow({
                 name="workflow-start"
                 aria-label="现成套图"
                 checked={fromSet}
-                disabled={busy}
                 onChange={() => onChange({ workflowInput: { ...input, mode: 'replace' }, language: brief.language === 'zh-CN' ? '跟随样图' : brief.language })}
               />
               <Layers3 size={16} strokeWidth={1.6} />
@@ -271,21 +270,20 @@ export function ImageWorkflow({
                           <div>
                             <IconButton
                               label={`前移参考图 ${i + 1}`}
-                              disabled={busy || i === 0}
+                              disabled={i === 0}
                               onClick={() => moveSource(i, -1)}
                             >
                               <ArrowUp size={12} />
                             </IconButton>
                             <IconButton
                               label={`后移参考图 ${i + 1}`}
-                              disabled={busy || i === input.sources.length - 1}
+                              disabled={i === input.sources.length - 1}
                               onClick={() => moveSource(i, 1)}
                             >
                               <ArrowDown size={12} />
                             </IconButton>
                             <IconButton
                               label={`移除参考图 ${i + 1}`}
-                              disabled={busy}
                               onClick={() =>
                                 onChange({
                                   workflowInput: {
@@ -322,7 +320,7 @@ export function ImageWorkflow({
                         ? '第一张是第 1 页，可调顺序'
                         : 'PNG / JPG / WebP'}
                     </p>
-                    <Button disabled={busy} onClick={() => void importImages('source')}>
+                    <Button  onClick={() => void importImages('source')}>
                       {fromSet ? '选择现成套图' : '选择商品照片'}
                     </Button>
                   </>
@@ -331,13 +329,13 @@ export function ImageWorkflow({
               {!!input.sources.length && (
                 <div className="iw-drop-bar">
                   <small>{dropActive && dropTarget !== 'products' ? '松开即可继续导入' : '还可以把图片继续拖进来'}</small>
-                  <Button size="sm" disabled={busy} onClick={() => void importImages('source')}>
+                  <Button size="sm"  onClick={() => void importImages('source')}>
                     <Plus size={14} />
                     {fromSet ? '继续添加套图' : '继续添加照片'}
                   </Button>
                 </div>
               )}
-              <RequirementComposer label="制作要求" disabled={busy} value={brief.requirement}
+              <RequirementComposer label="制作要求"  value={brief.requirement}
                 onChange={requirement => onChange({ requirement })}
                 preferredAssistantId={brief.assistantId} onAssistantChange={assistantId => onChange({ assistantId })}
                 mediaPaths={collectBriefImagePaths(brief)}
@@ -348,7 +346,6 @@ export function ImageWorkflow({
                 <details className="if-more"><summary>更多设置</summary><Field label="任务名称">
                   <input
                     className="kv-input"
-                    disabled={busy}
                     value={brief.name}
                     onChange={(e) => onChange({ name: e.target.value })}
                     placeholder={suggestImageTaskName(brief)}
@@ -357,14 +354,12 @@ export function ImageWorkflow({
                 </details><Field label="图内语言">
                   <ImageLanguageSelect
                     allowFollowExample={fromSet}
-                    disabled={busy}
                     value={brief.language}
                     onChange={(language) => onChange({ language })}
                   />
                 </Field>
                 <Field label="比例">
                   <ImageRatioSelect
-                    disabled={busy}
                     model={model}
                     protocol={protocol}
                     ratio={brief.ratio}
@@ -374,7 +369,6 @@ export function ImageWorkflow({
                 </Field>
                 <Field label="分辨率">
                   <ImageResolutionSelect
-                    disabled={busy}
                     model={model}
                     protocol={protocol}
                     ratio={brief.ratio}
@@ -391,7 +385,7 @@ export function ImageWorkflow({
                     type="number"
                     min={1}
                     max={30}
-                    disabled={busy || fromSet}
+                    disabled={fromSet}
                     value={fromSet ? input.sources.length : brief.count}
                     onChange={(e) =>
                       onChange({ count: Math.max(1, Math.min(30, Number(e.target.value) || 1)) })
@@ -484,11 +478,11 @@ export function ImageWorkflow({
             <h3>{dropActive && dropTarget === 'products' ? '松开即可导入' : '把商品图片或文件夹拖到这里'}</h3>
             <p>规则制作完成后，在这里添加其他商品来验证效果。</p>
             <div className="iw-drop-actions">
-              <Button size="sm" disabled={busy} onClick={() => void importImages('product')}>
+              <Button size="sm"  onClick={() => void importImages('product')}>
                 <Plus size={14} />
                 添加一款商品
               </Button>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void importImages('folder')}>
+              <Button size="sm" variant="ghost"  onClick={() => void importImages('folder')}>
                 <FolderOpen size={14} />
                 按文件夹添加多款
               </Button>
@@ -502,7 +496,6 @@ export function ImageWorkflow({
                 <span className="iw-hint">{sampleIds.includes(product.id) ? '自动试做' : '确认效果后生成'}</span>
                 <IconButton
                   label={`移除商品 ${product.name}`}
-                  disabled={busy}
                   onClick={() =>
                     onChange({ products: brief.products.filter((p) => p.id !== product.id) })
                   }
@@ -523,7 +516,6 @@ export function ImageWorkflow({
               <Field label="商品名称">
                 <input
                   className="kv-input"
-                  disabled={busy}
                   value={product.name}
                   onChange={(e) => patchProduct(product.id, { name: e.target.value })}
                 />
@@ -537,7 +529,6 @@ export function ImageWorkflow({
                       <span title={asset.name}>{asset.name}</span>
                       <IconButton
                         label={`移除素材 ${asset.name}`}
-                        disabled={busy}
                         onClick={() =>
                           patchProduct(product.id, {
                             assets: product.assets.filter((a) => a.id !== asset.id),
@@ -553,7 +544,6 @@ export function ImageWorkflow({
                 </div>
                 <Button
                   size="sm"
-                  disabled={busy}
                   onClick={() => void importImages('product', product.id)}
                 >
                   补充商品图片
@@ -562,7 +552,6 @@ export function ImageWorkflow({
                   <textarea
                     className="kv-textarea custom-scrollbar"
                     rows={3}
-                    disabled={busy}
                     value={product.facts}
                     onChange={(e) => patchProduct(product.id, { facts: e.target.value })}
                     placeholder="已确认的尺寸、容量、材质和卖点；不确定的留空"
@@ -578,11 +567,11 @@ export function ImageWorkflow({
           <div className="iw-drop-bar">
             <small>{dropActive && dropTarget === 'products' ? '松开即可继续导入' : '还可以把商品图片或文件夹继续拖进来'}</small>
             <div className="iw-drop-actions">
-              <Button size="sm" disabled={busy} onClick={() => void importImages('product')}>
+              <Button size="sm"  onClick={() => void importImages('product')}>
                 <Plus size={14} />
                 添加一款商品
               </Button>
-              <Button size="sm" variant="ghost" disabled={busy} onClick={() => void importImages('folder')}>
+              <Button size="sm" variant="ghost"  onClick={() => void importImages('folder')}>
                 <FolderOpen size={14} />
                 按文件夹添加多款
               </Button>
@@ -848,7 +837,6 @@ function RulesEditor({
       <Field label="统一风格">
         <textarea
           className="kv-textarea custom-scrollbar"
-          disabled={busy}
           rows={4}
           value={data.style || ''}
           onChange={(e) => setData({ ...data, style: e.target.value })}
@@ -857,7 +845,6 @@ function RulesEditor({
       <Field label="共用文案规则">
         <textarea
           className="kv-textarea custom-scrollbar"
-          disabled={busy}
           rows={3}
           value={String(data.text_policy || '')}
           onChange={(e) => setData({ ...data, text_policy: e.target.value })}
@@ -867,7 +854,6 @@ function RulesEditor({
         <Field key={slot.id} label={`${slot.id} · ${slot.purpose || '页面规则'}`}>
           <textarea
             className="kv-textarea custom-scrollbar"
-            disabled={busy}
             rows={4}
             value={slot[slotKey] || ''}
             onChange={(e) =>

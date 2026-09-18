@@ -31,6 +31,31 @@ class WorkspaceTests(unittest.TestCase):
     def action(self, t, action, **kw):
         return studio.handle(action, dict(id=t['id'], revision=t['revision'], **kw))
 
+    def test_poster_reads_output_without_mutating_task(self):
+        task = self.draft()
+        output = self.root / 'outputs' / 'video.mp4'
+        output.write_bytes(b'video')
+        task['output'] = str(output)
+        studio.persist(task)
+        before = studio.task_path(task['id']).read_bytes()
+        with patch.object(studio.subprocess, 'run', return_value=Mock(stdout=b'jpeg')) as run:
+            result = studio.handle('poster', {'id': task['id']})
+        self.assertEqual(result, 'data:image/jpeg;base64,anBlZw==')
+        self.assertIn(str(output.resolve()), run.call_args.args[0])
+        self.assertEqual(studio.task_path(task['id']).read_bytes(), before)
+
+    def test_poster_rejects_output_outside_workspace_including_symlinks(self):
+        with tempfile.TemporaryDirectory() as external:
+            outside = Path(external) / 'external.mp4'
+            outside.write_bytes(b'video')
+            link = self.root / 'outputs' / 'link.mp4'
+            link.symlink_to(outside)
+            with patch.object(studio.subprocess, 'run') as run:
+                for source in (outside, link):
+                    with self.assertRaisesRegex(ValueError, '成片必须位于视频工作区内'):
+                        studio.output_poster({'output': str(source)})
+                run.assert_not_called()
+
     def test_chat_template_file_is_visible_without_import_or_task(self):
         template = {'id': 'chat-template', 'name': '对话总结', 'kind': 'reference', 'script': '展示商品后切换使用场景'}
         path = self.root / 'templates/chat-template.json'
@@ -97,12 +122,11 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertEqual(submitted, original)
                 self.assertEqual(task['script'], original)
 
-    def test_preflight_blocks_missing_generation_options_before_planning(self):
+    def test_planning_preflight_does_not_require_generation_options(self):
         for field, value in [('route', ''), ('resolution', ''), ('duration', 2.5)]:
             with self.subTest(field=field):
                 t = studio.handle('create', {'brief': {**self.brief, field: value}})
-                with self.assertRaises(ValueError):
-                    self.action(t, 'preflight', operation='plan')
+                self.assertEqual(self.action(t, 'preflight', operation='plan')['revision'], t['revision'])
                 self.assertEqual(studio.read(studio.task_path(t['id']))['revision'], t['revision'])
 
     def test_analysis_preflight_requires_source_but_not_generation_settings(self):
@@ -115,8 +139,9 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_preflight_blocks_missing_credentials_and_unapproved_conversion(self):
         t = self.draft()
+        self.assertEqual(self.action(t, 'preflight', operation='plan')['revision'], t['revision'])
         with self.assertRaisesRegex(ValueError, 'API Key'):
-            self.action(t, 'preflight', operation='plan')
+            self.action(t, 'preflight', operation='prepare')
         studio.handle('config', {'name': 'grok', 'base_url': 'https://api.x.ai', 'api_key': 'test'})
         self.assertEqual(self.action(t, 'preflight', operation='plan')['revision'], t['revision'])
         with self.assertRaisesRegex(ValueError, '确认当前剧本'):

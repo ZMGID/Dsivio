@@ -150,7 +150,7 @@ beforeEach(() => {
 })
 
 describe('Image workspace state gates', () => {
-  it.each([false, true])('saves edited plans before switching tasks (failure=%s)', async (fails) => {
+  it('switches tasks without saving remotely and restores each task local edits', async () => {
     const current = fixture()
     const target = { ...fixture(), id: 'second', brief: { ...fixture().brief, name: '另一个任务' } }
     const plans = current.plans.map(p => ({ ...p, prompt: '尚未保存的方案修改' }))
@@ -158,21 +158,65 @@ describe('Image workspace state gates', () => {
       brief: current.brief, taskId: current.id, revision: current.revision, plans,
     }))
     vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([current, target]))
-    vi.mocked(api.imageStudioGet).mockResolvedValue(target)
-    if (fails) vi.mocked(api.imageStudioSavePlans).mockRejectedValueOnce(new Error('保存方案失败'))
-    else vi.mocked(api.imageStudioSavePlans).mockResolvedValueOnce({ ...current, plans })
+    vi.mocked(api.imageStudioGet).mockImplementation(async id => id === target.id ? target : current)
+    vi.mocked(api.imageStudioSavePlans).mockRejectedValue(new Error('保存失败也不能阻塞切换'))
     render(<ImageStudio />)
     fireEvent.click(await screen.findByRole('button', { name: /^任务 / }))
-    await waitFor(() => expect(api.imageStudioSavePlans).toHaveBeenCalledWith(current.id, current.revision, plans))
-    if (fails) {
-      expect(await screen.findByText('保存方案失败')).toBeTruthy()
-      expect(JSON.parse(localStorage.getItem('dsivio-image-draft-v1')!).plans).toEqual(plans)
-      expect(api.imageStudioGet).not.toHaveBeenCalled()
-    } else {
-      fireEvent.click(await screen.findByRole('button', { name: '打开任务 另一个任务' }))
-      await waitFor(() => expect(api.imageStudioGet).toHaveBeenCalledWith(target.id))
-      expect(api.imageStudioSave).not.toHaveBeenCalled()
-    }
+    expect(api.imageStudioSavePlans).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: '打开任务 另一个任务' }))
+    await waitFor(() => expect(api.imageStudioGet).toHaveBeenCalledWith(target.id))
+    expect(api.imageStudioSave).not.toHaveBeenCalled()
+    expect(JSON.parse(localStorage.getItem('dsivio-image-draft-v1:task:job')!).plans).toEqual(plans)
+    fireEvent.click(screen.getByRole('button', { name: /^任务 / }))
+    fireEvent.click(await screen.findByRole('button', { name: '打开任务 背包秋季套图' }))
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('dsivio-image-draft-v1')!).plans).toEqual(plans))
+  })
+  it('allows the empty result page and keeps separate drafts across image features', async () => {
+    render(<ImageStudio />)
+    await waitFor(() => expect(api.imageStudioBootstrap).toHaveBeenCalled())
+    const results = screen.getByRole('tab', { name: /生成结果/ })
+    expect(results).toBeEnabled()
+    fireEvent.click(results)
+    expect(results).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: /素材与要求/ }))
+    fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: '保留普通生图草稿' } })
+    fireEvent.click(screen.getByRole('button', { name: '制作模板' }))
+    fireEvent.change(screen.getByLabelText('制作要求'), { target: { value: '保留模板制作草稿' } })
+    fireEvent.click(screen.getByRole('button', { name: '单张 / 改图' }))
+    expect(screen.getByLabelText('图片要求')).toHaveValue('保留普通生图草稿')
+    fireEvent.click(screen.getByRole('button', { name: '制作模板' }))
+    expect(screen.getByLabelText('制作要求')).toHaveValue('保留模板制作草稿')
+    expect(api.imageStudioSave).not.toHaveBeenCalled()
+  })
+  it('can start a new draft during a pending save without the old response taking it over', async () => {
+    const saved = { ...fixture(), brief: { ...emptyBrief('gen'), requirement: '原要求' } }
+    let finish!: (task: ImageTask) => void
+    vi.mocked(api.imageStudioSave).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    vi.mocked(api.imageStudioAction).mockResolvedValue({ ...saved, status: 'running' })
+    render(<ImageStudio />)
+    await waitFor(() => expect(api.imageStudioBootstrap).toHaveBeenCalled())
+    fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: '原要求' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成图片' }))
+    await waitFor(() => expect(finish).toBeTypeOf('function'))
+    fireEvent.click(screen.getByRole('button', { name: '新任务' }))
+    fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: '新草稿' } })
+    await act(async () => finish(saved))
+    expect(screen.getByLabelText('图片要求')).toHaveValue('新草稿')
+    expect(screen.getByRole('tab', { name: /素材与要求/ })).toHaveAttribute('aria-selected', 'true')
+  })
+  it('lets edits survive polling a running image task', async () => {
+    const running = { ...fixture(), status: 'running', brief: { ...emptyBrief('gen'), requirement: '原始要求' } }
+    localStorage.setItem('dsivio-image-draft-v1', JSON.stringify({ brief: running.brief, taskId: running.id, revision: running.revision }))
+    vi.mocked(api.imageStudioBootstrap).mockResolvedValue(bootstrap([running]))
+    vi.mocked(api.imageStudioGet).mockResolvedValue({ ...running, status: 'completed' })
+    render(<ImageStudio />)
+    const input = await screen.findByLabelText('图片要求')
+    await waitFor(() => expect(input).toHaveValue('原始要求'))
+    expect(input).toBeEnabled()
+    fireEvent.change(input, { target: { value: '生成中编辑的新要求' } })
+    await waitFor(() => expect(api.imageStudioGet).toHaveBeenCalledWith(running.id), { timeout: 2000 })
+    expect(input).toHaveValue('生成中编辑的新要求')
+    expect(screen.getByRole('tab', { name: /生成结果/ })).toBeEnabled()
   })
   it('requires both complete samples, and rejects stale images or a failed latest edit', () => {
     const t = fixture()
@@ -552,7 +596,8 @@ it('keeps image work alive through chat navigation and does not replace a new br
   expect(screen.getByRole('heading', { name: /图片任务/ })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '新建图片' }))
   fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: '新的图片要求' } })
-  rerender(<ChatRouteKeepAlive activeKey="conversation"><main>新聊天</main></ChatRouteKeepAlive>)
+  rerender(<ChatRouteKeepAlive activeKey="videos"><main>视频工作台</main></ChatRouteKeepAlive>)
+  expect(screen.getByText('视频工作台')).toBeVisible()
   const completed = { ...saved, status: 'completed', progress: '已完成' }
   await act(async () => { finish(completed); await pending })
   rerender(page())

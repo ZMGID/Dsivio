@@ -52,7 +52,7 @@ import { builtinTemplates as initialTemplates } from './builtinTemplates'
 import './imageStudio.css'
 import './studioLayout.css'
 import { humanizeImageError, imageConfigIssue } from './imageValidation'
-import { DRAFT_KEY, readStudioDraft, storeStudioDraft, rememberImageSettings, newImageDraftBrief } from './draft'
+import { readStudioDraft, storeStudioDraft, rememberImageSettings, newImageDraftBrief } from './draft'
 import { ImageBriefForm } from './ImageBriefForm'
 import './imageFlow.css'
 import { dropAsProducts, dropZoneFromPoint, type ImageDropZone } from './studioDrop'
@@ -75,7 +75,7 @@ type Stage = 'brief' | 'plan' | 'results'
 
 export default function ImageStudio() {
   const [view, setView] = useState<View>('gen')
-  const [stage, setStage] = useState<Stage>('brief')
+  const [stage, setStage] = useState<Stage>(() => readStudioDraft()?.stage || 'brief')
   const [brief, setBrief] = useState<ImageBrief>(
     () => readStudioDraft()?.brief || newImageDraftBrief('gen'),
   )
@@ -85,7 +85,10 @@ export default function ImageStudio() {
   const [providers, setProviders] = useState<{ id: string; ready: boolean }[]>([])
   const [config, setConfig] = useState<ImageConfig>(DEFAULT_CONFIG)
   const [group, setGroup] = useState('未分类')
-  const [pending, setPending] = useState(false)
+  const editorVersion = useRef(0)
+  const [workspaceKey, setWorkspaceKey] = useState(0)
+  const [pendingKeys, setPendingKeys] = useState<Record<number, number>>({})
+  const pending = !!pendingKeys[workspaceKey]
   const navigation = useStudioNavigation()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -121,8 +124,10 @@ export default function ImageStudio() {
   const shared = useSharedDraft('image', 'main', native && !loading,
     { brief, taskId: task?.id, revision: task?.revision, plans: editedPlans },
     async (draft) => {
+      const version = editorVersion.current
       // A chat-created task may not have reached the polled list yet.
       const saved = draft.taskId ? await api.imageStudioGet(draft.taskId) : null
+      if (version !== editorVersion.current) return
       setBrief(draft.brief)
       setEditedPlans(draft.plans || null)
       setTask(saved || null)
@@ -131,6 +136,8 @@ export default function ImageStudio() {
   const syncCurrent = useRef({ task, dirty, editedPlans, busy })
   syncCurrent.current = { task, dirty, editedPlans, busy }
   const taskId = task?.id
+  const rememberDraft = () => storeStudioDraft({ brief, taskId: task?.id, revision: task?.revision, plans: editedPlans, stage, modified: dirty || !!editedPlans })
+  const navigateStage = (next: Stage) => { editorVersion.current++; navigation.cancel(); setStage(next) }
 
   const adopt = useCallback((t: ImageTask) => {
     setTask(t)
@@ -160,7 +167,7 @@ export default function ImageStudio() {
           const saved = draft?.taskId ? data.tasks.find((t) => t.id === draft.taskId) : null
           if (saved) {
             setTask(saved)
-            const restoreEdits = saved.revision === draft?.revision && saved.status !== 'running'
+            const restoreEdits = draft?.modified || saved.revision === draft?.revision
             setBrief(restoreEdits ? draft.brief : saved.brief)
             if (restoreEdits && draft.plans) setEditedPlans(draft.plans)
           }
@@ -181,8 +188,10 @@ export default function ImageStudio() {
         taskId: task?.id,
         revision: task?.revision,
         plans: editedPlans,
+        stage,
+        modified: dirty || !!editedPlans,
       }))
-  }, [brief, task?.id, task?.revision, loading, editedPlans])
+  }, [brief, task?.id, task?.revision, loading, editedPlans, stage, dirty])
   useEffect(() => {
     if (!native || loading) return
     let alive = true
@@ -230,7 +239,12 @@ export default function ImageStudio() {
       try {
         const current = await api.imageStudioGet(taskId)
         if (cancelled) return
-        adopt(current)
+        const editor = syncCurrent.current
+        setTasks(all => [current, ...all.filter(t => t.id !== current.id)])
+        if (editor.task?.id === current.id) {
+          if (!editor.dirty && !editor.editedPlans) adopt(current)
+          else setTask(current)
+        }
         if (current.status === 'running') timer = setTimeout(() => void poll(), 1200)
         else if (current.progress.startsWith('规则模板已保存')) {
           const data = await api.imageStudioBootstrap()
@@ -250,28 +264,34 @@ export default function ImageStudio() {
     }
   }, [taskId, running, adopt, report]) // A single non-overlapping poller survives status updates.
 
-  const perform = async (fn: () => Promise<void>) => {
+  const perform = async (fn: (current: () => boolean) => Promise<void>) => {
     if (!native) {
       setNotice('这是浏览器界面预览。请在 dsivio 桌面窗口中导入素材、配置模型和生成图片。')
       return
     }
     navigation.cancel()
-    setPending(true)
+    const version = editorVersion.current
+    setPendingKeys(keys => ({ ...keys, [workspaceKey]: (keys[workspaceKey] || 0) + 1 }))
     setError('')
     setNotice('')
     try {
-      await fn()
+      await fn(() => version === editorVersion.current)
     } catch (e) {
       report(e)
     } finally {
-      setPending(false)
+      setPendingKeys(keys => ({ ...keys, [workspaceKey]: Math.max(0, (keys[workspaceKey] || 0) - 1) }))
     }
   }
   const save = async () => {
+    const version = editorVersion.current
+    const acceptSaved = (saved: ImageTask) => {
+      setTasks(all => [saved, ...all.filter(t => t.id !== saved.id)])
+      if (version === editorVersion.current) adopt(saved)
+    }
     if (task && !dirty) {
       if (!editedPlans) return task
       const saved = await api.imageStudioSavePlans(task.id, task.revision, editedPlans)
-      adopt(saved)
+      acceptSaved(saved)
       return saved
     }
     const saved = await api.imageStudioSave(
@@ -282,58 +302,50 @@ export default function ImageStudio() {
       task?.id,
       task?.revision,
     )
-    adopt(saved)
-    try { localStorage.removeItem(DRAFT_KEY) } catch { /* Native task has already been saved. */ }
+    acceptSaved(saved)
     return saved
   }
   const openTask = (item: ImageTask) => {
-    if (!native || pending) return
+    if (!native) return
+    rememberDraft()
+    editorVersion.current++
+    setWorkspaceKey(key => key + 1)
     void navigation.open(item.id, async current => {
-      if (
-        editedPlans || (dirty &&
-        (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length))
-      ) {
-        setPending(true)
-        try { await save() } finally { setPending(false) }
-      }
-      if (!current()) return
       const latest = await api.imageStudioGet(item.id)
       if (!current()) return
+      const draft = readStudioDraft(`task:${latest.id}`)
       adopt(latest)
+      if (draft && (draft.modified || draft.revision === latest.revision)) {
+        setBrief(draft.brief)
+        setEditedPlans(draft.plans || null)
+      }
       setView(latest.brief.feature)
-      setStage(latest.results.length ? 'results' : latest.plans.length ? 'plan' : 'brief')
+      setStage(draft?.stage || (latest.results.length ? 'results' : latest.plans.length ? 'plan' : 'brief'))
       setGroup(productGroup(latest.brief.products[0] || ({ category: '' } as ImageProduct)))
     }, report)
   }
-  const switchView = async (next: View, template?: ImageTemplate) => {
-    if (pending) return
+  const switchView = (next: View, template?: ImageTemplate, fresh = false) => {
+    rememberDraft()
+    editorVersion.current++
+    setWorkspaceKey(key => key + 1)
     navigation.cancel()
-    if (
-      native &&
-      (editedPlans || (dirty &&
-      (brief.products.length || brief.requirement.trim() || brief.workflowInput?.sources.length)))
-    ) {
-      try {
-        await save()
-      } catch (e) {
-        report(e)
-        return
-      }
-    }
     if (next === 'templates' || next === 'tasks') {
       setView(next)
       return
     }
+    const draft = !fresh && !template ? readStudioDraft(`feature:${next}`) : null
+    const saved = draft?.taskId ? tasks.find(t => t.id === draft.taskId) : undefined
+    const restoreEdits = !saved || draft?.modified || draft?.revision === saved.revision
     setView(next)
-    setTask(null)
-    setStage('brief')
+    setTask(saved || null)
+    setStage(draft?.stage || 'brief')
     setGroup('未分类')
-    setEditedPlans(null)
+    setEditedPlans(restoreEdits ? draft?.plans || null : null)
     setSelected(null)
     setNotice('')
     setError('')
     rememberImageSettings(brief)
-    const b = newImageDraftBrief(next)
+    const b = (restoreEdits ? draft?.brief : saved?.brief) || newImageDraftBrief(next)
     if (template) {
       b.templateId = template.id
       b.language = template.data.language || b.language
@@ -344,6 +356,7 @@ export default function ImageStudio() {
     setBrief(b)
   }
   const act = async (action: ImageAction) => {
+    const version = editorVersion.current
     if (pending || (task && operationsRef.current.has(task.id))) return
     if (['start', 'sample', 'bulk', 'generate', 'retry', 'revise', 'plan', 'workflow_build', 'workflow_trial', 'workflow_refine', 'workflow_produce'].includes(action.kind)) {
       const issue = configurationIssue
@@ -361,7 +374,9 @@ export default function ImageStudio() {
       const current = await api.imageStudioAction(id, source.revision, { group, ...action })
       setTasks(all => [current, ...all.filter(t => t.id !== id)])
       if (syncCurrent.current.task?.id !== id) return
-      adopt(current)
+      if (!syncCurrent.current.dirty && !syncCurrent.current.editedPlans) adopt(current)
+      else setTask(current)
+      if (version !== editorVersion.current) return
       if (action.kind === 'plan') setStage('plan')
       if (['start', 'sample', 'bulk', 'generate', 'retry', 'revise', 'resume'].includes(action.kind)) setStage('results')
       if (action.kind === 'approve') setNotice('样品已确认。现在可以为这个分类的剩余商品规划并出图。')
@@ -373,6 +388,7 @@ export default function ImageStudio() {
     }
   }
   const patch = (p: Partial<ImageBrief>) => {
+    editorVersion.current++
     navigation.cancel()
     const next = { ...brief, ...p }
     if (p.ratio !== undefined || p.resolution !== undefined) rememberImageSettings(next)
@@ -382,10 +398,9 @@ export default function ImageStudio() {
   briefFeatureRef.current = brief.feature
   const briefRef = useRef(brief)
   briefRef.current = brief
-  const dropReadyRef = useRef({ accept: false, busy: false })
+  const dropReadyRef = useRef({ accept: false })
   dropReadyRef.current = {
     accept: routeActive && view !== 'templates' && view !== 'tasks' && (view === 'workflow' || stage === 'brief'),
-    busy,
   }
   const dropTargetRef = useRef<ImageDropZone | null>(null)
   const markDropTarget = (zone: ImageDropZone | null) => {
@@ -417,19 +432,23 @@ export default function ImageStudio() {
     })
   }, [])
   const importFromPaths = (paths: string[], asFolder: boolean) =>
-    perform(async () => {
+    perform(async current => {
       if (!paths.length) return
       const products = await api.imageStudioImport(
         paths,
         asFolder || briefFeatureRef.current === 'client',
       )
+      if (!current()) return
+      editorVersion.current++
       mergeImportedProducts(asFolder, products)
     })
   const importWorkflowSources = (paths: string[]) =>
-    perform(async () => {
+    perform(async current => {
       if (!paths.length) return
       const input = briefRef.current.workflowInput || { mode: 'smart' as const, sources: [] }
       const products = await api.imageStudioImport(paths, false)
+      if (!current()) return
+      editorVersion.current++
       const assets = products.flatMap((item) => item.assets)
       if (input.sources.length + assets.length > 30) throw new Error('原始参考素材最多 30 张')
       setBrief((b) => {
@@ -446,12 +465,13 @@ export default function ImageStudio() {
     patch({ templateId: null, workflowInput: { mode: 'replace', sources } })
   }
   const importReplaceSources = (paths: string[]) =>
-    perform(async () => {
+    perform(async current => {
       if (!paths.length) return
-      mergeReplaceSources(await api.imageStudioImport(paths, false))
+      const products = await api.imageStudioImport(paths, false)
+      if (current()) mergeReplaceSources(products)
     })
   const importWorkflowProducts = (paths: string[]) =>
-    perform(async () => {
+    perform(async current => {
       if (!paths.length) return
       const products = await api.imageStudioImport(
         paths,
@@ -463,10 +483,12 @@ export default function ImageStudio() {
       if (briefRef.current.products.length + products.length > 200) {
         throw new Error('一个任务最多 200 款商品')
       }
+      if (!current()) return
+      editorVersion.current++
       setBrief((b) => ({ ...b, products: [...b.products, ...products] }))
     })
   const importDropped = (paths: string[], zone: ImageDropZone | null = dropTargetRef.current) => {
-    if (dropReadyRef.current.busy || !paths.length) return
+    if (!paths.length) return
     if (briefFeatureRef.current === 'workflow') {
       if (zone === 'products') {
         void importWorkflowProducts(paths)
@@ -499,10 +521,8 @@ export default function ImageStudio() {
           return
         }
         if (payload.type === 'enter' || payload.type === 'over') {
-          if (!dropReadyRef.current.busy) {
-            markDropTarget(dropTargetFromPosition(payload.position))
-            setDropActive(true)
-          }
+          markDropTarget(dropTargetFromPosition(payload.position))
+          setDropActive(true)
           return
         }
         if (payload.type === 'leave') {
@@ -534,7 +554,7 @@ export default function ImageStudio() {
     if (zone) markDropTarget(zone)
   }
   const importImages = (folder: boolean) =>
-    perform(async () => {
+    perform(async current => {
       const paths = await open(
         folder
           ? {
@@ -554,6 +574,8 @@ export default function ImageStudio() {
         list,
         folder || briefFeatureRef.current === 'client',
       )
+      if (!current()) return
+      editorVersion.current++
       mergeImportedProducts(folder, products)
     })
   const updateTemplate = (t: ImageTemplate) =>
@@ -643,7 +665,7 @@ export default function ImageStudio() {
             </button>
             <Button variant="ghost" aria-label="图片设置"
               title={hasConfig ? `图片设置 · ${config.model}` : '图片设置 · 待配置图片模型'}
-              onClick={() => { navigation.cancel(); setSettingsOpen(true) }}><Settings2 size={15} /><span>图片设置</span></Button>
+              onClick={() => { editorVersion.current++; navigation.cancel(); setSettingsOpen(true) }}><Settings2 size={15} /><span>图片设置</span></Button>
           </nav>
         </aside>
         <div className="studio-workspace">
@@ -657,8 +679,8 @@ export default function ImageStudio() {
               report={report}
             />
           ) : view === 'tasks' ? (
-            <TaskPanel onDeleted={id => { setTasks(current => current.filter(t => t.id !== id)); if (task?.id === id) setTask(null) }} activeOperations={operations} tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} library={library} disabled={pending}
-              onNew={() => void switchView('gen')}
+            <TaskPanel onDeleted={id => { setTasks(current => current.filter(t => t.id !== id)); if (task?.id === id) setTask(null) }} activeOperations={operations} tasks={tasks} loading={loading} currentId={task?.id} onOpen={openTask} library={library} disabled={false}
+              onNew={() => switchView('gen', undefined, true)}
               onRefresh={async () => { const next = await api.imageStudioBootstrap(); setTasks(next.tasks); setTemplates(next.templates) }} />
           ) : view === 'workflow' ? (
             <ImageWorkflow
@@ -673,7 +695,7 @@ export default function ImageStudio() {
               onChange={patch}
               onAction={act}
               perform={perform}
-              onNew={() => void switchView('workflow')}
+              onNew={() => switchView('workflow', undefined, true)}
               onOpenResult={(result) => {
                 setSelected(result)
                 setEditNote('')
@@ -690,8 +712,8 @@ export default function ImageStudio() {
                   <h2>{currentFeature.label}</h2>
                   <p>{currentFeature.step}</p>
                 </div>
-                <Button size="sm" variant="ghost" disabled={pending}
-                  onClick={() => void switchView(brief.feature)}><Plus size={15} />新任务</Button>
+                <Button size="sm" variant="ghost"
+                  onClick={() => switchView(brief.feature, undefined, true)}><Plus size={15} />新任务</Button>
               </div>
               <div className="is-work-toolbar">
                 <div className="is-stage-tabs" role="tablist" aria-label="制作阶段">
@@ -701,8 +723,7 @@ export default function ImageStudio() {
                       role="tab"
                       aria-selected={stage === s}
                       key={s}
-                      disabled={s === 'results' && !task?.results.length}
-                      onClick={() => setStage(s)}
+                      onClick={() => navigateStage(s)}
                     >
                       <span>{i + 1}</span>
                       {s === 'brief' ? '素材与要求' : '生成结果'}
@@ -734,10 +755,11 @@ export default function ImageStudio() {
                 <ImageBriefForm configurationIssue={configurationIssue} model={config.model} protocol={config.protocol} brief={brief} templates={templates} busy={busy || loading}
                   dropActive={dropActive} onChange={patch}
                   onImport={(folder) => void importImages(folder)}
-                  onImportExamples={() => void perform(async () => {
+                  onImportExamples={() => void perform(async current => {
                     const paths = await open({ multiple: true, title: '按页面顺序选择现成套图', filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] })
                     if (!paths) return
-                    mergeReplaceSources(await api.imageStudioImport(Array.isArray(paths) ? paths : [paths], false))
+                    const products = await api.imageStudioImport(Array.isArray(paths) ? paths : [paths], false)
+                    if (current()) mergeReplaceSources(products)
                   })}
                   dropTarget={dropTarget === 'sources' ? null : dropTarget}
                   onDrop={keepOsDrop} onStart={() => void act({ kind: 'start' })} />
@@ -767,16 +789,7 @@ export default function ImageStudio() {
                         <Button
                           disabled={busy || !editedPlans}
                           onClick={() =>
-                            void perform(async () => {
-                              if (task && editedPlans)
-                                adopt(
-                                  await api.imageStudioSavePlans(
-                                    task.id,
-                                    task.revision,
-                                    editedPlans,
-                                  ),
-                                )
-                            })
+                            void perform(async () => { await save() })
                           }
                         >
                           <Save size={14} />
@@ -784,7 +797,7 @@ export default function ImageStudio() {
                         </Button>
                         <Button
                           variant="primary"
-                          disabled={busy || !!editedPlans || dirty}
+                          disabled={busy}
                           onClick={() =>
                             void act({
                               kind: brief.feature === 'gen' ? 'generate' : 'sample',
@@ -812,7 +825,7 @@ export default function ImageStudio() {
                           : '完成素材与要求后，生成可编辑的页面方案。'
                       }
                       action={
-                        <Button disabled={busy} onClick={() => setStage('brief')}>
+                        <Button onClick={() => navigateStage('brief')}>
                           返回素材与要求
                         </Button>
                       }
@@ -853,9 +866,9 @@ export default function ImageStudio() {
                               <textarea
                                 className="kv-textarea custom-scrollbar"
                                 rows={5}
-                                disabled={busy}
                                 value={plan.prompt}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  editorVersion.current++
                                   setEditedPlans(
                                     plans.map((x) =>
                                       x.productId === plan.productId && x.slotId === plan.slotId
@@ -863,7 +876,7 @@ export default function ImageStudio() {
                                         : x,
                                     ),
                                   )
-                                }
+                                }}
                               />
                             </Field></details>
                           </div>
@@ -881,8 +894,8 @@ export default function ImageStudio() {
                       <span className="is-count">{results.filter((result) => result.path).length} 张</span>
                     </div>
                     <div className="is-actions">
-                      <Button size="sm" disabled={busy} onClick={() => setStage('brief')}>返回修改</Button>
-                      <Button size="sm" disabled={busy} onClick={() => setSettingsOpen(true)}>更换模型 / 供应商</Button>
+                      <Button size="sm" onClick={() => navigateStage('brief')}>返回修改</Button>
+                      <Button size="sm" onClick={() => setSettingsOpen(true)}>更换模型 / 供应商</Button>
                       {!busy && task && (task.error || task.status === 'stopped') && results.length > 0 && <Button size="sm" onClick={() => void act({ kind: 'start' })}><RefreshCw size={14} />继续生成</Button>}
                       {!!plans.length && <Button size="sm" variant="ghost" onClick={() => setStage('plan')}>查看画面安排</Button>}
                       <Button

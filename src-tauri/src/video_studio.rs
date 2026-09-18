@@ -24,6 +24,7 @@ pub(crate) const PACKAGE_ID: &str = "42df724b-34e1-47b8-aa2c-6c738b09d280";
 const WORKER_ACTIONS: &[&str] = &[
     "bootstrap",
     "get",
+    "poster",
     "create",
     "save",
     "plan_result",

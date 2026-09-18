@@ -2006,6 +2006,7 @@ export const api = {
   videoStudioOpen: (id?: string, mode: 'open' | 'reveal' = 'open') =>
     invoke<void>('video_studio', { action: 'open', input: { id, mode } }),
   videoStudioPreview: (id: string) => invoke<string>('video_studio', { action: 'preview', input: { id } }),
+  videoStudioPoster: (id: string) => invoke<string>('video_studio', { action: 'poster', input: { id } }),
   videoStudioImage: (path: string) => invoke<string>('video_studio', { action: 'image_preview', input: { path } }),
   videoStudioInstallComfy: () => invoke<{ installed: boolean }>('video_studio', { action: 'install_comfy', input: {} }),
   imageStudioBootstrap: () => invoke<ImageBootstrap>('image_studio_bootstrap'),
