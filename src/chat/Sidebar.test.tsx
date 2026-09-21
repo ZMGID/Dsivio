@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -382,5 +383,54 @@ describe('Sidebar resize handle', () => {
       />,
     )
     expect(container.querySelector('.chat-sidebar-resize')).toBeNull()
+  })
+})
+
+
+describe('Sidebar extension navigation', () => {
+  beforeEach(() => {
+    vi.spyOn(chatApi, 'getProjects').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getSets').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getAssistants').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getConversations').mockResolvedValue([])
+    vi.spyOn(chatApi, 'getConversationPins').mockResolvedValue({})
+  })
+
+  function Navigation({ initial = null }: { initial?: import('./Sidebar').ExtensionsNavItem | null }) {
+    const [active, setActive] = useState(initial)
+    return <Sidebar
+      lang="zh" selectedProject={null} selectedSet={null}
+      onSelectProject={vi.fn()} onSelectSet={vi.fn()} onSelectConversation={vi.fn()}
+      onNewConversation={vi.fn()} onOpenSettings={vi.fn()}
+      onOpenExtensionsItem={setActive} extensionsActive={active}
+      onSelectLang={vi.fn()} onOpenUsage={vi.fn()}
+      collapsed={false} onToggleCollapsed={vi.fn()} refreshKey={0}
+      searchOpen={false} onSearchOpenChange={vi.fn()}
+    />
+  }
+
+  it.each(['应用市场', '图片', '视频', '作品'])('keeps extensions collapsed when selecting %s', async (label) => {
+    const user = userEvent.setup()
+    render(<Navigation />)
+    await user.click(screen.getByRole('button', { name: label, exact: true }))
+    expect(screen.getByRole('button', { name: '扩展', exact: true })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: 'MCP', exact: true })).not.toBeInTheDocument()
+  })
+
+  it('keeps extensions collapsed when opening the market directly', () => {
+    render(<Navigation initial="market" />)
+    expect(screen.getByRole('button', { name: '扩展', exact: true })).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('expands for an extension route and preserves manual toggling', async () => {
+    const user = userEvent.setup()
+    render(<Navigation initial="mcp" />)
+    const toggle = screen.getByRole('button', { name: '扩展', exact: true })
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await user.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await user.click(toggle)
+    await user.click(screen.getByRole('button', { name: '应用市场', exact: true }))
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
   })
 })

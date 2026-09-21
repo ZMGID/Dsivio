@@ -1434,7 +1434,7 @@ export const Sidebar = memo(function Sidebar({
         <NavRow icon={<Video size={17} />} label={'视频'} onClick={() => onOpenExtensionsItem('videos')} active={extensionsActive === 'videos'} />
         <NavRow icon={<Store size={17} />} label={'应用市场'} onClick={() => onOpenExtensionsItem('market')} active={extensionsActive === 'market'} />
         <ExtensionsNav
-          activeItem={extensionsActive === 'artifacts' ? null : extensionsActive}
+          activeItem={extensionSubItems.some((item) => item.id === extensionsActive) ? extensionsActive : null}
           onSelectItem={onOpenExtensionsItem}
         />
       </nav>
