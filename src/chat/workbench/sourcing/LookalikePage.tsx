@@ -32,7 +32,7 @@ function saveHistory(items: HistoryItem[]): void {
 }
 
 /**
- * 同款找货：上传图、搜 1688。图可以先落在本机；货源接口还没接。
+ * 同款找货：图可以先落在本机；货源接口还没接。
  */
 export function LookalikePage() {
   const t = useT()

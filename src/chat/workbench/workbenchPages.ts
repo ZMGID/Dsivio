@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { Bookmark, LayoutDashboard, Package, ScanSearch, ShieldCheck, Store, TrendingUp, Upload, Video, Workflow } from 'lucide-react'
+import { BarChart3, Bookmark, Captions, Clapperboard, ClipboardList, Copy, FileText, Film, FolderOpen, History, Image, Images, KeyRound, LayoutDashboard, Package, PanelsTopLeft, Pencil, ScanSearch, Send, Share2, ShieldCheck, Shirt, Shuffle, Sparkles, Store, TrendingUp, Upload, UserRound, Users, Video, Workflow } from 'lucide-react'
 import type { I18n } from '../../components/i18n'
 import { hashPath } from '../chatRoutes'
 import type { ChatExtensionsNavItem } from '../chatRoutes'
@@ -10,6 +10,11 @@ type WorkbenchIcon = (props: { size?: number; className?: string }) => ReactNode
 export type WorkbenchSubpageId =
   | 'shops' | 'overview' | 'products' | 'listing' | 'check' | 'workflows'
   | 'ranks' | 'match' | 'picks'
+  | 'posts' | 'articles'
+  | 'main' | 'detail' | 'poster' | 'retouch' | 'migrate' | 'dress' | 'clone' | 'edit'
+  | 'shorts' | 'avatar' | 'drama' | 'vclone' | 'vedit' | 'subs'
+  | 'publish' | 'vaccts' | 'plogs' | 'pdata'
+  | 'roles' | 'assets' | 'usage'
 export type WorkbenchPageId = 'home' | WorkbenchSubpageId
 
 export const WORKBENCH_SUBPAGES: readonly WorkbenchSubpageId[] = [
@@ -22,6 +27,29 @@ export const WORKBENCH_SUBPAGES: readonly WorkbenchSubpageId[] = [
   'ranks',
   'match',
   'picks',
+  'posts',
+  'articles',
+  'main',
+  'detail',
+  'poster',
+  'retouch',
+  'migrate',
+  'dress',
+  'clone',
+  'edit',
+  'shorts',
+  'avatar',
+  'drama',
+  'vclone',
+  'vedit',
+  'subs',
+  'publish',
+  'vaccts',
+  'plogs',
+  'pdata',
+  'roles',
+  'assets',
+  'usage',
 ]
 
 export function isWorkbenchSubpage(id: string): id is WorkbenchSubpageId {
@@ -110,6 +138,71 @@ export const WORKBENCH_NAV: {
         { page: 'ranks', label: (t) => t.workbenchNavRanks, icon: Video },
         { page: 'match', label: (t) => t.workbenchNavMatch, icon: ScanSearch },
         { page: 'picks', label: (t) => t.workbenchNavPicks, icon: Bookmark },
+      ],
+    },
+    {
+      id: 'copy',
+      label: (t) => t.workbenchGroupCopy,
+      icon: FileText,
+      entries: [
+        { page: 'posts', label: (t) => t.workbenchNavPosts, icon: Images },
+        { page: 'articles', label: (t) => t.workbenchNavArticles, icon: FileText },
+      ],
+    },
+    {
+      id: 'image',
+      label: (t) => t.workbenchGroupImage,
+      icon: Image,
+      entries: [
+        { page: 'main', label: (t) => t.workbenchNavMain, icon: Image },
+        { page: 'detail', label: (t) => t.workbenchNavDetail, icon: LayoutDashboard },
+        { page: 'poster', label: (t) => t.workbenchNavPoster, icon: PanelsTopLeft },
+        { page: 'retouch', label: (t) => t.workbenchNavRetouch, icon: Sparkles },
+        { page: 'migrate', label: (t) => t.workbenchNavMigrate, icon: Shuffle },
+        { page: 'dress', label: (t) => t.workbenchNavDress, icon: Shirt },
+        { page: 'clone', label: (t) => t.workbenchNavClone, icon: Copy },
+        { page: 'edit', label: (t) => t.workbenchNavEdit, icon: Pencil },
+      ],
+    },
+    {
+      id: 'video',
+      label: (t) => t.workbenchGroupVideo,
+      icon: Video,
+      entries: [
+        { page: 'shorts', label: (t) => t.workbenchNavShorts, icon: Video },
+        { page: 'avatar', label: (t) => t.workbenchNavAvatar, icon: UserRound },
+        { page: 'drama', label: (t) => t.workbenchNavDrama, icon: Clapperboard },
+        { page: 'vclone', label: (t) => t.workbenchNavVclone, icon: Copy },
+        { page: 'vedit', label: (t) => t.workbenchNavVedit, icon: Film },
+        { page: 'subs', label: (t) => t.workbenchNavSubs, icon: Captions },
+      ],
+    },
+    {
+      id: 'publish',
+      label: (t) => t.workbenchGroupPublish,
+      icon: Share2,
+      entries: [
+        { page: 'publish', label: (t) => t.workbenchNavPublish, icon: Send },
+        { page: 'vaccts', label: (t) => t.workbenchNavVaccts, icon: KeyRound },
+        { page: 'plogs', label: (t) => t.workbenchNavPlogs, icon: ClipboardList },
+        { page: 'pdata', label: (t) => t.workbenchNavPdata, icon: BarChart3 },
+      ],
+    },
+    {
+      id: 'content',
+      label: (t) => t.workbenchGroupContent,
+      icon: FolderOpen,
+      entries: [
+        { page: 'roles', label: (t) => t.workbenchNavRoles, icon: Users },
+        { page: 'assets', label: (t) => t.workbenchNavAssets, icon: Images },
+      ],
+    },
+    {
+      id: 'stats',
+      label: (t) => t.workbenchGroupStats,
+      icon: History,
+      entries: [
+        { page: 'usage', label: (t) => t.workbenchNavUsage, icon: History },
       ],
     },
   ],

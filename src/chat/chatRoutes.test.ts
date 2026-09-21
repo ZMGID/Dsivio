@@ -185,6 +185,16 @@ describe('extensionsNavItemForView', () => {
     expect(extensionsNavItemForView('workbench')).toBe('workbench/shops')
     window.location.hash = '#chat/workbench/ranks'
     expect(extensionsNavItemForView('workbench')).toBe('workbench/ranks')
+    window.location.hash = '#chat/workbench/posts'
+    expect(extensionsNavItemForView('workbench')).toBe('workbench/posts')
+    window.location.hash = '#chat/workbench/main'
+    expect(extensionsNavItemForView('workbench')).toBe('workbench/main')
+    window.location.hash = '#chat/workbench/shorts'
+    expect(extensionsNavItemForView('workbench')).toBe('workbench/shorts')
+    window.location.hash = '#chat/workbench/publish'
+    expect(extensionsNavItemForView('workbench')).toBe('workbench/publish')
+    window.location.hash = '#chat/workbench/usage'
+    expect(extensionsNavItemForView('workbench')).toBe('workbench/usage')
     window.location.hash = '#chat'
     expect(extensionsNavItemForView('settings')).toBeNull()
     expect(extensionsNavItemForView('conversation')).toBeNull()
