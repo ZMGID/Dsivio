@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { useT } from '../../components/i18n'
 import { ListingCheckPage } from './commerce/ListingCheckPage'
 import { ListingPage } from './commerce/ListingPage'
 import { ProductArchivePage } from './commerce/ProductArchivePage'
@@ -32,18 +31,8 @@ import { LookalikePage } from './sourcing/LookalikePage'
 import { PickLibraryPage } from './sourcing/PickLibraryPage'
 import { VideoRankPage } from './sourcing/VideoRankPage'
 import { WorkflowPage } from './workflow/WorkflowPage'
+import { WorkbenchLanding } from './WorkbenchLanding'
 import { workbenchPageFromHash, type WorkbenchPageId } from './workbenchPages'
-
-function WorkbenchLanding() {
-  const t = useT()
-  return (
-    <div className="custom-scrollbar workbench-home">
-      <div className="workbench-home-inner">
-        <h1 className="workbench-title">{t.productModeWorkbenchName}</h1>
-      </div>
-    </div>
-  )
-}
 
 function renderPage(page: WorkbenchPageId) {
   switch (page) {

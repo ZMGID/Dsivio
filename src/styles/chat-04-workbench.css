@@ -8,6 +8,7 @@
 .chat-sidebar-brand-row {
   display: flex;
   align-items: center;
+  gap: 4px;
   flex-shrink: 0;
   padding: 2px 8px 4px;
 }
@@ -88,6 +89,81 @@
   color: var(--wb-accent);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workbench-home-quick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.workbench-home-quick-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--theme-surface-border);
+  border-radius: 12px;
+  background: var(--theme-surface-muted);
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  transition: background-color var(--kv-dur-instant) var(--kv-ease-standard);
+}
+
+.workbench-home-quick-card:hover {
+  background: var(--wb-accent-soft);
+}
+
+.workbench-home-quick-name {
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-home-quick-meta {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-home-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 4px 8px;
+}
+
+.workbench-home-link {
+  overflow: hidden;
+  min-width: 0;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 36px;
+  color: var(--text);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--kv-dur-instant) var(--kv-ease-standard);
+}
+
+.workbench-home-link:hover {
+  background: var(--theme-surface-muted);
 }
 
 /* ── 工作台功能页 ─────────────────────────────────────────────── */

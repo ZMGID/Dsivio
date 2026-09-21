@@ -34,6 +34,7 @@ import { useInsertionReorder } from '../utils/insertionReorder'
 import { applyConversationPins, withPinAt, type ConversationPin } from './conversationPins'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
 import { ProductModeSwitcher } from './ProductModeSwitcher'
+import { SidebarBrandSearchButton } from './SidebarBrandSearchButton'
 import { SidebarShell } from './SidebarShell'
 import { SidebarUserFooter } from './SidebarUserFooter'
 import { NavRow } from './SidebarNavRow'
@@ -343,7 +344,7 @@ function SearchDialog({
     >
       <div
         ref={dialogRef}
-        className="chat-motion-popover flex max-h-[62vh] w-full max-w-[560px] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-black/25 dark:border-neutral-700 dark:bg-[#242426]"
+        className="flex max-h-[62vh] w-full max-w-[560px] flex-col overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xl shadow-black/25 dark:border-neutral-700 dark:bg-[#242426]"
         role="dialog"
         aria-modal="true"
         aria-label={t.chatSearchConversations}
@@ -377,7 +378,7 @@ function SearchDialog({
 
         <div className="custom-scrollbar min-h-0 overflow-y-auto px-1.5 pb-1.5">
           {results.length > 0 ? (
-            results.map((conversation, index) => {
+            results.map((conversation) => {
               const active = conversation.id === currentConversationId
               const listedTitle =
                 displayConversationTitle(conversation.title, conversation.preview)
@@ -397,10 +398,7 @@ function SearchDialog({
                   key={conversation.id}
                   type="button"
                   onClick={() => onSelectConversation(conversation)}
-                  style={{
-                    ['--chat-motion-delay' as string]: `${Math.min(index, 12) * 18}ms`,
-                  }}
-                  className={`chat-motion-row group/search-result flex w-full min-w-0 items-start gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                  className={`group/search-result flex w-full min-w-0 items-start gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
                     active
                       ? 'bg-black/[0.07] dark:bg-white/[0.1]'
                       : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.07]'
@@ -1202,7 +1200,14 @@ export const Sidebar = memo(function Sidebar({
         )}
 
       <div className="chat-sidebar-brand-row" data-tauri-drag-region="false">
-        <ProductModeSwitcher mode={productMode} onSelect={onSelectProductMode} />
+        <div className="min-w-0 flex-1">
+          <ProductModeSwitcher mode={productMode} onSelect={onSelectProductMode} />
+        </div>
+        <SidebarBrandSearchButton
+          label={t.chatSearchConversations}
+          active={searchOpen}
+          onClick={() => onSearchOpenChange(true)}
+        />
       </div>
 
       <nav
@@ -1214,13 +1219,6 @@ export const Sidebar = memo(function Sidebar({
           label={t.chatNewChat}
           onClick={onNewConversation}
           iconMotion="group-hover:-rotate-6 group-hover:scale-110"
-        />
-        <NavRow
-          icon={<Search size={17} strokeWidth={1.75} />}
-          label={t.chatSearch}
-          onClick={() => onSearchOpenChange(true)}
-          active={searchOpen}
-          iconMotion="group-hover:scale-110"
         />
         <NavRow
           icon={<WorksIcon size={17} strokeWidth={1.75} />}

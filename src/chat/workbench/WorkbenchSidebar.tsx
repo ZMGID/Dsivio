@@ -3,11 +3,13 @@ import { ChevronRight, Home } from 'lucide-react'
 import { useT } from '../../components/i18n'
 import { ChatTitlebarActions } from '../ChatTitlebarActions'
 import { ProductModeSwitcher } from '../ProductModeSwitcher'
+import { SidebarBrandSearchButton } from '../SidebarBrandSearchButton'
 import { SidebarShell } from '../SidebarShell'
 import { SidebarUserFooter } from '../SidebarUserFooter'
 import { NavRow } from '../SidebarNavRow'
 import { chatTitlebarMacInsetClass, usesNativeTitlebar } from '../platform'
 import type { SidebarProps } from '../Sidebar'
+import { WorkbenchFeatureSearch } from './WorkbenchFeatureSearch'
 import { WORKBENCH_NAV, workbenchNavItem, workbenchPageFromHash, type WorkbenchPageId } from './workbenchPages'
 
 const GROUP_STATE_KEY = 'kivio.workbench.navGroups'
@@ -77,6 +79,7 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
     return next
   })
   const [activeItem, setActiveItem] = useState(() => workbenchNavItem(workbenchPageFromHash()))
+  const [searchOpen, setSearchOpen] = useState(false)
 
   useEffect(() => {
     const sync = () => setActiveItem(workbenchNavItem(workbenchPageFromHash()))
@@ -86,6 +89,7 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
 
   const openPage = useCallback((page: WorkbenchPageId) => {
     onOpenExtensionsItem(workbenchNavItem(page))
+    setSearchOpen(false)
   }, [onOpenExtensionsItem])
 
   return (
@@ -110,7 +114,14 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
       )}
 
       <div className="chat-sidebar-brand-row" data-tauri-drag-region="false">
-        <ProductModeSwitcher mode={productMode} onSelect={onSelectProductMode} />
+        <div className="min-w-0 flex-1">
+          <ProductModeSwitcher mode={productMode} onSelect={onSelectProductMode} />
+        </div>
+        <SidebarBrandSearchButton
+          label={t.workbenchSearchFeatures}
+          active={searchOpen}
+          onClick={() => setSearchOpen(true)}
+        />
       </div>
 
       <nav
@@ -126,18 +137,12 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
 
         {WORKBENCH_NAV.groups.map((group) => {
           const open = openGroups[group.id] ?? true
-          const childActive = group.entries.some((entry) => activeItem === workbenchNavItem(entry.page))
-          const highlighted = open || childActive
           const GroupIcon = group.icon
           return (
             <div key={group.id} className="py-0.5">
               <button
                 type="button"
-                className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] font-medium transition-colors ${
-                  highlighted
-                    ? 'bg-black/[0.06] text-neutral-900 dark:bg-white/[0.1] dark:text-neutral-50'
-                    : 'text-neutral-800 hover:bg-black/[0.04] dark:text-neutral-200 dark:hover:bg-white/[0.06]'
-                }`}
+                className="group flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] font-medium text-neutral-800 transition-colors hover:bg-black/[0.04] dark:text-neutral-200 dark:hover:bg-white/[0.06]"
                 aria-expanded={open}
                 onClick={() => {
                   const next = !open
@@ -161,24 +166,18 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
                 <div className="ml-[12px] mt-0.5 grid grid-cols-2 gap-x-1 gap-y-0.5">
                   {group.entries.map((entry) => {
                     const active = activeItem === workbenchNavItem(entry.page)
-                    const Icon = entry.icon
                     return (
                       <button
                         key={entry.page}
                         type="button"
                         onClick={() => openPage(entry.page)}
-                        className={`workbench-nav-leaf flex items-center gap-2 py-1.5 pl-2 pr-1 text-left transition-colors ${
+                        title={entry.label(t)}
+                        className={`workbench-nav-leaf flex min-w-0 items-center px-2 text-left transition-colors ${
                           active
                             ? 'is-active'
                             : 'text-neutral-700 hover:bg-black/[0.04] hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-white/[0.06] dark:hover:text-neutral-100'
                         }`}
                       >
-                        <span className={`flex h-4 w-4 shrink-0 items-center justify-center ${
-                          active ? '' : 'text-neutral-400 dark:text-neutral-500'
-                        }`}
-                        >
-                          {Icon ? <Icon size={15} /> : null}
-                        </span>
                         <span className="min-w-0 flex-1 truncate">{entry.label(t)}</span>
                       </button>
                     )
@@ -189,6 +188,14 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
           )
         })}
       </nav>
+
+      {searchOpen && (
+        <WorkbenchFeatureSearch
+          activePage={activeItem}
+          onSelect={openPage}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
 
       <SidebarUserFooter
         lang={lang}
