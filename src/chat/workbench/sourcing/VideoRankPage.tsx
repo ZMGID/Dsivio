@@ -24,6 +24,7 @@ export function VideoRankPage() {
   const [kind, setKind] = useState<RankKind>('all')
   const [range, setRange] = useState<RankRange>('1d')
   const [query, setQuery] = useState('')
+  const [notice, setNotice] = useState('')
 
   const kinds: { id: RankKind; label: string }[] = [
     { id: 'all', label: t.workbenchRankAll },
@@ -81,11 +82,12 @@ export function VideoRankPage() {
             onChange={(event) => setQuery(event.target.value)}
             placeholder={t.workbenchRankSearch}
           />
-          <Button size="sm" variant="primary">
+          <Button size="sm" variant="primary" onClick={() => setNotice(t.workbenchRankSoon)}>
             <Search size={14} />
             {t.workbenchRankSearchAction}
           </Button>
         </div>
+        {notice ? <p className="workbench-inline-note">{notice}</p> : null}
         <WorkbenchEmpty icon={<BarChart3 size={22} />} title={t.workbenchRankEmpty}>
           {t.workbenchRankSoon}
         </WorkbenchEmpty>

@@ -3,7 +3,7 @@ import { Share2 } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { Input, TextArea } from '../../../settings/public/controls'
-import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { CopyUploadField } from '../copy/CopyUploadField'
 import { useLocalImages } from '../image/useLocalImages'
 import { VideoUploadField } from '../video/VideoUploadField'
@@ -42,62 +42,59 @@ export function PublishPage() {
     >
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={t.workbenchPublishCommon} hint={t.workbenchPublishCommonHint}>
-          <div className="workbench-card-scroll custom-scrollbar">
-            <VideoUploadField
-              label={t.workbenchPublishVideo}
-              required
-              hint={t.workbenchPublishVideoHint}
-              file={video}
-              onChange={setVideo}
-              onNotice={setNotice}
-            />
-            <label className="workbench-field">
-              <span className="workbench-field-row">
-                <span>
-                  {t.workbenchPublishHeadline}
-                  <span className="workbench-required" aria-hidden="true">*</span>
-                </span>
-                <span className="workbench-page-sub workbench-page-sub--flush">{title.length}/{PUBLISH_TITLE_MAX}</span>
+          <VideoUploadField
+            label={t.workbenchPublishVideo}
+            required
+            hint={t.workbenchPublishVideoHint}
+            file={video}
+            onChange={setVideo}
+            onNotice={setNotice}
+          />
+          <label className="workbench-field">
+            <span className="workbench-field-row">
+              <span>
+                {t.workbenchPublishHeadline}
+                <span className="workbench-required" aria-hidden="true">*</span>
               </span>
-              <Input
-                value={title}
-                onChange={(value) => setTitle(value.slice(0, PUBLISH_TITLE_MAX))}
-                maxLength={PUBLISH_TITLE_MAX}
-                placeholder={t.workbenchPublishHeadlineHint}
-              />
-            </label>
-            <CopyUploadField
-              label={t.workbenchPublishCover}
-              optional
-              hint={t.workbenchPublishCoverHint}
-              max={1}
-              files={cover}
-              onChange={setCover}
-              onNotice={setNotice}
+              <span className="workbench-page-sub workbench-page-sub--flush">{title.length}/{PUBLISH_TITLE_MAX}</span>
+            </span>
+            <Input
+              value={title}
+              onChange={(value) => setTitle(value.slice(0, PUBLISH_TITLE_MAX))}
+              maxLength={PUBLISH_TITLE_MAX}
+              placeholder={t.workbenchPublishHeadlineHint}
             />
-            <label className="workbench-field">
-              <span className="workbench-field-row">
-                <span>{t.workbenchPublishDesc}</span>
-                <span className="workbench-page-sub workbench-page-sub--flush">{desc.length}/{PUBLISH_DESC_MAX}</span>
-              </span>
-              <TextArea
-                value={desc}
-                onChange={(value) => setDesc(value.slice(0, PUBLISH_DESC_MAX))}
-                rows={5}
-                placeholder={t.workbenchPublishDescHint}
-              />
-            </label>
-            <div className="workbench-field">
-              <span>{t.workbenchPublishWhen}</span>
-              <div className="workbench-chip-row">
-                <span className="workbench-capsule">{t.workbenchPublishNow}</span>
-              </div>
+          </label>
+          <CopyUploadField
+            label={t.workbenchPublishCover}
+            optional
+            hint={t.workbenchPublishCoverHint}
+            max={1}
+            files={cover}
+            onChange={setCover}
+            onNotice={setNotice}
+          />
+          <label className="workbench-field">
+            <span className="workbench-field-row">
+              <span>{t.workbenchPublishDesc}</span>
+              <span className="workbench-page-sub workbench-page-sub--flush">{desc.length}/{PUBLISH_DESC_MAX}</span>
+            </span>
+            <TextArea
+              value={desc}
+              onChange={(value) => setDesc(value.slice(0, PUBLISH_DESC_MAX))}
+              rows={5}
+              placeholder={t.workbenchPublishDescHint}
+            />
+          </label>
+          <div className="workbench-field">
+            <span>{t.workbenchPublishWhen}</span>
+            <div className="workbench-chip-row">
+              <span className="workbench-capsule">{t.workbenchPublishNow}</span>
             </div>
-            {notice ? <p className="workbench-inline-note">{notice}</p> : null}
           </div>
-          <div className="workbench-cta-row">
+          <WorkbenchCta notice={notice}>
             <Button variant="primary" onClick={publish}>{t.workbenchPublishCta}</Button>
-          </div>
+          </WorkbenchCta>
         </WorkbenchCard>
         <WorkbenchCard fill title={t.workbenchPublishPlatforms} hint={t.workbenchPublishPlatformsHint}>
           <WorkbenchEmpty icon={<Share2 size={22} />} title={t.workbenchPublishPlatformsEmpty}>

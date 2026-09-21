@@ -37,6 +37,7 @@ function saveHistory(items: HistoryItem[]): void {
 export function LookalikePage() {
   const t = useT()
   const fileRef = useRef<HTMLInputElement>(null)
+  const historyRef = useRef<HTMLDivElement>(null)
   const [fileName, setFileName] = useState('')
   const [preview, setPreview] = useState('')
   const [query, setQuery] = useState('')
@@ -68,6 +69,22 @@ export function LookalikePage() {
   }, [history, t])
 
   useEffect(() => {
+    if (!historyOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setHistoryOpen(false)
+    }
+    const onPointer = (event: PointerEvent) => {
+      if (!historyRef.current?.contains(event.target as Node)) setHistoryOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('pointerdown', onPointer)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointerdown', onPointer)
+    }
+  }, [historyOpen])
+
+  useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
       const file = [...event.clipboardData?.items ?? []]
         .find((item) => item.type.startsWith('image/'))
@@ -84,7 +101,7 @@ export function LookalikePage() {
       title={t.workbenchNavMatch}
       subtitle={t.workbenchMatchSubtitle}
       actions={(
-        <div className="workbench-page-actions">
+        <div className="workbench-page-actions" ref={historyRef}>
           <Button size="sm" variant={historyOpen ? 'primary' : 'default'} onClick={() => setHistoryOpen((open) => !open)}>
             <Clock size={14} />
             {t.workbenchMatchHistory}

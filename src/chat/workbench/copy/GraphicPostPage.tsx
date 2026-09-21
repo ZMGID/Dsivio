@@ -3,7 +3,7 @@ import { Images } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { Select, TextArea } from '../../../settings/public/controls'
-import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { CopyUploadField, revokeImages, type LocalImage } from './CopyUploadField'
 import {
   POST_RATIOS,
@@ -101,7 +101,7 @@ export function GraphicPostPage() {
             <p className="workbench-page-sub">{t.workbenchPostsTemplateHint.replace('{name}', t[templateMeta.name])}</p>
           </div>
           <div className="workbench-pair">
-            <label className="workbench-field">
+            <div className="workbench-field">
               <span>{t.workbenchPostsRatio}</span>
               <Select
                 value={ratio}
@@ -109,16 +109,15 @@ export function GraphicPostPage() {
                 ariaLabel={t.workbenchPostsRatio}
                 options={POST_RATIOS.map((item) => ({ value: item.id, label: t[item.label] }))}
               />
-            </label>
-            <label className="workbench-field">
+            </div>
+            <div className="workbench-field">
               <span>{t.workbenchPostsSize}</span>
               <span className="workbench-readonly">{size}</span>
-            </label>
+            </div>
           </div>
-          {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-          <div className="workbench-cta-row">
+          <WorkbenchCta notice={notice}>
             <Button variant="primary" onClick={generate}>{t.workbenchPostsGenerate}</Button>
-          </div>
+          </WorkbenchCta>
         </WorkbenchCard>
       </div>
 

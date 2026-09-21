@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { Select } from '../../../settings/public/controls'
-import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import {
   IMAGE_COUNTS,
   IMAGE_RATIOS,
@@ -21,7 +21,7 @@ export function ImageSizeFields({
   const t = useT()
   return (
     <div className="workbench-pair">
-      <label className="workbench-field">
+      <div className="workbench-field">
         <span>{t.workbenchImageRatio}</span>
         <Select
           value={ratio}
@@ -29,11 +29,11 @@ export function ImageSizeFields({
           ariaLabel={t.workbenchImageRatio}
           options={IMAGE_RATIOS.map((item) => ({ value: item.id, label: t[item.label] }))}
         />
-      </label>
-      <label className="workbench-field">
+      </div>
+      <div className="workbench-field">
         <span>{t.workbenchImageSize}</span>
         <span className="workbench-readonly">{sizeForImageRatio(ratio)}</span>
-      </label>
+      </div>
     </div>
   )
 }
@@ -47,7 +47,7 @@ export function ImageCountField({
 }) {
   const t = useT()
   return (
-    <label className="workbench-field">
+    <div className="workbench-field">
       <span>{t.workbenchImageCount}</span>
       <Select
         value={String(count)}
@@ -55,7 +55,7 @@ export function ImageCountField({
         ariaLabel={t.workbenchImageCount}
         options={IMAGE_COUNTS.map((item) => ({ value: String(item), label: String(item) }))}
       />
-    </label>
+    </div>
   )
 }
 
@@ -103,13 +103,10 @@ export function ImageStudio({
       {tabs}
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={configTitle} hint={configHint}>
-          <div className="workbench-card-scroll custom-scrollbar">
-            {config}
-            {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-          </div>
-          <div className="workbench-cta-row">
+          {config}
+          <WorkbenchCta notice={notice}>
             {footer ?? (cta && onGenerate ? <Button variant="primary" onClick={onGenerate}>{cta}</Button> : null)}
-          </div>
+          </WorkbenchCta>
         </WorkbenchCard>
         <WorkbenchCard fill title={resultTitle} hint={resultHint} extra={resultExtra}>
           <WorkbenchEmpty icon={emptyIcon} title={emptyTitle}>{emptyHint}</WorkbenchEmpty>

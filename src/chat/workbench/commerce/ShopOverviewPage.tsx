@@ -26,6 +26,7 @@ const KPIS: { key: 'workbenchKpiGmv' | 'workbenchKpiOrders' | 'workbenchKpiRefun
 export function ShopOverviewPage() {
   const t = useT()
   const [range, setRange] = useState<RangeId>('today')
+  const [notice, setNotice] = useState('')
   const ranges: { id: RangeId; label: string }[] = [
     { id: 'today', label: t.workbenchRangeToday },
     { id: 'yesterday', label: t.workbenchRangeYesterday },
@@ -49,12 +50,13 @@ export function ShopOverviewPage() {
               {item.label}
             </button>
           ))}
-          <IconButton label={t.workbenchRefresh} size="sm">
+          <IconButton label={t.workbenchRefresh} size="sm" onClick={() => setNotice(t.workbenchActionSoon)}>
             <RefreshCw size={14} />
           </IconButton>
         </div>
       )}
     >
+      {notice ? <p className="workbench-inline-note">{notice}</p> : null}
       <p className="workbench-banner">{t.workbenchOverviewClientHint}</p>
       <div className="workbench-kpi-grid">
         {KPIS.map((item) => (

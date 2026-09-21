@@ -3,7 +3,7 @@ import { Film } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { TextArea } from '../../../settings/public/controls'
-import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { CopyUploadField } from '../copy/CopyUploadField'
 import { useLocalImages } from '../image/useLocalImages'
 import { VideoUploadField } from './VideoUploadField'
@@ -41,42 +41,39 @@ export function VideoEditPage() {
       crumb={t.workbenchGroupVideo}
       crumbCurrent={t.workbenchVeditCrumb}
       title={t.workbenchVeditTitle}
-      actions={<span className="workbench-capsule">{video ? video.name : t.workbenchVeditWait}</span>}
+      actions={<span className="workbench-capsule" title={video?.name}>{video ? video.name : t.workbenchVeditWait}</span>}
     >
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={t.workbenchVeditSettings} hint={t.workbenchVeditSettingsHint}>
-          <div className="workbench-card-scroll custom-scrollbar">
-            <VideoUploadField
-              label={t.workbenchVeditVideo}
-              required
-              hint={t.workbenchVeditVideoHint}
-              maxBytes={50 * 1024 * 1024}
-              accept="video/mp4,video/quicktime"
-              file={video}
-              onChange={setVideo}
-              onNotice={setNotice}
-            />
-            <CopyUploadField
-              label={t.workbenchVeditRef}
-              required
-              hint={t.workbenchVeditRefHint}
-              max={4}
-              files={refs}
-              onChange={setRefs}
-              onNotice={setNotice}
-            />
-            <label className="workbench-field">
-              <span>
-                {t.workbenchVeditBrief}
-                <span className="workbench-required" aria-hidden="true">*</span>
-              </span>
-              <TextArea value={brief} onChange={setBrief} rows={5} placeholder={t.workbenchVeditBriefHint} />
-            </label>
-            {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-          </div>
-          <div className="workbench-cta-row">
+          <VideoUploadField
+            label={t.workbenchVeditVideo}
+            required
+            hint={t.workbenchVeditVideoHint}
+            maxBytes={50 * 1024 * 1024}
+            accept="video/mp4,video/quicktime"
+            file={video}
+            onChange={setVideo}
+            onNotice={setNotice}
+          />
+          <CopyUploadField
+            label={t.workbenchVeditRef}
+            required
+            hint={t.workbenchVeditRefHint}
+            max={4}
+            files={refs}
+            onChange={setRefs}
+            onNotice={setNotice}
+          />
+          <label className="workbench-field">
+            <span>
+              {t.workbenchVeditBrief}
+              <span className="workbench-required" aria-hidden="true">*</span>
+            </span>
+            <TextArea value={brief} onChange={setBrief} rows={5} placeholder={t.workbenchVeditBriefHint} />
+          </label>
+          <WorkbenchCta notice={notice}>
             <Button variant="primary" onClick={generate}>{t.workbenchVeditGenerate}</Button>
-          </div>
+          </WorkbenchCta>
         </WorkbenchCard>
         <WorkbenchCard fill title={t.workbenchVeditResult} hint={t.workbenchVeditResultHint}>
           <WorkbenchEmpty icon={<Film size={22} />} title={t.workbenchVeditEmpty}>

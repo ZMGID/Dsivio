@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { workbenchHash } from '../workbenchPages'
 
 type ListingTab = 'create' | 'running' | 'waiting' | 'done' | 'failed'
 
@@ -46,7 +47,7 @@ export function ListingPage() {
               </div>
             </div>
           ))}
-          <Button size="sm">{t.workbenchShopsBindTitle}</Button>
+          <Button size="sm" onClick={() => { window.location.hash = workbenchHash('shops') }}>{t.workbenchShopsBindTitle}</Button>
         </div>
       </WorkbenchCard>
 

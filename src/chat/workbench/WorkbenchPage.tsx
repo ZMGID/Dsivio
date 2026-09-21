@@ -72,6 +72,21 @@ export function WorkbenchCard({
   )
 }
 
+export function WorkbenchCta({
+  notice,
+  children,
+}: {
+  notice?: string
+  children: ReactNode
+}) {
+  return (
+    <div className="workbench-cta-row">
+      {notice ? <p className="workbench-inline-note">{notice}</p> : null}
+      {children}
+    </div>
+  )
+}
+
 export function WorkbenchEmpty({
   icon,
   title,

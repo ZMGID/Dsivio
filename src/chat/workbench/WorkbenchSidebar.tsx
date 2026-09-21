@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from 'react'
+import { memo, useCallback, useEffect, useState } from 'react'
 import { ChevronRight, Home } from 'lucide-react'
 import { useT } from '../../components/i18n'
 import { ChatTitlebarActions } from '../ChatTitlebarActions'
@@ -8,7 +8,7 @@ import { SidebarUserFooter } from '../SidebarUserFooter'
 import { NavRow } from '../SidebarNavRow'
 import { chatTitlebarMacInsetClass, usesNativeTitlebar } from '../platform'
 import type { SidebarProps } from '../Sidebar'
-import { WORKBENCH_NAV, workbenchNavItem, type WorkbenchPageId } from './workbenchPages'
+import { WORKBENCH_NAV, workbenchNavItem, workbenchPageFromHash, type WorkbenchPageId } from './workbenchPages'
 
 const GROUP_STATE_KEY = 'kivio.workbench.navGroups'
 
@@ -56,7 +56,6 @@ export type WorkbenchSidebarProps = Pick<
 /** 工作台侧栏：首页单开，下面按分组列功能。 */
 export const WorkbenchSidebar = memo(function WorkbenchSidebar({
   lang,
-  extensionsActive = null,
   onOpenExtensionsItem,
   onNewConversation,
   onOpenSettings,
@@ -77,6 +76,13 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
     for (const group of WORKBENCH_NAV.groups) next[group.id] = loadGroupOpen(group.id)
     return next
   })
+  const [activeItem, setActiveItem] = useState(() => workbenchNavItem(workbenchPageFromHash()))
+
+  useEffect(() => {
+    const sync = () => setActiveItem(workbenchNavItem(workbenchPageFromHash()))
+    window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
+  }, [])
 
   const openPage = useCallback((page: WorkbenchPageId) => {
     onOpenExtensionsItem(workbenchNavItem(page))
@@ -114,13 +120,13 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
         <NavRow
           icon={<Home size={17} />}
           label={WORKBENCH_NAV.home.label(t)}
-          active={extensionsActive === 'workbench'}
+          active={activeItem === 'workbench'}
           onClick={() => openPage('home')}
         />
 
         {WORKBENCH_NAV.groups.map((group) => {
           const open = openGroups[group.id] ?? true
-          const childActive = group.entries.some((entry) => extensionsActive === workbenchNavItem(entry.page))
+          const childActive = group.entries.some((entry) => activeItem === workbenchNavItem(entry.page))
           const highlighted = open || childActive
           const GroupIcon = group.icon
           return (
@@ -154,7 +160,7 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
               {open && (
                 <div className="ml-[12px] mt-0.5 grid grid-cols-2 gap-x-1 gap-y-0.5">
                   {group.entries.map((entry) => {
-                    const active = extensionsActive === workbenchNavItem(entry.page)
+                    const active = activeItem === workbenchNavItem(entry.page)
                     const Icon = entry.icon
                     return (
                       <button

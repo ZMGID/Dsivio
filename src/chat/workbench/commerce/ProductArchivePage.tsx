@@ -13,6 +13,7 @@ type ArchiveStatus = 'all' | 'incomplete' | 'analyzing' | 'generating' | 'failed
 export function ProductArchivePage() {
   const t = useT()
   const [status, setStatus] = useState<ArchiveStatus>('all')
+  const [notice, setNotice] = useState('')
   const tabs: { id: ArchiveStatus; label: string }[] = [
     { id: 'all', label: t.workbenchArchiveAll },
     { id: 'incomplete', label: t.workbenchArchiveIncomplete },
@@ -29,16 +30,17 @@ export function ProductArchivePage() {
       subtitle={t.workbenchArchiveSubtitle}
       actions={(
         <div className="workbench-page-actions">
-          <IconButton label={t.workbenchRefresh} size="sm">
+          <IconButton label={t.workbenchRefresh} size="sm" onClick={() => setNotice(t.workbenchActionSoon)}>
             <RefreshCw size={14} />
           </IconButton>
-          <Button size="sm" variant="primary">
+          <Button size="sm" variant="primary" onClick={() => setNotice(t.workbenchActionSoon)}>
             <Plus size={14} />
             {t.workbenchArchiveNew}
           </Button>
         </div>
       )}
     >
+      {notice ? <p className="workbench-inline-note">{notice}</p> : null}
       <div className="workbench-stat-row">
         {tabs.map((item) => (
           <button

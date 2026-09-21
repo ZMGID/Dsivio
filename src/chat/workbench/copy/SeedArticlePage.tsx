@@ -3,7 +3,7 @@ import { FileText } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { Select, TextArea } from '../../../settings/public/controls'
-import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { CopyUploadField, revokeImages, type LocalImage } from './CopyUploadField'
 import {
   ARTICLE_LENGTHS,
@@ -86,7 +86,7 @@ export function SeedArticlePage() {
             </div>
           </div>
           <div className="workbench-pair">
-            <label className="workbench-field">
+            <div className="workbench-field">
               <span>{t.workbenchArticlesType}</span>
               <Select
                 value={type}
@@ -94,8 +94,8 @@ export function SeedArticlePage() {
                 ariaLabel={t.workbenchArticlesType}
                 options={ARTICLE_TYPES.map((item) => ({ value: item.id, label: t[item.label] }))}
               />
-            </label>
-            <label className="workbench-field">
+            </div>
+            <div className="workbench-field">
               <span>{t.workbenchArticlesLength}</span>
               <Select
                 value={length}
@@ -103,10 +103,10 @@ export function SeedArticlePage() {
                 ariaLabel={t.workbenchArticlesLength}
                 options={ARTICLE_LENGTHS.map((item) => ({ value: item.id, label: t[item.label] }))}
               />
-            </label>
+            </div>
           </div>
           <div className="workbench-pair">
-            <label className="workbench-field">
+            <div className="workbench-field">
               <span>{t.workbenchArticlesAudience}</span>
               <Select
                 value="mass"
@@ -114,8 +114,8 @@ export function SeedArticlePage() {
                 ariaLabel={t.workbenchArticlesAudience}
                 options={[{ value: 'mass', label: t.workbenchArticleAudience }]}
               />
-            </label>
-            <label className="workbench-field">
+            </div>
+            <div className="workbench-field">
               <span>{t.workbenchArticlesTone}</span>
               <Select
                 value="real"
@@ -123,12 +123,11 @@ export function SeedArticlePage() {
                 ariaLabel={t.workbenchArticlesTone}
                 options={[{ value: 'real', label: t.workbenchArticleTone }]}
               />
-            </label>
+            </div>
           </div>
-          {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-          <div className="workbench-cta-row">
+          <WorkbenchCta notice={notice}>
             <Button variant="primary" onClick={generate}>{t.workbenchArticlesGenerate}</Button>
-          </div>
+          </WorkbenchCta>
         </WorkbenchCard>
       </div>
 

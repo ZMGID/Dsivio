@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, X } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 
@@ -52,6 +52,7 @@ export function CopyUploadField({
       }
       next.push({ id: crypto.randomUUID(), name: file.name, url: URL.createObjectURL(file) })
     }
+    if (next.length !== files.length) onNotice('')
     onChange(next)
   }
 
@@ -73,18 +74,24 @@ export function CopyUploadField({
           <Plus size={18} />
         </button>
         {files.map((file) => (
-          <button
+          <div
             key={file.id}
-            type="button"
             className="workbench-upload-slot workbench-upload-slot--filled"
             title={file.name}
-            onClick={() => {
-              URL.revokeObjectURL(file.url)
-              onChange(files.filter((item) => item.id !== file.id))
-            }}
           >
             <img src={file.url} alt={file.name} />
-          </button>
+            <button
+              type="button"
+              className="workbench-upload-remove"
+              aria-label={t.workbenchUploadRemove}
+              onClick={() => {
+                URL.revokeObjectURL(file.url)
+                onChange(files.filter((item) => item.id !== file.id))
+              }}
+            >
+              <X size={12} />
+            </button>
+          </div>
         ))}
       </div>
       {hint === '' ? null : <p className="workbench-page-sub">{hint ?? t.workbenchCopyUploadHint}</p>}

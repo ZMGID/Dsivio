@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
-import { WorkbenchCard, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchPage } from '../WorkbenchPage'
 import { VIDEO_TASK_TABS } from './videoCatalog'
 
 export function VideoParamLine({ items }: { items: string[] }) {
@@ -73,16 +73,13 @@ export function VideoStudio({
       <div className="workbench-video-body">
         <div className="workbench-split workbench-split--even">
           <WorkbenchCard title={settingsTitle} hint={settingsHint}>
-            <div className="workbench-card-scroll custom-scrollbar">{settings}</div>
+            {settings}
           </WorkbenchCard>
           <WorkbenchCard title={generateTitle} hint={generateHint}>
-            <div className="workbench-card-scroll custom-scrollbar">
-              {generate}
-              {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-            </div>
-            <div className="workbench-cta-row">
+            {generate}
+            <WorkbenchCta notice={notice}>
               {footer ?? (cta && onGenerate ? <Button variant="primary" onClick={onGenerate}>{cta}</Button> : null)}
-            </div>
+            </WorkbenchCta>
           </WorkbenchCard>
         </div>
         <VideoTaskList hint={taskHint} empty={taskEmpty} />

@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { Plus } from 'lucide-react'
+import { Plus, X } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { revokeVideo, type LocalVideo } from './useLocalVideo'
@@ -43,17 +43,20 @@ export function VideoUploadField({
           <Plus size={18} />
         </button>
         {file ? (
-          <button
-            type="button"
-            className="workbench-upload-slot workbench-upload-slot--filled"
-            title={file.name}
-            onClick={() => {
-              revokeVideo(file)
-              onChange(null)
-            }}
-          >
+          <div className="workbench-upload-slot workbench-upload-slot--filled" title={file.name}>
             <span className="workbench-video-name">{file.name}</span>
-          </button>
+            <button
+              type="button"
+              className="workbench-upload-remove"
+              aria-label={t.workbenchUploadRemove}
+              onClick={() => {
+                revokeVideo(file)
+                onChange(null)
+              }}
+            >
+              <X size={12} />
+            </button>
+          </div>
         ) : null}
       </div>
       {hint ? <p className="workbench-page-sub">{hint}</p> : null}
@@ -71,6 +74,7 @@ export function VideoUploadField({
             onNotice(t.workbenchVideoTooBig)
             return
           }
+          onNotice('')
           revokeVideo(file)
           onChange({ id: crypto.randomUUID(), name: next.name, url: URL.createObjectURL(next) })
         }}

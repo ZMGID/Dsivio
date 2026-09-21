@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { TextArea } from '../../../settings/public/controls'
-import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { CopyUploadField, revokeImages } from '../copy/CopyUploadField'
 import { ImagePlatformLine, ImageSizeFields } from './ImageStudio'
 import { useLocalImages } from './useLocalImages'
@@ -49,45 +49,42 @@ export function DetailImagePage() {
       </div>
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={t.workbenchDetailStep1} hint={t.workbenchDetailUploadHint}>
-          <div className="workbench-card-scroll custom-scrollbar">
-            <CopyUploadField
-              label={t.workbenchImageProduct}
-              required
-              max={10}
-              files={files}
-              onChange={setFiles}
-              onNotice={setNotice}
-            />
-            <CopyUploadField
-              label={t.workbenchImageRole}
-              optional
-              hint=""
-              max={3}
-              files={roles}
-              onChange={setRoles}
-              onNotice={setNotice}
-            />
-            <label className="workbench-field">
-              <span>
-                {t.workbenchDetailBrief}
-                <span className="workbench-required" aria-hidden="true">*</span>
-              </span>
-              <TextArea value={brief} onChange={setBrief} rows={5} placeholder={t.workbenchDetailBriefHint} />
-            </label>
-            <ImagePlatformLine />
-            <p className="workbench-page-sub">{t.workbenchDetailPlatformHint}</p>
-            <ImageSizeFields ratio={ratio} onRatio={setRatio} />
-            {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-            <p className="workbench-page-sub">{t.workbenchDetailNextHint}</p>
-          </div>
-          <div className="workbench-cta-row">
+          <CopyUploadField
+            label={t.workbenchImageProduct}
+            required
+            max={10}
+            files={files}
+            onChange={setFiles}
+            onNotice={setNotice}
+          />
+          <CopyUploadField
+            label={t.workbenchImageRole}
+            optional
+            hint=""
+            max={3}
+            files={roles}
+            onChange={setRoles}
+            onNotice={setNotice}
+          />
+          <label className="workbench-field">
+            <span>
+              {t.workbenchDetailBrief}
+              <span className="workbench-required" aria-hidden="true">*</span>
+            </span>
+            <TextArea value={brief} onChange={setBrief} rows={5} placeholder={t.workbenchDetailBriefHint} />
+          </label>
+          <ImagePlatformLine />
+          <p className="workbench-page-sub">{t.workbenchDetailPlatformHint}</p>
+          <ImageSizeFields ratio={ratio} onRatio={setRatio} />
+          <p className="workbench-page-sub">{t.workbenchDetailNextHint}</p>
+          <WorkbenchCta notice={notice}>
             <Button
               variant="primary"
               onClick={() => setNotice(files.length === 0 ? t.workbenchDetailNeedImage : t.workbenchDetailSoon)}
             >
               {t.workbenchDetailRecognize}
             </Button>
-          </div>
+          </WorkbenchCta>
         </WorkbenchCard>
         <WorkbenchCard title={t.workbenchDetailPreview}>
           <div className="workbench-phone">

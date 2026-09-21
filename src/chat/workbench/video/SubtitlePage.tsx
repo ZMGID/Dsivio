@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Captions } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
-import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { VideoUploadField } from './VideoUploadField'
 import { useLocalVideo } from './useLocalVideo'
 
@@ -20,29 +20,26 @@ export function SubtitlePage() {
       crumb={t.workbenchGroupVideo}
       crumbCurrent={t.workbenchSubsCrumb}
       title={t.workbenchSubsTitle}
-      actions={<span className="workbench-capsule">{video ? video.name : t.workbenchSubsWait}</span>}
+      actions={<span className="workbench-capsule" title={video?.name}>{video ? video.name : t.workbenchSubsWait}</span>}
     >
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={t.workbenchSubsPick} hint={t.workbenchSubsPickHint}>
-          <div className="workbench-card-scroll custom-scrollbar">
-            <VideoUploadField
-              label={t.workbenchSubsVideo}
-              required
-              hint={t.workbenchSubsVideoHint}
-              file={video}
-              onChange={setVideo}
-              onNotice={setNotice}
-            />
-            {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-          </div>
-          <div className="workbench-cta-row">
+          <VideoUploadField
+            label={t.workbenchSubsVideo}
+            required
+            hint={t.workbenchSubsVideoHint}
+            file={video}
+            onChange={setVideo}
+            onNotice={setNotice}
+          />
+          <WorkbenchCta notice={notice}>
             <Button
               variant="primary"
               onClick={() => setNotice(video ? t.workbenchSubsSoon : t.workbenchVideoNeedFile)}
             >
               {t.workbenchSubsGenerate}
             </Button>
-          </div>
+          </WorkbenchCta>
         </WorkbenchCard>
         <WorkbenchCard fill title={t.workbenchSubsResult} hint={t.workbenchSubsResultHint}>
           <WorkbenchEmpty icon={<Captions size={22} />} title={t.workbenchSubsEmpty}>

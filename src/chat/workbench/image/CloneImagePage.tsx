@@ -3,7 +3,7 @@ import { Copy } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { TextArea } from '../../../settings/public/controls'
-import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { CopyUploadField } from '../copy/CopyUploadField'
 import { ImageCountField, ImageSizeFields } from './ImageStudio'
 import { useLocalImages } from './useLocalImages'
@@ -71,10 +71,9 @@ export function CloneImagePage() {
               <span>{t.workbenchClonePrompt}</span>
               <TextArea value={prompt} onChange={setPrompt} rows={5} placeholder={t.workbenchClonePromptHint} />
             </label>
-            {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-            <div className="workbench-cta-row">
+            <WorkbenchCta notice={notice}>
               <Button onClick={analyze}>{t.workbenchCloneAnalyze}</Button>
-            </div>
+            </WorkbenchCta>
           </WorkbenchCard>
           <WorkbenchCard title={t.workbenchImageConfig} hint={t.workbenchCloneConfigHint}>
             <CopyUploadField
@@ -87,10 +86,9 @@ export function CloneImagePage() {
             />
             <ImageSizeFields ratio={ratio} onRatio={setRatio} />
             <ImageCountField count={count} onCount={setCount} />
-            {notice ? <p className="workbench-inline-note">{notice}</p> : null}
-            <div className="workbench-cta-row">
+            <WorkbenchCta notice={notice}>
               <Button variant="primary" onClick={generate}>{t.workbenchCloneGenerate}</Button>
-            </div>
+            </WorkbenchCta>
           </WorkbenchCard>
         </div>
         <WorkbenchCard fill title={t.workbenchImageResult} hint={t.workbenchCloneResultHint} extra={<span className="workbench-capsule">{sizeForImageRatio(ratio)}</span>}>
