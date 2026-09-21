@@ -694,16 +694,10 @@ fn spawn_open_command(target: &Path, kind: &str, mode: &str) -> Result<(), Strin
         command.arg("-R");
     }
     command.arg(target);
-    let output = command
-        .output()
-        .map_err(|e| format!("系统打开失败（macOS open）：{e}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "系统打开失败（macOS open）：{}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(())
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("系统打开失败（macOS open）：{e}"))
 }
 
 #[cfg(target_os = "windows")]
@@ -713,7 +707,10 @@ fn spawn_open_command(target: &Path, kind: &str, mode: &str) -> Result<(), Strin
     let target_text = if let Some(unc) = target_text.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{unc}")
     } else {
-        target_text.strip_prefix(r"\\?\").unwrap_or(&target_text).to_string()
+        target_text
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&target_text)
+            .to_string()
     };
     let mut command = Command::new("explorer.exe");
     if mode == "reveal" && kind == "file" {

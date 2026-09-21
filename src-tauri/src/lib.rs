@@ -13,10 +13,15 @@ pub mod dock;
 pub mod external_agents;
 pub mod fonts;
 pub mod image_studio;
+pub mod video_studio;
+pub mod studio;
+pub mod market;
 pub mod lens;
 pub mod lens_commands;
 #[cfg(any(target_os = "macos", test))]
 mod macos_hang_watchdog;
+#[cfg(target_os = "macos")]
+pub mod macos_ocr;
 pub mod mcp;
 pub mod native_tools;
 pub mod notes;
@@ -24,7 +29,6 @@ pub mod offline_models;
 mod opencode_free;
 pub mod path_env;
 pub mod plugins;
-pub mod market;
 pub mod proc;
 pub mod prompts;
 pub mod provider_oauth;
@@ -36,16 +40,15 @@ pub mod sck;
 pub mod screenshot;
 pub mod self_config;
 pub mod settings;
-mod settings_backup;
 pub mod shortcuts;
 pub mod skills;
 pub mod state;
-pub mod studio;
 pub mod updates;
 pub mod usage;
 pub mod utils;
-pub mod video_studio;
 pub mod web_search;
+#[cfg(any(test, target_os = "macos"))]
+pub(crate) mod window_focus;
 pub mod windows;
 #[cfg(target_os = "windows")]
 pub mod windows_ocr;
@@ -77,7 +80,7 @@ use windows::{ensure_overlay_panel, restore_previous_frontmost_app};
 const AUTOSTART_ARG: &str = "--from-autostart";
 
 #[cfg(target_os = "macos")]
-const USER_WINDOW_LABELS: &[&str] = &["chat", "main"];
+const USER_WINDOW_LABELS: &[&str] = &["chat", "translator"];
 
 #[cfg(target_os = "macos")]
 fn first_visible_user_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
@@ -197,15 +200,15 @@ pub fn run() {
                     }
                     return;
                 }
-                // 翻译窗（main）若仍收到默认 CloseRequested，必须拦截并走安全销毁：先恢复
+                // 翻译浮层若仍收到默认 CloseRequested，必须拦截并走安全销毁：先恢复
                 // TaoWindow 原类，再 destroy WebView/NSPanel，同时把前台交还给打开它之前的 App。
                 #[cfg(target_os = "macos")]
-                if window.label() == "main" {
+                if window.label() == windows::TRANSLATOR_WINDOW_LABEL {
                     api.prevent_close();
                     let handle = window.app_handle();
                     let st = handle.state::<AppState>();
-                    restore_previous_frontmost_app(handle, &st.prev_frontmost_pid_main);
-                    if let Some(webview_window) = handle.get_webview_window("main") {
+                    restore_previous_frontmost_app(handle, st.frontmost_apps().translator());
+                    if let Some(webview_window) = handle.get_webview_window(windows::TRANSLATOR_WINDOW_LABEL) {
                         windows::destroy_overlay_window(&webview_window);
                     }
                     return;
@@ -227,6 +230,9 @@ pub fn run() {
             }
             tauri::WindowEvent::Destroyed => {
                 let label = window.label();
+                if let Some(flows) = window.app_handle().try_state::<connectors::OAuthFlows>() {
+                    flows.cancel_window(label);
+                }
                 chat::notification_viewing::clear_window(label);
                 if crate::chat::popout::is_popout_label(label) {
                     crate::chat::popout::on_popout_destroyed(window.app_handle(), label);
@@ -244,11 +250,9 @@ pub fn run() {
             _ => {}
         })
         .setup(|app| {
-            if let Err(error) = video_studio::initialize(app.handle()) { eprintln!("Video plugin initialization failed: {error}"); }
+            if let Err(error) = video_studio::initialize(app.handle()) { eprintln!("Video initialization failed: {error}"); }
+            if let Err(error) = image_studio::initialize_skill_workspace(app.handle()) { eprintln!("Image initialization failed: {error}"); }
             let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
-            if let Err(error) = image_studio::initialize_skill_workspace(app.handle()) {
-                eprintln!("Image Skill workspace initialization failed: {error}");
-            }
 
             // Windows：退出后台执行速度节流（EcoQoS）。无可见窗口时进程会被 Win11 当后台空闲
             // 进程节流,饿死全局热键的 WM_HOTKEY 消息泵 → 热键失灵（托盘点击是 shell 唤醒故仍
@@ -286,7 +290,7 @@ pub fn run() {
                         let Some(state) = sweeper.try_state::<AppState>() else {
                             continue;
                         };
-                        state.sweep_idle_external_live_sessions(
+                        state.external_live_sessions().sweep_idle(
                             crate::external_agents::session::live::LIVE_SESSION_IDLE_TTL,
                         );
                     }
@@ -295,6 +299,57 @@ pub fn run() {
 
             let mut settings = load_settings(&app.handle());
             video_studio::sync_settings(&mut settings);
+            // 非破坏性初始化：保留用户助手，成功持久化后标记已完成。
+            if !settings.builtin_assistants_seeded_v1 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v2(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v1 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!(
+                                "Failed to persist settings after seeding built-in assistants: {err}"
+                            );
+                            settings.builtin_assistants_seeded_v1 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to seed built-in assistants: {err}"),
+                }
+            }
+            // 非破坏性内置专家迁移（v2）：按 id upsert 新一批内置专家（升级 4 个 + 新增前端/翻译/文档），
+            // 保留用户自建。已 seed v1 的老用户靠它拿到新专家；新装用户 v1 已装全套，此处为幂等 no-op。
+            // 靠 settings flag 幂等，成功后立即写盘；持久化失败则回滚 flag 下次重试（merge 保留用户项，重试安全）。
+            if !settings.builtin_assistants_seeded_v2 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v2(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v2 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!(
+                                "Failed to persist settings after merging built-in assistants v2: {err}"
+                            );
+                            settings.builtin_assistants_seeded_v2 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to merge built-in assistants v2: {err}"),
+                }
+            }
+            // 非破坏性内置专家迁移（v3）：按 id upsert 补齐产品/法务/财务/教学/审查/求职，
+            // 保留用户自建。已 seed v2 的老用户靠它拿到新专家；新装用户 v1 已装全套，此处为幂等 no-op。
+            if !settings.builtin_assistants_seeded_v3 {
+                let now = chrono::Local::now().timestamp();
+                match chat::storage::merge_builtin_assistants_v3(&app.handle(), now) {
+                    Ok(()) => {
+                        settings.builtin_assistants_seeded_v3 = true;
+                        if let Err(err) = settings::persist_settings(&app.handle(), &settings) {
+                            eprintln!(
+                                "Failed to persist settings after merging built-in assistants v3: {err}"
+                            );
+                            settings.builtin_assistants_seeded_v3 = false;
+                        }
+                    }
+                    Err(err) => eprintln!("Failed to merge built-in assistants v3: {err}"),
+                }
+            }
             if let Err(err) = initialize_launch_at_startup(&app.handle(), &mut settings) {
                 eprintln!("Failed to initialize launch-at-startup setting: {err}");
             }
@@ -319,10 +374,13 @@ pub fn run() {
                 settings,
                 usage_dir,
                 build_http_client(),
+                #[cfg(target_os = "macos")]
+                macos_ocr::MacOcrClient::new(&app.handle()),
                 offline_models.clone(),
                 rapidocr::RapidOcrClient::new(offline_models),
             ));
             app.manage(chat::repository::ConversationRepository::default());
+            app.manage(connectors::OAuthFlows::default());
 
             // 崩溃残留的中断草稿日志:按每个 message_id 的最后一行合并回会话文件后删除。
             // setup 阶段不可能有活跃 run,没有并发写冲突。
@@ -446,6 +504,25 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            market::market_command,
+            studio::studio_draft,
+            studio::library::studio_task_library,
+            studio::library::studio_task_file_action,
+            video_studio::video_studio,
+            image_studio::image_studio_bootstrap,
+            image_studio::image_studio_get,
+            image_studio::image_studio_save,
+            image_studio::image_studio_save_plans,
+            image_studio::image_studio_import,
+            image_studio::image_studio_config,
+            image_studio::image_studio_preview,
+            image_studio::image_studio_action,
+            image_studio::image_studio_template_import,
+            image_studio::image_studio_template_save,
+            image_studio::image_studio_template_export,
+            image_studio::image_studio_freeze,
+            image_studio::image_studio_export,
+            image_studio::image_studio_open,
             provider_oauth::provider_oauth_start,
             provider_oauth::provider_oauth_poll,
             provider_oauth::provider_oauth_cancel,
@@ -555,6 +632,9 @@ pub fn run() {
             chat::commands::context::chat_compress_context,
             chat::commands::context::chat_clear_context,
             chat::commands::interaction::chat_take_external_sends,
+            chat::commands::interaction::chat_ack_external_send,
+            chat::commands::interaction::chat_renew_external_sends,
+            chat::commands::interaction::chat_release_external_sends,
             chat::commands::interaction::chat_set_agent_plan_mode,
             chat::commands::interaction::chat_execute_agent_plan,
             chat::goal::chat_get_goal,
@@ -574,14 +654,16 @@ pub fn run() {
             chat::commands::interaction::chat_steer_message,
             chat::commands::interaction::chat_follow_up_message,
             chat::commands::attachments::chat_read_attachment,
+            chat::artifacts::chat_artifacts_list,
+            chat::artifacts::chat_artifact_action,
             chat::commands::attachments::chat_open_attachment,
             chat::commands::attachments::chat_reveal_attachment,
             chat::commands::attachments::chat_open_generated_artifact,
             chat::commands::attachments::chat_reveal_generated_artifact,
             chat::commands::attachments::chat_save_pasted_image,
             chat::commands::attachments::chat_save_pasted_attachment,
+            chat::commands::attachments::chat_inspect_attachment_paths,
             chat::commands::attachments::chat_read_clipboard_files,
-            chat::commands::attachments::chat_classify_attachment_paths,
             chat::commands::attachments::chat_read_clipboard,
             chat::commands::attachments::chat_write_clipboard_text,
             chat::commands::mutations::chat_delete_conversation,
@@ -653,9 +735,9 @@ pub fn run() {
             mcp::registry::chat_mcp_reload_server,
             mcp::registry::chat_mcp_warmup,
             connectors::connector_oauth_connect,
+            connectors::connector_oauth_cancel,
             connectors::obsidian::list_obsidian_vaults_cmd,
             plugins::plugins_list,
-            market::market_command,
             plugins::packages::plugin_packages_list,
             plugins::packages::plugin_packages_import,
             plugins::packages::plugin_packages_set_enabled,
@@ -668,24 +750,6 @@ pub fn run() {
             plugins::plugins_set_enabled,
             plugins::plugins_uninstall,
             notes::notes_list,
-            studio::studio_draft,
-            studio::library::studio_task_library,
-            studio::library::studio_task_file_action,
-            video_studio::video_studio,
-            image_studio::image_studio_bootstrap,
-            image_studio::image_studio_get,
-            image_studio::image_studio_save,
-            image_studio::image_studio_save_plans,
-            image_studio::image_studio_import,
-            image_studio::image_studio_config,
-            image_studio::image_studio_preview,
-            image_studio::image_studio_action,
-            image_studio::image_studio_template_import,
-            image_studio::image_studio_template_save,
-            image_studio::image_studio_template_export,
-            image_studio::image_studio_freeze,
-            image_studio::image_studio_export,
-            image_studio::image_studio_open,
             notes::notes_read,
             notes::notes_create,
             notes::notes_update,
@@ -832,7 +896,7 @@ pub fn run() {
                     let closed = tauri::async_runtime::block_on(async {
                         tokio::time::timeout(
                             std::time::Duration::from_secs(3),
-                            state.close_all_external_live_sessions(),
+                            state.external_live_sessions().close_all(),
                         )
                         .await
                     });
@@ -841,10 +905,12 @@ pub fn run() {
                     }
                     // 杀掉所有跟踪中的后台 run_command 进程组（跨 turn 存活，只在这里或
                     // 显式 kill_background 才清理），删除其 per-job 日志，避免孤儿进程/文件。
-                    let killed = state.kill_all_background_commands();
+                    let killed = state.background_commands_handle().kill_all();
                     if killed > 0 {
                         eprintln!("Killed {killed} background command process group(s) on exit.");
                     }
+                    #[cfg(target_os = "macos")]
+                    state.macos_ocr.shutdown();
                     // OfficeCLI live preview (`officecli watch`) 等插件附属进程
                     crate::plugins::stop_all_previews();
                 }

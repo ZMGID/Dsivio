@@ -70,10 +70,12 @@ fn truncate(s: &str, max: usize) -> String {
 
 #[cfg(target_os = "windows")]
 fn windows_sender_identity(bundle_id: &str) -> (String, &'static str) {
-    // Windows caches the first executable's friendly name for a notification
-    // handler. Use a separate stable identity so older executable metadata
-    // does not override the current product name.
-    (format!("{bundle_id}.notifications"), "dsivio")
+    // The bundle AUMID was also used by pre-Kivio development builds. Windows
+    // caches the first executable's friendly name for a notification handler,
+    // so continuing to reuse it can label current notifications as `dsivio`.
+    // Give notifications their own stable identity to keep branding independent
+    // from old executable metadata and future packaging changes.
+    (format!("{bundle_id}.notifications"), "Kivio")
 }
 
 #[cfg(target_os = "windows")]
@@ -211,7 +213,7 @@ mod tests {
     fn windows_sender_identity_is_branded_and_separate_from_legacy_app_cache() {
         let (app_id, display_name) = super::windows_sender_identity("com.zmair.kivio");
         assert_eq!(app_id, "com.zmair.kivio.notifications");
-        assert_eq!(display_name, "dsivio");
+        assert_eq!(display_name, "Kivio");
     }
 
     #[test]
@@ -225,7 +227,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_script_activates_the_winrt_xml_type_explicitly() {
-        let script = windows_script("com.zmair.kivio", "dsivio", "<toast />");
+        let script = windows_script("com.zmair.kivio", "Kivio Desktop", "<toast />");
         assert!(script.contains(
             "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]::new()"
         ));
@@ -293,7 +295,7 @@ mod tests {
             super::xml_escape(&body)
         );
         let toast = super::windows_toast_script(&xml);
-        let full_script = windows_script("com.zmair.kivio", "dsivio", &xml);
+        let full_script = windows_script("com.zmair.kivio", "Kivio Desktop", &xml);
         let script = format!(
             "$ErrorActionPreference = 'Stop'; \
              [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api, type ModelProvider, type ProviderOAuthLogin } from '../api/tauri'
 import { Button } from '../components/Button'
 import { FieldBlock, Select } from './components'
-import type { Lang } from './i18n'
+import type { Lang } from '../components/i18n'
 import { ProviderAccountIdentity } from './ProviderAccountIdentity'
 
 export function ProviderOAuthPanel({ provider, lang, onUpdateProvider }: {
@@ -11,7 +11,7 @@ export function ProviderOAuthPanel({ provider, lang, onUpdateProvider }: {
   onUpdateProvider: (id: string, updates: Partial<ModelProvider>) => void
 }) {
   const zh = lang === 'zh'
-  const auth = provider.request?.oauth
+  const auth = provider.request.oauth
   const [login, setLogin] = useState<ProviderOAuthLogin | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -66,7 +66,7 @@ export function ProviderOAuthPanel({ provider, lang, onUpdateProvider }: {
     const run = ++generation.current
     setBusy(true); setError(''); setNotice('')
     try {
-      const next = await api.providerOAuthStart(auth.provider, provider.request?.useSystemProxy !== false)
+      const next = await api.providerOAuthStart(auth.provider, provider.request.useSystemProxy)
       if (generation.current !== run) { await api.providerOAuthCancel(next.loginId); return }
       loginRef.current = next
       setLogin(next)
@@ -130,7 +130,7 @@ export function ProviderOAuthPanel({ provider, lang, onUpdateProvider }: {
       {login && <div className="mt-3 space-y-2 rounded-lg border border-[var(--border)] p-3">
         <p className="text-sm">{login.userCode
           ? (zh ? '在授权页面输入设备码：' : 'Enter this device code on the authorization page:')
-          : (zh ? '请在浏览器中完成 Google 登录，完成后会自动返回授权结果。' : 'Complete Google sign-in in your browser. dsivio will receive the authorization automatically.')}</p>
+          : (zh ? '请在浏览器中完成 Google 登录，完成后会自动返回授权结果。' : 'Complete Google sign-in in your browser. Kivio will receive the authorization automatically.')}</p>
         {login.userCode && <code className="block select-text text-lg tracking-widest">{login.userCode}</code>}
         <button type="button" className="text-sm text-indigo-500 hover:underline" onClick={() => void api.openExternal(login.verificationUrl).catch(err => setError(String(err)))}>
           {zh ? '打开授权页面 ↗' : 'Open authorization page ↗'}

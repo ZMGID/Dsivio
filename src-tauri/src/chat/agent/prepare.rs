@@ -18,8 +18,8 @@ pub fn chat_tools_capable(
 }
 
 /// Apply the active assistant snapshot's explicit MCP server policy.
-/// Native and Skill tools are unaffected. Prompt-only assistants keep both lists
-/// empty, which means they inherit the user's globally enabled tools.
+/// Native and Skill tools are unaffected; `None` means unrestricted, while an
+/// empty `mcp_server_ids` list intentionally disables every MCP tool.
 pub fn apply_assistant_mcp_restrictions(
     tools: &mut Vec<ChatToolDefinition>,
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
@@ -27,9 +27,6 @@ pub fn apply_assistant_mcp_restrictions(
     let Some(assistant) = assistant_snapshot else {
         return;
     };
-    if assistant.mcp_server_ids.is_empty() {
-        return;
-    }
     tools.retain(|tool| {
         if tool.source != "mcp" {
             return true;
@@ -44,8 +41,8 @@ pub fn apply_assistant_mcp_restrictions(
     });
 }
 
-/// A non-empty assistant list restricts skills. Empty means a prompt-only
-/// assistant and inherits the user's global skill settings.
+/// 某技能在当前对话是否可用：全局已启用 **且**（无助手 = 不限；有助手 = 在其 skill_ids 白名单内）。
+/// 空 skill_ids = 该助手不可用任何技能。
 pub fn skill_allowed_for_conversation(
     chat_tools: &crate::settings::ChatToolsConfig,
     assistant_snapshot: Option<&ChatAssistantSnapshot>,
@@ -56,10 +53,8 @@ pub fn skill_allowed_for_conversation(
         return false;
     }
     match assistant_snapshot {
-        Some(assistant) if !assistant.skill_ids.is_empty() => {
-            skills::skill_id_in_allowlist(skill_id, &assistant.skill_ids)
-        }
-        _ => true,
+        Some(assistant) => assistant.skill_ids.iter().any(|id| id == skill_id),
+        None => true,
     }
 }
 
@@ -93,13 +88,15 @@ pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
     // Builtin name set = static native registry (17 native + todo/ask_user)
     // plus the non-native builtin sources listed here.
     const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image", "mixer_video_analysis"];
-    // 模型按 wire 名（保留名别名）调用——反查回内部名再比对注册表。
+    // 模型按 wire 名（保留名别名）或改名前的旧名调用——规整到现名再比对注册表。
     let function_name = crate::mcp::types::resolve_reserved_wire_alias(function_name);
+    let canonical = crate::mcp::types::canonical_tool_name(function_name);
     let is_builtin = crate::mcp::native_registry::find_entry(function_name).is_some()
+        || crate::mcp::native_registry::find_entry(canonical).is_some()
         || EXTRA_BUILTIN_NAMES.contains(&function_name);
     if is_builtin {
         Some(format!(
-            "Kivio tool `{function_name}` is not enabled for this chat. Do not call it again; answer using the available context and enabled tools only."
+            "Kivio tool `{function_name}` is not enabled in the current tool set, so this call was not executed. This applies to this tool only; it does not establish a filesystem restriction or that other tools are unavailable. Continue with a currently declared tool if it can perform the requested work. If none can, explain the specific missing capability without inventing a permission or provider error."
         ))
     } else {
         None
@@ -472,7 +469,7 @@ pub fn build_chat_system_prompt_with_segments(
         );
     }
 
-    // Chat 没有文件/shell/skill 激活：这些段会教模型去 list_dir / run_command，
+    // Chat 没有文件/shell/skill 激活：这些段会教模型去 read / bash，
     // 和「写文件 / Shell 只在 Agent 可用」矛盾，故整段跳过。
     if !is_chat_runtime {
         if let Some(path) = obsidian_vault_path
@@ -482,8 +479,8 @@ pub fn build_chat_system_prompt_with_segments(
             let text = format!(
                 "Obsidian vault path: {path}\n\
                  This is a local Obsidian markdown vault. Use the native file tools: \
-                 list_dir to browse (entries include modified time), glob_files to find *.md by name, \
-                 search_files to search by content/keyword, read_file to read a note; \
+                 read with the vault directory path to browse, glob with that path to find *.md by name, \
+                 grep with that path to search by content/keyword, read with a note's path to read it. Use only tools declared in this request; \
                  notes cross-reference each other via [[wikilink]].\n\
                  For Obsidian syntax or file-format details, activate the obsidian-markdown / \
                  obsidian-bases / json-canvas / obsidian-cli skills."
@@ -984,17 +981,20 @@ pub(crate) fn tool_matches_recommended_name(tool: &ChatToolDefinition, recommend
     if recommended.is_empty() {
         return false;
     }
-    // 旧名归一化：persona/skill 白名单里写的旧工具名（find/ls/todo_update/list_background）
-    // 规整到现名，避免改名后被静默剔除。
-    let recommended = crate::mcp::types::canonical_tool_name(recommended);
-    tool.name == recommended
-        || tool.id == recommended
-        || tool.openai_tool_name() == recommended
+    // 只规整白名单条目，不规整工具自己的名字：MCP 完全可以真有一个叫
+    // `read_file` 的工具，不能被当成内置 `read`。条目是旧名时对上现名；
+    // 条目与工具都仍是旧名时也对上。
+    let canonical_recommended = crate::mcp::types::canonical_tool_name(recommended);
+    let wire = tool.openai_tool_name();
+    let matches_name =
+        |candidate: &str| candidate == recommended || candidate == canonical_recommended;
+    matches_name(&tool.name)
+        || matches_name(&tool.id)
+        || matches_name(&wire)
         || tool
             .server_id
             .as_deref()
-            .map(|server_id| format!("{server_id}:{}", tool.name) == recommended)
-            .unwrap_or(false)
+            .is_some_and(|server_id| matches_name(&format!("{server_id}:{}", tool.name)))
 }
 
 fn workbench_location_prompt(
@@ -1063,7 +1063,12 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     let mut bullets: Vec<String> = Vec::new();
     if has_file_cwd {
         bullets.push(
-            "Relative file paths and omitted command cwd resolve from the current default workbench (the bound project root for project conversations, or the per-conversation workbench otherwise). Explicit absolute or ~/ paths remain unrestricted and always take precedence.".to_string(),
+            "Relative file paths and omitted command cwd resolve from the current default workbench (the bound project root for project conversations, or the per-conversation workbench otherwise). Explicit absolute or ~/ paths can target locations outside it; normal OS permissions, tool approvals, and user constraints still apply. An empty workbench or search result does not show what exists elsewhere. Use the user's explicit path as given; when searching another directory, pass it as the search tool's path.".to_string(),
+        );
+    }
+    if has("read") {
+        bullets.push(
+            "For a user-provided disk file, call read with path directly; disk files do not need an artifact ID or registration with present_artifacts. Use read with artifact_ids only for exact art_ IDs already returned by tools. File reading, artifact registration, and showing a file to the user are separate operations.".to_string(),
         );
     }
     if has_write || has_edit {
@@ -1110,7 +1115,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
             "Runtime environment: {os_name}; bash runs via {shell_name}. Match that shell's syntax ({shell_syntax_hint}). Each bash call is a fresh process — cwd does NOT persist across calls; switch directories with the `cwd` parameter, not a prior `cd`. To run multi-line or quoted code, write it to a file with write and run that — do not cram it into inline commands like `python -c \"...\"` (inline quotes are fragile across shells). When a tool returns a hard rejection, change strategy instead of retrying variants of the same action; never re-run a failed command unchanged; don't drop one-off probe or cleanup scripts into the project."
         ));
         bullets.push(
-            "bash runs on the host shell from the current default workbench; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Finite commands (builds, tests, image-generation batches) stay in the foreground: bash waits until the process exits. Put parallel work inside one command (a script --concurrency flag, etc.), not as N bash jobs. Pass timeout_ms only if you want the process killed at that deadline. Never-ending servers such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Explain and get confirmation before destructive, network, or environment-changing commands. Run a skill's bundled scripts with run_command; never use host pip unless the user explicitly asked for a host Python install.".to_string(),
+            "bash runs on the host shell from the current default workbench; non-zero exit means failure. Paths with spaces must use the `cwd` parameter—never `cd path && command`; do not combine `cwd` with a leading `cd ... &&` prefix. Finite commands (builds, tests, image-generation batches) stay in the foreground: bash waits until the process exits. Put parallel work inside one command (a script --concurrency flag, etc.), not as N bash jobs. Pass timeout_ms only if you want the process killed at that deadline. Never-ending servers such as `npm run dev`, `tauri dev`, and `vite` start in the background automatically and return a job_id immediately; do not start the same dev server twice. Obey user constraints and obtain any required authorization for destructive, network, or environment-changing commands. Run a skill's bundled scripts with bash; never use host pip unless the user explicitly asked for a host Python install.".to_string(),
         );
         bullets.push(
             "Background commands (bash with background:true, or auto-detected never-ending servers): the call returns a job_id immediately. Inspect with bash_output (pass the job_id; default wait ~30s; use next_offset for the next read). Do not background a command that will exit. List jobs with bash_output (no job_id), and stop one with kill_background. Status in history may be stale, so refresh once with bash_output before reporting a background command's result. Background commands survive across turns until you kill them or the app exits, so kill_background a dev server when you no longer need it.".to_string(),
@@ -1144,7 +1149,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     }
     if has_image_generation {
         bullets.push(
-            "For image generation or editing requests, prefer the `dsimage` Skill: if it is listed in Agent Skills, activate it first and follow its workflow instead of calling mixer_generate_image directly. Use mixer_generate_image only when dsimage is unavailable or disabled, or when the active dsimage instructions explicitly require that tool. When falling back to mixer_generate_image, pass paths or artifact_ids to edit existing images; this turn's attached images are used automatically if omitted. Never merely describe an image when an enabled path can produce it.".to_string(),
+            "To create or edit an image, call mixer_generate_image using the argument examples in that tool's description.".to_string(),
         );
     }
     if has_advisor {
@@ -1158,7 +1163,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
         );
     } else if has("automation_list") {
         bullets.push(
-            "You can inspect automations with automation_list / automation_get / automation_runs. Creating or editing graphs requires dsivio Agent (automation_upsert).".to_string(),
+            "You can inspect automations with automation_list / automation_get / automation_runs. Creating or editing graphs requires Kivio Agent (automation_upsert).".to_string(),
         );
     }
     if has_write || has_edit || has_bash {
@@ -1819,13 +1824,13 @@ mod tests {
     }
 
     #[test]
-    fn prompt_only_assistant_inherits_global_mcp_tools() {
+    fn assistant_empty_mcp_list_drops_all_mcp_tools() {
         let assistant = test_assistant_snapshot(vec![], vec![]);
         let mut tools = vec![crate::mcp::types::native_web_fetch_tool(), test_mcp_tool()];
 
         apply_assistant_mcp_restrictions(&mut tools, Some(&assistant));
 
-        assert!(tools.iter().any(|t| t.source == "mcp"));
+        assert!(tools.iter().all(|t| t.source != "mcp"));
         assert!(tools.iter().any(|t| t.name == "web_fetch"));
     }
 
@@ -1860,34 +1865,6 @@ mod tests {
             None,
             "pdf",
             false
-        ));
-
-        let prompt_only = test_assistant_snapshot(vec![], vec![]);
-        assert!(skill_allowed_for_conversation(
-            &chat_tools,
-            Some(&prompt_only),
-            "pdf",
-            false
-        ));
-    }
-
-    #[test]
-    fn skill_allowed_matches_packaged_plugin_skill_ids() {
-        let chat_tools = crate::settings::ChatToolsConfig::default();
-        let assistant = test_assistant_snapshot(vec![], vec!["h3-prompt-writing"]);
-        let packaged = "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-h3-prompt-writing";
-
-        assert!(skill_allowed_for_conversation(
-            &chat_tools,
-            Some(&assistant),
-            packaged,
-            false,
-        ));
-        assert!(!skill_allowed_for_conversation(
-            &chat_tools,
-            Some(&assistant),
-            "pkg-42df724b-34e1-47b8-aa2c-6c738b09d280-ecom-h3-video",
-            false,
         ));
     }
 
@@ -1926,11 +1903,17 @@ mod tests {
 
         assert!(feedback.contains("not enabled"));
         assert!(feedback.contains("web_search"));
+        assert!(feedback.contains("this tool only"));
+        assert!(!feedback.contains("Do not call it again; answer"));
         assert!(disabled_builtin_tool_feedback("mcp__server__tool").is_none());
         // 模型按 wire 别名调用时同样识别为内置工具（保留名规避）。
         let alias_feedback = disabled_builtin_tool_feedback("search_web")
             .expect("wire alias resolves to the builtin tool");
         assert!(alias_feedback.contains("not enabled"));
+        let renamed = disabled_builtin_tool_feedback("read_file")
+            .expect("pre-rename file tool names resolve to the current builtin");
+        assert!(renamed.contains("not enabled"));
+        assert!(renamed.contains("this tool only"));
     }
 
     #[test]
@@ -1941,6 +1924,19 @@ mod tests {
         let prompt = native_tools_prompt(&names, false).expect("prompt");
         assert!(prompt.contains("search_web"), "{prompt}");
         assert!(!prompt.contains("web_search"), "{prompt}");
+    }
+
+    #[test]
+    fn file_guidance_distinguishes_disk_paths_from_artifact_ids() {
+        let prompt = native_tools_prompt(
+            &["read".into(), "bash".into(), "present_artifacts".into()],
+            false,
+        )
+        .unwrap();
+        assert!(!prompt.contains("with run_command"));
+        assert!(prompt.contains("read with path"));
+        assert!(prompt.contains("does not show what exists elsewhere"));
+        assert!(prompt.contains("do not need an artifact ID"));
     }
 
     #[test]
@@ -2220,15 +2216,11 @@ mod tests {
     }
 
     #[test]
-    fn native_tools_prompt_prefers_dsimage_before_mixer() {
+    fn native_tools_prompt_tells_model_to_edit_images_via_mixer() {
         let prompt =
             native_tools_prompt(&["mixer_generate_image".to_string()], false).expect("prompt");
         assert!(prompt.contains("mixer_generate_image"), "{prompt}");
-        assert!(prompt.contains("prefer the `dsimage` Skill"), "{prompt}");
-        assert!(prompt.contains("activate it first"), "{prompt}");
-        assert!(prompt.contains("only when dsimage is unavailable or disabled"), "{prompt}");
-        assert!(prompt.contains("edit"), "{prompt}");
-        assert!(prompt.contains("artifact_ids"), "{prompt}");
+        assert!(prompt.contains("argument examples"), "{prompt}");
     }
 
     #[test]

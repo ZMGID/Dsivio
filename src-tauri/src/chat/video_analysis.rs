@@ -382,7 +382,7 @@ pub(super) fn tool_record(
 /// tools, and image payloads. Active context boundaries were already applied by the builder.
 fn analysis_messages(messages: &[Value], language: &str) -> Vec<Value> {
     let prompt = if language.starts_with("zh") {
-        r#"你是 Dsivio 的视频分析模型。主对话模型看不到原视频，只能依据你提供的文字作答。你承担的是把视频转成尽量完整、可追溯的观察记录，而不是替主模型写一段简短摘要。信息一旦被你省略，主模型就无法恢复。
+        r#"你是 Kivio 的视频分析模型。主对话模型看不到原视频，只能依据你提供的文字作答。你承担的是把视频转成尽量完整、可追溯的观察记录，而不是替主模型写一段简短摘要。信息一旦被你省略，主模型就无法恢复。
 
 默认详细拆解：即使用户只说「看看这个视频」「大概什么意思」，也要保留完整的中间分析，不要自行压缩成几句概括。用户明确要求简短时，由主模型缩短最终答复；你的观察记录仍应保留必要细节。结合最新问题安排重点；用户问局部时重点深挖该部分，并保留理解它所需的上下文。不靠重复、空泛形容词或猜测凑长度。
 

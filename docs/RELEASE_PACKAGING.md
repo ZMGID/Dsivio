@@ -1,10 +1,10 @@
 # Release Packaging
 
-This document is the release checklist for Dsivio installers (historical releases used Kivio Desktop). Do not publish a new release only from memory; follow this file.
+This document is the required release checklist for Kivio Desktop installers. Do not publish a new release only from memory; follow this file.
 
 ## Current Packaging Flow
 
-Dsivio is packaged by Tauri. Current product name and binary are `dsivio`; the application identifier remains `com.zmair.kivio`. Historical asset names and README layout examples below must be checked against current configuration before a release.
+Kivio Desktop is packaged by Tauri.
 
 Local packaging (debug / inspect only — published installers come from GitHub Actions):
 
@@ -18,14 +18,19 @@ npm run build
 
 `npm run build` runs:
 
-1. `npm run build:video-runtime` prepares the bundled runtime, then `npm run package:check` and `npm run icons:check` verify versions, resources and Windows icons.
-2. `npm run protocol:check`
-   - Verifies generated TypeScript and JSON Schemas against the Rust protocol.
-3. `tauri build`
-   - Runs `beforeBuildCommand` from `src-tauri/tauri.conf.json`: `npm run build:video-runtime && npm run build:ui`.
-   - Prepares bundled Python / Node / media tools and MCP dependencies; see [video runtime build and verification](video-studio.md#内置运行环境构建).
+1. `npm run package:check`
+   - Verifies app/lockfile versions, MSI version inheritance, and resource mappings.
+2. `npm run icons:check`
+   - Verifies Windows assets against their unpadded source without changing macOS icons.
+3. `npm run build:swift`
+   - Builds the macOS Swift sidecars.
+   - On non-macOS platforms, creates stub binaries so Tauri `externalBin` validation passes.
+4. `npm run protocol:check`
+   - Verifies committed chat protocol artifacts.
+5. `tauri build`
+   - Runs `beforeBuildCommand` from `src-tauri/tauri.conf.json`, currently `npm run build:ui`.
    - Vite writes the production frontend to `dist/`.
-   - Tauri packages `dist/`, configured `resources`, and platform icons into DMG / MSI / NSIS bundles.
+   - Tauri packages `dist/`, configured `externalBin` files, configured `resources`, and platform icons into DMG / MSI / NSIS bundles.
 
 GitHub release packaging (this is the official path — do not build installers locally):
 
@@ -40,14 +45,18 @@ GitHub release packaging (this is the official path — do not build installers 
    ```
    Pushing the `v*` tag is what starts packaging. To rebuild an existing tag after a workflow change:
    ```bash
-   gh workflow run release.yml --repo ZMGID/Dsivio --ref main -f tag=vX.Y.Z -f ref=vX.Y.Z
+   gh workflow run release.yml --repo ZMGID/kivio --ref main -f tag=vX.Y.Z -f ref=vX.Y.Z
    ```
-5. `.github/workflows/release.yml` publishes only the Windows x64 NSIS installer, `dsivio_X.Y.Z_x64-setup.exe`.
-   The portable helper remains available for local use; the workflow does not publish portable ZIPs or macOS DMGs.
+5. `.github/workflows/release.yml` builds **both** installers on GitHub Actions and uploads them to the tag's release:
+   - `macos-latest` (Apple Silicon / aarch64) with `--bundles dmg` → `Kivio.Desktop_X.Y.Z_aarch64.dmg`
+   - `windows-latest` (x64) with `--bundles nsis` → `Kivio.Desktop_X.Y.Z_x64-setup.exe`
+   - After the NSIS build, Windows also packs `scripts/package-windows-portable.ps1` → `Kivio.Desktop_X.Y.Z_x64-portable.zip` (unzip and run `Kivio Desktop.exe`; no Start Menu). In-app update still downloads the NSIS installer.
+   - GitHub normalizes spaces in `productName` to dots in the asset file names.
+   - The macOS DMG is **unsigned** (no signing secrets configured); first launch needs right-click → Open, or `xattr -cr "/Applications/Kivio Desktop.app"`.
 6. Watch the workflow and inspect the release assets:
    ```bash
-   gh run watch <RUN_ID> --repo ZMGID/Dsivio --exit-status
-   gh release view vX.Y.Z --repo ZMGID/Dsivio --json url,assets
+   gh run watch <RUN_ID> --repo ZMGID/kivio --exit-status
+   gh release view vX.Y.Z --repo ZMGID/kivio --json url,assets
    ```
 7. **Replace the CI-generated release body with hand-written bilingual notes.** The
    workflow publishes the release with a boilerplate body ("Automated macOS…");
@@ -57,7 +66,7 @@ GitHub release packaging (this is the official path — do not build installers 
    matching `docs/releases/vX.Y.Z.md`, not an inline README changelog), and a `完整变更 / Full changelog: …compare/vPREV...vX.Y.Z`
    link:
    ```bash
-   gh release edit vX.Y.Z --repo ZMGID/Dsivio --notes-file docs/releases/vX.Y.Z.md
+   gh release edit vX.Y.Z --repo ZMGID/kivio --notes-file docs/releases/vX.Y.Z.md
    ```
 
 ## Resources That Must Be Packaged
@@ -125,7 +134,7 @@ The icon work and packaging/autostart fixes are not installed on the user's PC y
 
 | Area | Evidence / status | Required interactive check |
 | --- | --- | --- |
-| Identity and version | Stable `com.zmair.kivio`; version is checked against the Dsivio app configuration. Removed the stale MSI override; version checks run before builds. | Installed Apps, EXE properties, shortcut target after upgrade. |
+| Identity and version | Stable `com.zmair.kivio`; debug EXE reports Kivio Desktop / 2.9.9. Removed stale MSI 2.8.2 override; version checks run before builds. | Installed Apps, EXE properties, shortcut target after upgrade. |
 | Installation scope | NSIS uses `currentUser`; portable creates no Start Menu or uninstall entry. | Clean user install, upgrade and uninstall using CI artifacts; preserve user data. |
 | Resources | Installer and portable mappings include skills and licenses; full-content verification replaces presence-only confidence. | Inspect final ZIP as well as staged files. |
 | Startup | Windows now reads the OS startup state on launch; unrelated settings saves and rollback do not re-enable a Task Manager-disabled entry. Explicit preference changes still apply. | Enable, disable in Task Manager, reopen app and save an unrelated setting; entry must remain disabled. |
@@ -192,14 +201,12 @@ find "src-tauri/target/release/bundle/macos/Kivio Desktop.app/Contents/Resources
 For GitHub Releases:
 
 ```bash
-gh release view vX.Y.Z --repo ZMGID/Dsivio --json url,assets
+gh release view vX.Y.Z --repo ZMGID/kivio --json url,assets
 ```
 
 The release is not complete until the final installer contains loose `Contents/Resources/skills/pdf|docx|xlsx` Skill files.
 
 ## README format
-
-Historical layout reference: as of 2026-09-10, the root README is a placeholder and the English/Chinese companion files below are absent. These examples apply if the bilingual release pages are restored; they do not describe the current checkout. Developer navigation is in [the documentation index](README.md).
 
 GitHub's default landing page is **Chinese-first**, in the CC Switch README shape. Agents and humans updating the README for a release **must keep this layout**. Do not revert to the old short bilingual page (English-first header, inline “What's New” bullets, LINUX DO footer, no sponsor block, no star history).
 
@@ -220,7 +227,7 @@ Keep `README.md` and `README.en.md` in lockstep. A release bump that edits one m
 3. **❤️ 赞助 / Sponsor** — `<details open>`. Table: logo 150px in the left cell (`docs/sponsors/…`), sponsor-provided copy in the right cell. Copy is the sponsor's; do not append in-app setup steps (“设置 → 供应商 → 添加驱动…”). Contact line stays GitHub Issues + QQ.
 4. 为什么用 Kivio / Why Kivio
 5. 截图 / Screenshots (`docs/screenshots/`)
-6. 功能 / Features — link [Releases](https://github.com/ZMGID/Dsivio/releases) **and** `docs/releases/vX.Y.Z.md`. **This version pointer is the only README line a release should change.** Do not paste the changelog into README.
+6. 功能 / Features — link [Releases](https://github.com/ZMGID/kivio/releases) **and** `docs/releases/vX.Y.Z.md`. **This version pointer is the only README line a release should change.** Do not paste the changelog into README.
 7. 热键 / Hotkeys
 8. 下载安装 / Download
 9. 帮助 / Help — Releases + Issues + QQ only. **Do not** list PRDs, architecture drafts, Chat Probe, packaging checklists, perf baselines, `CLAUDE.md`, or the model-adapter contract. Those stay in the repo for contributors (see 开发).
@@ -235,13 +242,13 @@ Keep `README.md` and `README.en.md` in lockstep. A release bump that edits one m
 In `README.md` 功能:
 
 ```markdown
-完整记录见 [Releases](https://github.com/ZMGID/Dsivio/releases) · 当前版本说明：[vX.Y.Z](docs/releases/vX.Y.Z.md)
+完整记录见 [Releases](https://github.com/ZMGID/kivio/releases) · 当前版本说明：[vX.Y.Z](docs/releases/vX.Y.Z.md)
 ```
 
 In `README.en.md` Features:
 
 ```markdown
-Full history: [Releases](https://github.com/ZMGID/Dsivio/releases) · current notes: [vX.Y.Z](docs/releases/vX.Y.Z.md)
+Full history: [Releases](https://github.com/ZMGID/kivio/releases) · current notes: [vX.Y.Z](docs/releases/vX.Y.Z.md)
 ```
 
 Badges already resolve to `releases/latest`; do not hard-code the version in badge URLs.

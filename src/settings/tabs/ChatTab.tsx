@@ -4,7 +4,7 @@ import { homeDir, join } from '@tauri-apps/api/path'
 import { Select, Input, SettingRow, SettingsGroup, Toggle } from '../components'
 import { Button } from '../../components/Button'
 import { PromptField } from '../ScreenshotTranslationSettings'
-import type { I18n, Lang } from '../i18n'
+import type { I18n, Lang } from '../../components/i18n'
 import type { SettingsTab } from '../SettingsShell'
 import { AvatarField } from './AvatarField'
 import { ChatToolsStatusGroup } from './ChatToolsStatusGroup'
@@ -278,8 +278,8 @@ export function ChatTab({
         </SettingRow>
         <p className="kv-row-desc px-0 pb-1 pt-1">
           {lang === 'zh'
-            ? '以上开关仅影响 dsivio Chat。写文件 / Shell / Subagent 始终只在 dsivio Agent 中可用。'
-            : 'These toggles only affect dsivio Chat. Write / shell / sub-agents stay Agent-only.'}
+            ? '以上开关仅影响 Kivio Chat。写文件 / Shell / Subagent 始终只在 Kivio Agent 中可用。'
+            : 'These toggles only affect Kivio Chat. Write / shell / sub-agents stay Agent-only.'}
         </p>
       </SettingsGroup>
     </>

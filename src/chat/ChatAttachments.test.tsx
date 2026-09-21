@@ -75,17 +75,17 @@ describe('ChatAttachments 卡片形态', () => {
     expect(container.textContent).toContain('PDF')
   })
 
-  it('renders folder cards with a folder label', () => {
+  it('renders dropped folders as FOLDER cards', () => {
     const { container } = render(
       <ChatAttachments
         attachments={[
-          { id: 'd1', name: 'VE女包系列', type: 'folder', path: 'E:\\\\goods\\\\VE女包系列' },
+          { id: 'd1', name: 'testend', type: 'folder', path: 'E:\\ZM database\\testend' },
         ]}
         variant="composer"
       />,
     )
 
-    expect(container.textContent).toContain('VE女包系列')
+    expect(container.textContent).toContain('testend')
     expect(container.textContent).toContain('FOLDER')
   })
 })

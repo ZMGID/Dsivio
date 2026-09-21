@@ -18,20 +18,18 @@ import { homeDir } from '@tauri-apps/api/path'
 import { ChatMarkdown } from './ChatMarkdown'
 import {
   api,
-  defaultNativeTools,
   isTauriRuntime,
   type ChatToolsConfig,
   type Settings,
   type SkillDetail,
   type SkillMeta,
 } from '../api/tauri'
-import { getSettingsCached, refreshSettings, saveSettingsCached } from '../api/settingsCache'
-import { packageApi } from '../api/pluginPackages'
-import { Select, Toggle } from '../settings/components'
-import { useT, type I18n } from '../settings/i18n'
+import { getSettingsCached, updateSettingsCached } from '../api/settingsCache'
+import { Select, Toggle } from '../settings/public/controls'
+import { useT, type I18n } from '../components/i18n'
 import { Button, IconButton } from '../components/Button'
 import { SkillStoreBrowser } from './SkillStoreBrowser'
-import { SkillIcon } from '../settings/NavIcons'
+import { SkillIcon } from '../settings/public/icons'
 
 interface SkillCenterProps {
   /** Skill 启用状态 / 列表变化后通知 Chat 刷新其技能列表 */
@@ -50,22 +48,6 @@ const CLI_SKILL_SOURCES = [
 
 type CliSkillKey = (typeof CLI_SKILL_SOURCES)[number]['key']
 type CliSkillGroups = Record<CliSkillKey, SkillMeta[]>
-
-function defaultChatTools(): ChatToolsConfig {
-  return {
-    enabled: false,
-    servers: [],
-    skillScanPaths: [],
-    skillAutoMatch: true,
-    skillFallbackMode: 'progressive',
-    disabledSkillIds: [],
-    maxToolRounds: null,
-    toolTimeoutMs: 60_000,
-    mcpIdleTimeoutMs: 600_000,
-    approvalPolicy: 'readonly_auto_sensitive_confirm',
-    nativeTools: defaultNativeTools(),
-  }
-}
 
 function isBuiltinSkill(skill: SkillMeta): boolean {
   return skill.source === 'builtin'
@@ -355,53 +337,38 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
   const settingsRef = useRef<Settings | null>(null)
   const saveTimer = useRef<number | null>(null)
 
-  const chatTools = settings?.chatTools ?? defaultChatTools()
-  const disabledSkillIds = chatTools.disabledSkillIds ?? []
+  const chatTools = settings?.chatTools
+  const disabledSkillIds = chatTools?.disabledSkillIds ?? []
+  const skillScanPaths = chatTools?.skillScanPaths ?? []
 
   const refreshChatSkills = useCallback(async (scanPaths?: string[]) => {
     setSkillsLoading(true)
     setSkillError('')
     try {
+      if (isTauriRuntime()) {
+        try {
+          const plugins = await api.pluginsListCached()
+          const ids = new Set<string>()
+          for (const plugin of plugins) {
+            if (!plugin.enabled) continue
+            for (const skillId of plugin.skillIds ?? []) ids.add(skillId)
+          }
+          setEnabledPluginSkillIds(ids)
+        } catch {
+          /* 插件列表失败不挡技能列表 */
+        }
+      }
       const result = await api.chatSkillsList(
         scanPaths ?? settingsRef.current?.chatTools?.skillScanPaths,
         projectCwd || undefined,
       )
-      if (isTauriRuntime()) {
-        // Catalog plugins and manifest packages have separate owner switches.
-        // One unavailable list must not hide the other owner's enabled skills.
-        const [plugins, packages] = await Promise.allSettled([
-          api.pluginsListCached(),
-          packageApi.list(),
-        ])
-        const ids = new Set<string>()
-        if (plugins.status === 'fulfilled') {
-          for (const plugin of plugins.value) {
-            if (!plugin.enabled) continue
-            for (const skillId of plugin.skillIds ?? []) ids.add(skillId)
-          }
-        }
-        if (packages.status === 'fulfilled' && result.success) {
-          const activePrefixes = packages.value
-            .filter((plugin) => plugin.enabled && plugin.diagnostics.length === 0)
-            .map((plugin) => `pkg-${plugin.id}-`)
-          for (const skill of result.skills) {
-            if (skill.source === 'plugin' && activePrefixes.some((prefix) => skill.id.startsWith(prefix))) {
-              ids.add(skill.id)
-            }
-          }
-        }
-        setEnabledPluginSkillIds(ids)
-      }
       if (result.success) {
         setSkills(result.skills)
-        return true
       } else {
         setSkillError(result.error || t.chatSkillListLoadFailed)
-        return false
       }
     } catch (err) {
       setSkillError(err instanceof Error ? err.message : String(err))
-      return false
     } finally {
       setSkillsLoading(false)
     }
@@ -415,7 +382,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
         if (cancelled) return
         settingsRef.current = loaded
         setSettings(loaded)
-        await refreshChatSkills(loaded.chatTools?.skillScanPaths)
+        await refreshChatSkills(loaded.chatTools.skillScanPaths)
       } catch (err) {
         if (!cancelled) setSkillError(err instanceof Error ? err.message : String(err))
       }
@@ -429,20 +396,17 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
   const flushSave = useCallback(async (next: Settings) => {
     try {
       // 只把技能页改过的字段盖到 fresh 上，避免把 MCP / 收藏 / 插件开关盖回旧值。
-      const fresh = await refreshSettings()
-      const nextTools = next.chatTools ?? defaultChatTools()
-      const freshTools = fresh.chatTools ?? defaultChatTools()
-      const merged: Settings = {
+      const nextTools = next.chatTools
+      const saved = await updateSettingsCached((fresh) => ({
         ...fresh,
         chatTools: {
-          ...freshTools,
+          ...fresh.chatTools,
           disabledSkillIds: nextTools.disabledSkillIds,
           skillScanPaths: nextTools.skillScanPaths,
           skillAutoMatch: nextTools.skillAutoMatch,
           skillFallbackMode: nextTools.skillFallbackMode,
         },
-      }
-      const saved = await saveSettingsCached(merged)
+      }))
       settingsRef.current = saved
       onSkillsChanged?.()
     } catch (err) {
@@ -456,7 +420,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
       if (!prev) return prev
       const next: Settings = {
         ...prev,
-        chatTools: { ...(prev.chatTools ?? defaultChatTools()), ...updates },
+        chatTools: { ...prev.chatTools, ...updates },
       }
       settingsRef.current = next
       if (saveTimer.current) {
@@ -736,7 +700,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
           </div>
 
           {/* Tab 行 */}
-          <div className="mt-5 flex flex-wrap items-center gap-1 border-b border-neutral-200 dark:border-neutral-800">
+          <div className="mt-5 flex items-center gap-1 border-b border-neutral-200 dark:border-neutral-800">
             {([['installed', t.chatSkillTabInstalled], ['store', t.chatSkillTabStore], ['import', t.chatSkillTabImport], ['advanced', t.chatSkillTabAdvanced]] as const).map(([id, label]) => (
               <button
                 key={id}
@@ -874,7 +838,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
                     </p>
                   </div>
                   <Toggle
-                    checked={chatTools.skillAutoMatch !== false}
+                    checked={chatTools?.skillAutoMatch !== false}
                     onChange={(skillAutoMatch) => persistChatTools({ skillAutoMatch })}
                     ariaLabel={t.chatSkillAutoMatch}
                   />
@@ -886,7 +850,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
                       {t.chatSkillFallbackMode}
                     </div>
                     <Select
-                      value={chatTools.skillFallbackMode || 'progressive'}
+                      value={chatTools?.skillFallbackMode || 'progressive'}
                       onChange={(value) => persistChatTools({ skillFallbackMode: value })}
                       options={[
                         { value: 'progressive', label: t.chatSkillFallbackProgressive },
@@ -900,13 +864,13 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
                 <div className="min-w-0">
                   <div className="mb-1.5 text-[13px] font-medium text-neutral-800 dark:text-neutral-100">{t.chatSkillExtraScanPaths}</div>
                   <div className="space-y-1.5">
-                    {chatTools.skillScanPaths.map((path, index) => (
+                    {skillScanPaths.map((path, index) => (
                       <div key={`${path}-${index}`} className="flex items-center gap-1.5">
                         <input
                           type="text"
                           value={path}
                           onChange={(event) => {
-                            const next = [...chatTools.skillScanPaths]
+                            const next = [...skillScanPaths]
                             next[index] = event.target.value
                             persistChatTools({ skillScanPaths: next }, true)
                           }}
@@ -919,7 +883,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
                           variant="danger"
                           label={t.chatSkillRemovePath}
                           onClick={() => {
-                            const next = chatTools.skillScanPaths.filter((_, i) => i !== index)
+                            const next = skillScanPaths.filter((_, i) => i !== index)
                             persistChatTools({ skillScanPaths: next })
                             void refreshChatSkills(next)
                           }}
@@ -933,7 +897,7 @@ export function SkillCenter({ onSkillsChanged, projectCwd }: SkillCenterProps) {
                       onClick={async () => {
                         const selected = await open({ directory: true, multiple: false })
                         if (typeof selected === 'string') {
-                          const next = [...chatTools.skillScanPaths, selected]
+                          const next = [...skillScanPaths, selected]
                           persistChatTools({ skillScanPaths: next })
                           void refreshChatSkills(next)
                         }

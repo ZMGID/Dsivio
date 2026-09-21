@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { chatApi } from '../api'
 import { api } from '../../api/tauri'
 import VideoStudio from './VideoStudio'
 import { newVideoBrief, type VideoTask } from './types'
@@ -180,7 +179,7 @@ describe('shared video workspace navigation', () => {
     expect(await screen.findByText('已选模板：聊天创建的参考模板')).toBeTruthy()
     expect(screen.getByRole('button', { name: '生成服务' }).textContent).toContain('请选择')
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
-    expect(await screen.findByRole('heading', { name: '内置运行环境' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: '本机运行环境' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '安装 / 修复 Comfy 依赖' })).toBeNull()
   })
 
@@ -207,7 +206,7 @@ describe('shared video workspace navigation', () => {
     render(<VideoStudio />)
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
     expect(await screen.findAllByText('检测失败')).toHaveLength(5)
-    expect(screen.getByText(/无法读取内置运行环境状态/)).toHaveTextContent('unknown path')
+    expect(screen.getByText(/无法读取本机运行环境状态/)).toHaveTextContent('unknown path')
     expect(screen.queryByText('内置文件缺失')).toBeNull()
     expect(screen.queryByText(/重新安装 dsivio/)).toBeNull()
 
@@ -218,7 +217,7 @@ describe('shared video workspace navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: '重新检查' }))
     expect(await screen.findByText('3.12.12')).toBeTruthy()
     expect(screen.getAllByText('已就绪')).toHaveLength(4)
-    expect(screen.queryByText(/无法读取内置运行环境状态/)).toBeNull()
+    expect(screen.queryByText(/无法读取本机运行环境状态/)).toBeNull()
     expect(screen.queryByText(/重新安装 dsivio/)).toBeNull()
   })
 
@@ -227,7 +226,7 @@ describe('shared video workspace navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
     expect(await screen.findByText('3.14')).toBeTruthy()
     expect(screen.getAllByText('内置文件缺失')).toHaveLength(1)
-    expect(screen.getByText('内置运行环境不完整，请重新安装 dsivio。')).toBeTruthy()
+    expect(screen.getByText('请按需要在本机安装 Python 3、ffmpeg、Comfy MCP 或视频分析 MCP，然后重新检查。')).toBeTruthy()
   })
 
   it('shows a floating error toast for a user action, then auto-dismisses', async () => {
@@ -847,48 +846,5 @@ describe('video settings and stable result controls', () => {
     render(<VideoStudio />)
     expect(await screen.findByLabelText('成片预览')).toHaveAttribute('src', 'data:video/mp4;base64,AAAA')
     expect(screen.getByRole('button', { name: '打开本地成片' })).toBeEnabled()
-  })
-})
-
-
-describe('video planning assistants', () => {
-  beforeEach(() => { localStorage.clear(); vi.mocked(api.videoStudioTask).mockReset() })
-  afterEach(() => { localStorage.clear(); vi.mocked(chatApi.getAssistants).mockResolvedValue([]) })
-  it('selects saved prompt assistants across categories and persists planning selection', async () => {
-    vi.mocked(chatApi.getAssistants).mockResolvedValue([
-      { id: 'asst_builtin_video_prompt', name: '通用视频', category: 'video', created_at: 0, updated_at: 0 },
-      { id: 'asst_builtin_video_product', name: '电商产品展示', category: 'video', installed: false, created_at: 0, updated_at: 0 },
-      { id: 'asst_writer', name: '写作助手', category: 'writing', created_at: 0, updated_at: 0 },
-      { id: 'asst_archived', name: '归档助手', category: 'video', archived: true, created_at: 0, updated_at: 0 },
-    ])
-    let task: VideoTask = { id: 'assistant-task', revision: 1, updatedAt: 1, brief: { ...newVideoBrief(), request: '慢慢展示产品', route: 'grok', resolution: '720p' }, script: '', prompt: '', approved: false, status: 'draft' }
-    localStorage.setItem('dsivio-video-drafts-v1', JSON.stringify({ creation: { brief: task.brief, task, script: '', step: 0, dirty: false } }))
-    vi.mocked(api.videoStudioBootstrap).mockResolvedValue({ tasks: [], config: {}, templates: [], root: '', configPath: '', dependencies: { python: '', comfy: true, node: true, ffmpeg: true } })
-    vi.mocked(api.videoStudioTask).mockImplementation(async (action, input) => {
-      if (action === 'save') task = { ...task, revision: task.revision + 1, brief: input.brief as VideoTask['brief'] }
-      if (action === 'plan') task = { ...task, script: '展示方案', revision: task.revision + 1 }
-      if (action === 'revise') task = { ...task, script: '修改后的方案', revision: task.revision + 1 }
-      return task
-    })
-    const view = render(<VideoStudio />)
-    expect(await screen.findByRole('button', { name: '选择助手' })).toBeTruthy()
-    await waitFor(() => expect(chatApi.getAssistants).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: '选择助手' }))
-    await screen.findByRole('option', { name: '电商产品展示' })
-    expect(screen.getByRole('option', { name: '写作助手' })).toBeTruthy()
-    expect(screen.queryByRole('option', { name: '归档助手' })).toBeNull()
-    fireEvent.click(screen.getByRole('option', { name: '电商产品展示' }))
-    fireEvent.click(screen.getByRole('button', { name: '帮我设计视频' }))
-    expect(await screen.findByText('展示方案')).toBeTruthy()
-    expect(task.brief.assistantId).toBe('asst_builtin_video_product')
-    fireEvent.change(screen.getByLabelText('修改要求'), { target: { value: '动作慢一点' } })
-    fireEvent.click(screen.getByRole('button', { name: '让 AI 修改' }))
-    expect(await screen.findByText('修改后的方案')).toBeTruthy()
-    expect(task.brief.assistantId).toBe('asst_builtin_video_product')
-    expect(api.videoStudioTask).toHaveBeenCalledWith('revise', expect.objectContaining({ id: task.id, note: '动作慢一点' }))
-    view.unmount()
-    localStorage.removeItem('dsivio-video-drafts-v1')
-    render(<VideoStudio />)
-    await waitFor(() => expect(screen.getByRole('button', { name: '电商产品展示' })).toBeTruthy())
   })
 })

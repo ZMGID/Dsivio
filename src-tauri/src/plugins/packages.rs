@@ -70,7 +70,6 @@ impl Drop for TestPackagesRoot {
         TEST_PACKAGES_ROOT.with(|slot| slot.replace(self.0.take()));
     }
 }
-
 /// App-owned package content updates independently of user data and enabled state.
 pub fn ensure_builtin(id: &str, source: &Path) -> Result<Resolved, String> {
     let dir = package_dir(id)?;
@@ -387,18 +386,11 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
         }
     }
     let mut env: BTreeMap<String, String> = std::env::vars().collect();
-    if package.id == crate::video_studio::PACKAGE_ID && package.source == "builtin:dsvideo" {
-        env.extend(crate::video_studio::runtime::environment()?);
-    }
-    // Normalize only host-injected paths, before expansion into command/args/env.
-    // Keep canonical paths for containment checks and leave arbitrary values intact.
-    let cli_root = crate::utils::strip_windows_verbatim_prefix(root.to_path_buf());
-    let cli_data = crate::utils::strip_windows_verbatim_prefix(data.to_path_buf());
     for key in ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"] {
-        env.insert(key.into(), cli_root.display().to_string());
+        env.insert(key.into(), root.display().to_string());
     }
     for key in ["PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"] {
-        env.insert(key.into(), cli_data.display().to_string());
+        env.insert(key.into(), data.display().to_string());
     }
     let mut servers = Vec::new();
     let mut mcp_configs = configs(root, manifest.get("mcpServers"), ".mcp.json")?;
@@ -455,7 +447,7 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
             }
             .into();
             server.connector_id = Some(format!("plugin:package:{}", package.id));
-            server.cwd = Some(env["PLUGIN_ROOT"].clone());
+            server.cwd = Some(root.display().to_string());
             if transport == "stdio" && server.command.trim().is_empty() {
                 return Err(format!("MCP {name} requires command"));
             }
@@ -792,39 +784,39 @@ async fn set_enabled(
         ));
     }
     let prefix = format!("plugin-package-{id}-");
-    // Snapshot + persist while holding the settings lock: unrelated user changes are preserved.
+    // Persist package metadata first, then publish settings through the unified settings commit.
+    // On settings failure the metadata write is rolled back to keep the two stores aligned.
     let old_package = resolved.package.clone();
     resolved.package.enabled = enabled;
-    let disconnect;
-    {
-        let mut settings = state.settings_write();
-        disconnect = settings
+    write_json(&package_dir(&id)?.join("record.json"), &resolved.package)?;
+    let disconnect = std::cell::RefCell::new(Vec::new());
+    let settings_result = crate::settings::update_settings(&app, &state, |settings| {
+        *disconnect.borrow_mut() = settings
             .chat_tools
             .servers
             .iter()
             .filter(|s| s.id.starts_with(&prefix))
             .map(|s| s.id.clone())
             .collect::<Vec<_>>();
-        let mut next = settings.clone();
-        next.chat_tools
+        settings
+            .chat_tools
             .servers
             .retain(|s| !s.id.starts_with(&prefix));
         if enabled {
             let skill_prefix = format!("pkg-{id}-");
-            next.chat_tools.disabled_skill_ids.retain(|skill| !skill.starts_with(&skill_prefix));
-            next.chat_tools.enabled = true;
-            next.chat_tools.native_tools.skill_runtime = true;
-            next.chat_tools.servers.extend(resolved.servers);
+            settings.chat_tools.disabled_skill_ids.retain(|skill| !skill.starts_with(&skill_prefix));
+            settings.chat_tools.enabled = true;
+            settings.chat_tools.native_tools.skill_runtime = true;
+            settings.chat_tools.servers.extend(resolved.servers.clone());
         }
-        write_json(&package_dir(&id)?.join("record.json"), &resolved.package)?;
-        if let Err(e) = crate::settings::persist_settings(&app, &next) {
-            let _ = write_json(&package_dir(&id)?.join("record.json"), &old_package);
-            return Err(e);
-        }
-        *settings = next;
+        Ok(())
+    });
+    if let Err(error) = settings_result {
+        let _ = write_json(&package_dir(&id)?.join("record.json"), &old_package);
+        return Err(error.into());
     }
     // IDs are deterministic; disconnect both enabled and disabled snapshots.
-    for server in disconnect {
+    for server in disconnect.into_inner() {
         state.mcp_disconnect_server(&server).await;
     }
     Ok(resolved.package)
@@ -1209,30 +1201,6 @@ mod tests {
             .any(|s| s.args.first().is_some_and(|a| a
                 .contains(&dir.path().display().to_string())
                 && !a.contains("${"))));
-    }
-    #[test]
-    fn canonical_package_paths_are_normalized_before_mcp_expansion() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::create_dir(dir.path().join(".codex-plugin")).unwrap();
-        fs::write(dir.path().join(".codex-plugin/plugin.json"), r#"{"name":"paths","mcpServers":{"node":{"command":"${PLUGIN_ROOT}/node.exe","args":["${CLAUDE_PLUGIN_ROOT}/index.js"],"env":{"CACHE":"${PLUGIN_DATA}/cache","OTHER":"${CLAUDE_PLUGIN_DATA}/other"}}}}"#).unwrap();
-        // canonicalize supplies the verbatim prefix on Windows.
-        let canonical = fs::canonicalize(dir.path()).unwrap();
-        let plain = crate::utils::strip_windows_verbatim_prefix(canonical.clone());
-        let resolved = resolve(&canonical, fixture(), &canonical).unwrap();
-        let server = &resolved.servers[0];
-        assert_eq!(server.command, format!("{}/node.exe", plain.display()));
-        assert_eq!(server.args, vec![format!("{}/index.js", plain.display())]);
-        assert_eq!(server.env["CACHE"], format!("{}/cache", plain.display()));
-        assert_eq!(server.env["OTHER"], format!("{}/other", plain.display()));
-        assert_eq!(server.cwd.as_deref(), plain.to_str());
-        for key in [
-            "PLUGIN_ROOT",
-            "CLAUDE_PLUGIN_ROOT",
-            "PLUGIN_DATA",
-            "CLAUDE_PLUGIN_DATA",
-        ] {
-            assert_eq!(server.env[key], plain.to_string_lossy());
-        }
     }
     fn fixture() -> Package {
         Package {

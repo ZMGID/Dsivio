@@ -500,7 +500,7 @@ pub enum StreamPart {
 pub enum ModelErrorKind {
     Other,
     StreamReadInterrupted,
-    /// 调用方主动取消（如 Lens 流的 `explain_stream_generation` 代际失配）。
+    /// 调用方主动取消（如 Lens owner 的 stream generation 代际失配）。
     /// 由 sink 在 emit 时返回，适配器沿 `?` 上抛；包装层据此把取消当正常结束处理。
     Cancelled,
 }
@@ -755,6 +755,7 @@ pub fn generate_request_from_openai_messages(
             model_messages.push(model_message);
         }
     }
+    repair_legacy_tool_result_order(&mut model_messages);
     if let Some(first) = system_parts.first_mut() {
         if let Some((prefix, suffix)) = split_workbench_system_suffix(first) {
             *first = prefix;
@@ -796,6 +797,56 @@ pub fn model_messages_from_openai_messages(messages: Vec<Value>) -> Vec<ModelMes
         .collect()
 }
 
+/// Older stored tool rounds inserted image/user messages between results from
+/// the same assistant call batch. Repair that ordering at the request boundary
+/// so existing conversations can continue without deleting their history.
+/// Only move results for this batch, never across the next assistant turn; do
+/// not invent missing results or discard unrelated messages.
+fn repair_legacy_tool_result_order(messages: &mut [ModelMessage]) {
+    let mut start = 0;
+    while start < messages.len() {
+        if messages[start].role != ModelRole::Assistant {
+            start += 1;
+            continue;
+        }
+        let mut pending: std::collections::HashSet<String> = messages[start]
+            .content
+            .iter()
+            .filter_map(|part| match part {
+                MessagePart::ToolCall { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let end = (start + 1..messages.len())
+            .find(|&index| messages[index].role == ModelRole::Assistant)
+            .unwrap_or(messages.len());
+        let mut insert_at = start + 1;
+        for index in start + 1..end {
+            let message = &messages[index];
+            if pending.is_empty() {
+                break;
+            }
+            if message.role != ModelRole::Tool
+                || message.content.is_empty()
+                || !message.content.iter().all(|part| {
+                    matches!(part,
+                    MessagePart::ToolResult { tool_call_id, .. } if pending.contains(tool_call_id))
+                })
+            {
+                continue;
+            }
+            for part in &message.content {
+                if let MessagePart::ToolResult { tool_call_id, .. } = part {
+                    pending.remove(tool_call_id);
+                }
+            }
+            messages[insert_at..=index].rotate_right(1);
+            insert_at += 1;
+        }
+        start = end;
+    }
+}
+
 pub fn openai_messages_from_generate_request(request: &GenerateRequest) -> Vec<Value> {
     let mut messages = Vec::new();
     if !request.system.trim().is_empty() {
@@ -818,50 +869,9 @@ pub fn openai_messages_from_generate_request(request: &GenerateRequest) -> Vec<V
     messages
 }
 
-/// Repair legacy histories that interleave image follow-ups with a tool batch.
-/// Only move existing matching results, never fabricate a result or cross another
-/// assistant/system turn. Keep all follow-up content in its original order.
-fn ordered_tool_results(messages: &[ModelMessage]) -> Vec<&ModelMessage> {
-    let mut ordered = Vec::with_capacity(messages.len());
-    let mut moved = std::collections::HashSet::new();
-    for (index, message) in messages.iter().enumerate() {
-        if moved.contains(&index) {
-            continue;
-        }
-        ordered.push(message);
-        if message.role != ModelRole::Assistant {
-            continue;
-        }
-        let ids: Vec<_> = message
-            .content
-            .iter()
-            .filter_map(|part| match part {
-                MessagePart::ToolCall { id, .. } => Some(id.as_str()),
-                _ => None,
-            })
-            .collect();
-        if ids.is_empty() {
-            continue;
-        }
-        for (next, candidate) in messages.iter().enumerate().skip(index + 1) {
-            if !matches!(candidate.role, ModelRole::User | ModelRole::Tool) {
-                break;
-            }
-            if candidate.role == ModelRole::Tool && !candidate.content.is_empty()
-                && candidate.content.iter().all(|part| matches!(part,
-                    MessagePart::ToolResult { tool_call_id, .. } if ids.contains(&tool_call_id.as_str())))
-            {
-                ordered.push(candidate);
-                moved.insert(next);
-            }
-        }
-    }
-    ordered
-}
-
 pub fn openai_messages_from_model_messages(messages: &[ModelMessage]) -> Vec<Value> {
-    ordered_tool_results(messages)
-        .into_iter()
+    messages
+        .iter()
         .flat_map(openai_messages_from_model_message)
         .collect()
 }
@@ -1208,7 +1218,7 @@ pub fn responses_input_from_model_messages(
     reasoning_replay: Option<&str>,
 ) -> Vec<Value> {
     let mut items = Vec::new();
-    for message in ordered_tool_results(messages) {
+    for message in messages {
         responses_items_from_model_message(message, reasoning_replay, &mut items);
     }
     items
@@ -1321,81 +1331,6 @@ fn responses_items_from_model_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn legacy_image_tool_batch_replays_results_before_images() {
-        let raw = vec![
-            serde_json::json!({"role":"assistant", "tool_calls":[
-                {"id":"a","type":"function","function":{"name":"read","arguments":"{}"}},
-                {"id":"b","type":"function","function":{"name":"read","arguments":"{}"}}
-            ]}),
-            serde_json::json!({"role":"tool","tool_call_id":"a","content":"first"}),
-            serde_json::json!({"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,YQ=="}}]}),
-            serde_json::json!({"role":"tool","tool_call_id":"b","content":"second"}),
-            serde_json::json!({"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,Yg=="}}]}),
-            serde_json::json!({"role":"assistant","content":"done"}),
-            serde_json::json!({"role":"user","content":"是"}),
-        ];
-        let request = generate_request_from_openai_messages(
-            "m",
-            raw,
-            None,
-            Default::default(),
-            "t",
-            Default::default(),
-        );
-        let items = responses_input_from_model_messages(&request.messages, None);
-        assert_eq!(items.len(), 8);
-        assert_eq!(items[2]["call_id"], "a");
-        assert_eq!(items[3]["call_id"], "b");
-        assert_eq!(items[3]["type"], "function_call_output");
-        assert_eq!(
-            items[4]["content"][0]["image_url"],
-            "data:image/png;base64,YQ=="
-        );
-        assert_eq!(
-            items[5]["content"][0]["image_url"],
-            "data:image/png;base64,Yg=="
-        );
-        assert_eq!(items[7]["content"][0]["text"], "是");
-        let chat = openai_messages_from_model_messages(&request.messages);
-        assert_eq!(chat[1]["tool_call_id"], "a");
-        assert_eq!(chat[2]["tool_call_id"], "b");
-        // Replaying an already repaired history is stable.
-        let again = generate_request_from_openai_messages(
-            "m",
-            chat.clone(),
-            None,
-            Default::default(),
-            "t",
-            Default::default(),
-        );
-        assert_eq!(openai_messages_from_model_messages(&again.messages), chat);
-    }
-
-    #[test]
-    fn legacy_repair_does_not_invent_results_or_cross_assistant_turns() {
-        let raw = vec![
-            serde_json::json!({"role":"assistant", "tool_calls":[
-                {"id":"a","type":"function","function":{"name":"read","arguments":"{}"}}
-            ]}),
-            serde_json::json!({"role":"user","content":"next"}),
-            serde_json::json!({"role":"assistant","content":"boundary"}),
-            serde_json::json!({"role":"tool","tool_call_id":"a","content":"late"}),
-        ];
-        let request = generate_request_from_openai_messages(
-            "m",
-            raw,
-            None,
-            Default::default(),
-            "t",
-            Default::default(),
-        );
-        let items = responses_input_from_model_messages(&request.messages, None);
-        assert_eq!(items.len(), 4);
-        assert_eq!(items[1]["role"], "user");
-        assert_eq!(items[3]["type"], "function_call_output");
-    }
 
     #[test]
     fn video_chat_content_retains_data_url_format() {
@@ -1558,6 +1493,65 @@ MCP note after the path.";
             panic!("expected text part");
         };
         assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn tool_image_follow_up_replay_repairs_legacy_interleaved_results() {
+        let messages = vec![
+            serde_json::json!({"role":"user", "content":"请找官方群"}),
+            serde_json::json!({"role":"assistant", "tool_calls":[
+                {"id":"read_image", "type":"function", "function":{"name":"read", "arguments":"{}"}},
+                {"id":"run_command", "type":"function", "function":{"name":"bash", "arguments":"{}"}}
+            ]}),
+            serde_json::json!({"role":"tool", "tool_call_id":"read_image", "content":"image loaded"}),
+            serde_json::json!({"role":"user", "content":[{"type":"image_url", "image_url":{"url":"data:image/png;base64,aGVsbG8="}}]}),
+            serde_json::json!({"role":"tool", "tool_call_id":"run_command", "content":"ok"}),
+            serde_json::json!({"role":"assistant", "content":"answer"}),
+            serde_json::json!({"role":"user", "content":"你回答用的是英文。为啥"}),
+        ];
+        let request = generate_request_from_openai_messages(
+            "m",
+            messages,
+            None,
+            Default::default(),
+            "t",
+            Default::default(),
+        );
+        let items = responses_input_from_model_messages(&request.messages, None);
+        assert_eq!(
+            items[4]["type"], "function_call_output",
+            "No tool output found for run_command before image turn"
+        );
+        assert_eq!(items[4]["call_id"], "run_command");
+        assert_eq!(items[5]["role"], "user");
+        assert_eq!(items[6]["role"], "assistant");
+        assert_eq!(items[7]["content"][0]["text"], "你回答用的是英文。为啥");
+    }
+
+    #[test]
+    fn tool_image_follow_up_repair_does_not_cross_assistant_turns_or_invent_results() {
+        let messages = vec![
+            serde_json::json!({"role":"assistant", "tool_calls":[
+                {"id":"missing", "type":"function", "function":{"name":"read", "arguments":"{}"}}
+            ]}),
+            serde_json::json!({"role":"user", "content":"new instruction"}),
+            serde_json::json!({"role":"tool", "tool_call_id":"unrelated", "content":"keep"}),
+            serde_json::json!({"role":"assistant", "content":"next turn"}),
+            serde_json::json!({"role":"tool", "tool_call_id":"missing", "content":"late"}),
+        ];
+        let expected = model_messages_from_openai_messages(messages.clone());
+        let request = generate_request_from_openai_messages(
+            "m",
+            messages,
+            None,
+            Default::default(),
+            "t",
+            Default::default(),
+        );
+        assert_eq!(
+            serde_json::to_value(request.messages).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
     }
 
     #[test]

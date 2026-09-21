@@ -68,10 +68,20 @@ fn text_only_video_replay_preserves_identity_without_opening_missing_files() {
             "attachments": [{"id": "v1", "type": "video", "name": "clip.mp4", "path": "missing.mp4"}]}]
     })).unwrap();
     let messages = super::context::build_chat_api_messages_with_video(
-        None, "system", &conversation, Some(0), None, &[], false,
-    ).unwrap();
+        None,
+        "system",
+        &conversation,
+        Some(0),
+        None,
+        &[],
+        false,
+    )
+    .unwrap();
     assert_eq!(crate::chat::video_analysis::video_count(&messages), 0);
-    assert!(messages[1]["content"][0]["text"].as_str().unwrap().contains("clip.mp4 [v1]"));
+    assert!(messages[1]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("clip.mp4 [v1]"));
     assert_eq!(messages[1]["content"][1]["text"], "Hello");
     assert_eq!(conversation.messages[0].attachments.len(), 1);
 }
@@ -81,7 +91,10 @@ fn video_analysis_tool_is_available_in_chat_and_plan_without_extra_approval() {
     let tool = crate::chat::video_analysis::tool_definition();
     assert!(agent_prepare::builtin_tool_bypasses_approval(&tool));
     let mut tools = vec![tool.clone()];
-    assert!(super::tooling::apply_chat_mode_tool_filter(&mut tools, true, &Default::default()).is_empty());
+    assert!(
+        super::tooling::apply_chat_mode_tool_filter(&mut tools, true, &Default::default())
+            .is_empty()
+    );
     assert_eq!(tools.len(), 1);
     assert!(super::tooling::apply_agent_plan_tool_filter(&mut tools, true).is_empty());
     assert_eq!(tools.len(), 1);
@@ -305,7 +318,7 @@ fn slash_trigger_skips_disabled_skill() {
 }
 
 #[test]
-fn slash_trigger_inherits_global_skills_for_prompt_only_assistant() {
+fn slash_trigger_respects_assistant_policy_but_allows_explicit_only_skills() {
     let mut record = slash_skill_record("commit", "Commit", vec![]);
     record.meta.disable_model_invocation = true;
     let registry = slash_skill_registry(record);
@@ -334,9 +347,8 @@ fn slash_trigger_inherits_global_skills_for_prompt_only_assistant() {
         None,
         false,
     );
-    assert_eq!(id.as_deref(), Some("commit"));
-    assert!(detail.is_some());
-    assert_eq!(config.skill_fallback_mode, "skill_md_only");
+    assert!(id.is_none() && detail.is_none());
+    assert_eq!(config.skill_fallback_mode, "progressive");
 }
 
 fn test_provider(id: &str, name: &str, enabled_models: Vec<&str>) -> ModelProvider {
@@ -2012,7 +2024,7 @@ fn apply_context_clear_rejects_external_runtime() {
     conversation.agent_runtime.kind = crate::chat::AgentRuntimeKind::External;
     conversation.agent_runtime.external_agent_id = Some("claude".to_string());
     let err = apply_context_clear(&mut conversation).expect_err("external");
-    assert!(err.contains("dsivio Agent"));
+    assert!(err.contains("Kivio Agent"));
 }
 
 #[test]
@@ -2227,7 +2239,7 @@ fn prepare_reply_with_model_tags_last_turn_and_rejects_duplicates() {
         None,
     )
     .expect_err("external");
-    assert!(err.contains("dsivio Agent"));
+    assert!(err.contains("Kivio Agent"));
 }
 
 #[test]
@@ -2596,6 +2608,23 @@ fn test_conversation_with_messages(messages: Vec<ChatMessage>) -> Conversation {
         forked_from: None,
         agent_runtime: crate::chat::AgentRuntimeConfig::default(),
     }
+}
+
+#[test]
+fn chat_without_read_only_mcp_skips_discovery_before_tool_filtering() {
+    let mut conversation = test_conversation_with_messages(Vec::new());
+    conversation.agent_runtime.kind = crate::chat::AgentRuntimeKind::Chat;
+    let mut settings = Settings::default();
+    settings.chat.chat_mode.mcp_read_only = false;
+    assert!(
+        super::tooling::allowed_mcp_server_ids(&conversation, &settings)
+            .is_some_and(|ids| ids.is_empty())
+    );
+    settings.chat.chat_mode.mcp_read_only = true;
+    assert_eq!(
+        super::tooling::allowed_mcp_server_ids(&conversation, &settings),
+        None,
+    );
 }
 
 #[test]

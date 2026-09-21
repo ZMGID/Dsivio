@@ -1,31 +1,16 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "dsivio",
-  "version": "1.0.1",
+  "version": "3.0.0",
   "identifier": "com.zmair.kivio",
   "build": {
-    "beforeDevCommand": "npm run build:video-runtime && npm run dev:ui",
-    "beforeBuildCommand": "npm run build:video-runtime && npm run build:ui",
+    "beforeDevCommand": "npm run dev:ui",
+    "beforeBuildCommand": "npm run build:ui",
     "devUrl": "http://localhost:5713",
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "dsivio",
-        "width": 392,
-        "height": 152,
-        "resizable": true,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "visibleOnAllWorkspaces": true,
-        "create": false,
-        "skipTaskbar": true,
-        "visible": false
-      }
-    ],
+    "windows": [],
     "macOSPrivateApi": true
   },
   "bundle": {
@@ -35,12 +20,15 @@
       "msi",
       "nsis"
     ],
+    "externalBin": [
+      "binaries/kivio-ocr-helper"
+    ],
     "resources": {
       "resources/skills": "skills",
-      "resources/plugins": "plugins",
-      "resources/video-runtime": "video-runtime",
+      "../docs/licenses": "licenses",
+      "resources/image-studio": "image-studio",
       "resources/video-studio": "video-studio",
-      "../docs/licenses": "licenses"
+      "resources/plugins/dsvideo-plugin": "plugins/dsvideo-plugin"
     },
     "windows": {
       "nsis": {

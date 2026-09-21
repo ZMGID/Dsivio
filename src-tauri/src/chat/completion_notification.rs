@@ -12,7 +12,7 @@ pub(crate) fn notify_reply_completed(
 ) {
     let language = {
         // Notifications are optional; do not wait behind a settings writer.
-        let settings = match state.settings.try_read() {
+        let settings = match state.try_settings_read() {
             Ok(settings) => settings,
             Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => return,
@@ -41,9 +41,9 @@ fn completion_copy(
     let title = preview(conversation_title, 77);
     let title = if title.is_empty() {
         if is_chinese {
-            "dsivio · 回复已完成"
+            "Kivio · 回复已完成"
         } else {
-            "dsivio · Reply ready"
+            "Kivio · Reply ready"
         }
         .to_string()
     } else {
@@ -100,14 +100,11 @@ mod tests {
     fn empty_title_and_reply_use_localized_fallbacks() {
         assert_eq!(
             completion_copy("en", "  ", &[]),
-            ("dsivio · Reply ready".into(), "Your reply is ready.".into())
+            ("Kivio · Reply ready".into(), "Your reply is ready.".into())
         );
         assert_eq!(
             completion_copy("zh", "", &[]),
-            (
-                "dsivio · 回复已完成".into(),
-                "你的回复已经生成完成。".into()
-            )
+            ("Kivio · 回复已完成".into(), "你的回复已经生成完成。".into())
         );
     }
 

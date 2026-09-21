@@ -55,7 +55,7 @@ pub const COMBINED_TRANSLATE_SEPARATOR: &str = "<<<ORIGINAL>>>";
 
 /// 折叠 OCR 输出里的多余空行 + 行尾空白。
 ///
-/// OCR 引擎(如带版式分析的 RapidOCR)经常在段落之间塞 N 个空行,
+/// 系统 OCR 引擎(尤其 Apple Vision / RapidOCR 这种带版式分析的)经常在段落之间塞 N 个空行,
 /// 这些空行直接送翻译模型会被一字不漏 echo 进译文,显示时占很多空间(用户看到的就是大段大段空白)。
 /// 这里把连续多个空行/纯空白行折成最多一个,行尾空格也顺手剥掉。
 pub fn compact_ocr_text(text: &str) -> String {

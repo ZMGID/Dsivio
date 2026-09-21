@@ -38,24 +38,6 @@ describe('matchModel', () => {
     expect(matchModelExact('gpt-6')).toBeNull()
   })
 
-  it('uses the upstream GPT-5.6 catalog windows and token prices', () => {
-    expect(matchModel('gpt-5.6')).toMatchObject({
-      contextWindow: 256_000,
-      maxOutput: 128_000,
-      pricing: { input: 4, output: 20, cachedInput: 0.4 },
-    })
-    expect(matchModel('gpt-5.6-terra')?.pricing).toEqual({
-      input: 2,
-      output: 12,
-      cachedInput: 0.2,
-    })
-    expect(matchModel('gpt-5.6-luna')?.pricing).toEqual({
-      input: 0.2,
-      output: 1.2,
-      cachedInput: 0.02,
-    })
-  })
-
   it('returns null for blank model names', () => {
     expect(matchModel('')).toBeNull()
     expect(matchModel('   ')).toBeNull()
@@ -127,17 +109,6 @@ describe('matchModel', () => {
     const sunburstSnapshot = matchModel('gpt-image-2.5-sunburst-2026-09-08')
     expect(sunburstSnapshot?.displayName).toBe('GPT Image 2.5 Sunburst (2026-09-08)')
     expect(sunburstSnapshot?.capabilities?.imageGeneration).toBe(true)
-  })
-
-  it('matches both GPT Image 2.5 variants and their dated snapshots', () => {
-    const sunburst = matchModel('gpt-image-2.5-sunburst')
-    expect(sunburst?.displayName).toBe('GPT Image 2.5 Sunburst')
-    expect(sunburst?.capabilities?.imageGeneration).toBe(true)
-    expect(sunburst?.pricing).toEqual({ input: 5, output: 30, cachedInput: 1.25 })
-    expect(matchModel('gpt-image-2.5-sunburst-2026-09-08')).toEqual({
-      ...sunburst, displayName: 'GPT Image 2.5 Sunburst (2026-09-08)',
-    })
-    expect(matchModel('openai/gpt-image-2.5-flare')?.displayName).toBe('GPT Image 2.5 Flare')
   })
 
   it('matches current Grok Imagine image ids without collapsing variants', () => {
@@ -549,16 +520,4 @@ describe('embedding models', () => {
     expect(info.dimensions).toBe(1024)
     expect(info.multilingual).toBe(true)
   })
-})
-
-
-it('resolves image and video rates from the shared model catalog', () => {
-  const video = matchModel('grok-imagine-video-1.5')
-  expect(video?.capabilities?.videoGeneration).toBe(true)
-  expect(video?.mediaPricing?.output['720p']).toBe(0.14)
-  expect(video?.mediaPricing?.unit).toBe('second')
-  expect(matchModel('MiniMax-H3')?.mediaPricing?.output['2K']).toBe(0.8)
-  const image = matchModel('grok-imagine-image-2.0')
-  expect(image?.mediaPricing?.output['1k:low']).toBe(0.04)
-  expect(image?.pricing?.input).toBeUndefined()
 })

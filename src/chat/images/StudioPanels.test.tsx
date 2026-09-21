@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { getSettingsCached } from '../../api/settingsCache'
 import { makeProvider } from '../../settings/tabs/testFixtures'
-import { ConfigPanel, ImageLanguageSelect } from './StudioPanels'
+import { ConfigPanel, ImageLanguageSelect, StudioSelect } from './StudioPanels'
 
 vi.mock('../../api/tauri', () => ({
   isTauriRuntime: () => true,
@@ -102,4 +102,9 @@ it('preserves a saved protocol when saving unrelated image settings', async () =
   render(<ConfigPanel config={config} onSave={onSave} onClose={() => {}} />)
   fireEvent.click(screen.getByRole('button', { name: '保存配置' }))
   await waitFor(() => expect(onSave).toHaveBeenCalledWith(config))
+})
+
+it('shows Auto for a numeric zero option', () => {
+  render(<StudioSelect value={0} onChange={() => {}} ariaLabel="张数"><option value={0}>Auto</option><option value={1}>1</option></StudioSelect>)
+  expect(screen.getByRole('button', { name: '张数' })).toHaveTextContent('Auto')
 })

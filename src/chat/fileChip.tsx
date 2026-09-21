@@ -36,15 +36,16 @@ function extensionOf(name: string): string {
   return base.slice(dot + 1).toLowerCase()
 }
 
-function fileKindVisual(name: string, kind?: 'folder'): FileKindVisual {
-  if (kind === 'folder') {
-    return {
-      Icon: Folder,
-      label: 'FOLDER',
-      iconClass: 'text-amber-600 dark:text-amber-400',
-      wellClass: 'bg-amber-500/10 dark:bg-amber-400/15',
-    }
+function folderKindVisual(): FileKindVisual {
+  return {
+    Icon: Folder,
+    label: 'FOLDER',
+    iconClass: 'text-amber-600 dark:text-amber-400',
+    wellClass: 'bg-amber-500/10 dark:bg-amber-400/15',
   }
+}
+
+function fileKindVisual(name: string): FileKindVisual {
   const ext = extensionOf(name)
   const label = ext ? ext.toUpperCase() : 'FILE'
   if (ext === 'pdf') {
@@ -98,7 +99,7 @@ export function FileChip({
 }) {
   const [menuAnchor, setMenuAnchor] = useState<DockMenuAnchor | null>(null)
   const [locationError, setLocationError] = useState(false)
-  const visual = fileKindVisual(name, kind)
+  const visual = kind === 'folder' ? folderKindVisual() : fileKindVisual(name)
   const Icon = visual.Icon
   const contextMenu = onRevealLocation ? (event: React.MouseEvent) => {
     event.preventDefault()

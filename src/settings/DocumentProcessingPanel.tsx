@@ -1,4 +1,4 @@
-// 文档处理设置区（知识库页）：dsivio 内置本地解析 + 图片 OCR，
+// 文档处理设置区（知识库页）：Kivio 内置本地解析 + 图片 OCR，
 // 以及可选第三方解析服务（MinerU / LlamaParse，扫描版/复杂版面）。
 import { Download, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -11,7 +11,7 @@ import {
   type RapidOcrStatus,
   type RapidOcrTier,
 } from '../api/tauri'
-import { type Lang } from './i18n'
+import { type Lang } from '../components/i18n'
 import { SettingsGroup, Select, SettingRow, Toggle, Input } from './components'
 import { Button, IconButton } from '../components/Button'
 
@@ -44,7 +44,7 @@ export function DocumentProcessingPanel({
 
   const patch = (updates: Partial<DocumentProcessingConfig>) => onChange({ ...cfg, ...updates })
 
-  const hasSystemOcr = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
+  const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
 
   // 固定 provider 条目按 kind 定位（id = kind）；改 key 时就地建/改。
   const providerOf = (kind: string) => cfg.providers.find((p) => p.kind === kind)
@@ -69,7 +69,7 @@ export function DocumentProcessingPanel({
       <SettingsGroup title={t('文档解析服务', 'Parsing service')}>
         <div className="px-1 py-2">
           <div className="kv-seg w-full">
-            {[{ kind: '', name: t('dsivio 内置', 'dsivio built-in') }, ...THIRD_PARTY].map((s) => (
+            {[{ kind: '', name: t('Kivio 内置', 'Kivio built-in') }, ...THIRD_PARTY].map((s) => (
               <button
                 key={s.kind || 'builtin'}
                 type="button"
@@ -83,8 +83,8 @@ export function DocumentProcessingPanel({
           <p className="kv-row-desc mt-1.5">
             {activeKind === ''
               ? t(
-                  'dsivio 本地解析 txt / md / html / PDF 文字层 / docx / xlsx，免费离线。',
-                  'dsivio parses txt, md, html, PDF text layer, docx and xlsx locally — free and offline.',
+                  'Kivio 本地解析 txt / md / html / PDF 文字层 / docx / xlsx，免费离线。',
+                  'Kivio parses txt, md, html, PDF text layer, docx and xlsx locally — free and offline.',
                 )
               : t(
                   '文档上传到所选服务解析为 Markdown（适合扫描版 / 复杂版面），需要 API 密钥。',
@@ -142,7 +142,7 @@ export function DocumentProcessingPanel({
             onChange={(v) => patch({ ocrEngine: v as OcrEngine })}
             options={[
               { value: 'off', label: t('关闭', 'Off') },
-              ...(hasSystemOcr ? [{ value: 'system', label: t('系统 OCR', 'System OCR') }] : []),
+              { value: 'system', label: t('系统 OCR', 'System OCR') },
               { value: 'rapid_ocr', label: t('RapidOCR 离线', 'RapidOCR (offline)') },
             ]}
           />
@@ -150,7 +150,9 @@ export function DocumentProcessingPanel({
 
         {cfg.ocrEngine === 'system' && (
           <p className="kv-row-desc -mt-1 px-1 pb-1">
-            {t('Windows：Windows.Media.Ocr', 'Windows: Windows.Media.Ocr')}
+            {isMac
+              ? t('macOS：Apple Vision', 'macOS: Apple Vision')
+              : t('Windows：Windows.Media.Ocr', 'Windows: Windows.Media.Ocr')}
           </p>
         )}
 

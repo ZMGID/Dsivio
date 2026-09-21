@@ -13,7 +13,7 @@ import {
   TextArea,
   Toggle,
 } from './components'
-import { type I18n } from './i18n'
+import { type I18n } from '../components/i18n'
 
 type ScreenshotTranslation = Settings['screenshotTranslation']
 type RapidOcrDownloadState = 'idle' | 'downloading' | 'failed'
@@ -22,7 +22,7 @@ type ReplacePackDownloadState = 'idle' | 'downloading' | 'failed'
 interface ScreenshotTranslationSettingsProps {
   settings: Settings
   isMac: boolean
-  hasLocalOcr: boolean
+  hasSystemOcr: boolean
   defaultPrompts: DefaultPromptTemplates | null
   rapidOcrStatus: RapidOcrStatus | null
   rapidOcrDownloadState: RapidOcrDownloadState
@@ -42,7 +42,7 @@ interface ScreenshotTranslationSettingsProps {
 export function ScreenshotTranslationSettings({
   settings,
   isMac,
-  hasLocalOcr,
+  hasSystemOcr,
   defaultPrompts,
   rapidOcrStatus,
   rapidOcrDownloadState,
@@ -59,8 +59,8 @@ export function ScreenshotTranslationSettings({
   onDownloadReplacePack,
 }: ScreenshotTranslationSettingsProps) {
   const screenshot = settings.screenshotTranslation
-  const ocrMode = screenshot?.ocrMode ?? 'cloud_vision'
-  const cardWidth = screenshot?.cardWidth ?? 480
+  const ocrMode = screenshot.ocrMode ?? 'cloud_vision'
+  const cardWidth = screenshot.cardWidth ?? 480
   const [widthDraft, setWidthDraft] = useState(String(cardWidth))
   // 外部改宽（翻译卡右下角拖拽缩放写回设置）时同步草稿，保持设置页与卡片联动。
   useEffect(() => {
@@ -87,19 +87,19 @@ export function ScreenshotTranslationSettings({
       <SettingsGroup title={t.sectionOptions}>
           <SettingRow label={t.enabled}>
             <Toggle
-              checked={screenshot?.enabled ?? true}
+              checked={screenshot.enabled}
               onChange={(enabled) => onUpdate({ enabled })}
             />
           </SettingRow>
 
-          {screenshot?.enabled !== false && (
+          {screenshot.enabled && (
             <>
               <SettingRow
                 label={t.screenshotShowOriginal}
                 description={t.screenshotShowOriginalHint}
               >
                 <Toggle
-                  checked={!(screenshot?.directTranslate ?? false)}
+                  checked={!(screenshot.directTranslate ?? false)}
                   onChange={(showOriginal) => onUpdate({ directTranslate: !showOriginal })}
                 />
               </SettingRow>
@@ -143,7 +143,7 @@ export function ScreenshotTranslationSettings({
           )}
       </SettingsGroup>
 
-      {screenshot?.enabled !== false && (
+      {screenshot.enabled && (
         <SettingsGroup title={t.replaceTranslate}>
           <SettingRow label={t.replaceTranslateEnabled}>
             <Toggle
@@ -152,7 +152,7 @@ export function ScreenshotTranslationSettings({
             />
           </SettingRow>
 
-          {hasLocalOcr && screenshot?.replaceEnabled !== false && (
+          {hasSystemOcr && screenshot?.replaceEnabled !== false && (
             <SettingRow label={t.replaceTranslateOfflinePack} stack>
               <ReplaceTranslationPackPanel
                 status={replacePackStatus}
@@ -170,9 +170,9 @@ export function ScreenshotTranslationSettings({
         </SettingsGroup>
       )}
 
-      {screenshot?.enabled !== false && (
+      {screenshot.enabled && (
         <>
-          {hasLocalOcr && (
+          {hasSystemOcr && (
             <SettingsGroup title={t.ocrEngine}>
                   <SettingRow label={t.ocrEngine} description={t.ocrEngineHint}>
                     <Select
@@ -184,7 +184,7 @@ export function ScreenshotTranslationSettings({
                       }
                       options={[
                         { value: 'cloud_vision', label: t.ocrEngineCloudVision },
-                        ...(!isMac ? [{ value: 'system', label: t.ocrEngineSystem }] : []),
+                        { value: 'system', label: t.ocrEngineSystem },
                         { value: 'rapid_ocr', label: t.ocrEngineRapidOcr },
                       ]}
                       className="w-44"
@@ -194,7 +194,7 @@ export function ScreenshotTranslationSettings({
                   {ocrMode === 'system' && (
                     <div className="kv-panel mt-2">
                       <div className="kv-panel-body">
-                      {t.ocrEngineWindowsHint}
+                      {isMac ? t.ocrEngineMacHint : t.ocrEngineWindowsHint}
                       </div>
                     </div>
                   )}

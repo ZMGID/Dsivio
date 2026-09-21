@@ -65,7 +65,7 @@ impl AgentHost for ImageHost {
             && self
                 .app
                 .state::<AppState>()
-                .is_chat_generation_active(id, generation)
+                .chat_runtime().is_generation_active(id, generation)
     }
     fn wait_for_generation_inactive<'a>(
         &'a self,
@@ -157,9 +157,9 @@ pub(crate) async fn run_specialized(
         content.push(json!({"type":"image_url", "image_url":{"url":url}}));
     }
     let id = format!("image-{task_id}");
-    let generation = state.next_chat_generation(&id);
+    let generation = state.chat_runtime().begin_generation(&id);
     let config = AgentRunConfig {
-        state,
+        provider_runtime: state,
         conversation_id: id.clone(),
         tool_conversation_id: id.clone(),
         depth: 0,
@@ -197,7 +197,7 @@ pub(crate) async fn run_specialized(
         &NoTools,
     )
     .await;
-    state.end_chat_generation(&id, generation);
+    state.chat_runtime().end_generation(&id, generation);
     let result = result?;
     if result.stream_outcome != "completed" {
         return Err(format!(

@@ -14,8 +14,8 @@ import type { QueuedMessage } from './hooks/useMessageQueue'
 import type { MessageListProps } from './MessageList'
 import type { ChatImageViewerItem } from './imageViewer'
 import type { ChatHookPayload } from '../api/tauri'
-import type { Lang } from '../settings/i18n'
-import { i18n } from '../settings/i18n'
+import type { Lang } from '../components/i18n'
+import { i18n } from '../components/i18n'
 
 const MessageList = lazy(() => import('./MessageList').then((module) => ({
   default: module.MessageList,
@@ -179,7 +179,7 @@ export const ChatConversationPane = memo(function ChatConversationPane({
           role="alert"
         >
           <TriangleAlert className="shrink-0" size={15} aria-hidden="true" />
-          <span>组件版本不一致，请重启 dsivio</span>
+          <span>组件版本不一致，请重启 Kivio</span>
         </div>
       )}
 
@@ -241,7 +241,7 @@ export const ChatConversationPane = memo(function ChatConversationPane({
               <div className="flex justify-center px-4 pt-2">
                 <span
                   className="inline-flex max-w-full items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] text-amber-700 dark:bg-amber-500/15 dark:text-amber-400"
-                  title="这条会话在 CLI 那边继续聊过。dsivio 里的历史是导入时的快照，不会自动同步；续聊时 CLI 用的仍是它自己那份完整上下文。"
+                  title="这条会话在 CLI 那边继续聊过。Kivio 里的历史是导入时的快照，不会自动同步；续聊时 CLI 用的仍是它自己那份完整上下文。"
                 >
                   <span className="truncate">这条会话在 CLI 那边有新内容，此处显示的历史不完整</span>
                 </span>

@@ -6,7 +6,7 @@ from runtime import comfy_command
 
 command = comfy_command()
 if not command:
-    print('内置 Comfy MCP 不完整，请重新安装 Dsivio', file=sys.stderr)
+    print('请先在本机安装 comfy-mcp 和 comfy-cli', file=sys.stderr)
     sys.exit(1)
 os.environ['COMFYUI_URL'] = os.environ.get('COMFYUI_URL') or get_provider('comfy').get('base_url') or 'http://192.168.1.171:8188'
 # CLI probes (system_stats/free) use COMFY_LOCAL_URL rather than --host/--port.

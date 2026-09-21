@@ -1,5 +1,4 @@
 import { RequirementComposer } from './RequirementComposer'
-import { collectBriefImagePaths } from './RequirementOptimize'
 import { useEffect, useState, type DragEvent } from 'react'
 import type { ImageDropZone } from './studioDrop'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -337,8 +336,6 @@ export function ImageWorkflow({
               )}
               <RequirementComposer label="制作要求"  value={brief.requirement}
                 onChange={requirement => onChange({ requirement })}
-                preferredAssistantId={brief.assistantId} onAssistantChange={assistantId => onChange({ assistantId })}
-                mediaPaths={collectBriefImagePaths(brief)}
                 placeholder={fromSet ? '例如：保留这套图的版式，以后只换商品。' : '例如：做一套简洁的电商主图模板，包含卖点、细节和场景。'} />
             </div>
             <aside className="is-spec-column">

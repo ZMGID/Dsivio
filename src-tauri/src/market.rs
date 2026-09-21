@@ -687,12 +687,7 @@ pub async fn market_command(
         return Ok(json!({"example":example,"assetBase":base}));
     }
     let _guard = mutation_lock().lock().await;
-    if action == "prepare"
-        && !state
-            .chat_active_replies
-            .lock()
-            .map_err(|_| "聊天状态暂不可用")?
-            .is_empty()
+    if action == "prepare" && state.chat_runtime().has_any_active_reply()
     {
         return Err("当前仍有对话任务在运行，请结束后再更改应用加载状态。".into());
     }

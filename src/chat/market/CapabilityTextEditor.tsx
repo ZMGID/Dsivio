@@ -1,4 +1,4 @@
-import type { Lang } from '../../settings/i18n'
+import type { Lang } from '../../components/i18n'
 
 export function CapabilityTextEditor({ value, onChange, lang }: { value: string; onChange: (value: string) => void; lang: Lang }) {
   const zh = lang === 'zh'

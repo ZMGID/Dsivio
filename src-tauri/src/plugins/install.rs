@@ -12,8 +12,8 @@ use super::lifecycle::{
 };
 use super::state::{
     default_binary_filename, is_enabled, kivio_binary_path, meta_path, plugin_dir, probe_version,
-    read_meta, refresh_process_path_for_detection, resolve_binary, resolve_binary_cached,
-    resolve_binary_for_status, skill_dir, write_meta, PluginMeta,
+    read_meta, refresh_process_path_for_detection, resolve_binary, resolve_binary_for_status,
+    skill_dir, write_meta, PluginMeta,
 };
 use crate::proc::NoConsoleWindow;
 use crate::state::AppState;
@@ -91,7 +91,7 @@ pub fn list_plugin_statuses() -> Result<Vec<PluginStatus>, String> {
     Ok(PLUGIN_CATALOG.iter().map(status_for).collect())
 }
 
-/// 无 spawn 的快速列表：查托管目录、进程 PATH、官方目录 + meta.json（enabled/version），
+/// 无 spawn 的缓存态列表：只查文件（kivio 托管路径）+ meta.json（enabled/version），
 /// 不跑 `which` / `--version` 子进程。前端首屏用它秒开页面；完整探测只在手动刷新/操作后跑。
 pub fn list_plugin_statuses_cached() -> Result<Vec<PluginStatus>, String> {
     Ok(PLUGIN_CATALOG.iter().map(status_for_cached).collect())
@@ -99,7 +99,6 @@ pub fn list_plugin_statuses_cached() -> Result<Vec<PluginStatus>, String> {
 
 /// 填充 mcp_active（settings 里该 server 是否已注册且 enabled）。纯 settings 读，无 spawn。
 fn fill_mcp_active(list: &mut [PluginStatus], state: &AppState) {
-    super::lifecycle::heal_disabled_plugin_mcp(state);
     let settings = state.settings_read();
     for status in list.iter_mut() {
         if let Some(sid) = status.mcp_server_id.as_deref() {
@@ -114,7 +113,7 @@ fn fill_mcp_active(list: &mut [PluginStatus], state: &AppState) {
 }
 
 /// 构造一条 PluginStatus。`installed` 由调用方决定（精确探测用 `path.is_some()`，缓存态用
-/// 实际文件存在），`path`/`version` 同理由调用方按快/慢路径填入。
+/// kivio 路径存在 + meta 记录），`path`/`version` 同理由调用方按快/慢路径填入。
 fn build_status(
     catalog: &CatalogPlugin,
     kivio: &Option<PathBuf>,
@@ -175,14 +174,19 @@ fn status_for(catalog: &CatalogPlugin) -> PluginStatus {
     build_status(catalog, &kivio, path, installed, version)
 }
 
-/// 无子进程，安装状态依据实际文件；元数据只提供开关和缓存版本。
+/// 缓存态：无子进程。installed 取「kivio 托管二进制存在」或「meta 记录装过/启用过」，
+/// version 直接用 meta 缓存值。system-PATH 安装但无 meta 的插件此处可能暂显未装，随后
+/// 被手动刷新的完整探测修正——秒开优先，短暂不精确可接受。
 fn status_for_cached(catalog: &CatalogPlugin) -> PluginStatus {
     let kivio = kivio_binary_path(catalog.id);
     let meta = read_meta(catalog.id);
-    let path = resolve_binary_cached(catalog);
-    let installed = path.is_some();
+    let installed = kivio.is_some()
+        || meta
+            .as_ref()
+            .map(|m| m.enabled || m.version.is_some() || m.installed_at.is_some())
+            .unwrap_or(false);
     let version = meta.and_then(|m| m.version);
-    build_status(catalog, &kivio, path, installed, version)
+    build_status(catalog, &kivio, kivio.clone(), installed, version)
 }
 
 /// 用 AppState 填充 mcp_active（settings 里是否已注册且 enabled）
@@ -211,11 +215,6 @@ pub fn list_plugin_statuses_cached_with_state(
 /// 用户点「启用」后，Kivio 运行时再挂官方 MCP stdio + 把已装官方 Skill 接入 Agent。
 pub fn get_install_brief(id: &str) -> Result<PluginInstallBrief, String> {
     let catalog = catalog_plugin(id).ok_or_else(|| format!("unknown plugin: {id}"))?;
-    // 紫鸟官方 SETUP 是一个完整的本机交互流程（安装、系统浏览器授权、doctor），
-    // 且明确禁止沙盒内静默安装；不能套用下方默认的 CLI + MCP 模板。
-    if catalog.id == "ziniao-cli" {
-        return Ok(build_ziniao_cli_brief(catalog));
-    }
     // GUI 应用型插件（Skill 由 Kivio 下载、无 MCP，如 ego lite）：officecli 那套 MCP/skills-install
     // 模板不适用，走精简简报。
     if catalog.skill_download_url.is_some() {
@@ -338,22 +337,6 @@ PATH 若仅新终端生效：请用户在插件页点刷新，或重启 Kivio。
         readme_urls,
         user_message,
     })
-}
-
-fn build_ziniao_cli_brief(catalog: &CatalogPlugin) -> PluginInstallBrief {
-    let readme_urls = catalog
-        .readme_urls
-        .iter()
-        .map(|url| (*url).to_string())
-        .collect::<Vec<_>>();
-    PluginInstallBrief {
-        plugin_id: catalog.id.to_string(),
-        plugin_name: catalog.name.to_string(),
-        conversation_title: format!("安装插件 · {}", catalog.name),
-        readme_urls,
-        // 官方给出的文本本身就是完整的 Agent 安装任务，直接发送，避免二次包装改变语义。
-        user_message: catalog.install_doc.trim().to_string(),
-    }
 }
 
 fn official_install_program_args(script: &str) -> (&'static str, Vec<String>) {
@@ -1092,9 +1075,28 @@ pub(crate) fn write_skill_files(catalog: &CatalogPlugin) -> Result<(), String> {
 #[cfg(test)]
 mod skill_sync_tests {
     use super::{
-        build_status, catalog_plugin, get_install_brief, officecli_skill_folder,
+        build_status, catalog_plugin, fill_mcp_active, get_install_brief, officecli_skill_folder,
         official_install_program_args, official_skill_install_argvs, official_skills_need_install,
     };
+    use crate::settings::ChatMcpServer;
+    use crate::state::test_app_state;
+
+    #[test]
+    fn filling_plugin_status_is_read_only_for_settings() {
+        let state = test_app_state();
+        state.update_settings_for_test(|settings| {
+            settings.chat_tools.servers.push(ChatMcpServer {
+                id: "plugin-package-00000000-0000-0000-0000-000000000000".to_string(),
+                enabled: true,
+                ..ChatMcpServer::default()
+            })
+        });
+
+        let mut statuses = Vec::new();
+        fill_mcp_active(&mut statuses, &state);
+
+        assert!(state.settings_read().chat_tools.servers[0].enabled);
+    }
 
     #[test]
     fn official_install_wraps_readme_command() {
@@ -1127,25 +1129,6 @@ mod skill_sync_tests {
     }
 
     #[test]
-    fn ziniao_brief_sends_official_setup_verbatim() {
-        let brief = get_install_brief("ziniao-cli").expect("brief");
-        let catalog = catalog_plugin("ziniao-cli").expect("ziniao-cli");
-        assert_eq!(brief.user_message, catalog.install_doc.trim());
-        assert!(brief
-            .user_message
-            .contains("npm install -g @ziniao-open/cli"));
-        assert!(brief
-            .user_message
-            .contains("ziniao-cli skills install --copy"));
-        assert!(brief.user_message.contains("ziniao-cli config init --new"));
-        assert!(brief.user_message.contains("memberAuth?cliRequestId="));
-        assert!(brief.user_message.contains("ziniao-cli doctor"));
-        assert!(brief
-            .user_message
-            .starts_with("# 帮我安装并初始化紫鸟开放平台 CLI"));
-    }
-
-    #[test]
     fn officecli_skill_install_uses_the_official_command() {
         let office = catalog_plugin("officecli").expect("officecli");
         assert_eq!(
@@ -1155,9 +1138,6 @@ mod skill_sync_tests {
         let ego = catalog_plugin("ego-lite").expect("ego-lite");
         assert!(official_skill_install_argvs(ego).is_empty());
         assert!(!official_skills_need_install(ego));
-        let ziniao = catalog_plugin("ziniao-cli").expect("ziniao-cli");
-        assert!(official_skill_install_argvs(ziniao).is_empty());
-        assert!(!official_skills_need_install(ziniao));
         assert!(office.skill_ids.len() > 1);
     }
 
@@ -1171,28 +1151,5 @@ mod skill_sync_tests {
             value["canInstall"],
             serde_json::Value::Bool(catalog.host_install_command().is_some())
         );
-    }
-
-    #[test]
-    fn cached_status_detects_external_install_without_installation_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let executable = dir.path().join("cua-driver.exe");
-        std::fs::write(&executable, b"fixture; must never be executed").unwrap();
-        let mut catalog = catalog_plugin("officecli").unwrap().clone();
-        catalog.id = "test-external-install-without-meta";
-        catalog.binary = "test-external-install-without-meta";
-        catalog.known_binary_paths = Box::leak(
-            vec![&*Box::leak(
-                executable.to_string_lossy().into_owned().into_boxed_str(),
-            )]
-            .into_boxed_slice(),
-        );
-        let status = super::status_for_cached(&catalog);
-        assert!(status.installed);
-        assert!(!status.enabled);
-        assert_eq!(status.source, "system");
-        assert_eq!(status.path.as_deref(), executable.to_str());
-        std::fs::remove_file(executable).unwrap();
-        assert!(!super::status_for_cached(&catalog).installed);
     }
 }

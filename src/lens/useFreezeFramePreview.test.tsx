@@ -6,7 +6,7 @@ import { useFreezeFramePreview } from './useFreezeFramePreview'
 vi.mock('../api/tauri', () => ({ api: { lensReadFreezeFrame: vi.fn() } }))
 
 describe('freeze frame binary preview lifecycle', () => {
-  const create = vi.fn<(blob: Blob) => string>().mockReturnValue('blob:freeze-frame')
+  const create = vi.fn<(blob: Blob) => string>(() => 'blob:freeze-frame')
   const revoke = vi.fn()
 
   beforeEach(() => {

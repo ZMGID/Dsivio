@@ -96,11 +96,15 @@ pub async fn process_document(
 async fn ocr_image(state: &AppState, path: &Path, engine: &str) -> Result<String, String> {
     match engine {
         "system" => {
+            #[cfg(target_os = "macos")]
+            {
+                return state.macos_ocr.ocr_image(&path.to_string_lossy()).await;
+            }
             #[cfg(target_os = "windows")]
             {
                 return crate::windows_ocr::ocr_image(path).await;
             }
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             {
                 let _ = (state, path);
                 return Err("系统 OCR 在此平台不可用".into());

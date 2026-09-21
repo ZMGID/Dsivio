@@ -12,8 +12,8 @@ import { Check, FolderOpen, Image as ImageIcon, Layers3, Plus, Save, Settings2, 
 import { api, isTauriRuntime, type ModelProvider } from '../../api/tauri'
 import { getSettingsCached } from '../../api/settingsCache'
 import { Button, IconButton } from '../../components/Button'
-import { Select } from '../../settings/components'
-import { ModelPairSelect } from '../../settings/ModelPairSelect'
+import { Select } from '../../settings/public/controls'
+import { ModelPairSelect } from '../../settings/public/modelSelection'
 import type { ImageConfig, ImageTemplate, ImageTemplateSlot } from './types'
 import { builtinImageUrl } from './builtinTemplates'
 import { inferImageStudioProtocol, isImageGenerationModel, isVisionModel, reconcileImageStudioProtocol } from './studioModels'
@@ -41,9 +41,9 @@ export function StudioSelect({
       )
       .join('')
   const options = Children.toArray(children).flatMap((child) => {
-    if (!isValidElement<{ value?: string; children?: ReactNode }>(child)) return []
+    if (!isValidElement<{ value?: string | number; children?: ReactNode }>(child)) return []
     const label = text(child.props.children)
-    return [{ value: child.props.value ?? label, label }]
+    return [{ value: String(child.props.value ?? label), label }]
   })
   return (
     <Select

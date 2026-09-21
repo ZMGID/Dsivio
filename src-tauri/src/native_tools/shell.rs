@@ -59,21 +59,9 @@ fn apply_shell_tool_env(cmd: &mut Command, state: Option<&AppState>) {
     cmd.env("FORCE_COLOR", "0");
     cmd.env("PAGER", "cat");
 
-    let Some(state) = state else {
+    let Some(_state) = state else {
         return;
     };
-    let settings = state.settings_read();
-    if crate::plugins::packages::owner_enabled(crate::video_studio::PACKAGE_ID) {
-        if let Ok(environment) = crate::video_studio::runtime::environment() {
-            // Expose explicit runtime paths to bundled skills without changing
-            // PYTHONPATH/PYTHONHOME for unrelated user commands.
-            cmd.envs(
-                environment
-                    .into_iter()
-                    .filter(|(key, _)| key.starts_with("DSVIDEO_")),
-            );
-        }
-    }
     // PATH 合并：启用插件 bin 目录，再接系统 Path。
     let plugin_dirs = crate::plugins::enabled_bin_dirs();
     if !plugin_dirs.is_empty() {
@@ -276,7 +264,7 @@ pub(crate) fn build_shell_command(command: &str) -> Command {
             let mut c = Command::new(bash);
             // 与 PowerShell 分支同法:.arg() 把整段命令当单个 argv 传给 bash 的
             // -c,由 bash 自己的引号/转义规则解析,不在 Kivio 侧二次拆分。
-            c.args(["-o", "pipefail", "-c"]);
+            c.arg("-c");
             c.arg(command);
             return c;
         }
@@ -284,8 +272,8 @@ pub(crate) fn build_shell_command(command: &str) -> Command {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let mut c = Command::new("/bin/bash");
-        c.args(["-o", "pipefail", "-c", command]);
+        let mut c = Command::new("sh");
+        c.args(["-c", command]);
         c
     }
 }
@@ -774,17 +762,19 @@ async fn run_shell_command_background(
     // registry only holds the sender, never kills a pid directly.
     let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<()>();
 
-    state.register_background_command(BackgroundCommand {
-        job_id: job_id.clone(),
-        conversation_id: conversation_id.map(str::to_string),
-        pid,
-        command: command.to_string(),
-        cwd: cwd.display().to_string(),
-        log_path: log_path.clone(),
-        status: BackgroundCommandStatus::Running,
-        started_at: SystemTime::now(),
-        kill_tx: Some(kill_tx),
-    });
+    state
+        .background_commands_handle()
+        .register(BackgroundCommand {
+            job_id: job_id.clone(),
+            conversation_id: conversation_id.map(str::to_string),
+            pid,
+            command: command.to_string(),
+            cwd: cwd.display().to_string(),
+            log_path: log_path.clone(),
+            status: BackgroundCommandStatus::Running,
+            started_at: SystemTime::now(),
+            kill_tx: Some(kill_tx),
+        });
 
     // Reap the child off-thread: race a self-exit against a kill request. The
     // waiter owns the Child for its whole lifetime, so a kill always targets the
@@ -810,14 +800,7 @@ async fn run_shell_command_background(
                 BackgroundCommandStatus::Killed
             }
         };
-        let mut map = waiter_state.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(job) = map.get_mut(&waiter_job) {
-            // Do not clobber a Killed status set by kill_background; the kill
-            // path is the authority on a killed job's terminal status.
-            if !matches!(job.status, BackgroundCommandStatus::Killed) {
-                job.status = status;
-            }
-        }
+        waiter_state.complete(&waiter_job, status);
     });
 
     Ok(format!(
@@ -834,13 +817,6 @@ const BASH_OUTPUT_POLL_INTERVAL_MS: u64 = 200;
 
 /// 该作业是否属于调用方会话。调用方无会话上下文（`None`）时不设限（headless /
 /// 测试路径）；作业本身无会话归属时同样放行（旧作业 / 测试种入）。
-fn job_visible_to(job: &BackgroundCommand, caller: Option<&str>) -> bool {
-    match (caller, job.conversation_id.as_deref()) {
-        (Some(caller), Some(owner)) => caller == owner,
-        _ => true,
-    }
-}
-
 fn bash_output_wait_ms(arguments: &Value) -> u64 {
     arguments
         .get("wait_ms")
@@ -856,11 +832,9 @@ fn snapshot_bash_output(
     conversation_id: Option<&str>,
 ) -> Result<(BackgroundCommandStatus, String, u64, String), String> {
     let (status, log_path, command) = {
-        let map = state.background_commands_handle();
-        let map = map.lock().unwrap_or_else(|e| e.into_inner());
-        let job = map
-            .get(job_id)
-            .filter(|job| job_visible_to(job, conversation_id))
+        let job = state
+            .background_commands_handle()
+            .snapshot(job_id, conversation_id)
             .ok_or_else(|| format!("No background job with job_id {job_id}"))?;
         (
             job.status.clone(),
@@ -959,12 +933,9 @@ pub fn list_background(
     _arguments: &Value,
     conversation_id: Option<&str>,
 ) -> Result<String, String> {
-    let map = state.background_commands_handle();
-    let map = map.lock().unwrap_or_else(|e| e.into_inner());
-    let mut jobs: Vec<&BackgroundCommand> = map
-        .values()
-        .filter(|job| job_visible_to(job, conversation_id))
-        .collect();
+    let mut jobs = state
+        .background_commands_handle()
+        .snapshots(conversation_id, true);
     if jobs.is_empty() {
         return Ok("(no background jobs)".to_string());
     }
@@ -1003,32 +974,13 @@ pub fn kill_background(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "kill_background requires job_id".to_string())?;
 
-    let map = state.background_commands_handle();
-    let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
-    let job = map
-        .get_mut(job_id)
-        .filter(|job| job_visible_to(job, conversation_id))
-        .ok_or_else(|| format!("No background job with job_id {job_id}"))?;
-    if job.status.is_terminal() {
+    if !state
+        .background_commands_handle()
+        .kill(job_id, conversation_id)?
+    {
         return Ok(format!(
             "job_id: {job_id} already finished (status unchanged); nothing to kill."
         ));
-    }
-    // Mark Killed under the lock, then signal the waiter to kill+reap. The
-    // waiter still owns the live Child, so it kills the live process group
-    // rather than a pid this lock holder might read after a reap (TOCTOU). If
-    // there is no waiter (e.g. a seeded test job), fall back to a direct
-    // process-group kill of the recorded pid.
-    job.status = BackgroundCommandStatus::Killed;
-    match job.kill_tx.take() {
-        Some(kill_tx) => {
-            let _ = kill_tx.send(());
-        }
-        None => {
-            if let Some(pid) = job.pid {
-                kill_process_group(pid);
-            }
-        }
     }
     Ok(format!("job_id: {job_id} killed."))
 }
@@ -1178,21 +1130,6 @@ fn format_command_output(output: &CommandOutput) -> String {
 mod tests {
     use super::*;
     use crate::native_tools::user_home_dir;
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn pipeline_failure_is_not_hidden_by_tee_or_tail() {
-        let output = build_shell_command("printf 'provider failed\\n' >&2; (exit 7) | cat")
-            .output()
-            .await
-            .unwrap();
-        assert_eq!(output.status.code(), Some(7));
-        let output = build_shell_command("printf ok | cat")
-            .output()
-            .await
-            .unwrap();
-        assert!(output.status.success());
-    }
 
     #[test]
     fn default_cwd_uses_first_workspace_root_when_configured() {
@@ -1352,17 +1289,19 @@ mod tests {
         let job_id = uuid::Uuid::new_v4().to_string();
         let log_path = std::env::temp_dir().join(format!("{BG_CMD_LOG_PREFIX}{job_id}.log"));
         std::fs::write(&log_path, b"hello").expect("seed log");
-        state.register_background_command(BackgroundCommand {
-            job_id: job_id.clone(),
-            conversation_id: None,
-            pid: None,
-            command: "seed".to_string(),
-            cwd: ".".to_string(),
-            log_path: log_path.clone(),
-            status: BackgroundCommandStatus::Exited { code: Some(0) },
-            started_at: SystemTime::now(),
-            kill_tx: None,
-        });
+        state
+            .background_commands_handle()
+            .register(BackgroundCommand {
+                job_id: job_id.clone(),
+                conversation_id: None,
+                pid: None,
+                command: "seed".to_string(),
+                cwd: ".".to_string(),
+                log_path: log_path.clone(),
+                status: BackgroundCommandStatus::Exited { code: Some(0) },
+                started_at: SystemTime::now(),
+                kill_tx: None,
+            });
 
         // First read from offset 0 sees all bytes and reports next_offset = 5.
         let first = bash_output(&state, &serde_json::json!({ "job_id": job_id }), None)
@@ -1397,17 +1336,19 @@ mod tests {
         let seed = |job_id: &str, conv: Option<&str>| {
             let log_path = std::env::temp_dir().join(format!("{BG_CMD_LOG_PREFIX}{job_id}.log"));
             std::fs::write(&log_path, b"x").expect("seed log");
-            state.register_background_command(BackgroundCommand {
-                job_id: job_id.to_string(),
-                conversation_id: conv.map(str::to_string),
-                pid: None,
-                command: format!("cmd-{job_id}"),
-                cwd: ".".to_string(),
-                log_path,
-                status: BackgroundCommandStatus::Running,
-                started_at: SystemTime::now(),
-                kill_tx: None,
-            });
+            state
+                .background_commands_handle()
+                .register(BackgroundCommand {
+                    job_id: job_id.to_string(),
+                    conversation_id: conv.map(str::to_string),
+                    pid: None,
+                    command: format!("cmd-{job_id}"),
+                    cwd: ".".to_string(),
+                    log_path,
+                    status: BackgroundCommandStatus::Running,
+                    started_at: SystemTime::now(),
+                    kill_tx: None,
+                });
         };
         let job_a = format!("conv-a-{}", uuid::Uuid::new_v4());
         let job_b = format!("conv-b-{}", uuid::Uuid::new_v4());
@@ -1659,17 +1600,19 @@ mod tests {
         let job_id = uuid::Uuid::new_v4().to_string();
         let log_path = std::env::temp_dir().join(format!("{BG_CMD_LOG_PREFIX}{job_id}.log"));
         std::fs::write(&log_path, log_bytes).expect("seed log");
-        state.register_background_command(BackgroundCommand {
-            job_id: job_id.clone(),
-            conversation_id: None,
-            pid: None,
-            command: "seed".to_string(),
-            cwd: ".".to_string(),
-            log_path: log_path.clone(),
-            status: BackgroundCommandStatus::Running,
-            started_at: SystemTime::now(),
-            kill_tx: None,
-        });
+        state
+            .background_commands_handle()
+            .register(BackgroundCommand {
+                job_id: job_id.clone(),
+                conversation_id: None,
+                pid: None,
+                command: "seed".to_string(),
+                cwd: ".".to_string(),
+                log_path: log_path.clone(),
+                status: BackgroundCommandStatus::Running,
+                started_at: SystemTime::now(),
+                kill_tx: None,
+            });
         (job_id, log_path)
     }
 
@@ -1704,10 +1647,10 @@ mod tests {
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(120)).await;
             let _ = std::fs::write(&write_path, b"hello-later");
-            let mut map = waiter_state.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(job) = map.get_mut(&waiter_job) {
-                job.status = BackgroundCommandStatus::Exited { code: Some(0) };
-            }
+            waiter_state.complete(
+                &waiter_job,
+                BackgroundCommandStatus::Exited { code: Some(0) },
+            );
         });
         let started = std::time::Instant::now();
         let out = bash_output(
@@ -1781,18 +1724,20 @@ mod tests {
         let job_id = uuid::Uuid::new_v4().to_string();
         let log_path = std::env::temp_dir().join(format!("{BG_CMD_LOG_PREFIX}{job_id}.log"));
         std::fs::write(&log_path, b"x").expect("seed log");
-        state.register_background_command(BackgroundCommand {
-            job_id: job_id.clone(),
-            conversation_id: None,
-            pid: None, // no real process → no kill, just registry/log cleanup
-            command: "seed".to_string(),
-            cwd: ".".to_string(),
-            log_path: log_path.clone(),
-            status: BackgroundCommandStatus::Exited { code: Some(0) },
-            started_at: SystemTime::now(),
-            kill_tx: None,
-        });
-        let _ = state.kill_all_background_commands();
+        state
+            .background_commands_handle()
+            .register(BackgroundCommand {
+                job_id: job_id.clone(),
+                conversation_id: None,
+                pid: None, // no real process → no kill, just registry/log cleanup
+                command: "seed".to_string(),
+                cwd: ".".to_string(),
+                log_path: log_path.clone(),
+                status: BackgroundCommandStatus::Exited { code: Some(0) },
+                started_at: SystemTime::now(),
+                kill_tx: None,
+            });
+        let _ = state.background_commands_handle().kill_all();
         // Registry cleared and the per-job log removed.
         let listed = list_background(&state, &serde_json::json!({}), None).unwrap();
         assert!(listed.contains("no background jobs"), "{listed}");
@@ -1808,24 +1753,28 @@ mod tests {
             let job_id = uuid::Uuid::new_v4().to_string();
             let log_path = std::env::temp_dir().join(format!("{BG_CMD_LOG_PREFIX}{job_id}.log"));
             std::fs::write(&log_path, b"x").expect("seed log");
-            state.register_background_command(BackgroundCommand {
-                job_id: job_id.clone(),
-                conversation_id: conversation_id.map(str::to_string),
-                pid: None, // 无真实进程：只验注册表与日志的清理
-                command: "seed".to_string(),
-                cwd: ".".to_string(),
-                log_path: log_path.clone(),
-                status: BackgroundCommandStatus::Running,
-                started_at: SystemTime::now(),
-                kill_tx: None,
-            });
+            state
+                .background_commands_handle()
+                .register(BackgroundCommand {
+                    job_id: job_id.clone(),
+                    conversation_id: conversation_id.map(str::to_string),
+                    pid: None, // 无真实进程：只验注册表与日志的清理
+                    command: "seed".to_string(),
+                    cwd: ".".to_string(),
+                    log_path: log_path.clone(),
+                    status: BackgroundCommandStatus::Running,
+                    started_at: SystemTime::now(),
+                    kill_tx: None,
+                });
             (job_id, log_path)
         };
         let (doomed, doomed_log) = seed(Some("conv_doomed"));
         let (other, other_log) = seed(Some("conv_other"));
         let (orphan, orphan_log) = seed(None);
 
-        state.kill_background_commands_for_conversation("conv_doomed");
+        state
+            .background_commands_handle()
+            .kill_for_conversation("conv_doomed");
 
         let listed = list_background(&state, &serde_json::json!({}), None).unwrap();
         assert!(!listed.contains(&doomed), "本对话的作业应被摘除：{listed}");

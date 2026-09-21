@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
           cache: npm
 
       - name: Install frontend dependencies
@@ -37,22 +37,20 @@ jobs:
       - name: Check application icons
         run: npm run icons:check
 
+      - name: Check desktop packaging contracts
+        run: npm run package:check && npm run test:packaging
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup build-time Python packager
-        uses: astral-sh/setup-uv@v6
-        with:
-          version: '0.10.7'
-
-      - name: Build and verify bundled MCP runtimes
-        run: npm run build:video-runtime
-
-      - name: Check prepared package resources
-        run: npm run package:check && npm run test:packaging
+      - name: Build Swift sidecar
+        run: npm run build:swift
 
       - name: Lint
         run: npm run lint
+
+      - name: Architecture boundaries
+        run: npm run architecture:check
 
       # typecheck 本身就串了 protocol:check（见 package.json），生成物漂移在这一步拦住。
       - name: Typecheck
@@ -61,5 +59,7 @@ jobs:
       - name: Frontend tests
         run: npm run test
 
+      # tauri-build 会校验 externalBin（kivio-ocr-helper）对应当前 target triple 的二进制存在。
+      # 上面的 build:swift 在 macOS 上构建真实 Swift sidecar 满足校验，否则这一步会在 build-script 阶段失败。
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml

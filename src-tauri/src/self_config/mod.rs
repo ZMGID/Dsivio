@@ -7,7 +7,7 @@ mod tests;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 use crate::mcp::native_registry::{text_tool_result, NativeCallCtx, NativeToolFuture};
 use crate::mcp::types::{ChatToolDefinition, McpToolCallResult};
@@ -46,7 +46,7 @@ fn definition(
         description: description.into(),
         source: "native".into(),
         server_id: None,
-        server_name: Some("dsivio".into()),
+        server_name: Some("Kivio".into()),
         input_schema,
         sensitive,
         annotations: None,
@@ -173,7 +173,7 @@ pub fn inspect(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
 }
 
 fn status_summary(settings: &Settings, cwd: Option<&Path>) -> Value {
-    json!({"application":"dsivio","version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,
+    json!({"application":"Kivio","version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,
         "appData":crate::app_data::app_data_dir(),"userSkills":crate::skills::kivio_skills_dir(),"cwd":cwd,
         "skillRuntime":settings.chat_tools.native_tools.skill_runtime,"skillAutoMatch":settings.chat_tools.skill_auto_match,
         "skillScanPaths":settings.chat_tools.skill_scan_paths,"disabledSkillIds":settings.chat_tools.disabled_skill_ids,
@@ -213,10 +213,6 @@ pub fn configure(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
             serde_json::from_value(ctx.arguments.clone()).map_err(|e| e.to_string())?;
         let before = ctx.state.settings_read().clone();
         let operation = configure_action(&ctx, action).await;
-        if operation.is_ok() {
-            // Notify webviews without broadcasting settings or credentials.
-            let _ = ctx.app.emit("kivio-configuration-changed", ());
-        }
         match operation {
             Ok(value) => result(
                 &before,
@@ -389,12 +385,7 @@ fn update_settings(
     ctx: &NativeCallCtx<'_>,
     change: impl FnOnce(&mut Settings) -> Result<(), String>,
 ) -> Result<(), String> {
-    // Read-modify-persist under the application's settings lock, just like package activation.
-    let mut current = ctx.state.settings_write();
-    let mut next = current.clone();
-    change(&mut next)?;
-    crate::settings::persist_settings(ctx.app, &next)?;
-    *current = next;
+    crate::settings::update_settings(ctx.app, ctx.state, change)?;
     Ok(())
 }
 

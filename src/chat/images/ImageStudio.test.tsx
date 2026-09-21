@@ -363,7 +363,7 @@ describe('Built-in image workflows', () => {
     expect(screen.getByRole('region', { name: '图片工作台' })).toHaveClass('kv')
     expect(screen.getByRole('main')).toHaveClass('custom-scrollbar')
     expect(screen.getByLabelText('图片要求')).toHaveClass('kv-textarea', 'custom-scrollbar')
-    expect(screen.getByRole('button', { name: '选择助手' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '选择助手' })).toBeNull()
     fireEvent.click(screen.getByText('更多设置'))
     expect(screen.queryByText('更多场景')).not.toBeInTheDocument()
     expect(screen.queryByText('最近任务')).not.toBeInTheDocument()

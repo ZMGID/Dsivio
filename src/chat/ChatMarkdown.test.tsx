@@ -33,20 +33,6 @@ describe('ChatMarkdown 公式稳定性', () => {
 })
 
 describe('ChatMarkdown artifact 图片', () => {
-  it('does not append emphasis markers after a generated image', () => {
-    for (const name of ['generated-image-1.png', 'generated_image_1.png']) {
-      const { container, unmount } = render(
-        <ChatMarkdown
-          content={`![结果图](${name})`}
-          artifacts={[{ name, mimeType: 'image/png', dataUrl: 'data:image/png;base64,AAAA' }]}
-        />,
-      )
-      expect(container.querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,AAAA')
-      expect(container.textContent?.trim()).toBe('')
-      unmount()
-    }
-  })
-
   it('places files and images by exact ID and resolves artifacts arriving after the text', () => {
     const content = 'Before\n\n![Selected](artifact:art_second)\n\nBetween\n\n[Video](artifact:art_video)\n\nAfter'
     const { container, rerender } = render(<ChatMarkdown content={content} artifacts={[]} />)

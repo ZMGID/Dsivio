@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Check } from 'lucide-react'
-import { open } from '@tauri-apps/plugin-dialog'
-import { type Settings } from '../api/tauri'
-import { getSettingsCached, importSettingsCached, saveSettingsCached } from '../api/settingsCache'
-import { i18n, type Lang } from '../settings/i18n'
-import { usesNativeTitlebar } from '../chat/platform'
+import { type Settings, type SettingsVersion } from '../api/tauri'
+import { getSettingsSnapshotCached, saveSettingsSnapshotCached, updateSettingsCached } from '../api/settingsCache'
+import { i18n, type Lang } from '../components/i18n'
+import { usesNativeTitlebar } from '../utils/windowPlatform'
 import { Button } from '../components/Button'
 import { ONBOARDING_STEPS, type OnboardingStepId } from './types'
 import { canCompleteOnboarding, validateProviderStep } from './validation'
@@ -32,14 +31,12 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
   const [stepIndex, setStepIndex] = useState(0)
   const [skipConfirmOpen, setSkipConfirmOpen] = useState(false)
   const [providerBypass, setProviderBypass] = useState(false)
-  const busy = saving || importing
+  const settingsVersionRef = useRef<SettingsVersion | null>(null)
 
   const stepId = ONBOARDING_STEPS[stepIndex] ?? 'welcome'
   const lang = (settings?.settingsLanguage || 'zh') as Lang
@@ -48,8 +45,11 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
   const loadSettings = useCallback(async () => {
     setLoading(true)
     setLoadError(null)
+    setSaveError(null)
     try {
-      const loaded = await getSettingsCached()
+      const snapshot = await getSettingsSnapshotCached()
+      const loaded = snapshot.settings
+      settingsVersionRef.current = snapshot.version
       // 首次运行按系统语言自动设定界面语言（欢迎页起即本地化）；但若用户此前已选过语言
       // （如重跑引导的老用户），沿用其选择，不要用系统 locale 覆盖。
       setSettings({
@@ -72,24 +72,6 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     setSettings(next)
   }, [])
 
-  const handleImportConfig = useCallback(async () => {
-    if (busy) return
-    setImporting(true)
-    setImportError(null)
-    try {
-      const selected = await open({ multiple: false, filters: [{ name: 'JSON', extensions: ['json'] }] })
-      if (!selected || typeof selected !== 'string') return
-      const imported = await importSettingsCached(selected, true)
-      setSettings(imported)
-      onSettingsChange?.()
-      onComplete()
-    } catch (err) {
-      setImportError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setImporting(false)
-    }
-  }, [busy, onComplete, onSettingsChange])
-
   const providerValidation = useMemo(
     () => (settings ? validateProviderStep(settings) : { ok: false }),
     [settings],
@@ -111,11 +93,14 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
     setSaving(true)
     setSaveError(null)
     try {
-      const saved = await saveSettingsCached({
+      const expectedVersion = settingsVersionRef.current
+      if (!expectedVersion) throw new Error('Settings version is unavailable')
+      const saved = await saveSettingsSnapshotCached({
         ...settings,
         onboardingStatus: status,
-      })
-      setSettings(saved)
+      }, expectedVersion)
+      settingsVersionRef.current = saved.version
+      setSettings(saved.settings)
       onSettingsChange?.()
       return true
     } catch (err) {
@@ -136,16 +121,17 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
 
   const handleSkipAfterLoadFailure = useCallback(async () => {
     setSaving(true)
+    setSaveError(null)
     try {
-      const loaded = await getSettingsCached()
-      await saveSettingsCached({ ...loaded, onboardingStatus: 'skipped' })
+      await updateSettingsCached((current) => ({ ...current, onboardingStatus: 'skipped' }))
       onSettingsChange?.()
+      onSkip()
     } catch (err) {
       console.error('Failed to skip onboarding after load error:', err)
+      setSaveError(err instanceof Error ? err.message : String(err))
     } finally {
       setSaving(false)
     }
-    onSkip()
   }, [onSettingsChange, onSkip])
 
   const handleFinish = useCallback(async () => {
@@ -187,6 +173,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
           <h2 className="onboarding-title">{errorT.onboardingLoadErrorTitle}</h2>
           <p className="onboarding-subtitle">{errorT.onboardingLoadErrorDesc}</p>
           {loadError ? <p className="onboarding-panel-note">{loadError}</p> : null}
+          {saveError ? <p className="onboarding-panel-note" role="alert">{saveError}</p> : null}
           <div className="onboarding-error-actions">
             <Button
               variant="primary"
@@ -240,7 +227,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
       >
         <div className="onboarding-side-brand" data-tauri-drag-region>
           <img src="/logo-mark.png" alt="" className="onboarding-side-logo" draggable={false} />
-          <span className="onboarding-side-brand-name">dsivio</span>
+          <span className="onboarding-side-brand-name">Dsivio</span>
         </div>
         <nav className="onboarding-side-steps">
           {ONBOARDING_STEPS.map((step, index) => {
@@ -252,7 +239,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
                 type="button"
                 className={`onboarding-side-step${active ? ' active' : ''}${done ? ' done' : ''}`}
                 data-clickable={done ? 'true' : 'false'}
-                disabled={!done || busy}
+                disabled={!done}
                 onClick={() => {
                   if (done) setStepIndex(index)
                 }}
@@ -273,7 +260,6 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
           <Button
             variant="ghost"
             onClick={() => setSkipConfirmOpen(true)}
-            disabled={busy}
             data-tauri-drag-region="false"
           >
             {t.onboardingSkip}
@@ -281,15 +267,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
         </div>
 
         <div className="onboarding-body kv-scroll custom-scrollbar" data-tauri-drag-region="false">
-          {stepId === 'welcome' ? (
-            <WelcomeStep
-              t={t}
-              onImportConfig={() => void handleImportConfig()}
-              importing={importing}
-              disabled={busy}
-              importError={importError}
-            />
-          ) : null}
+          {stepId === 'welcome' ? <WelcomeStep t={t} /> : null}
           {stepId === 'provider' ? (
             <ProviderStep
               t={t}
@@ -322,7 +300,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
               <Button
                 variant="ghost"
                 onClick={goBack}
-                disabled={busy}
+                disabled={saving}
                 data-tauri-drag-region="false"
               >
                 <ArrowLeft size={14} />
@@ -335,7 +313,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
                 <Button
                   variant="ghost"
                   onClick={goNext}
-                  disabled={busy}
+                  disabled={saving}
                   data-tauri-drag-region="false"
                 >
                   {t.onboardingWebSearchSkipStep}
@@ -344,7 +322,7 @@ export function OnboardingShell({ onComplete, onSkip, onSettingsChange }: Onboar
               <Button
                 variant="primary"
                 onClick={handlePrimary}
-                disabled={busy || (stepId !== 'done' && !canGoNext) || (stepId === 'done' && !canCompleteOnboarding(settings) && !providerBypass)}
+                disabled={saving || (stepId !== 'done' && !canGoNext) || (stepId === 'done' && !canCompleteOnboarding(settings) && !providerBypass)}
                 data-tauri-drag-region="false"
               >
                 {primaryLabel}

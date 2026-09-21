@@ -736,22 +736,25 @@ pub(crate) fn image_generation_model_for_session(
     }
 }
 
-fn image_generation_model_name_heuristic(_provider: &ModelProvider, model: &str) -> Option<bool> {
-    // 供应商名称可能是“Gemini 生图”，不能因此把它下面的文本模型也当成生图模型。
-    let descriptor = normalize_model_name(model);
+fn image_generation_model_name_heuristic(provider: &ModelProvider, model: &str) -> Option<bool> {
+    let descriptor = format!(
+        "{} {} {} {}",
+        provider.name,
+        provider.base_url,
+        provider.api_format,
+        normalize_model_name(model)
+    )
+    .to_ascii_lowercase();
     let known_image_model = [
         "gpt-image",
         "dall-e",
         "grok-imagine-image",
-        "grok-2-image",
         "gemini-3.1-flash-image",
         "gemini-3.1-flash-lite-image",
         "gemini-3-pro-image",
         "gemini-2.5-flash-image",
         "nano-banana",
         "qwen-image",
-        "z-image",
-        "ernie-image",
         "glm-image",
         "hy-image",
         "seedream",
@@ -1182,11 +1185,12 @@ mod tests {
 
     #[test]
     fn reasoning_efforts_resolve_from_db_family_and_default() {
-        // 与上游模型库显式推理等级保持一致。
+        // 模型库显式列表：DeepSeek V4 含 xhigh+max（含用户的代理别名变体，靠前缀匹配）。
         // 库里能查到时 provider 无关，传 None。
-        assert_eq!(
-            reasoning_efforts_for_model(None, "deepseek-flash"),
-            vec!["low", "high", "xhigh", "max"]
+        let ds = reasoning_efforts_for_model(None, "DeepSeek-V4-Flash");
+        assert!(
+            ds.contains(&"max".to_string()) && ds.contains(&"xhigh".to_string()),
+            "{ds:?}"
         );
         // GPT-5：有 xhigh、无 max（max 是 5.6 一代才加的）。
         let gpt = reasoning_efforts_for_model(None, "gpt-5.5");
@@ -1822,18 +1826,4 @@ mod tests {
             (262_144, false)
         );
     }
-}
-
-/// The same merged model catalog used by chat; no separate studio price database.
-pub(crate) fn media_pricing_catalog() -> Value {
-    let entries = model_database_entries()
-        .into_iter()
-        .flat_map(|m| m.iter())
-        .filter_map(|(id, entry)| {
-            entry
-                .get("mediaPricing")
-                .map(|price| (id.clone(), price.clone()))
-        })
-        .collect::<serde_json::Map<String, Value>>();
-    Value::Object(entries)
 }

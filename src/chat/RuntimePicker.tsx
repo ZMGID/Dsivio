@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Check, Brain, RefreshCw } from 'lucide-react'
-import { AgentIcon } from './AgentIcon'
-import { useT } from '../settings/i18n'
+import { AgentIcon } from '../components/AgentIcon'
+import { useT } from '../components/i18n'
 import { chatApi, type DetectedExternalAgent } from './api'
 import { chatTitlebarPillButtonClass } from './platform'
 import { IconButton } from '../components/Button'
@@ -153,8 +153,8 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
 
   const label = useMemo(() => {
     if (usesExternal) return currentAgent?.name ?? agentRuntime.externalAgentId ?? t.chatRuntimeLocalCli
-    if (usesChat) return 'dsivio Chat'
-    return 'dsivio Agent'
+    if (usesChat) return 'Kivio Chat'
+    return 'Kivio Agent'
   }, [agentRuntime.externalAgentId, currentAgent?.name, t, usesChat, usesExternal])
 
   const selectBuiltin = () => {
@@ -244,7 +244,7 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                   className={`kv-runtime-picker__agent${usesBuiltinAgent ? ' is-active' : ''}`}
                 >
                   <KivioMark size={20} variant="agent" />
-                  <span className="kv-runtime-picker__agent-name">dsivio Agent</span>
+                  <span className="kv-runtime-picker__agent-name">Kivio Agent</span>
                 </button>
                 <button
                   type="button"
@@ -255,7 +255,7 @@ function RuntimePickerBase({ agentRuntime, onRuntimeChange, conversationId, lock
                   className={`kv-runtime-picker__agent${usesChat ? ' is-active' : ''}`}
                 >
                   <KivioMark size={20} variant="chat" />
-                  <span className="kv-runtime-picker__agent-name">dsivio Chat</span>
+                  <span className="kv-runtime-picker__agent-name">Kivio Chat</span>
                 </button>
                 {availableAgents.map((agent) => {
                   const active = usesExternal && agentRuntime.externalAgentId === agent.id

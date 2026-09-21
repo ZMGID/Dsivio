@@ -390,7 +390,7 @@ pub(crate) async fn create_chat_conversation_internal(
         .map(|assistant| assistant.id.clone());
 
     let conversation = {
-        let _create_guard = state.chat_create_conversation_lock.lock().await;
+        let _create_guard = state.chat_runtime().lock_conversation_creation().await;
         if let Some(conversation) = crate::chat::repository::repository(app)
             .find_reusable_blank(
                 app,
@@ -661,7 +661,6 @@ pub(super) fn assistant_from_builder_args(arguments: &Value) -> Result<ChatAssis
         icon: str_field("icon"),
         color: str_field("color"),
         source: "user".to_string(),
-        category: String::new(),
         system_prompt: system_prompt.to_string(),
         provider_id: String::new(),
         model: String::new(),

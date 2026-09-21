@@ -9,7 +9,6 @@ import { TextEditContextMenu } from './TextEditContextMenu'
 const MENU_GAP = 6
 const MENU_MARGIN = 8
 const MENU_MAX_HEIGHT = 260
-const MENU_MIN_WIDTH = 168
 
 function useSelectMenuRect(
   open: boolean,
@@ -36,13 +35,11 @@ function useSelectMenuRect(
     const flipUp = spaceBelow < MENU_MAX_HEIGHT && spaceAbove > spaceBelow
     const available = Math.max(flipUp ? spaceAbove : spaceBelow, 0)
     const maxHeight = Math.max(Math.min(MENU_MAX_HEIGHT, available), 80)
-    const width = Math.max(rect.width, MENU_MIN_WIDTH)
-    const left = Math.min(Math.max(MENU_MARGIN, rect.left), window.innerWidth - width - MENU_MARGIN)
     if (flipUp) {
       // 用 bottom 定位让菜单底边贴着按钮向上生长，避免 top 计算后恒等于 MENU_MARGIN 导致飞到窗口顶部。
-      setMenuRect({ left, bottom: viewportH - rect.top + MENU_GAP, width, maxHeight })
+      setMenuRect({ left: rect.left, bottom: viewportH - rect.top + MENU_GAP, width: rect.width, maxHeight })
     } else {
-      setMenuRect({ left, top: rect.bottom + MENU_GAP, width, maxHeight })
+      setMenuRect({ left: rect.left, top: rect.bottom + MENU_GAP, width: rect.width, maxHeight })
     }
   }, [triggerRef])
 
@@ -88,6 +85,7 @@ function useSelectMenuOpen(
     }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault()
         setOpen(false)
         triggerRef.current?.focus()
       }
@@ -110,6 +108,7 @@ function useSelectMenuOpen(
 /** 与 Select 同款的选项菜单（portal）。 */
 function SelectMenuPortal({
   open,
+  triggerRef,
   menuRef,
   menuRect,
   options,
@@ -117,6 +116,7 @@ function SelectMenuPortal({
   onPick,
 }: {
   open: boolean
+  triggerRef: RefObject<HTMLElement | null>
   menuRef: RefObject<HTMLDivElement | null>
   menuRect: { left: number; top?: number; bottom?: number; width: number; maxHeight: number }
   options: SelectOption[]
@@ -132,29 +132,27 @@ function SelectMenuPortal({
       style={{ left: menuRect.left, top: menuRect.top, bottom: menuRect.bottom, width: menuRect.width, maxHeight: menuRect.maxHeight }}
       data-tauri-drag-region="false"
     >
-      {options.map((opt, index) => {
+      {options.map(opt => {
         const active = opt.value === value
-        const showGroup = !!opt.group && opt.group !== options[index - 1]?.group
         return (
-          <div key={opt.value}>
-            {showGroup && <div className="kv-select-group" role="presentation">{opt.group}</div>}
-            <button
-              type="button"
-              role="option"
-              aria-selected={active}
-              onClick={() => onPick(opt.value)}
-              title={opt.title || opt.label}
-              className={`kv-select-option ${active ? 'is-active' : ''}`}
-              data-tauri-drag-region="false"
-            >
-              <Check className="kv-select-option-check" strokeWidth={2.5} aria-hidden />
-              <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-            </button>
-          </div>
+          <button
+            key={opt.value}
+            type="button"
+            role="option"
+            aria-selected={active}
+            onClick={() => onPick(opt.value)}
+            title={opt.title || opt.label}
+            className={`kv-select-option ${active ? 'is-active' : ''}`}
+            data-tauri-drag-region="false"
+          >
+            <Check className="kv-select-option-check" strokeWidth={2.5} aria-hidden />
+            <span className="min-w-0 flex-1 truncate">{opt.label}</span>
+          </button>
         )
       })}
     </div>,
-    document.body,
+    // Native dialogs occupy the top layer; their menus must stay in that layer.
+    triggerRef.current?.closest('dialog[open]') ?? document.body,
   )
 }
 
@@ -212,6 +210,7 @@ export function Select({ value, onChange, options, className = '', disabled: dis
 
       <SelectMenuPortal
         open={open}
+        triggerRef={triggerRef}
         menuRef={menuRef}
         menuRect={menuRect}
         options={options}
@@ -291,6 +290,7 @@ export function SuggestInput({
       )}
       <SelectMenuPortal
         open={open && canSuggest}
+        triggerRef={triggerRef}
         menuRef={menuRef}
         menuRect={menuRect}
         options={options}

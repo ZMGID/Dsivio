@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { realpathSync, statSync, readFileSync, readdirSync } from 'node:fs'
+import { lstatSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -33,18 +33,14 @@ export function checkVersions(root, expectedVersion) {
   return config
 }
 
-function manifest(directory, prefix = '', root = realpathSync(directory), ancestors = []) {
-  const actual = realpathSync(directory)
-  assert.ok(!ancestors.includes(actual), `Cyclic resource link: ${directory}`)
-  const parents = [...ancestors, actual]
+function manifest(directory, prefix = '') {
   const result = {}
   for (const name of readdirSync(directory).sort()) {
     const relative = prefix ? `${prefix}/${name}` : name
     const file = path.join(directory, name)
-    const resolved = realpathSync(file)
-    assert.ok(resolved === root || resolved.startsWith(root + path.sep), `Resource link escapes its root: ${file}`)
-    const stat = statSync(file)
-    if (stat.isDirectory()) Object.assign(result, manifest(file, relative, root, parents))
+    const stat = lstatSync(file)
+    assert.ok(!stat.isSymbolicLink(), `Bundled resources must not contain symlinks: ${file}`)
+    if (stat.isDirectory()) Object.assign(result, manifest(file, relative))
     else {
       assert.ok(stat.isFile(), `Not a resource file: ${file}`)
       result[relative] = createHash('sha256').update(readFileSync(file)).digest('hex')

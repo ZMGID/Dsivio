@@ -94,6 +94,8 @@ fn sync_builtin_servers(
             server.enabled = previous.enabled;
             server.enabled_tools = previous.enabled_tools.clone();
             for (key, value) in &previous.env {
+                // Retire paths injected by the removed bundled runtime.
+                if matches!(key.as_str(), "DSVIDEO_RUNTIME_ROOT" | "DSVIDEO_RUNTIME_PATH" | "DSVIDEO_PYTHON" | "DSVIDEO_NODE" | "PATH" | "PYTHONPATH" | "PYTHONHOME" | "PYTHONNOUSERSITE") { continue; }
                 server
                     .env
                     .entry(key.clone())
@@ -219,11 +221,7 @@ fn video_metadata_from_probe(probe: &Value) -> Option<Value> {
 }
 
 async fn probe_video_metadata(source: &str) -> Option<Value> {
-    let executable = runtime::root().ok()?.join("bin").join(if cfg!(windows) {
-        "ffprobe.exe"
-    } else {
-        "ffprobe"
-    });
+    let executable = "ffprobe";
     let output = tokio::process::Command::new(executable)
         .args([
             "-v",
@@ -322,7 +320,7 @@ async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     command.creation_flags(0x08000000);
     let mut child = command
         .spawn()
-        .map_err(|e| format!("内置视频运行环境无法启动，请重新安装 dsivio：{e}"))?;
+        .map_err(|e| format!("无法启动本机 Python，请安装 Python 3 并确保命令可用：{e}"))?;
     child
         .stdin
         .take()
@@ -421,34 +419,9 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
         save["prompt"] = t["script"].clone();
         return worker(app, "prompt_result", save).await;
     }
-    let planner = if action == "plan" {
-        Some(planning::select(
-            crate::chat::storage::load_assistant_index(app)?.assistants,
-            b["assistantId"].as_str(),
-        )?)
-    } else {
-        None
-    };
-    let config = planner
-        .as_ref()
-        .map(|assistant| {
-            let settings = app.state::<crate::state::AppState>();
-            let (default_provider, default_model) = settings.settings_read().effective_chat_model();
-            StudioConfig {
-                agent_provider_id: if assistant.provider_id.is_empty() {
-                    default_provider
-                } else {
-                    assistant.provider_id.clone()
-                },
-                agent_model: if assistant.model.is_empty() {
-                    default_model
-                } else {
-                    assistant.model.clone()
-                },
-                ..StudioConfig::default()
-            }
-        })
-        .unwrap_or_default();
+    let settings = app.state::<crate::state::AppState>();
+    let (agent_provider_id, agent_model) = settings.settings_read().effective_chat_model();
+    let config = StudioConfig { agent_provider_id, agent_model, ..StudioConfig::default() };
     let root = runtime::resource_directory(app)?.join("video-studio");
     let mut images: Vec<(String, String)> = b["images"]
         .as_array()
@@ -482,7 +455,7 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
                 .or_else(|| t["script"].as_str()),
         );
         let instruction =
-            planning::instruction(planner.as_ref().ok_or("无视频助手")?, b, revision.is_some());
+            planning::instruction(b, revision.is_some());
         let context = revision
             .map(|(note, previous)| revise_context(previous, note, b))
             .unwrap_or_else(|| b.clone());
@@ -949,10 +922,9 @@ mod tests {
             .iter()
             .all(|s| !s.args.join(" ").contains("${")));
         for server in &resolved.servers {
-            assert!(std::path::Path::new(&server.command).is_absolute());
-            assert!(server.command.contains("video-runtime"));
+            assert!(["comfy-mcp", "mcp-video-analyzer"].contains(&server.command.as_str()));
             assert!(!server.args.iter().any(|arg| arg == "-y"));
-            assert!(server.env.contains_key("DSVIDEO_RUNTIME_ROOT"));
+            assert!(!server.env.contains_key("DSVIDEO_RUNTIME_ROOT"));
         }
     }
 
@@ -980,19 +952,19 @@ mod tests {
         });
         let new = ChatMcpServer {
             id: "builtin-analyzer".into(),
-            command: "/moved app/node".into(),
-            args: vec!["/moved app/analyzer.js".into()],
+            command: "mcp-video-analyzer".into(),
+            args: vec![],
             enabled: true,
-            env: [("PATH".into(), "new runtime".into())].into(),
+            env: Default::default(),
             ..Default::default()
         };
         sync_builtin_servers(&mut settings, vec![new.clone()]);
         sync_builtin_servers(&mut settings, vec![new]);
         let server = &settings.chat_tools.servers[0];
-        assert_eq!(server.command, "/moved app/node");
+        assert_eq!(server.command, "mcp-video-analyzer");
         assert!(!server.enabled);
         assert_eq!(server.enabled_tools, vec!["get_metadata"]);
-        assert_eq!(server.env["PATH"], "new runtime");
+        assert!(!server.env.contains_key("PATH"));
         assert_eq!(server.env["CUSTOM_ENDPOINT"], "http://localhost:8188");
         assert_eq!(settings.chat_tools.servers.len(), 2);
         assert_eq!(settings.chat_tools.servers[1].command, "user-command");

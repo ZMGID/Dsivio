@@ -1,11 +1,12 @@
+
 import { lazy, Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { Settings as SettingsIcon, Cpu } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { api, isTauriRuntime } from './api/tauri'
 import { getSettingsCached } from './api/settingsCache'
-import { i18n, type Lang } from './settings/i18n'
-import { useWindowInteractionFocus } from './utils/windowFocus'
+import { i18n, type Lang } from './components/i18n'
+import { useWindowInteractionFocus } from './api/windowFocus'
 import { ChatWindowHost } from './chat/ChatWindowHost'
 import {
   getRememberedChatRoute,
@@ -20,9 +21,7 @@ import {
 } from './chat/persistence'
 import { isChatPopoutPath } from './chat/popout/popoutRoutes'
 import { ChatErrorBoundary } from './chat/ChatErrorBoundary'
-import { normalizeThemeColorId } from './themeColors'
-import { dismissBootSplash } from './bootSplash'
-import './index.css'
+import './styles/app.css'
 
 const Lens = lazy(() => import('./Lens'))
 const Chat = lazy(() => import('./chat/Chat'))
@@ -265,10 +264,8 @@ function App() {
   // 应用主题设置
   const applyTheme = async () => {
     const settings = await getSettingsCached()
-    const nextMode = (settings.theme || 'system') as 'system' | 'light' | 'dark'
+    const nextMode = settings.theme
     setThemeMode(nextMode)
-    // Reuse the explicit theme before React/settings load on the next refresh.
-    try { localStorage.setItem('dsivio-theme-mode', nextMode) } catch { /* Storage may be unavailable. */ }
     setTranslucentSidebar(settings.translucentSidebar)
     const isDark = nextMode === 'dark' || (nextMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
     if (isDark) {
@@ -276,7 +273,7 @@ function App() {
     } else {
       document.documentElement.classList.remove('dark')
     }
-    document.documentElement.dataset.themeColor = normalizeThemeColorId(settings.themeColor)
+    document.documentElement.dataset.themeColor = settings.themeColor
     // UI 字号（整体缩放）+ 自定义字体：仅作用于聊天窗口，翻译窗/Lens 保持原始几何与布局。
     // 直接读 hash（稳定的 import）而非 mode state，避免让 applyTheme 变成不稳定依赖。
     const root = document.documentElement
@@ -403,7 +400,8 @@ function App() {
     }
   }, [persistChatWindowGeometry])
 
-  // 冷启动先露出闪屏（几何恢复后立刻 show），Chat 首屏就绪再揭开。
+  // 首次创建 chat 窗口时后端保持 hidden，把 show 交给前端；此处再把 show 从“App 挂载即弹出”
+  // 推迟到“Chat 首屏内容就绪”（onContentReady → revealChatWindowNow），避免窗口弹出后还在转圈。
   const revealedRef = useRef(false)
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const revealChatWindowNow = useCallback(() => {
@@ -415,14 +413,6 @@ function App() {
     }
     void revealChatWindow()
   }, [revealChatWindow])
-  const finishChatBoot = useCallback(() => {
-    if (revealTimerRef.current !== undefined) {
-      clearTimeout(revealTimerRef.current)
-      revealTimerRef.current = undefined
-    }
-    revealChatWindowNow()
-    dismissBootSplash()
-  }, [revealChatWindowNow])
 
   useLayoutEffect(() => {
     if (mode !== 'chat' && mode !== 'chat-popout') return
@@ -435,10 +425,10 @@ function App() {
       void revealChatWindow()
       return
     }
-    // 先露出闪屏，避免再等 React chunk。3s 兜底：chunk 失败 / ErrorBoundary / 信号丢失也揭开。
-    revealChatWindowNow()
+    // 兜底：内容就绪信号 3s 内未到达（chunk 加载失败 / 组件抛错被 ErrorBoundary 接住 / 信号丢失）
+    // 也强制 show，绝不让窗口永久 hidden。
     revealTimerRef.current = setTimeout(() => {
-      finishChatBoot()
+      revealChatWindowNow()
     }, 3000)
     return () => {
       if (revealTimerRef.current !== undefined) {
@@ -446,7 +436,7 @@ function App() {
         revealTimerRef.current = undefined
       }
     }
-  }, [mode, revealChatWindow, revealChatWindowNow, finishChatBoot])
+  }, [mode, revealChatWindow, revealChatWindowNow])
 
   useEffect(() => {
     if (mode !== 'chat') return
@@ -528,13 +518,17 @@ function App() {
       </Suspense>
     )
   }
-  const chatSuspenseFallback = <div className="h-full w-full bg-transparent" />
+  const chatSuspenseFallback = (
+    <div className="flex h-full w-full items-center justify-center bg-transparent">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800 dark:border-neutral-700 dark:border-t-neutral-200" />
+    </div>
+  )
   if (mode === 'chat-popout') {
     return (
       <ChatWindowHost translucentSidebar={translucentSidebar}>
         <Suspense fallback={chatSuspenseFallback}>
           <ChatErrorBoundary>
-            <ChatPopout onContentReady={finishChatBoot} />
+            <ChatPopout onContentReady={revealChatWindowNow} />
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>
@@ -545,7 +539,7 @@ function App() {
       <ChatWindowHost translucentSidebar={translucentSidebar}>
         <Suspense fallback={chatSuspenseFallback}>
           <ChatErrorBoundary>
-            <Chat onSettingsChange={applyTheme} onContentReady={finishChatBoot} />
+            <Chat onSettingsChange={applyTheme} onContentReady={revealChatWindowNow} />
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>

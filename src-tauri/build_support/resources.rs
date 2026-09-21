@@ -64,9 +64,6 @@ fn prune_directory(source: &Path, destination: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
     struct Fixture(PathBuf);
 
@@ -77,9 +74,8 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             let root = std::env::temp_dir().join(format!(
-                "kivio-resource-test-{}-{nonce}-{}",
-                std::process::id(),
-                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+                "kivio-resource-test-{}-{nonce}",
+                std::process::id()
             ));
             fs::create_dir_all(root.join("source/current")).unwrap();
             fs::create_dir_all(root.join("output/skills/current")).unwrap();

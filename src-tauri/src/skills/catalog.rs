@@ -29,22 +29,14 @@ pub fn format_catalog(
     }
 
     skills.sort_by(|a, b| a.meta.name.cmp(&b.meta.name));
-    let has_dsimage = skills.iter().any(|record| {
-        record.meta.id == "dsimage" || record.meta.name.eq_ignore_ascii_case("dsimage")
-    });
 
-    let mut header = if tools_available {
-        "The following Agent Skills are specialized playbooks for specific kinds of work. When the current task matches a skill's description, call the skill tool for that skill proactively — you do NOT need the user to name it or ask for it; matching the description is enough. Load the matching skill BEFORE calling its domain MCP tools; tool availability does not replace the playbook. Activating a skill loads its full step-by-step instructions and bundled resources, which produce markedly better results than improvising. After activating: read the skill's bundled files with `read` and run its scripts with `run_command`.\n\n".to_string()
+    let header = if tools_available {
+        "The following Agent Skills are specialized playbooks for specific kinds of work. When the current task matches a skill's description, call the skill tool for that skill proactively — you do NOT need the user to name it or ask for it; matching the description is enough. Activating a skill loads its full step-by-step instructions and bundled resources, which produce markedly better results than improvising. After activating: use `read` for bundled files and `bash` for scripts when those tools are declared in this request.\n\n"
     } else {
-        "The following Agent Skills are available for reference. The current model does not support tools, so the skill tool is unavailable. Use the catalog only as guidance, switch to a tools-capable provider for progressive loading, or set Skill fallback to SKILL.md only when a skill is selected.\n\n".to_string()
+        "The following Agent Skills are available for reference. Tool-based skill activation is unavailable in this request. Use the catalog only as reference; this alone does not identify a model capability or permission failure. A selected skill may still be supplied through the SKILL.md-only fallback.\n\n"
     };
-    if tools_available && has_dsimage {
-        header.push_str(
-            "For image generation or image editing, activate `dsimage` first and follow it before using any direct image-generation tool.\n\n",
-        );
-    }
 
-    let mut out = header;
+    let mut out = String::from(header);
     out.push_str("<available_skills>\n");
     for record in skills {
         out.push_str("  <skill>\n");
@@ -129,22 +121,8 @@ mod tests {
 
         let catalog = format_catalog(&registry, None, false, |_| true);
         assert!(!catalog.contains("call the skill tool"));
-        assert!(catalog.contains("does not support tools"));
+        assert!(catalog.contains("unavailable in this request"));
         assert!(catalog.contains("<location>/skills/auto/SKILL.md</location>"));
-    }
-
-    #[test]
-    fn catalog_prioritizes_dsimage_for_image_work() {
-        let registry = SkillRegistry {
-            records: vec![sample_record("dsimage", "dsimage", false)],
-            warnings: vec![],
-        };
-
-        let catalog = format_catalog(&registry, None, true, |_| true);
-        assert!(catalog.contains("activate `dsimage` first"));
-
-        let unavailable = format_catalog(&registry, None, false, |_| true);
-        assert!(!unavailable.contains("activate `dsimage` first"));
     }
 
     #[test]

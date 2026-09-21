@@ -202,16 +202,6 @@ mod tests {
     }
 
     #[test]
-    fn bundled_dsimage_preserves_skill_workflow_and_shares_only_templates() {
-        let raw = include_str!("../../resources/skills/dsimage/SKILL.md");
-        let parsed = parse_skill_markdown(raw, "builtin", None, Vec::new()).unwrap();
-        assert_eq!(parsed.meta.id, "dsimage");
-        assert!(!parsed.body.contains("guides/studio.md"));
-        assert!(parsed.body.contains("Dsivio 模板共享"));
-        assert!(!parsed.body.contains("任务和出图必须走该工具"));
-    }
-
-    #[test]
     fn split_frontmatter_returns_raw_when_missing_delimiters() {
         let raw = "# Title\n\nBody";
         let (fm, body) = split_frontmatter(raw);

@@ -769,9 +769,9 @@ export default function VideoStudio() {
                   </div>
                 </section>
                 <section className="vs-panel">
-                  <h3>内置运行环境</h3>
+                  <h3>本机运行环境</h3>
                   <p className="vs-muted">
-                    提示词使用所选助手的模型，未指定时使用当前聊天模型；处理图片需模型支持视觉。
+                    方案使用当前聊天模型；处理图片需模型支持视觉。
                   </p>
                   <dl className="vs-specs">
                     <dt>Python</dt>
@@ -802,11 +802,11 @@ export default function VideoStudio() {
                   </div>
                   {runtimeCheck === 'failed' && (
                     <p className="vs-muted">
-                      无法读取内置运行环境状态，请重新检查。错误：{runtimeError}
+                      无法读取本机运行环境状态，请重新检查。错误：{runtimeError}
                     </p>
                   )}
                   {runtimeMissing && (
-                    <p className="vs-muted">内置运行环境不完整，请重新安装 dsivio。</p>
+                    <p className="vs-muted">请按需要在本机安装 Python 3、ffmpeg、Comfy MCP 或视频分析 MCP，然后重新检查。</p>
                   )}
                   <p className="vs-path">{data.configPath}</p>
                 </section>
@@ -1168,11 +1168,8 @@ export default function VideoStudio() {
                       {isAnalysis ? <Field label="重点分析什么（可选）"><textarea className="kv-textarea vs-request custom-scrollbar"
                         value={brief.request} onChange={e => change({ request: e.target.value })}
                         placeholder="例如：重点看开场、商品展示和镜头节奏。留空则完整拆解。" /></Field> : <RequirementComposer label="这次要拍什么"
-                        value={brief.request} purpose="video_brief"
-                        preferredAssistantId={brief.assistantId}
-                        onAssistantChange={assistantId => change({ assistantId, selectedConcept: undefined })}
-                        onChange={request => change({ request, selectedConcept: undefined })} onError={setError}
-                        mediaPaths={[...brief.images, brief.source, brief.firstFrame, brief.lastFrame, ...(brief.referenceVideos ?? [])]}
+                        value={brief.request}
+                        onChange={request => change({ request, selectedConcept: undefined })}
                         placeholder="例如：让背包在自然光下缓慢转动，展示正面细节，不要口播。" />}
                       {brief.template && (
                         <div className="vs-notice">
@@ -1189,7 +1186,7 @@ export default function VideoStudio() {
                     {view === 'creation' && (
                       <details className="vs-panel vs-advanced">
                         <summary>声音与高级参考设置</summary>
-                        <VideoMediaOptions
+                        <VideoMediaOptions onError={setError}
                           disabled={false}
                           brief={brief}
                           change={change}
@@ -1197,7 +1194,7 @@ export default function VideoStudio() {
                           dropActive={dropActive}
                           dropTarget={dropTarget}
                           onDrop={keepOsDrop}
-                          onError={setError}
+
                         />
                       </details>
                     )}

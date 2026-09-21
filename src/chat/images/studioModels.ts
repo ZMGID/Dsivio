@@ -1,4 +1,4 @@
-import { normalizeProviderApiFormat, type ModelProvider } from '../../api/tauri'
+import { type ModelProvider } from '../../api/tauri'
 import { resolveModelInfo } from '../../data/modelMatching'
 
 export function isImageGenerationModel(
@@ -30,7 +30,7 @@ export function inferImageStudioProtocol(
   model: string,
 ): string {
   const name = model.toLowerCase()
-  const format = normalizeProviderApiFormat(provider?.apiFormat)
+  const format = provider?.apiFormat
   const base = (provider?.baseUrl || '').toLowerCase()
   if (format === 'gemini') return 'gemini'
   if (
@@ -46,7 +46,7 @@ export function inferImageStudioProtocol(
     name.includes('nano-banana') ||
     name.startsWith('imagen')
   ) {
-    return format === 'gemini' || hostMatches(base, 'googleapis.com')
+    return hostMatches(base, 'googleapis.com')
       ? 'gemini'
       : 'gemini-chat'
   }

@@ -446,7 +446,7 @@ pub struct ChatMessage {
 pub struct Attachment {
     pub id: String,
     #[serde(rename = "type")]
-    pub attachment_type: String, // "image" | "file" | "folder"
+    pub attachment_type: String, // "image" | "file" | "video" | "folder"
     pub name: String,
     pub path: String, // 文件：相对对话附件目录；文件夹：本机绝对路径；`memory://` = 内存虚拟文本附件
     /// 内存虚拟文本附件（粘贴长文本生成的虚拟 txt）正文：随对话消息持久化，不生成独立磁盘文件。
@@ -843,9 +843,6 @@ pub struct ChatAssistant {
     pub color: String,
     #[serde(default)]
     pub source: String,
-    /// Prompt library category: `image` / `video` / `general`. Legacy values remain readable.
-    #[serde(default)]
-    pub category: String,
     #[serde(default)]
     pub system_prompt: String,
     #[serde(default)]

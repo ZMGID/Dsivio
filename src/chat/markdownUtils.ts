@@ -84,11 +84,9 @@ export function preserveLocalMarkdownLinks(content: string): string {
         return `${prefix}${destination}${suffix}`
       }
       if (/^file:\/\//i.test(destination)) {
-        return `${prefix}https://kivio.local/kivio-file?target=${encodeURIComponent(destination).replace(/_/g, '%5F')}${suffix}`
+        return `${prefix}https://kivio.local/__kivio-file?target=${encodeURIComponent(destination)}${suffix}`
       }
-      // remend counts underscores in image URLs as unfinished emphasis and appends
-      // visible "__". Keep the internal URL free of literal underscores.
-      return `${prefix}https://kivio.local/kivio-local?target=${encodeURIComponent(destination).replace(/_/g, '%5F')}${suffix}`
+      return `${prefix}https://kivio.local/__kivio-local?target=${encodeURIComponent(destination)}${suffix}`
     }),
   )
 }

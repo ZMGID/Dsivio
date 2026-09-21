@@ -9,9 +9,6 @@ use uuid::Uuid;
 use crate::api::with_standard_request_timeout;
 use crate::state::AppState;
 
-/// GitHub Releases 仓库。检查最新版、下载安装包都走这里。
-const GITHUB_RELEASES_REPO: &str = "ZMGID/Dsivio";
-
 /// 检查 GitHub Releases 的最新版本。
 ///
 /// 双通道：先查 `api.github.com`（能拿到 release notes）；失败（网络 / 非 2xx /
@@ -22,14 +19,15 @@ const GITHUB_RELEASES_REPO: &str = "ZMGID/Dsivio";
 pub(crate) async fn check_github_latest_release(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
+    const REPO: &str = "ZMGID/Dsivio";
     let current = env!("CARGO_PKG_VERSION");
 
     // 主通道：api.github.com（成功即返回，无论 available 真假）。
-    if let Some(json) = try_api_latest(&state, GITHUB_RELEASES_REPO, current).await {
+    if let Some(json) = try_api_latest(&state, REPO, current).await {
         return Ok(json);
     }
     // 回退通道：github.com atom feed（用户能访问 github.com 但 api.github.com 不通/被限流时）。
-    if let Some(json) = try_atom_latest(&state, GITHUB_RELEASES_REPO, current).await {
+    if let Some(json) = try_atom_latest(&state, REPO, current).await {
         return Ok(json);
     }
     // 两条都失败：明确告知检查失败，不伪装成"最新"。
@@ -46,10 +44,7 @@ async fn try_api_latest(state: &AppState, repo: &str, current: &str) -> Option<s
             .http
             .get(&url)
             // GitHub API 要求显式 User-Agent
-            .header(
-                "User-Agent",
-                format!("dsivio/{}", env!("CARGO_PKG_VERSION")),
-            )
+            .header("User-Agent", format!("Dsivio/{}", env!("CARGO_PKG_VERSION")))
             .header("Accept", "application/vnd.github+json"),
     )
     .send()
@@ -91,10 +86,7 @@ async fn try_atom_latest(state: &AppState, repo: &str, current: &str) -> Option<
         state
             .http
             .get(&url)
-            .header(
-                "User-Agent",
-                format!("dsivio/{}", env!("CARGO_PKG_VERSION")),
-            )
+            .header("User-Agent", format!("Dsivio/{}", env!("CARGO_PKG_VERSION")))
             .header("Accept", "application/atom+xml"),
     )
     .send()
@@ -210,6 +202,7 @@ pub(crate) async fn download_update_asset(
     state: State<'_, AppState>,
     version: String,
 ) -> Result<String, String> {
+    const REPO: &str = "ZMGID/Dsivio";
     let version = normalize_release_version(&version)
         .ok_or_else(|| format!("无效的 release 版本号: {version}"))?;
     let name = release_asset_name_for(&version, std::env::consts::OS, std::env::consts::ARCH)
@@ -220,7 +213,7 @@ pub(crate) async fn download_update_asset(
                 std::env::consts::ARCH
             )
         })?;
-    let asset_url = release_download_url(GITHUB_RELEASES_REPO, &version, &name);
+    let asset_url = release_download_url(REPO, &version, &name);
 
     // 决定本地文件名：保留原扩展名（.dmg / .exe）便于 install 流程根据扩展名判断行为
     let ext = std::path::Path::new(&name)
@@ -232,10 +225,7 @@ pub(crate) async fn download_update_asset(
     let mut resp = state
         .http
         .get(&asset_url)
-        .header(
-            "User-Agent",
-            format!("dsivio/{}", env!("CARGO_PKG_VERSION")),
-        )
+        .header("User-Agent", format!("Dsivio/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .await
         .map_err(|e| format!("下载失败: {e}"))?;
@@ -541,9 +531,12 @@ mod tests {
 
     #[test]
     fn release_download_url_uses_tag_specific_public_asset_path() {
-        assert_eq!(GITHUB_RELEASES_REPO, "ZMGID/Dsivio");
         assert_eq!(
-            release_download_url(GITHUB_RELEASES_REPO, "2.8.1", "dsivio_2.8.1_aarch64.dmg"),
+            release_download_url(
+                "ZMGID/Dsivio",
+                "2.8.1",
+                "dsivio_2.8.1_aarch64.dmg"
+            ),
             "https://github.com/ZMGID/Dsivio/releases/download/v2.8.1/dsivio_2.8.1_aarch64.dmg"
         );
     }

@@ -260,13 +260,12 @@ pub async fn run_agent_loop(
         degraded: None,
         tool_schema_tokens_cache: None,
     };
-    // A non-empty legacy allow-list remains a hard gate. Prompt-only assistants
-    // have no list and inherit global skill availability.
+    // 把助手的技能白名单冻结进 skill_cache,作为 skill_activate 执行派发的硬 gate。
+    // 无助手 = None = 不限(全局行为)。
     state.skill_cache.set_allowed_skill_ids(
         config
             .assistant_snapshot
             .as_ref()
-            .filter(|assistant| !assistant.skill_ids.is_empty())
             .map(|assistant| assistant.skill_ids.clone()),
     );
     state

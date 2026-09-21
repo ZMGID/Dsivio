@@ -73,23 +73,6 @@ function tool(partial: Partial<ToolCallRecord> & Pick<ToolCallRecord, 'id'>): To
 }
 
 describe('groupTimelineSegments', () => {
-  it('shows trailing tool-loop text after a delivery and folds it only when more work arrives', () => {
-    const segments = [
-      toolSegment('present', 1, 'present'),
-      segment({ id: 'reason', kind: 'reasoning', phase: 'tool_loop', order: 2, text: 'Think' }),
-      segment({ id: 'answer', kind: 'text', phase: 'tool_loop', order: 3, text: 'Analysis' }),
-    ]
-    const isPresentation = (s: ChatMessageSegment) => s.id === 'present'
-    const live = groupTimelineSegments(segments, 'running', isPresentation)
-    expect(live.map(item => item.type)).toEqual(['presentation', 'group', 'text'])
-    const continued = groupTimelineSegments([
-      ...segments, toolSegment('check', 4, 'check'),
-    ], 'running', isPresentation)
-    expect(continued.map(item => item.type)).toEqual(['presentation', 'group'])
-    expect(continued[1].type === 'group' && continued[1].segments.map(s => s.id))
-      .toEqual(['reason', 'answer', 'check'])
-  })
-
   it.each(['running', 'completed', 'stopped'] as const)('keeps process and deliveries in chronological order when %s', state => {
     const items = groupTimelineSegments([
       toolSegment('read', 0, 'read'),

@@ -4,8 +4,9 @@ import { InputBar } from './InputBar'
 
 const clipboard = vi.hoisted(() => ({ read: vi.fn(), readText: vi.fn(), writeText: vi.fn() }))
 const api = vi.hoisted(() => ({
-  chatClassifyAttachmentPaths: vi.fn(), chatReadClipboardFiles: vi.fn(), chatSavePastedImage: vi.fn(),
+  chatReadClipboardFiles: vi.fn(), chatSavePastedImage: vi.fn(),
   chatReadClipboard: vi.fn(), chatWriteClipboardText: vi.fn(),
+  chatInspectAttachmentPaths: vi.fn(),
 }))
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
 vi.mock('@tauri-apps/api/webview', () => ({ getCurrentWebview: () => ({ onDragDropEvent: () => Promise.resolve(() => {}) }) }))
@@ -28,10 +29,16 @@ beforeEach(() => {
   clipboard.read.mockReset().mockRejectedValue(new Error('Web clipboard must not be used'))
   clipboard.readText.mockReset().mockRejectedValue(new Error('Web clipboard must not be used'))
   clipboard.writeText.mockReset().mockRejectedValue(new Error('Web clipboard must not be used'))
-  api.chatClassifyAttachmentPaths.mockReset().mockImplementation(async (paths: string[]) => paths.map(path => ({ path, name: path.split('/').pop(), kind: 'file' })))
   api.chatReadClipboard.mockReset().mockResolvedValue({ kind: 'text', text: '插入' })
   api.chatWriteClipboardText.mockReset().mockResolvedValue(undefined)
   api.chatReadClipboardFiles.mockReset().mockResolvedValue({ success: true, files: [] })
+  api.chatInspectAttachmentPaths.mockReset().mockImplementation(async (paths: string[]) =>
+    paths.map((path) => ({
+      path,
+      name: path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? path,
+      type: 'file' as const,
+    })),
+  )
   api.chatSavePastedImage.mockReset().mockResolvedValue({ success: true, path: '/tmp/pasted.png', name: 'pasted.png' })
 })
 afterEach(() => {

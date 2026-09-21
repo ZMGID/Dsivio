@@ -1,4 +1,4 @@
-import type { I18n } from '../../settings/i18n'
+import type { I18n } from '../../components/i18n'
 import type {
   AgentData,
   AgentRuntimeKind,
@@ -7,7 +7,7 @@ import type {
   FlowEdge,
   FlowNode,
   FlowNodeData,
-} from './types'
+} from '../../api/automationContracts'
 
 export const AGENT_SLOTS: readonly AgentSlot[] = ['runtime', 'context', 'tool', 'skill']
 
@@ -308,10 +308,10 @@ export function explodeInlineAgents(
       spawnedEdges.push(connectSlotEdge(child.id, node.id, slot))
     }
     const runtimeLabel = agent.runtimeKind === 'chat'
-      ? 'dsivio Chat'
+      ? 'Kivio Chat'
       : agent.runtimeKind === 'external'
         ? (agent.externalAgentId || 'CLI')
-        : 'dsivio Agent'
+        : 'Kivio Agent'
     spawn('runtime', toAgentData({
       prompt: '',
       runtimeKind: agent.runtimeKind,

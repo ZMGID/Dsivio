@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
-import { refreshSettings, saveSettingsCached, subscribeSettings } from '../../api/settingsCache'
-import type { Lang } from '../../settings/i18n'
+import { refreshSettings, updateSettingsCached, subscribeSettings } from '../../api/settingsCache'
+import type { Lang } from '../../components/i18n'
 import { Button } from '../../components/Button'
 import { CapabilityTextEditor } from './CapabilityTextEditor'
 
@@ -28,8 +28,7 @@ export function CapabilityConfig({ lang, open, onClose }: { lang: Lang; open: bo
         const text = draft.current
         if (mounted.current) { setStatus(zh ? '正在保存…' : 'Saving…'); setError('') }
         try {
-          const settings = await refreshSettings()
-          await saveSettingsCached({ ...settings, capabilityConfigText: text })
+          await updateSettingsCached(settings => ({ ...settings, capabilityConfigText: text }))
           saved.current = text
         } catch (e) {
           if (mounted.current) { setError(String(e)); setStatus('') }

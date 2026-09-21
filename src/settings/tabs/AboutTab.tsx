@@ -1,8 +1,8 @@
 import { RefreshCw, Download, ExternalLink } from 'lucide-react'
 import { Toggle, SettingRow, SettingsGroup } from '../components'
 import { Button } from '../../components/Button'
-import { ChatMarkdown } from '../../chat/ChatMarkdown'
-import type { I18n, Lang } from '../i18n'
+import type { ReactNode } from 'react'
+import type { I18n, Lang } from '../../components/i18n'
 import type { Settings as SettingsData, UpdateInfo } from '../../api/tauri'
 
 /** 应用信息：图标 / 名称 / 版本 / 开发者。 */
@@ -20,10 +20,10 @@ export function AppInfoGroup({
       <div className="kv-panel mb-2">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-[10px] overflow-hidden shrink-0">
-            <img src="/icon.png" alt="dsivio" className="w-full h-full object-contain" />
+            <img src="/icon.png" alt="Dsivio" className="w-full h-full object-contain" />
           </div>
           <div className="min-w-0">
-            <div className="kv-page-title">dsivio</div>
+            <div className="kv-page-title">Dsivio</div>
             <div className="kv-panel-body">{lang === 'zh' ? '屏幕级 AI 助手' : 'Screen-level AI Assistant'}</div>
           </div>
         </div>
@@ -64,6 +64,7 @@ export function UpdateGroup({
   onOpenReleasePage,
   onOpenGithubReleases,
   onDismiss,
+  renderReleaseNotes,
 }: {
   settings: SettingsData | null
   t: I18n
@@ -75,6 +76,7 @@ export function UpdateGroup({
   onOpenReleasePage: () => void
   onOpenGithubReleases: () => void
   onDismiss: () => void
+  renderReleaseNotes: (markdown: string) => ReactNode
 }) {
   const { status, info, downloadState, downloadPercent, downloadError } = update
 
@@ -124,7 +126,7 @@ export function UpdateGroup({
           </div>
           {info.body && (
             <div className="custom-scrollbar mb-3 max-h-40 overflow-y-auto text-[12px] leading-relaxed">
-              <ChatMarkdown content={info.body} />
+              {renderReleaseNotes(info.body)}
             </div>
           )}
 

@@ -3,7 +3,7 @@
  */
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { LangContext } from '../settings/i18n'
+import { LangContext } from '../components/i18n'
 
 vi.mock('./platform', async () => {
   const actual = await vi.importActual<typeof import('./platform')>('./platform')

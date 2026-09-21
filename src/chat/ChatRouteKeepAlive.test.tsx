@@ -1,5 +1,6 @@
 import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import { useChatRouteActive } from './chatRouteVisibility'
 import { ChatRouteKeepAlive } from './ChatRouteKeepAlive'
 
 describe('ChatRouteKeepAlive', () => {
@@ -18,7 +19,8 @@ describe('ChatRouteKeepAlive', () => {
       </ChatRouteKeepAlive>,
     )
     expect(firstPane).toBeInTheDocument()
-    expect((firstPane?.parentElement as HTMLElement).style.display).toBe('none')
+    expect((firstPane?.parentElement as HTMLElement).hidden).toBe(true)
+    expect(firstPane?.parentElement?.hasAttribute('inert')).toBe(true)
 
     rerender(
       <ChatRouteKeepAlive activeKey="conversation">
@@ -26,27 +28,22 @@ describe('ChatRouteKeepAlive', () => {
       </ChatRouteKeepAlive>,
     )
     expect(document.querySelector('[data-testid="chat-pane"]')).toBe(firstPane)
+    expect((firstPane?.parentElement as HTMLElement).hidden).toBe(false)
     expect(firstPane).toHaveTextContent('chat updated')
   })
 })
 
-it('retains both media workspaces and marks hidden native input listeners inactive', async () => {
-  const { useChatRouteActive } = await import('./chatRouteVisibility')
-  function Workspace({ name }: { name: string }) {
-    const active = useChatRouteActive()
-    return <main data-testid={name}>{active ? 'active' : 'background'}</main>
-  }
-  const { rerender } = render(<ChatRouteKeepAlive activeKey="videos"><Workspace name="video" /></ChatRouteKeepAlive>)
-  const video = document.querySelector('[data-testid="video"]')
-  rerender(<ChatRouteKeepAlive activeKey="images"><Workspace name="image" /></ChatRouteKeepAlive>)
-  const image = document.querySelector('[data-testid="image"]')
-  expect(video).toHaveTextContent('background')
-  expect(image).toHaveTextContent('active')
-  rerender(<ChatRouteKeepAlive activeKey="conversation"><main>新聊天</main></ChatRouteKeepAlive>)
-  expect(video).toHaveTextContent('background')
-  expect(image).toHaveTextContent('background')
-  rerender(<ChatRouteKeepAlive activeKey="videos"><Workspace name="video" /></ChatRouteKeepAlive>)
-  expect(document.querySelector('[data-testid="video"]')).toBe(video)
-  expect(video).toHaveTextContent('active')
-  expect(document.querySelector('[data-testid="image"]')).toBe(image)
+function MediaPane() {
+  const active = useChatRouteActive()
+  return <section data-testid="media-pane">{active ? 'active' : 'background'}</section>
+}
+it('preserves media state while hiding and deactivating a background page', () => {
+ const { rerender, getByTestId } = render(<ChatRouteKeepAlive activeKey="images"><MediaPane /></ChatRouteKeepAlive>)
+ const pane = getByTestId('media-pane')
+ rerender(<ChatRouteKeepAlive activeKey="settings"><div>settings</div></ChatRouteKeepAlive>)
+ expect(pane).toHaveTextContent('background')
+ expect(pane.parentElement).toHaveAttribute('inert')
+ rerender(<ChatRouteKeepAlive activeKey="images"><MediaPane /></ChatRouteKeepAlive>)
+ expect(getByTestId('media-pane')).toBe(pane)
+ expect(pane).toHaveTextContent('active')
 })

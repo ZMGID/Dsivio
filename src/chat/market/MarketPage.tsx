@@ -1,7 +1,8 @@
+import { marketText, useMarketAction, actionLabel } from './marketActions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, Film, Image, LayoutGrid, Loader2, MoreHorizontal, RefreshCw, Search } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
-import type { Lang } from '../../settings/i18n'
+import type { Lang } from '../../components/i18n'
 import { marketApi, useMarket } from './api'
 import { marketItems, primaryAction, type MarketItem, type MarketLocal, type MarketExample } from './types'
 import { CapabilityConfig } from './CapabilityConfig'
@@ -9,7 +10,6 @@ import './market.css'
 
 export type MarketActions = { onInstall: (id: string) => Promise<void>; onUse: (local: MarketLocal, newChat: boolean) => Promise<void>; onUninstall: (id: string) => Promise<void> }
 const viewState = { query: '', category: '', installedOnly: false, scroll: 0 }
-export const marketText = (lang: Lang, zh: string, en: string) => lang === 'en' ? en : zh
 export function PackageIcon({ categories, item }: { categories?: string[]; item?: MarketItem }) {
   const [src, setSrc] = useState('')
   const id = item?.id
@@ -28,27 +28,6 @@ export function LoadSwitch({ item, busy, onChange, lang }: { item: MarketItem; b
   if (item.local?.status !== 'ready') return null
   const enabled = item.local.enabled
   return <span className="market-load"><span>{marketText(lang, enabled ? '已加载' : '未加载', enabled ? 'Loaded' : 'Not loaded')}</span><button className="market-switch" type="button" role="switch" aria-checked={enabled} aria-label={`${item.manifest?.name ?? item.id} ${marketText(lang, '加载', 'load')}`} disabled={busy} onClick={onChange}><span /></button></span>
-}
-export function useMarketAction(actions: Pick<MarketActions, 'onInstall' | 'onUse'>) {
-  const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
-  const locks = useRef(new Set<string>())
-  const [error, setError] = useState('')
-  const run = async (id: string, task: () => Promise<unknown>) => {
-    if (locks.current.has(id)) return
-    locks.current.add(id); setBusyIds(new Set(locks.current)); setError('')
-    try { await task() } catch (e) { setError(String(e)) }
-    finally { locks.current.delete(id); setBusyIds(new Set(locks.current)) }
-  }
-  const use = (item: MarketItem, newChat = true) => run(item.id, async () => {
-    if (item.local?.status === 'ready' && primaryAction(item) !== 'repair') {
-      await actions.onUse(item.local, newChat)
-    } else await actions.onInstall(item.id)
-  })
-  return { busyIds, error, run, use }
-}
-export function actionLabel(item: MarketItem, lang: Lang) {
-  const action = primaryAction(item)
-  return ({ repair: marketText(lang, '重新配置', 'Reconfigure'), install: marketText(lang, '安装', 'Install'), continue: marketText(lang, '继续安装', 'Continue setup'), 'enable-use': marketText(lang, '加载并使用', 'Load and use'), use: marketText(lang, '使用', 'Use'), unavailable: marketText(lang, '暂不可用', 'Unavailable') })[action]
 }
 function detailId() {
   const match = window.location.hash.match(/^#chat\/market\/([^/?]+)/)

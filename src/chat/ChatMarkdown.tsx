@@ -1018,7 +1018,7 @@ function safeDecodeURIComponent(value: string): string {
 }
 
 function decodeKivioInternalUrl(value: string): string {
-  const internalLink = /^https:\/\/kivio\.local\/(?:__)?kivio-(file|local)\?target=(.*)$/i.exec(value)
+  const internalLink = /^https:\/\/kivio\.local\/__kivio-(file|local)\?target=(.*)$/i.exec(value)
   return internalLink ? safeDecodeURIComponent(internalLink[2]) : value
 }
 

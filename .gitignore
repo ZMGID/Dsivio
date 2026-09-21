@@ -28,19 +28,13 @@ release
 src-tauri/target
 # rust-analyzer 在 workspace 根生成的 cache,不是 cargo 用户产物
 /target
-/src-tauri/resources/video-runtime/*
-!/src-tauri/resources/video-runtime/.gitkeep
-/src-tauri/resources/.video-runtime-*/
-/src-tauri/resources/plugins/dsvideo-plugin/**/__pycache__/
-/tests/__pycache__/
 
 # Local build artifacts (OCR helper / leftover sandbox downloads)
 resources/ocr
 resources/python-sandbox/
-/src-tauri/resources/skills/dsimage/**/__pycache__/
 .cache/swift
 
-# Sidecar binaries and legacy Swift build caches
+# Swift sidecar 编译产物 (npm run build:swift / CI 生成,不入库)
 src-tauri/binaries/
 src-tauri/swift/kivio-ai-helper/.build/
 src-tauri/swift/kivio-ocr-helper/.build/
@@ -62,10 +56,15 @@ src-tauri/swift/kivio-ocr-helper/.build/
 MEMORY.md
 
 # Local runtime discovery caches and manual E2E artifacts
+/.scratch/
 /mcps/
 /output/
 /.playwright-cli/
 
 # 本地手测用的外部仓库克隆（不入库）
 /test-ZMGID/
-/src-tauri/resources/video-studio/**/__pycache__/
+
+# Local host dependency caches are never bundled or committed.
+__pycache__/
+*.pyc
+src-tauri/resources/video-runtime/

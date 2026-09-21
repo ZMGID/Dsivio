@@ -43,7 +43,7 @@ import { GitStatusPill } from './dock/GitStatusPill'
 import { GitDiffChip } from './dock/GitDiffChip'
 import { AgentTodoIndicator } from './AgentTodoIndicator'
 import { Button, IconButton } from '../components/Button'
-import { useT, type I18n, type Lang } from '../settings/i18n'
+import { useT, type I18n, type Lang } from '../components/i18n'
 import { api, type ChatToolDefinition, type ChatMcpServer } from '../api/tauri'
 import { chatApi } from './api'
 import type { AdditionalDirectory, AgentPlanMode, AgentPlanState, AgentTodoState, ChatAssistant, ChatProject, ChatSet, ModelRef, PendingAttachment, WebSearchMode } from './types'
@@ -473,11 +473,6 @@ export interface InputBarProps {
   onOpenGitPanel?: () => void
   /** 功能栏右侧的用量注入区（会话输入/缓存命中/输出）：渲染在模式胶囊与上下文指示器左侧 */
   usageSlot?: ReactNode
-  /**
-   * 窗口级 OS 拖放是否归输入框。聊天树在设置/图片等工作台下会被 keep-alive 藏起来，
-   * 监听却还在；关掉后素材只会进当前页，不会再落到「Ask me anything」。
-   */
-  acceptOsDrops?: boolean
 }
 
 export const InputBar = memo(function InputBar({
@@ -546,7 +541,6 @@ export const InputBar = memo(function InputBar({
   gitLang,
   onOpenGitPanel,
   usageSlot,
-  acceptOsDrops = true,
 }: InputBarProps) {
   const t = useT()
   // 生成中的排队模式：Enter 改成入队，且只锁「要打后端」的入口。附件的选择 / 粘贴 / 拖入
@@ -688,34 +682,43 @@ export const InputBar = memo(function InputBar({
     setPresetMenuOpen(false)
   }, [])
 
-  const pendingFromPath = useCallback(
-    (path: string, kind?: 'file' | 'directory'): PendingAttachment => {
-      const normalized = path.replace(/\\/g, '/')
-      const name = normalized.split('/').filter(Boolean).pop() || t.chatAttachmentFallbackName
-      if (kind === 'directory') {
+  const attachmentsFromPaths = useCallback(
+    (paths: string[]) =>
+      paths.map((path) => {
+        const normalized = path.replace(/\\/g, '/')
+        const name = normalized.split('/').filter(Boolean).pop() || t.chatAttachmentFallbackName
+        const ext = name.split('.').pop()?.toLowerCase() ?? ''
+        const type: PendingAttachment['type'] = IMAGE_EXTENSIONS.includes(ext) ? 'image' : isVideoFile(name) ? 'video' : 'file'
         return {
           id: `pending-att-${crypto.randomUUID()}`,
-          type: 'folder',
+          type,
           name,
           path,
         }
-      }
-      const ext = name.split('.').pop()?.toLowerCase() ?? ''
-      const type: PendingAttachment['type'] = IMAGE_EXTENSIONS.includes(ext) ? 'image' : isVideoFile(name) ? 'video' : 'file'
-      return {
-        id: `pending-att-${crypto.randomUUID()}`,
-        type,
-        name,
-        path,
-      }
-    },
+      }),
     [t],
   )
 
-  const attachmentsFromPaths = useCallback(
-    (paths: string[]) => paths.map((path) => pendingFromPath(path)),
-    [pendingFromPath],
-  )
+  const pendingFromPaths = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return []
+    try {
+      const inspected = await api.chatInspectAttachmentPaths(paths)
+      const next = inspected
+        .filter((item): item is typeof item & { type: PendingAttachment['type'] } => (
+          item.type === 'image' || item.type === 'file' || item.type === 'video' || item.type === 'folder'
+        ))
+        .map((item) => ({
+          id: `pending-att-${crypto.randomUUID()}`,
+          type: item.type,
+          name: item.name || t.chatAttachmentFallbackName,
+          path: item.path,
+        }))
+      if (next.length > 0) return next
+    } catch (err) {
+      console.error('Failed to classify chat attachments:', err)
+    }
+    return attachmentsFromPaths(paths)
+  }, [attachmentsFromPaths, t])
 
   const loadProjectOptions = useCallback(async () => {
     if (!projectEntryEnabled) return
@@ -1058,23 +1061,6 @@ export const InputBar = memo(function InputBar({
     [t],
   )
 
-  const attachOsPaths = useCallback(
-    async (paths: string[]) => {
-      if (paths.length === 0) return
-      try {
-        const classified = await api.chatClassifyAttachmentPaths(paths)
-        if (classified.length > 0) {
-          addAttachments(classified.map((item) => pendingFromPath(item.path, item.kind)))
-          return
-        }
-      } catch (err) {
-        console.error('Failed to classify dropped paths:', err)
-      }
-      addAttachments(attachmentsFromPaths(paths))
-    },
-    [addAttachments, attachmentsFromPaths, pendingFromPath],
-  )
-
   // 编辑弹窗保存：用编辑后的内容重建内存附件数据（提交时由 api 层生成新的 File/Blob 内容）。
   const updateAttachmentContent = useCallback((id: string, content: string) => {
     setAttachments((prev) => prev.map((attachment) =>
@@ -1167,14 +1153,14 @@ export const InputBar = memo(function InputBar({
       const paths = Array.isArray(selected) ? selected : selected ? [selected] : []
       if (paths.length === 0) return
 
-      addAttachments(attachmentsFromPaths(paths))
+      addAttachments(await pendingFromPaths(paths))
     } catch (err) {
       console.error('Failed to add chat attachment:', err)
       setAttachmentError(
         typeof err === 'string' ? err : err instanceof Error ? err.message : t.chatAttachmentAddFailed,
       )
     }
-  }, [addAttachments, attachmentsFromPaths, closeProjectMenu, composerLocked, t])
+  }, [addAttachments, closeProjectMenu, composerLocked, pendingFromPaths, t])
 
   const handleSlashCommandSelect = useCallback(async (command: SlashCommandDefinition) => {
     if (disabled) return
@@ -1530,12 +1516,12 @@ export const InputBar = memo(function InputBar({
       e.preventDefault()
     }
 
-    const nativeFiles: Array<{ path: string; name: string; kind?: 'file' | 'directory' }> = knownNativePaths?.length ? await api.chatClassifyAttachmentPaths(knownNativePaths) : []
+    const nativePaths: string[] = knownNativePaths ?? []
     try {
       if (!knownNativePaths && isTauriRuntime()) {
         const native = await api.chatReadClipboardFiles()
         if (native.success && native.files?.length) {
-          nativeFiles.push(...native.files)
+          nativePaths.push(...native.files.map((file) => file.path))
         }
       }
     } catch (err) {
@@ -1543,7 +1529,7 @@ export const InputBar = memo(function InputBar({
     }
 
     if (menuTarget && !menuTarget.isCurrent()) return
-    const hasNativeFiles = nativeFiles.length > 0
+    const hasNativeFiles = nativePaths.length > 0
     const hasClipboardFiles = attachableClipboardFiles.length > 0
 
     // 纯文字粘贴：短文本放行交给浏览器默认处理；超长文本已在上方同步阶段 preventDefault
@@ -1583,9 +1569,7 @@ export const InputBar = memo(function InputBar({
       const pastedAttachments: PendingAttachment[] = []
 
       if (hasNativeFiles) {
-        pastedAttachments.push(
-          ...nativeFiles.map((file) => pendingFromPath(file.path, file.kind)),
-        )
+        pastedAttachments.push(...await pendingFromPaths(nativePaths))
       } else for (const [index, file] of attachableClipboardFiles.entries()) {
         const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
 
@@ -1822,21 +1806,13 @@ export const InputBar = memo(function InputBar({
     setSlashSelectedIndex(Math.max(filteredSlashCommands.length - 1, 0))
   }, [filteredSlashCommands.length, slashSelectedIndex])
 
-  const acceptOsDropsRef = useRef(acceptOsDrops)
-  acceptOsDropsRef.current = acceptOsDrops
-  useEffect(() => {
-    if (!acceptOsDrops) setDragActive(false)
-  }, [acceptOsDrops])
   useEffect(() => {
     if (!isTauriRuntime()) return
     let cancelled = false
     let unlisten: (() => void) | undefined
 
     getCurrentWebview().onDragDropEvent((event) => {
-      if (cancelled || composerLocked || !acceptOsDropsRef.current) {
-        if (event.payload.type === 'leave' || event.payload.type === 'drop') setDragActive(false)
-        return
-      }
+      if (cancelled || composerLocked) return
 
       if (event.payload.type === 'enter' || event.payload.type === 'over') {
         setDragActive(true)
@@ -1851,7 +1827,7 @@ export const InputBar = memo(function InputBar({
 
       if (event.payload.type === 'drop') {
         setDragActive(false)
-        void attachOsPaths(event.payload.paths)
+        void pendingFromPaths(event.payload.paths).then(addAttachments)
       }
     }).then((handler) => {
       if (cancelled) {
@@ -1868,7 +1844,7 @@ export const InputBar = memo(function InputBar({
       setDragActive(false)
       unlisten?.()
     }
-  }, [attachOsPaths, composerLocked])
+  }, [addAttachments, composerLocked, pendingFromPaths])
 
   const canSend = (Boolean(input.trim()) || attachments.length > 0)
     && !slashPanelOpen

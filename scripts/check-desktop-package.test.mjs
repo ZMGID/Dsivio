@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -47,10 +47,11 @@ test('rejects lockfile version drift', t => {
 
 test('packaged resources reject missing licenses, changed files and stale skills', t => {
   const directory = fixture(t)
-  changeJson(directory, 'src-tauri/tauri.conf.json', config => {
-    config.bundle.resources = { 'resources/skills': 'skills', '../docs/licenses': 'licenses' }
-  })
   const packaged = path.join(directory, 'packaged')
+  const configPath = path.join(directory, 'src-tauri/tauri.conf.json')
+  const config = JSON.parse(readFileSync(configPath, 'utf8'))
+  config.bundle.resources = { 'resources/skills': 'skills', '../docs/licenses': 'licenses' }
+  writeFileSync(configPath, JSON.stringify(config))
   for (const [source, destination] of [['src-tauri/resources/skills', 'skills'], ['docs/licenses', 'licenses']]) {
     cpSync(path.join(root, source), path.join(directory, source), { recursive: true })
     if (destination === 'skills') cpSync(path.join(root, source), path.join(packaged, destination), { recursive: true })
@@ -63,25 +64,4 @@ test('packaged resources reject missing licenses, changed files and stale skills
   rmSync(path.join(packaged, 'skills', 'retired-skill.md'))
   writeFileSync(path.join(packaged, 'skills', 'pdf', 'SKILL.md'), 'changed')
   assert.throws(() => checkResources(directory, packaged), /packaged files must match/)
-})
-
-
-test('resource links may target internal files but cannot escape or cycle', { skip: process.platform === 'win32' }, t => {
-  const directory = fixture(t)
-  changeJson(directory, 'src-tauri/tauri.conf.json', config => {
-    config.bundle.resources = { 'resources/skills': 'skills', '../docs/licenses': 'licenses' }
-  })
-  const skills = path.join(directory, 'src-tauri/resources/skills')
-  const licenses = path.join(directory, 'docs/licenses')
-  mkdirSync(skills, { recursive: true })
-  mkdirSync(licenses, { recursive: true })
-  writeFileSync(path.join(skills, 'script.js'), 'source')
-  writeFileSync(path.join(licenses, 'LICENSE'), 'license')
-  symlinkSync('script.js', path.join(skills, 'entry.js'))
-  assert.equal(checkResources(directory), 3)
-  symlinkSync(path.join(licenses, 'LICENSE'), path.join(skills, 'outside'))
-  assert.throws(() => checkResources(directory), /escapes its root/)
-  rmSync(path.join(skills, 'outside'))
-  symlinkSync('.', path.join(skills, 'cycle'))
-  assert.throws(() => checkResources(directory), /Cyclic resource link/)
 })

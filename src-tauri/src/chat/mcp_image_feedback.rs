@@ -15,6 +15,7 @@ pub(super) fn select_image_artifacts_for_attach(
 ) -> (Vec<(&ChatToolArtifact, Vec<u8>)>, Option<String>) {
     let mut accepted: Vec<(&ChatToolArtifact, Vec<u8>)> = Vec::new();
     let mut oversize_count = 0usize;
+    let mut overflow_count = 0usize;
 
     for artifact in artifacts {
         if !artifact.mime_type.starts_with("image/") || artifact.data_url.is_empty() {
@@ -32,28 +33,11 @@ pub(super) fn select_image_artifacts_for_attach(
             oversize_count += 1;
             continue;
         }
+        if accepted.len() >= max_images {
+            overflow_count += 1;
+            continue;
+        }
         accepted.push((artifact, bytes));
-    }
-
-    // Preserve coverage across an ordered frame sequence, including its end.
-    // Taking only the prefix can hide late scene changes in video tool results.
-    let eligible_count = accepted.len();
-    let overflow_count = eligible_count.saturating_sub(max_images);
-    if overflow_count > 0 {
-        accepted = if max_images == 0 {
-            Vec::new()
-        } else if max_images == 1 {
-            vec![accepted.swap_remove(eligible_count / 2)]
-        } else {
-            let indices: Vec<_> = (0..max_images)
-                .map(|i| i * (eligible_count - 1) / (max_images - 1))
-                .collect();
-            accepted
-                .into_iter()
-                .enumerate()
-                .filter_map(|(i, item)| indices.contains(&i).then_some(item))
-                .collect()
-        };
     }
 
     let mut notes = Vec::new();
@@ -65,7 +49,7 @@ pub(super) fn select_image_artifacts_for_attach(
     }
     if overflow_count > 0 {
         notes.push(format!(
-            "（另有 {overflow_count} 张图片超出单结果 {max_images} 张上限，未内联；已按原顺序均匀选取，包含首尾。未传入的图片不代表已检查；视频关键动作仍不清楚时，按具体时间段每次最多补取 4 帧，不能据此断言全程没有变化。）"
+            "（另有 {overflow_count} 张图片超出单结果 {max_images} 张上限，未内联）"
         ));
     }
     let guard_note = if notes.is_empty() {
@@ -209,18 +193,6 @@ mod tests {
             select_image_artifacts_for_attach(&artifacts, 8 * 1024 * 1024, 4);
 
         assert_eq!(accepted.len(), 4);
-        assert_eq!(
-            accepted
-                .iter()
-                .map(|(_, bytes)| bytes.as_slice())
-                .collect::<Vec<_>>(),
-            vec![
-                b"payload-0".as_slice(),
-                b"payload-1".as_slice(),
-                b"payload-3".as_slice(),
-                b"payload-5".as_slice()
-            ]
-        );
         let note = guard_note.expect("overflow beyond the cap should produce a guard note");
         assert!(
             note.contains("另有 2 张图片超出单结果 4 张上限"),

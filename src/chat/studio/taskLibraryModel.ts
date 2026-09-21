@@ -1,7 +1,6 @@
+import type { TaskOrganizations } from '../../api/studioContracts'
+export type { TaskOrganization, TaskOrganizations, TaskOrganizationPatch } from '../../api/studioContracts'
 export type TaskGroup = 'draft' | 'running' | 'attention' | 'ready'
-export type TaskOrganization = { archived: boolean; pinned: boolean }
-export type TaskOrganizations = Record<string, TaskOrganization>
-export type TaskOrganizationPatch = Partial<TaskOrganization>
 export type LibraryTask = {
   id: string
   name: string
