@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { ChevronRight, Home } from 'lucide-react'
+import { ChevronsDownUp, ChevronsUpDown, ChevronRight, Home } from 'lucide-react'
 import { useT } from '../../components/i18n'
 import { ChatTitlebarActions } from '../ChatTitlebarActions'
 import { ProductModeSwitcher } from '../ProductModeSwitcher'
@@ -7,7 +7,7 @@ import { SidebarBrandSearchButton } from '../SidebarBrandSearchButton'
 import { SidebarShell } from '../SidebarShell'
 import { SidebarUserFooter } from '../SidebarUserFooter'
 import { NavRow } from '../SidebarNavRow'
-import { chatTitlebarMacInsetClass, usesNativeTitlebar } from '../platform'
+import { chatTitlebarIconButtonClass, chatTitlebarMacInsetClass, usesNativeTitlebar } from '../platform'
 import type { SidebarProps } from '../Sidebar'
 import { WorkbenchFeatureSearch } from './WorkbenchFeatureSearch'
 import { WORKBENCH_NAV, workbenchNavItem, workbenchPageFromHash, type WorkbenchPageId } from './workbenchPages'
@@ -31,6 +31,14 @@ function saveGroupOpen(id: string, open: boolean): void {
     const parsed = raw ? JSON.parse(raw) as Record<string, boolean> : {}
     parsed[id] = open
     window.localStorage.setItem(GROUP_STATE_KEY, JSON.stringify(parsed))
+  } catch {
+    /* 写不进去就当这次没记住 */
+  }
+}
+
+function saveAllGroups(next: Record<string, boolean>): void {
+  try {
+    window.localStorage.setItem(GROUP_STATE_KEY, JSON.stringify(next))
   } catch {
     /* 写不进去就当这次没记住 */
   }
@@ -92,6 +100,15 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
     setSearchOpen(false)
   }, [onOpenExtensionsItem])
 
+  const allGroupsOpen = WORKBENCH_NAV.groups.every((group) => openGroups[group.id] ?? true)
+  const toggleAllGroups = useCallback(() => {
+    const nextOpen = !allGroupsOpen
+    const next: Record<string, boolean> = {}
+    for (const group of WORKBENCH_NAV.groups) next[group.id] = nextOpen
+    setOpenGroups(next)
+    saveAllGroups(next)
+  }, [allGroupsOpen])
+
   return (
     <SidebarShell
       collapsed={collapsed}
@@ -117,6 +134,20 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
         <div className="min-w-0 flex-1">
           <ProductModeSwitcher mode={productMode} onSelect={onSelectProductMode} />
         </div>
+        <button
+          type="button"
+          onClick={toggleAllGroups}
+          className={`${chatTitlebarIconButtonClass} shrink-0`}
+          aria-label={allGroupsOpen ? t.workbenchCollapseAllGroups : t.workbenchExpandAllGroups}
+          title={allGroupsOpen ? t.workbenchCollapseAllGroups : t.workbenchExpandAllGroups}
+          aria-expanded={allGroupsOpen}
+        >
+          {allGroupsOpen ? (
+            <ChevronsDownUp size={16} strokeWidth={1.75} />
+          ) : (
+            <ChevronsUpDown size={16} strokeWidth={1.75} />
+          )}
+        </button>
         <SidebarBrandSearchButton
           label={t.workbenchSearchFeatures}
           active={searchOpen}

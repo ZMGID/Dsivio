@@ -235,7 +235,7 @@ Keep `README.md` and `README.en.md` in lockstep. A release bump that edits one m
 11. 常见问题 / FAQ (`<details>`)
 12. 开发 / Development (`<details>`)
 13. 贡献 / Contributing
-14. **Star History** at the end — embed the committed chart `docs/star-history.svg` (refreshed by `.github/workflows/star-history.yml`). Do not use `api.star-history.com`; GitHub locked the public stargazers API and that URL now renders a “restricted access” placeholder. Then License.
+14. License.
 
 ### Release bump (example)
 

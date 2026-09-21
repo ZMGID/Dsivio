@@ -243,10 +243,6 @@ Development conventions: [Engineering standards](docs/engineering-standards.md).
 
 Open an issue first for larger features. Tracker conventions: [docs/agents/issue-tracker.md](docs/agents/issue-tracker.md).
 
-## Star History
-
-[![Star History Chart](docs/star-history.svg)](https://github.com/ZMGID/kivio/stargazers)
-
 ## License
 
 [GPL-3.0-or-later](LICENSE) © ZM

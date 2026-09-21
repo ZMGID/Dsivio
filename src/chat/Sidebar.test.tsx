@@ -429,25 +429,25 @@ describe('Sidebar extension navigation', () => {
   it.each(['应用市场', '图片', '视频', '作品'])('keeps extensions collapsed when selecting %s', async (label) => {
     const user = userEvent.setup()
     render(<Navigation />)
-    await user.click(screen.getByRole('button', { name: label, exact: true }))
-    expect(screen.getByRole('button', { name: '扩展', exact: true })).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByRole('button', { name: 'MCP', exact: true })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: new RegExp(`^${label}$`) }))
+    expect(screen.getByRole('button', { name: /^扩展$/ })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: /^MCP$/ })).not.toBeInTheDocument()
   })
 
   it('keeps extensions collapsed when opening the market directly', () => {
     render(<Navigation initial="market" />)
-    expect(screen.getByRole('button', { name: '扩展', exact: true })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: /^扩展$/ })).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('expands for an extension route and preserves manual toggling', async () => {
     const user = userEvent.setup()
     render(<Navigation initial="mcp" />)
-    const toggle = screen.getByRole('button', { name: '扩展', exact: true })
+    const toggle = screen.getByRole('button', { name: /^扩展$/ })
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     await user.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await user.click(toggle)
-    await user.click(screen.getByRole('button', { name: '应用市场', exact: true }))
+    await user.click(screen.getByRole('button', { name: /^应用市场$/ }))
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
   })
 })
