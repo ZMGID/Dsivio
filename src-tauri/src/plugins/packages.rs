@@ -386,11 +386,18 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
         }
     }
     let mut env: BTreeMap<String, String> = std::env::vars().collect();
+    if package.id == crate::video_studio::PACKAGE_ID && package.source == "builtin:dsvideo" {
+        env.extend(crate::video_studio::runtime::environment()?);
+    }
+    // Normalize only host-injected paths, before expansion into command/args/env.
+    // Keep canonical paths for containment checks and leave arbitrary values intact.
+    let cli_root = crate::utils::strip_windows_verbatim_prefix(root.to_path_buf());
+    let cli_data = crate::utils::strip_windows_verbatim_prefix(data.to_path_buf());
     for key in ["PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT"] {
-        env.insert(key.into(), root.display().to_string());
+        env.insert(key.into(), cli_root.display().to_string());
     }
     for key in ["PLUGIN_DATA", "CLAUDE_PLUGIN_DATA"] {
-        env.insert(key.into(), data.display().to_string());
+        env.insert(key.into(), cli_data.display().to_string());
     }
     let mut servers = Vec::new();
     let mut mcp_configs = configs(root, manifest.get("mcpServers"), ".mcp.json")?;
@@ -447,7 +454,7 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
             }
             .into();
             server.connector_id = Some(format!("plugin:package:{}", package.id));
-            server.cwd = Some(root.display().to_string());
+            server.cwd = Some(env["PLUGIN_ROOT"].clone());
             if transport == "stdio" && server.command.trim().is_empty() {
                 return Err(format!("MCP {name} requires command"));
             }

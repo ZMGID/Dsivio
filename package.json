@@ -11,7 +11,7 @@
     "protocol:check": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin export-chat-protocol -- --check",
     "dev": "(npm run build:swift || true) && tauri dev",
     "dev:ui": "vite --port 5713",
-    "build": "npm run package:check && npm run icons:check && npm run build:swift && npm run protocol:check && tauri build",
+    "build": "npm run build:video-runtime && npm run package:check && npm run icons:check && npm run build:swift && npm run protocol:check && tauri build",
     "tauri": "tauri",
     "build:ui": "vite build",
     "build:swift": "node scripts/build-swift-sidecar.js",
@@ -28,7 +28,9 @@
     "test:watch": "vitest",
     "probe:e2e": "node scripts/probe-e2e.mjs",
     "probe:chat-performance": "node scripts/check-chat-performance-report.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:video-runtime": "node scripts/build-video-runtime.mjs",
+    "verify:video-runtime": "node scripts/verify-video-runtime.mjs"
   },
   "dependencies": {
     "@lobehub/icons": "^5.10.0",

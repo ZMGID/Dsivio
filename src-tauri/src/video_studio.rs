@@ -94,7 +94,7 @@ fn sync_builtin_servers(
             server.enabled = previous.enabled;
             server.enabled_tools = previous.enabled_tools.clone();
             for (key, value) in &previous.env {
-                // Retire paths injected by the removed bundled runtime.
+                // Refresh application-owned paths when the installation moves.
                 if matches!(key.as_str(), "DSVIDEO_RUNTIME_ROOT" | "DSVIDEO_RUNTIME_PATH" | "DSVIDEO_PYTHON" | "DSVIDEO_NODE" | "PATH" | "PYTHONPATH" | "PYTHONHOME" | "PYTHONNOUSERSITE") { continue; }
                 server
                     .env
@@ -221,7 +221,7 @@ fn video_metadata_from_probe(probe: &Value) -> Option<Value> {
 }
 
 async fn probe_video_metadata(source: &str) -> Option<Value> {
-    let executable = "ffprobe";
+    let executable = runtime::root().ok()?.join("bin").join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
     let output = tokio::process::Command::new(executable)
         .args([
             "-v",
@@ -320,7 +320,7 @@ async fn worker(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
     command.creation_flags(0x08000000);
     let mut child = command
         .spawn()
-        .map_err(|e| format!("无法启动本机 Python，请安装 Python 3 并确保命令可用：{e}"))?;
+        .map_err(|e| format!("无法启动内置 Python，请检查应用资源是否完整：{e}"))?;
     child
         .stdin
         .take()
@@ -922,9 +922,10 @@ mod tests {
             .iter()
             .all(|s| !s.args.join(" ").contains("${")));
         for server in &resolved.servers {
-            assert!(["comfy-mcp", "mcp-video-analyzer"].contains(&server.command.as_str()));
+            assert!(std::path::Path::new(&server.command).is_absolute());
+            assert!(server.command.contains("video-runtime"));
             assert!(!server.args.iter().any(|arg| arg == "-y"));
-            assert!(!server.env.contains_key("DSVIDEO_RUNTIME_ROOT"));
+            assert!(server.env.contains_key("DSVIDEO_RUNTIME_ROOT"));
         }
     }
 
@@ -952,19 +953,19 @@ mod tests {
         });
         let new = ChatMcpServer {
             id: "builtin-analyzer".into(),
-            command: "mcp-video-analyzer".into(),
-            args: vec![],
+            command: "/moved app/node".into(),
+            args: vec!["/moved app/analyzer.js".into()],
             enabled: true,
-            env: Default::default(),
+            env: [("PATH".into(), "new runtime".into())].into(),
             ..Default::default()
         };
         sync_builtin_servers(&mut settings, vec![new.clone()]);
         sync_builtin_servers(&mut settings, vec![new]);
         let server = &settings.chat_tools.servers[0];
-        assert_eq!(server.command, "mcp-video-analyzer");
+        assert_eq!(server.command, "/moved app/node");
         assert!(!server.enabled);
         assert_eq!(server.enabled_tools, vec!["get_metadata"]);
-        assert!(!server.env.contains_key("PATH"));
+        assert_eq!(server.env["PATH"], "new runtime");
         assert_eq!(server.env["CUSTOM_ENDPOINT"], "http://localhost:8188");
         assert_eq!(settings.chat_tools.servers.len(), 2);
         assert_eq!(settings.chat_tools.servers[1].command, "user-command");

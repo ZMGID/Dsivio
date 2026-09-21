@@ -179,7 +179,7 @@ describe('shared video workspace navigation', () => {
     expect(await screen.findByText('已选模板：聊天创建的参考模板')).toBeTruthy()
     expect(screen.getByRole('button', { name: '生成服务' }).textContent).toContain('请选择')
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
-    expect(await screen.findByRole('heading', { name: '本机运行环境' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: '内置运行环境' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '安装 / 修复 Comfy 依赖' })).toBeNull()
   })
 
@@ -206,7 +206,7 @@ describe('shared video workspace navigation', () => {
     render(<VideoStudio />)
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
     expect(await screen.findAllByText('检测失败')).toHaveLength(5)
-    expect(screen.getByText(/无法读取本机运行环境状态/)).toHaveTextContent('unknown path')
+    expect(screen.getByText(/无法读取内置运行环境状态/)).toHaveTextContent('unknown path')
     expect(screen.queryByText('内置文件缺失')).toBeNull()
     expect(screen.queryByText(/重新安装 dsivio/)).toBeNull()
 
@@ -217,7 +217,7 @@ describe('shared video workspace navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: '重新检查' }))
     expect(await screen.findByText('3.12.12')).toBeTruthy()
     expect(screen.getAllByText('已就绪')).toHaveLength(4)
-    expect(screen.queryByText(/无法读取本机运行环境状态/)).toBeNull()
+    expect(screen.queryByText(/无法读取内置运行环境状态/)).toBeNull()
     expect(screen.queryByText(/重新安装 dsivio/)).toBeNull()
   })
 
@@ -226,7 +226,7 @@ describe('shared video workspace navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: '视频设置' }))
     expect(await screen.findByText('3.14')).toBeTruthy()
     expect(screen.getAllByText('内置文件缺失')).toHaveLength(1)
-    expect(screen.getByText('请按需要在本机安装 Python 3、ffmpeg、Comfy MCP 或视频分析 MCP，然后重新检查。')).toBeTruthy()
+    expect(screen.getByText('内置依赖不完整，请重新安装 Dsivio 后重新检查。')).toBeTruthy()
   })
 
   it('shows a floating error toast for a user action, then auto-dismisses', async () => {

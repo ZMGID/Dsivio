@@ -769,7 +769,7 @@ export default function VideoStudio() {
                   </div>
                 </section>
                 <section className="vs-panel">
-                  <h3>本机运行环境</h3>
+                  <h3>内置运行环境</h3>
                   <p className="vs-muted">
                     方案使用当前聊天模型；处理图片需模型支持视觉。
                   </p>
@@ -802,11 +802,11 @@ export default function VideoStudio() {
                   </div>
                   {runtimeCheck === 'failed' && (
                     <p className="vs-muted">
-                      无法读取本机运行环境状态，请重新检查。错误：{runtimeError}
+                      无法读取内置运行环境状态，请重新检查。错误：{runtimeError}
                     </p>
                   )}
                   {runtimeMissing && (
-                    <p className="vs-muted">请按需要在本机安装 Python 3、ffmpeg、Comfy MCP 或视频分析 MCP，然后重新检查。</p>
+                    <p className="vs-muted">内置依赖不完整，请重新安装 Dsivio 后重新检查。</p>
                   )}
                   <p className="vs-path">{data.configPath}</p>
                 </section>

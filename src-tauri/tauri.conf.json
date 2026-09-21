@@ -4,8 +4,8 @@
   "version": "3.0.0",
   "identifier": "com.zmair.kivio",
   "build": {
-    "beforeDevCommand": "npm run dev:ui",
-    "beforeBuildCommand": "npm run build:ui",
+    "beforeDevCommand": "npm run build:video-runtime && npm run dev:ui",
+    "beforeBuildCommand": "npm run build:video-runtime && npm run build:ui",
     "devUrl": "http://localhost:5713",
     "frontendDist": "../dist"
   },
@@ -28,7 +28,8 @@
       "../docs/licenses": "licenses",
       "resources/image-studio": "image-studio",
       "resources/video-studio": "video-studio",
-      "resources/plugins/dsvideo-plugin": "plugins/dsvideo-plugin"
+      "resources/plugins/dsvideo-plugin": "plugins/dsvideo-plugin",
+      "resources/video-runtime": "video-runtime"
     },
     "windows": {
       "nsis": {
