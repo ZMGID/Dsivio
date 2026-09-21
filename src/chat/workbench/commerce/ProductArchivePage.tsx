@@ -24,6 +24,7 @@ export function ProductArchivePage() {
 
   return (
     <WorkbenchPage
+      crumb={t.workbenchGroupCommerce}
       title={t.workbenchNavProducts}
       subtitle={t.workbenchArchiveSubtitle}
       actions={(

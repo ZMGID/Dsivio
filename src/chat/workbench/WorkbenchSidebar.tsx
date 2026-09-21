@@ -72,7 +72,11 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
   onWidthChange,
 }: WorkbenchSidebarProps) {
   const t = useT()
-  const [commerceOpen, setCommerceOpen] = useState(() => loadGroupOpen('commerce'))
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() => {
+    const next: Record<string, boolean> = {}
+    for (const group of WORKBENCH_NAV.groups) next[group.id] = loadGroupOpen(group.id)
+    return next
+  })
 
   const openPage = useCallback((page: WorkbenchPageId) => {
     onOpenExtensionsItem(workbenchNavItem(page))
@@ -115,7 +119,7 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
         />
 
         {WORKBENCH_NAV.groups.map((group) => {
-          const open = group.id === 'commerce' ? commerceOpen : true
+          const open = openGroups[group.id] ?? true
           const childActive = group.entries.some((entry) => extensionsActive === workbenchNavItem(entry.page))
           const highlighted = open || childActive
           const GroupIcon = group.icon
@@ -130,10 +134,9 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
                 }`}
                 aria-expanded={open}
                 onClick={() => {
-                  if (group.id !== 'commerce') return
-                  const next = !commerceOpen
-                  setCommerceOpen(next)
-                  saveGroupOpen('commerce', next)
+                  const next = !open
+                  setOpenGroups((current) => ({ ...current, [group.id]: next }))
+                  saveGroupOpen(group.id, next)
                 }}
               >
                 <span className="flex h-5 w-5 shrink-0 items-center justify-center text-neutral-600 transition duration-300 ease-out group-hover:text-neutral-800 group-active:scale-90 dark:text-neutral-400 dark:group-hover:text-neutral-200">
@@ -149,7 +152,7 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
                 />
               </button>
               {open && (
-                <div className="ml-[12px] mt-0.5 grid grid-cols-2 gap-x-1">
+                <div className="ml-[12px] mt-0.5 grid grid-cols-2 gap-x-1 gap-y-0.5">
                   {group.entries.map((entry) => {
                     const active = extensionsActive === workbenchNavItem(entry.page)
                     const Icon = entry.icon
@@ -158,14 +161,14 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
                         key={entry.page}
                         type="button"
                         onClick={() => openPage(entry.page)}
-                        className={`flex items-center gap-2 rounded-md py-1.5 pl-2 pr-1 text-left text-[13px] transition-colors ${
+                        className={`workbench-nav-leaf flex items-center gap-2 py-1.5 pl-2 pr-1 text-left transition-colors ${
                           active
-                            ? 'font-medium text-neutral-900 dark:text-neutral-100'
+                            ? 'is-active'
                             : 'text-neutral-700 hover:bg-black/[0.04] hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-white/[0.06] dark:hover:text-neutral-100'
                         }`}
                       >
                         <span className={`flex h-4 w-4 shrink-0 items-center justify-center ${
-                          active ? 'text-neutral-700 dark:text-neutral-200' : 'text-neutral-400 dark:text-neutral-500'
+                          active ? '' : 'text-neutral-400 dark:text-neutral-500'
                         }`}
                         >
                           {Icon ? <Icon size={15} /> : null}

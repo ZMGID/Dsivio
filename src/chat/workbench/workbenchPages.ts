@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { LayoutDashboard, Package, ShieldCheck, Store, Upload, Workflow } from 'lucide-react'
+import { Bookmark, LayoutDashboard, Package, ScanSearch, ShieldCheck, Store, TrendingUp, Upload, Video, Workflow } from 'lucide-react'
 import type { I18n } from '../../components/i18n'
 import { hashPath } from '../chatRoutes'
 import type { ChatExtensionsNavItem } from '../chatRoutes'
@@ -7,7 +7,9 @@ import type { ChatExtensionsNavItem } from '../chatRoutes'
 type WorkbenchIcon = (props: { size?: number; className?: string }) => ReactNode
 
 /** 工作台首页之外的页面。路由写在 `#chat/workbench/{id}`，仍属 workbench 这一种 chatView。 */
-export type WorkbenchSubpageId = 'shops' | 'overview' | 'products' | 'listing' | 'check' | 'workflows'
+export type WorkbenchSubpageId =
+  | 'shops' | 'overview' | 'products' | 'listing' | 'check' | 'workflows'
+  | 'ranks' | 'match' | 'picks'
 export type WorkbenchPageId = 'home' | WorkbenchSubpageId
 
 export const WORKBENCH_SUBPAGES: readonly WorkbenchSubpageId[] = [
@@ -17,6 +19,9 @@ export const WORKBENCH_SUBPAGES: readonly WorkbenchSubpageId[] = [
   'listing',
   'check',
   'workflows',
+  'ranks',
+  'match',
+  'picks',
 ]
 
 export function isWorkbenchSubpage(id: string): id is WorkbenchSubpageId {
@@ -95,6 +100,16 @@ export const WORKBENCH_NAV: {
         { page: 'listing', label: (t) => t.workbenchNavListing, icon: Upload },
         { page: 'check', label: (t) => t.workbenchNavCheck, icon: ShieldCheck },
         { page: 'workflows', label: (t) => t.workbenchNavWorkflows, icon: Workflow },
+      ],
+    },
+    {
+      id: 'sourcing',
+      label: (t) => t.workbenchGroupSourcing,
+      icon: TrendingUp,
+      entries: [
+        { page: 'ranks', label: (t) => t.workbenchNavRanks, icon: Video },
+        { page: 'match', label: (t) => t.workbenchNavMatch, icon: ScanSearch },
+        { page: 'picks', label: (t) => t.workbenchNavPicks, icon: Bookmark },
       ],
     },
   ],

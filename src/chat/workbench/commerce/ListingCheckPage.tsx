@@ -37,6 +37,7 @@ export function ListingCheckPage() {
 
   return (
     <WorkbenchPage
+      crumb={t.workbenchGroupCommerce}
       title={t.workbenchNavCheck}
       subtitle={t.workbenchCheckSubtitle}
       actions={(

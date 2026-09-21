@@ -183,6 +183,8 @@ describe('extensionsNavItemForView', () => {
     expect(extensionsNavItemForView('workbench')).toBe('workbench')
     window.location.hash = '#chat/workbench/shops'
     expect(extensionsNavItemForView('workbench')).toBe('workbench/shops')
+    window.location.hash = '#chat/workbench/ranks'
+    expect(extensionsNavItemForView('workbench')).toBe('workbench/ranks')
     window.location.hash = '#chat'
     expect(extensionsNavItemForView('settings')).toBeNull()
     expect(extensionsNavItemForView('conversation')).toBeNull()

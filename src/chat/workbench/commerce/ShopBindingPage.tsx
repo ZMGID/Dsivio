@@ -27,7 +27,7 @@ export function ShopBindingPage() {
   const [notice, setNotice] = useState<string | null>(null)
 
   return (
-    <WorkbenchPage title={t.workbenchNavShops} subtitle={t.workbenchShopsSubtitle}>
+    <WorkbenchPage crumb={t.workbenchGroupCommerce} title={t.workbenchNavShops} subtitle={t.workbenchShopsSubtitle}>
       <WorkbenchCard title={t.workbenchShopsBindTitle}>
         <p className="workbench-page-sub workbench-page-sub--flush">{t.workbenchShopsBindHint}</p>
         <div className="workbench-platform-grid">

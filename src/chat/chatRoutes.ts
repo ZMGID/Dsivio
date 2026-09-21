@@ -108,6 +108,9 @@ export type ChatExtensionsNavItem =
   | 'workbench/listing'
   | 'workbench/check'
   | 'workbench/workflows'
+  | 'workbench/ranks'
+  | 'workbench/match'
+  | 'workbench/picks'
   | 'images'
   | 'videos'
   | 'market'
@@ -125,6 +128,9 @@ export function extensionsNavItemForView(chatView: string): ChatExtensionsNavIte
         || item === 'workbench/listing'
         || item === 'workbench/check'
         || item === 'workbench/workflows'
+        || item === 'workbench/ranks'
+        || item === 'workbench/match'
+        || item === 'workbench/picks'
       ) return item
     }
     return 'workbench'

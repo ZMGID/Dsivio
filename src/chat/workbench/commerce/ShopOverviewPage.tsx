@@ -35,6 +35,7 @@ export function ShopOverviewPage() {
 
   return (
     <WorkbenchPage
+      crumb={t.workbenchGroupCommerce}
       title={t.workbenchNavOverview}
       actions={(
         <div className="workbench-page-actions">

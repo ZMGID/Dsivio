@@ -5,6 +5,9 @@ import { ListingPage } from './commerce/ListingPage'
 import { ProductArchivePage } from './commerce/ProductArchivePage'
 import { ShopBindingPage } from './commerce/ShopBindingPage'
 import { ShopOverviewPage } from './commerce/ShopOverviewPage'
+import { LookalikePage } from './sourcing/LookalikePage'
+import { PickLibraryPage } from './sourcing/PickLibraryPage'
+import { VideoRankPage } from './sourcing/VideoRankPage'
 import { WorkflowPage } from './workflow/WorkflowPage'
 import { workbenchPageFromHash, type WorkbenchPageId } from './workbenchPages'
 
@@ -33,6 +36,12 @@ function renderPage(page: WorkbenchPageId) {
       return <ListingCheckPage />
     case 'workflows':
       return <WorkflowPage />
+    case 'ranks':
+      return <VideoRankPage />
+    case 'match':
+      return <LookalikePage />
+    case 'picks':
+      return <PickLibraryPage />
     default:
       return <WorkbenchLanding />
   }
