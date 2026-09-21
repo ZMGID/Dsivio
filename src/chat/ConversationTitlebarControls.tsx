@@ -3,7 +3,7 @@ import { PanelRight, SquareArrowOutUpRight } from 'lucide-react'
 import { IconButton } from '../components/Button'
 import { i18n, type Lang } from '../components/i18n'
 import { BackgroundJobsIndicator } from './BackgroundJobsIndicator'
-import { ExternalModelSelector, RuntimePicker } from './RuntimePicker'
+import { RuntimePicker } from './RuntimePicker'
 import { ModelSelector } from './ModelSelector'
 import { PermissionPicker } from './PermissionPicker'
 import { ThinkingLevelSelector } from './ThinkingLevelSelector'
@@ -46,7 +46,6 @@ export const ConversationTitlebarControls = memo(function ConversationTitlebarCo
   dockOpen,
   uiLang,
   onRuntimeChange,
-  onExternalModelChange,
   onModelChange,
   onThinkingLevelChange,
   onApprovalPolicyChange,
@@ -66,18 +65,8 @@ export const ConversationTitlebarControls = memo(function ConversationTitlebarCo
           />
         </div>
         <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
-          {usesExternalRuntime ? (
-            <ExternalModelSelector
-              agentRuntime={activeAgentRuntime}
-              onModelChange={onExternalModelChange}
-              conversationId={conversationId}
-            />
-          ) : (
-            <ModelSelector
-              currentProviderId={activeProviderId}
-              currentModel={activeModel}
-              onModelChange={onModelChange}
-            />
+          {!usesExternalRuntime && (
+            <ModelSelector currentProviderId={activeProviderId} currentModel={activeModel} onModelChange={onModelChange} />
           )}
         </div>
         {!usesExternalRuntime && (

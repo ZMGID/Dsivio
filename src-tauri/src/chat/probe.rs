@@ -264,23 +264,6 @@ pub async fn run_probe_watcher(app: AppHandle) {
         };
 
         if req.probe_models {
-            let result = crate::external_agents::commands::chat_detect_external_agent_models(
-                app.clone(),
-                app.state::<AppState>(),
-                req.external_agent_id.clone().unwrap_or_default(),
-                req.conversation_id.clone(),
-                Some(true),
-            )
-            .await;
-            let value = match result {
-                Ok(payload) => serde_json::json!({"id":req.id,"payload":payload}),
-                Err(error) => serde_json::json!({"id":req.id,"error":error}),
-            };
-            let _ = crate::chat::storage::atomic_write(
-                &dir.join("models-result.json"),
-                &value.to_string(),
-                "model probe",
-            );
             continue;
         }
         eprintln!("[chat-probe] running: {:?}", req.prompt);
@@ -440,15 +423,8 @@ impl ProbeLiveSession {
 
 /// 读一次常驻会话注册表。**只读**：不改任何条目（`last_activity` 不动，否则自省本身就会
 /// 把空闲回收的时钟拨回去），也**不跨 await 持锁**（本函数是同步的，state.rs 的既有约定）。
-fn live_session_snapshot(state: &AppState, conversation_id: &str) -> ProbeLiveSession {
-    let snapshot = state.external_live_session_diagnostic(conversation_id);
-    ProbeLiveSession {
-        registered: snapshot.registered,
-        alive: snapshot.alive,
-        child_pid: snapshot.child_pid,
-        turns_served: snapshot.turns_served,
-        registry_size: snapshot.registry_size,
-    }
+fn live_session_snapshot(_state: &AppState, _conversation_id: &str) -> ProbeLiveSession {
+    ProbeLiveSession::default_empty()
 }
 
 /// 枚举的线上名字（`snake_case`，与前端事件同一套口径）。走 serde 而不是手写 match：

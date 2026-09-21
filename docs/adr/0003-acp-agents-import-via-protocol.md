@@ -1,5 +1,8 @@
 # ACP 代理走协议枚举与重放，不解析它们的私有存储
 
+> 已于 2026-09-21 随本地 CLI 管理和适配移除而退役。现仅支持 Dsivio Agent；旧 CLI 对话保留历史，不能续聊或转为内置运行时。
+
+
 opencode 和 kimi 在 Kivio 里是 ACP 代理。导入它们的会话时，用 ACP 的 `session/list`（枚举）和 `session/load`（绑定/续聊），**不去读** `opencode.db` / `session_index.jsonl` 来做枚举。opencode 的 `session/load` 还会把历史**重放**成正常的 `session/update` 流——Kivio 的 `acp.rs` 本来就会渲染它，导入历史的保真度自动等同于实时聊天。
 
 ## 本机实测的能力矩阵（2026-08-01）

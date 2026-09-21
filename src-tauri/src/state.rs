@@ -47,10 +47,8 @@ pub struct AppState {
     /// Chat 审批、会话授权与 ask-user 的瞬态状态。领域句柄私有持有所有 map/lock，
     /// 组合根只负责生命周期，调用方只能走原子行为方法。
     chat_interactions: crate::chat::interaction_state::ChatInteractionState,
-    external_discovery: crate::external_agents::discovery_state::ExternalDiscoveryState,
     /// Phase 2 持久会话注册表：conversation_id → 活会话（仅持有控制通道，不持有 Child）。
     /// 仅在 get/insert/remove 时短暂持锁，绝不跨 turn await 持锁。
-    external_live_sessions: crate::external_agents::session::live::LiveSessionRegistry,
     /// 外部入口（例如 Lens）交给 Chat 前端发送的待处理消息。
     /// 后端只负责保存请求和打开窗口，实际发送必须走 Chat 前端的手动发送状态机。
     pending_chat_external_sends: crate::chat::external_send::ChatExternalSendMailbox,
@@ -82,7 +80,6 @@ pub struct AppState {
     /// 外部 CLI 自报的后台任务注册表（目前只有 claude：后台 Bash / 后台子代理，
     /// task_id → 条目）。由 `run.rs` 消费 `UnifiedAgentEvent::BackgroundTask` 时 upsert，
     /// Background tasks 面板轮询读取。仅内存：任务活在 CLI 进程里，Kivio 重启即失效。
-    external_background_tasks: crate::external_agents::background_tasks::ExternalBackgroundTasks,
     /// 开发者「请求调试」内存环形缓冲：最近 [`REQUEST_DEBUG_CAPACITY`] 条 provider 调用的
     /// 请求（脱敏 headers + body）+ 响应摘要。默认关闭（`chat_tools.request_debug_enabled`），
     /// 关闭时 adapter 短路、不构造记录。领域 owner 管理环形缓冲及既有磁盘镜像。
@@ -99,11 +96,7 @@ impl AppState {
     pub(crate) fn frontmost_apps(&self) -> &crate::window_focus::FrontmostAppState {
         &self.frontmost_apps
     }
-    pub(crate) fn external_background_tasks(
-        &self,
-    ) -> &crate::external_agents::background_tasks::ExternalBackgroundTasks {
-        &self.external_background_tasks
-    }
+
     pub(crate) fn request_debug(&self) -> &crate::chat::request_debug::RequestDebugState {
         &self.request_debug
     }
@@ -126,22 +119,8 @@ impl AppState {
         &self.pending_chat_external_sends
     }
 
-    #[cfg(debug_assertions)]
-    pub(crate) fn external_live_session_diagnostic(
-        &self,
-        conversation_id: &str,
-    ) -> crate::external_agents::session::live::LiveSessionDiagnostic {
-        self.external_live_sessions.diagnostic(conversation_id)
-    }
-
     pub(crate) fn provider_runtime(&self) -> &crate::chat::provider_runtime::ProviderRuntimeState {
         &self.provider_runtime
-    }
-
-    pub(crate) fn external_discovery(
-        &self,
-    ) -> &crate::external_agents::discovery_state::ExternalDiscoveryState {
-        &self.external_discovery
     }
 
     pub(crate) fn chat_runtime(&self) -> &crate::chat::runtime_state::ChatRuntimeState {
@@ -156,12 +135,6 @@ impl AppState {
         &self,
     ) -> &crate::chat::interaction_state::ChatInteractionState {
         &self.chat_interactions
-    }
-
-    pub(crate) fn external_live_sessions(
-        &self,
-    ) -> &crate::external_agents::session::live::LiveSessionRegistry {
-        &self.external_live_sessions
     }
 
     /// 集中构造点：`lib.rs::run` 的 `app.manage`、`new_headless`、以及测试用 `test_app_state`
@@ -189,10 +162,6 @@ impl AppState {
             chat_runtime: crate::chat::runtime_state::ChatRuntimeState::default(),
             chat_protocol: crate::chat::protocol::ChatProtocolState::default(),
             chat_interactions: crate::chat::interaction_state::ChatInteractionState::default(),
-            external_discovery:
-                crate::external_agents::discovery_state::ExternalDiscoveryState::default(),
-            external_live_sessions:
-                crate::external_agents::session::live::LiveSessionRegistry::default(),
             pending_chat_external_sends:
                 crate::chat::external_send::ChatExternalSendMailbox::default(),
             provider_runtime,
@@ -208,8 +177,6 @@ impl AppState {
             background_commands: Arc::new(
                 crate::native_tools::background_registry::BackgroundCommandRegistry::default(),
             ),
-            external_background_tasks:
-                crate::external_agents::background_tasks::ExternalBackgroundTasks::default(),
             request_debug,
             automation_runs: crate::automation::AutomationRunState::default(),
         }
@@ -551,148 +518,6 @@ mod tests {
                 .pick_active_key("p", 0, &HashSet::new()),
             None
         );
-    }
-
-    #[test]
-    fn external_agent_detection_cache_is_scoped_by_cwd() {
-        let st = test_state();
-        st.external_discovery()
-            .set_cached_detected_agents("/project-a".to_string(), Vec::new());
-
-        assert!(st
-            .external_discovery()
-            .get_cached_detected_agents("/project-a", Duration::from_secs(60))
-            .is_some());
-        assert!(st
-            .external_discovery()
-            .get_cached_detected_agents("/project-b", Duration::from_secs(60))
-            .is_none());
-    }
-
-    #[tokio::test]
-    async fn model_probe_lock_is_shared_per_key_and_distinct_across_keys() {
-        let st = test_state();
-        let a = st
-            .external_discovery()
-            .acquire_model_probe("claude:/proj")
-            .await;
-        let _b = tokio::time::timeout(
-            Duration::from_secs(1),
-            st.external_discovery().acquire_model_probe("codex:/proj"),
-        )
-        .await
-        .unwrap();
-        assert!(tokio::time::timeout(
-            Duration::from_millis(1),
-            st.external_discovery().acquire_model_probe("claude:/proj")
-        )
-        .await
-        .is_err());
-        drop(a);
-        let _retry = tokio::time::timeout(
-            Duration::from_secs(1),
-            st.external_discovery().acquire_model_probe("claude:/proj"),
-        )
-        .await
-        .unwrap();
-    }
-
-    #[test]
-    fn external_agent_models_cache_applies_source_aware_ttl() {
-        use crate::external_agents::types::{CachedAgentModels, ModelSource, RuntimeModelOption};
-        let st = test_state();
-        let one = |id: &str| RuntimeModelOption {
-            id: id.to_string(),
-            label: id.to_string(),
-            context_window_tokens: None,
-        };
-
-        // probed 条目在长 TTL 内命中，短 fallback TTL 不影响它。
-        st.external_discovery().set_cached_external_agent_models(
-            "claude:/p".to_string(),
-            CachedAgentModels {
-                models: vec![one("gpt-5")],
-                source: ModelSource::Probed,
-                reasoning_options: vec![],
-                reasoning_by_model: Default::default(),
-                current_model: None,
-                current_reasoning: None,
-            },
-        );
-        assert!(st
-            .external_discovery()
-            .get_cached_external_agent_models("claude:/p", Duration::from_secs(300), Duration::ZERO)
-            .is_some());
-
-        // fallback 条目按短 TTL 裁定：TTL=0 立即视为过期（负缓存到点即重探）。
-        st.external_discovery().set_cached_external_agent_models(
-            "codex:/p".to_string(),
-            CachedAgentModels {
-                models: vec![one("default")],
-                source: ModelSource::Fallback,
-                reasoning_options: vec![],
-                reasoning_by_model: Default::default(),
-                current_model: None,
-                current_reasoning: None,
-            },
-        );
-        assert!(st
-            .external_discovery()
-            .get_cached_external_agent_models("codex:/p", Duration::from_secs(300), Duration::ZERO)
-            .is_none());
-        // 同一 fallback 条目在足够长的 fallback TTL 内仍命中。
-        st.external_discovery().set_cached_external_agent_models(
-            "codex:/p".to_string(),
-            CachedAgentModels {
-                models: vec![one("default")],
-                source: ModelSource::Fallback,
-                reasoning_options: vec![],
-                reasoning_by_model: Default::default(),
-                current_model: None,
-                current_reasoning: None,
-            },
-        );
-        let hit = st.external_discovery().get_cached_external_agent_models(
-            "codex:/p",
-            Duration::from_secs(300),
-            Duration::from_secs(30),
-        );
-        assert!(matches!(hit.map(|c| c.source), Some(ModelSource::Fallback)));
-    }
-
-    #[test]
-    fn external_slash_commands_cache_negative_caches_empty_with_short_ttl() {
-        use crate::external_agents::types::ExternalCliSlashCommand;
-        let st = test_state();
-        let cmd = |name: &str| ExternalCliSlashCommand {
-            slash: format!("/{name}"),
-            name: name.to_string(),
-            description: None,
-            argument_hint: None,
-        };
-
-        // 非空命令列表走长 TTL：短(empty) TTL=0 不影响它，仍命中。
-        st.external_discovery()
-            .set_cached_external_slash_commands("kimi:/g".to_string(), vec![cmd("compact")]);
-        assert!(st
-            .external_discovery()
-            .get_cached_external_slash_commands("kimi:/g", Duration::from_secs(300), Duration::ZERO)
-            .is_some());
-
-        // 空列表（负缓存）按短 TTL 裁定：empty TTL=0 立即过期 → 到点重探。
-        st.external_discovery()
-            .set_cached_external_slash_commands("grok:/g".to_string(), Vec::new());
-        assert!(st
-            .external_discovery()
-            .get_cached_external_slash_commands("grok:/g", Duration::from_secs(300), Duration::ZERO)
-            .is_none());
-        // 但空列表在足够长的 empty TTL 内仍命中（TTL 内不重探）。
-        let hit = st.external_discovery().get_cached_external_slash_commands(
-            "grok:/g",
-            Duration::from_secs(300),
-            Duration::from_secs(30),
-        );
-        assert!(matches!(hit, Some(ref v) if v.is_empty()));
     }
 
     fn sample_mcp_tool(name: &str) -> McpTool {

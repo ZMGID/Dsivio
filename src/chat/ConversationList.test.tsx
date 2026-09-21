@@ -1,7 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { chatApi } from './api'
 import { ConversationList } from './ConversationList'
 import type { ConversationListItem } from './types'
 
@@ -133,32 +132,6 @@ describe('ConversationList pin and archive', () => {
     expect(screen.queryByRole('menuitem', { name: '重命名' })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: '置顶聊天' })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /原生会话/ })).not.toBeInTheDocument()
-  })
-
-  it('shows the bound native session id for local CLI conversations', async () => {
-    const user = userEvent.setup()
-    vi.spyOn(chatApi, 'getExternalNativeSessionId').mockResolvedValue(
-      '0194abcd-61e2-7113-b077-58d3d91fb3d7',
-    )
-    const { container } = render(
-      <ConversationList
-        {...listProps}
-        conversations={[
-          {
-            ...conversation,
-            agent_runtime: { kind: 'external', externalAgentId: 'codex' },
-          },
-        ]}
-      />,
-    )
-
-    const row = container.querySelector('.kv-conv-row')
-    expect(row).toBeTruthy()
-    await user.pointer({ keys: '[MouseRight>]', target: row as Element })
-
-    await waitFor(() => {
-      expect(screen.getByRole('menuitem', { name: /原生会话/ })).toHaveTextContent('0194abcd')
-    })
   })
 
   it('regenerates title from the context menu', async () => {

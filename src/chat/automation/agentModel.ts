@@ -22,7 +22,7 @@ export interface NormalizedAgent {
   skillIds: string[]
 }
 
-const RUNTIME_KINDS: AgentRuntimeKind[] = ['builtin', 'chat', 'external']
+const RUNTIME_KINDS: AgentRuntimeKind[] = ['builtin', 'external']
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value : ''
@@ -99,7 +99,7 @@ export function withRuntimeKind(
   return {
     ...agent,
     ...extra,
-    runtimeKind,
+    runtimeKind: 'builtin',
     externalAgentId: null,
     externalModel: null,
   }
@@ -136,7 +136,6 @@ export function agentSlotLabel(slot: AgentSlot, t: I18n): string {
 }
 
 export function agentRuntimeSummary(agent: NormalizedAgent, t: I18n): string {
-  if (agent.runtimeKind === 'chat') return t.chatAutomationKivioChat
   if (agent.runtimeKind === 'external') {
     return agent.externalAgentId || t.chatAutomationExternalCli
   }
@@ -307,11 +306,9 @@ export function explodeInlineAgents(
       spawned.push(child)
       spawnedEdges.push(connectSlotEdge(child.id, node.id, slot))
     }
-    const runtimeLabel = agent.runtimeKind === 'chat'
-      ? 'Kivio Chat'
-      : agent.runtimeKind === 'external'
+    const runtimeLabel = agent.runtimeKind === 'external'
         ? (agent.externalAgentId || 'CLI')
-        : 'Kivio Agent'
+        : 'Dsivio Agent'
     spawn('runtime', toAgentData({
       prompt: '',
       runtimeKind: agent.runtimeKind,

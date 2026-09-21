@@ -17,7 +17,7 @@ describe('normalizeAgent', () => {
     expect(data.skillIds).toEqual([])
     expect(data.prompt).toBe('')
   })
-  it('defaults to builtin Kivio Agent with an empty prompt', () => {
+  it('defaults to builtin Dsivio Agent with an empty prompt', () => {
     const agent = normalizeAgent(undefined)
     expect(agent.runtimeKind).toBe('builtin')
     expect(agent.prompt).toBe('')
@@ -98,7 +98,7 @@ describe('normalizeAgent', () => {
       { source: 'c', target: 'a', targetHandle: 'context' },
     ]
     const agent = composeAgent('a', nodes, edges)
-    expect(agent.runtimeKind).toBe('chat')
+    expect(agent.runtimeKind).toBe('builtin')
     expect(agent.prompt).toBe('new')
     expect(agent.toolIds).toEqual([])
   })

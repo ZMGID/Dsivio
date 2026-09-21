@@ -1236,132 +1236,7 @@ fn normalize_segments_does_not_duplicate_toolloop_only_answer_text() {
 ///
 /// 本用例直接问 `segment_phase_for_tool_count`（生产者本人）要 phase，而不是硬编码一个
 /// phase 常量——这样生产者哪天再标回 ToolLoop，这条就会红。
-#[test]
-fn external_cli_answer_text_after_tools_is_not_duplicated() {
-    use crate::external_agents::run::segment_phase_for_tool_count;
 
-    let answer = "已创建 `dup.md`，内容为 `hello`。".to_string();
-    let tool_calls = vec![test_tool_record(
-        "call_write",
-        "external_cli",
-        1,
-        ToolCallStatus::Success,
-    )];
-    // 外部 CLI 落库前的分段形态：推理 → 工具 → 工具之后的正文。
-    let segments = vec![
-        ChatMessageSegment {
-            id: "seg_reasoning".to_string(),
-            kind: ChatMessageSegmentKind::Reasoning,
-            phase: segment_phase_for_tool_count(&ChatMessageSegmentKind::Reasoning, 0),
-            order: 1,
-            step_number: None,
-            round: None,
-            text: Some("我先建文件".to_string()),
-            tool_call_id: None,
-        },
-        ChatMessageSegment {
-            id: "seg_tool".to_string(),
-            kind: ChatMessageSegmentKind::Tool,
-            phase: ChatMessageSegmentPhase::ToolLoop,
-            order: 2,
-            step_number: None,
-            round: Some(1),
-            text: None,
-            tool_call_id: Some("call_write".to_string()),
-        },
-        ChatMessageSegment {
-            id: "seg_answer".to_string(),
-            kind: ChatMessageSegmentKind::Text,
-            phase: segment_phase_for_tool_count(&ChatMessageSegmentKind::Text, tool_calls.len()),
-            order: 3,
-            step_number: None,
-            round: Some(1),
-            text: Some(answer.clone()),
-            tool_call_id: None,
-        },
-    ];
-
-    let segments = normalize_assistant_segments(&answer, None, &tool_calls, segments);
-
-    assert_eq!(
-        segments
-            .iter()
-            .filter(|segment| segment.kind == ChatMessageSegmentKind::Text
-                && segment.text.as_deref() == Some(answer.as_str()))
-            .count(),
-        1,
-        "工具之后的正文只能有一条分段，否则气泡里会显示两遍"
-    );
-    assert_eq!(content_from_segments(&segments).as_deref(), Some(&*answer));
-}
-
-/// 「说一句 → 调工具 → 再说一句」：外部 CLI 的 `content` 是两段拼起来的，所以两条文本分段
-/// 都必须被 `content_from_segments` 认可——只认最后一条的话，落库正文会丢掉工具之前那句。
-#[test]
-fn external_cli_text_around_tool_call_all_counts_as_content() {
-    use crate::external_agents::run::segment_phase_for_tool_count;
-
-    let tool_calls = vec![test_tool_record(
-        "call_write",
-        "external_cli",
-        1,
-        ToolCallStatus::Success,
-    )];
-    let before = "我来建这个文件。";
-    let after = "已创建 `dup.md`。";
-    let segments = vec![
-        ChatMessageSegment {
-            id: "seg_before".to_string(),
-            kind: ChatMessageSegmentKind::Text,
-            phase: segment_phase_for_tool_count(&ChatMessageSegmentKind::Text, 0),
-            order: 1,
-            step_number: None,
-            round: None,
-            text: Some(before.to_string()),
-            tool_call_id: None,
-        },
-        ChatMessageSegment {
-            id: "seg_tool".to_string(),
-            kind: ChatMessageSegmentKind::Tool,
-            phase: ChatMessageSegmentPhase::ToolLoop,
-            order: 2,
-            step_number: None,
-            round: Some(1),
-            text: None,
-            tool_call_id: Some("call_write".to_string()),
-        },
-        ChatMessageSegment {
-            id: "seg_after".to_string(),
-            kind: ChatMessageSegmentKind::Text,
-            phase: segment_phase_for_tool_count(&ChatMessageSegmentKind::Text, tool_calls.len()),
-            order: 3,
-            step_number: None,
-            round: Some(1),
-            text: Some(after.to_string()),
-            tool_call_id: None,
-        },
-    ];
-    let content = format!("{before}{after}");
-
-    let segments = normalize_assistant_segments(&content, None, &tool_calls, segments);
-
-    assert_eq!(
-        segments
-            .iter()
-            .filter(|segment| segment.kind == ChatMessageSegmentKind::Text)
-            .count(),
-        2,
-        "不许为「正文没落段」再补一条全文分段"
-    );
-    let stored = content_from_segments(&segments).expect("content must be covered by segments");
-    assert!(stored.contains(before), "工具之前那句不能从正文里掉出去");
-    assert!(stored.contains(after), "工具之后那句不能从正文里掉出去");
-}
-
-/// 内置路径的护栏：内置 loop 的 `content` **只**是最终答案（工具循环期间的过程文字留在
-/// ToolLoop 分段里、不进 content，见 `chat/agent/planning.rs`）。所以
-/// `content_from_segments` 必须继续把 ToolLoop 文本**排除**在正文之外——谁要是为了修
-/// 外部 CLI 的重复而放宽这把共享的尺，这条用例就会红。
 #[test]
 fn builtin_toolloop_narration_stays_out_of_content() {
     let final_answer = "结论：改好了。";
@@ -2024,7 +1899,7 @@ fn apply_context_clear_rejects_external_runtime() {
     conversation.agent_runtime.kind = crate::chat::AgentRuntimeKind::External;
     conversation.agent_runtime.external_agent_id = Some("claude".to_string());
     let err = apply_context_clear(&mut conversation).expect_err("external");
-    assert!(err.contains("Kivio Agent"));
+    assert!(err.contains("Dsivio Agent"));
 }
 
 #[test]
@@ -2239,7 +2114,7 @@ fn prepare_reply_with_model_tags_last_turn_and_rejects_duplicates() {
         None,
     )
     .expect_err("external");
-    assert!(err.contains("Kivio Agent"));
+    assert!(err.contains("Dsivio Agent"));
 }
 
 #[test]

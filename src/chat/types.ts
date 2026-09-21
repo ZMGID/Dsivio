@@ -514,7 +514,6 @@ export interface CliImportResult {
   failures: Array<{ agentId: string; sessionId: string; error: string }>
 }
 
-export type { NativeProviderSummary, DetectedExternalAgent } from '../api/externalCliSettings'
 export interface Conversation {
   id: string
   revision: number

@@ -1,7 +1,7 @@
 import { ChatTitlebar } from '../ChatTitlebar'
 import { ModelSelector } from '../ModelSelector'
 import { PermissionPicker } from '../PermissionPicker'
-import { ExternalModelSelector, RuntimePicker } from '../RuntimePicker'
+import { RuntimePicker } from '../RuntimePicker'
 import { ThinkingLevelSelector } from '../ThinkingLevelSelector'
 import { conversationTitleSource, displayConversationTitle } from '../conversationTitle'
 import { chatTitlebarMacInsetClass, chatTitlebarRowClass, usesNativeTitlebar } from '../platform'
@@ -26,7 +26,6 @@ function TitlebarPills({
   approvalPolicy,
   onRuntimeChange,
   onModelChange,
-  onExternalModelChange,
   onThinkingLevelChange,
   onApprovalPolicyChange,
 }: PopoutTitlebarProps) {
@@ -52,19 +51,7 @@ function TitlebarPills({
           />
         </div>
         <div className="min-w-0 max-w-full shrink" data-tauri-drag-region="false">
-          {usesExternalRuntime ? (
-            <ExternalModelSelector
-              agentRuntime={runtime}
-              onModelChange={onExternalModelChange}
-              conversationId={conversation?.id}
-            />
-          ) : (
-            <ModelSelector
-              currentProviderId={providerId}
-              currentModel={model}
-              onModelChange={onModelChange}
-            />
-          )}
+          {!usesExternalRuntime && <ModelSelector currentProviderId={providerId} currentModel={model} onModelChange={onModelChange} />}
         </div>
         {!usesExternalRuntime && (
           <div className="chat-thinking-pill-wrap shrink-0" data-tauri-drag-region="false">

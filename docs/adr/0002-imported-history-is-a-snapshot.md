@@ -1,5 +1,8 @@
 # 导入的历史是一次性快照，不与 CLI 存储保持同步
 
+> 已于 2026-09-21 随本地 CLI 管理和适配移除而退役。现仅支持 Dsivio Agent；旧 CLI 对话保留历史，不能续聊或转为内置运行时。
+
+
 导入时把原生会话解析一次、写进 Kivio 的 conversation，之后就是一条普通的外部 CLI 对话；不在每次打开时重读 CLI 的存储。因为重读会把在 Kivio 里聊出来的内容**降级**——Kivio 跑外部 CLI 时记的是完整的工具卡片和 reasoning 段，而解析 CLI 存储只能还原出解析器支持的那部分。
 
 ## Considered Options

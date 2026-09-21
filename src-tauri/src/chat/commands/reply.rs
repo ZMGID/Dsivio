@@ -5,9 +5,6 @@ use uuid::Uuid;
 
 use crate::chat::agent::execute::truncate_chars;
 use crate::chat::agent::prepare as agent_prepare;
-use crate::chat::attachments::{
-    compose_text_attachments_for_api, text_attachments_from_attachments,
-};
 use crate::chat::model_metadata::{
     chat_max_output_tokens_on_wire, model_can_generate_images_directly,
 };
@@ -149,60 +146,8 @@ pub(super) async fn complete_assistant_reply_inner(
     arm: Option<&ReplyArm>,
     probe: bool,
 ) -> Result<ArmReplyOutcome, String> {
-    if conversation.agent_runtime.is_external() {
-        // 外部 CLI 路径在 run.rs 内自带 generation；这里登记一条 per-run 回复槽位，
-        // 让 `chat_runtime().has_active_reply` 在外部回复期间也能拒绝并发新发送（防回归）。
-        let ext_generation = state.chat_runtime().begin_generation(&conversation.id);
-        let ext_run_id = format!("chat-run-ext-{}-{}", ext_generation, Uuid::new_v4());
-        let _ext_reply_guard =
-            ChatReplyGuard::try_new(state.inner(), &conversation.id, &ext_run_id, ext_generation);
-        let latest_user = conversation
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.role == "user");
-        // 虚拟文本附件（memory://）正文只存在附件记录里、不在 message.content 中：
-        // 在此重建内联正文，外部 CLI 才能看到粘贴的长文本。磁盘附件仍走
-        // file_paths → file_attachments_note 的路径说明（run.rs），不进正文。
-        let latest_user_text = latest_user
-            .map(|m| {
-                let text_attachments = text_attachments_from_attachments(&m.attachments);
-                if text_attachments.is_empty() {
-                    m.content.clone()
-                } else {
-                    compose_text_attachments_for_api(&m.content, &text_attachments)
-                }
-            })
-            .unwrap_or_default();
-        // 外部 CLI 也要带附件：图片走各协议原生块 / 降级，文件走路径说明。图片路径已由调用方
-        // 算好（last_user_image_paths）；文件路径从最后一条 user 消息现解析（best-effort）。
-        let latest_user_file_paths = latest_user
-            .map(|m| {
-                crate::chat::attachments::stored_file_paths_for_attachments(
-                    app,
-                    &conversation.id,
-                    &m.attachments,
-                )
-                .unwrap_or_default()
-            })
-            .unwrap_or_default();
-        return crate::external_agents::run_external_cli_reply(
-            app,
-            state,
-            conversation,
-            title_from_first_user,
-            &latest_user_text,
-            last_user_image_paths,
-            &latest_user_file_paths,
-            active_skill_id,
-            entry,
-        )
-        .await
-        .map(|_| ArmReplyOutcome {
-            message: None,
-            run_id: None,
-            error: None,
-        });
+    if conversation.agent_runtime.kind == crate::chat::types::AgentRuntimeKind::External {
+        return Err("Local CLI support has been removed. This conversation is read-only; start a new Dsivio Agent conversation.".into());
     }
 
     let settings = state.settings_read().clone();
@@ -248,7 +193,7 @@ pub(super) async fn complete_assistant_reply_inner(
         1
     };
     let chat_mode = conversation.agent_runtime.is_chat();
-    // Plan/Orchestrate only apply to the full Kivio Agent runtime, not Chat.
+    // Plan/Orchestrate only apply to the full Dsivio Agent runtime, not Chat.
     let plan_mode = !chat_mode && crate::chat::plan::is_plan_mode(&conversation.agent_plan_state);
     let orchestrate_mode =
         !chat_mode && crate::chat::plan::is_orchestrate_mode(&conversation.agent_plan_state);

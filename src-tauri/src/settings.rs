@@ -896,7 +896,7 @@ pub struct ChatConfig {
     /// 响应语言（"zh"/"en" 等）。空字符串表示跟随 Lens 默认语言，再跟随 target_lang。
     #[serde(default)]
     pub default_language: String,
-    /// 自定义 system prompt；空则使用内置 Chat 模板（Kivio Agent 运行时）。
+    /// 自定义 system prompt；空则使用内置 Chat 模板（Dsivio Agent 运行时）。
     #[serde(default)]
     pub system_prompt: String,
     /// 输入框「问题优化」的自定义系统提示词；空则使用内置优化提示词。
@@ -914,7 +914,7 @@ pub struct ChatConfig {
     /// 本地 CLI Agent 的用户覆盖，key = agent id（claude/codex/…）。缺省 = 全默认。
     #[serde(default)]
     pub external_cli_agents: std::collections::HashMap<String, ExternalCliAgentConfig>,
-    /// Kivio Chat 运行时专属设置（与 Kivio Agent 的工具/提示词分离）。
+    /// Kivio Chat 运行时专属设置（与 Dsivio Agent 的工具/提示词分离）。
     #[serde(default)]
     pub chat_mode: ChatModeConfig,
 }
@@ -2943,54 +2943,12 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
 
     settings.onboarding_status = normalize_onboarding_status(&settings);
 
-    sanitize_external_cli_agents(&mut settings.chat.external_cli_agents);
+    settings.chat.external_cli_agents.clear();
+    if settings.chat.default_agent_runtime.kind != crate::chat::types::AgentRuntimeKind::Builtin {
+        settings.chat.default_agent_runtime = crate::chat::AgentRuntimeConfig::default();
+    }
 
     settings
-}
-
-/// settings.json 是用户可手改的文件：环境变量名/模型 id 空白或全空格会被原样塞进子进程环境，
-/// 表现成难查的「CLI 启动即报错」。这里统一 trim 并丢掉空条目，未知 agent id 的整条配置也丢掉。
-fn sanitize_external_cli_agents(
-    agents: &mut std::collections::HashMap<String, ExternalCliAgentConfig>,
-) {
-    agents.retain(|id, cfg| {
-        if crate::external_agents::registry::get_agent_def(id).is_none() {
-            return false;
-        }
-        cfg.path = cfg.path.trim().to_string();
-        for pair in cfg.env.iter_mut() {
-            pair.key = pair.key.trim().to_string();
-            pair.value = pair.value.trim().to_string();
-        }
-        cfg.env.retain(|pair| !pair.key.is_empty());
-        for model in cfg.custom_models.iter_mut() {
-            model.id = model.id.trim().to_string();
-            model.label = model.label.trim().to_string();
-        }
-        cfg.custom_models.retain(|model| !model.id.is_empty());
-        for provider in cfg.providers.iter_mut() {
-            provider.id = provider.id.trim().to_string();
-            provider.name = provider.name.trim().to_string();
-            for pair in provider.env.iter_mut() {
-                pair.key = pair.key.trim().to_string();
-                pair.value = pair.value.trim().to_string();
-            }
-            provider.env.retain(|pair| !pair.key.is_empty());
-        }
-        cfg.providers
-            .retain(|provider| !provider.id.is_empty() && !provider.name.is_empty());
-        // 悬空的 current_provider（供应商被删了 / 手改错了）必须归零：留着会让注入层
-        // 找不到条目而**静默什么都不注入**，用户看到的是「选了供应商但没生效」。
-        cfg.current_provider = cfg.current_provider.trim().to_string();
-        if !cfg
-            .providers
-            .iter()
-            .any(|provider| provider.id == cfg.current_provider && !provider.disabled)
-        {
-            cfg.current_provider = String::new();
-        }
-        true
-    });
 }
 
 fn default_onboarding_status() -> String {
@@ -3146,112 +3104,24 @@ pub(crate) fn commit_settings(
     Ok(snapshot)
 }
 
-fn persist_then_apply_with_rollback(
-    persist: impl FnOnce() -> Result<(), String>,
-    rollback_unpersisted: impl FnOnce() -> Result<(), String>,
-    apply: impl FnOnce() -> Result<(), String>,
-    rollback_persisted: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
-    if let Err(error) = persist() {
-        return match rollback_unpersisted() {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(format!("{error}; cache rollback failed: {rollback_error}")),
-        };
-    }
-    if let Err(error) = apply() {
-        return match rollback_persisted() {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(format!("{error}; rollback failed: {rollback_error}")),
-        };
-    }
-    Ok(())
-}
-
-/// 只有外部 CLI 配置本身变了才需要重新落地原生配置。
-///
-/// `materialize_all` 会合并写 `~/.grok/config.toml`、`~/.kimi-code/config.toml`、OpenCode / Pi
-/// 的原生配置和 dsh 的 profile —— 都是用户家目录里的文件。`persist_settings` 是所有设置写盘的
-/// 总出口（收藏模型、热键、主题……），无条件物化等于「改任何设置都重写一遍外部 CLI 的用户配置」，
-/// 与 `provider_profile` 模块头写的「物化时机是保存 / 切换供应商那一次」不符。
-/// `materialize` 读的全部输入都来自 `overrides`（即 `chat.external_cli_agents` 的镜像），
-/// 所以这一个字段不变就没有任何东西需要重写。
-fn external_cli_agents_changed(previous: &Settings, next: &Settings) -> bool {
-    previous.chat.external_cli_agents != next.chat.external_cli_agents
-}
-
-fn apply_external_agent_settings(previous: &Settings, settings: &Settings) -> Result<(), String> {
-    crate::external_agents::overrides::sync_from_settings(settings);
-    if !external_cli_agents_changed(previous, settings) {
-        return Ok(());
-    }
-    crate::external_agents::provider_profile::materialize_all()
-}
-
 pub fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
-    let (canonical, to_persist) = settings_for_persistence(settings);
+    let (_, to_persist) = settings_for_persistence(settings);
     let store = StoreBuilder::new(app, SETTINGS_STORE)
         .build()
         .map_err(|e| e.to_string())?;
-    let previous_value = store.get("settings");
-    let previous_settings = previous_value
-        .clone()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .map(sanitize_settings)
-        .unwrap_or_default();
+    let previous = store.get("settings");
     store.set(
         "settings".to_string(),
         serde_json::to_value(&to_persist).map_err(|e| e.to_string())?,
     );
-    let previous_cache_value = previous_value.clone();
-    let external_agents_changed = external_cli_agents_changed(&previous_settings, &canonical);
-    persist_then_apply_with_rollback(
-        || store.save().map_err(|e| e.to_string()),
-        || {
-            match previous_cache_value {
-                Some(value) => store.set("settings".to_string(), value),
-                None => {
-                    store.delete("settings");
-                }
+    if let Err(error) = store.save() {
+        match previous {
+            Some(value) => store.set("settings".to_string(), value),
+            None => {
+                store.delete("settings");
             }
-            Ok(())
-        },
-        || apply_external_agent_settings(&previous_settings, &canonical),
-        || {
-            match previous_value {
-                Some(value) => {
-                    store.set("settings".to_string(), value);
-                }
-                None => {
-                    store.delete("settings");
-                }
-            }
-            let disk_rollback = store.save().map_err(|err| err.to_string());
-            crate::external_agents::overrides::sync_from_settings(&previous_settings);
-            // apply 只在配置变了时才写过原生文件；没写过就没有什么要还原。
-            let profile_rollback = if external_agents_changed {
-                crate::external_agents::provider_profile::materialize_all()
-            } else {
-                Ok(())
-            };
-            match (disk_rollback, profile_rollback) {
-                (Ok(()), Ok(())) => Ok(()),
-                (disk, profile) => Err(format!(
-                    "settings: {}; provider: {}",
-                    disk.err().unwrap_or_else(|| "none".to_string()),
-                    profile.err().unwrap_or_else(|| "none".to_string())
-                )),
-            }
-        },
-    )?;
-
-    // 供应商可能变了：模型列表（300s）与可用性（600s）两个探测缓存都得作废。
-    // 首次启动的内置专家迁移会在 AppState manage 之前保存设置，此时还没有缓存可清。
-    use tauri::Manager;
-    if let Some(state) = app.try_state::<crate::state::AppState>() {
-        state
-            .external_discovery()
-            .clear_all_external_agent_models_cache();
-        state.external_discovery().clear_detected_agents_cache();
+        }
+        return Err(error.to_string());
     }
     Ok(())
 }
@@ -3333,7 +3203,6 @@ pub fn load_settings(app: &AppHandle) -> Settings {
         Err(_) => Settings::default(),
     };
     let settings = sanitize_settings(settings);
-    crate::external_agents::overrides::sync_from_settings(&settings);
     settings
 }
 
@@ -3578,56 +3447,6 @@ mod tests {
     use std::cell::RefCell;
 
     use crate::state::test_app_state;
-
-    #[test]
-    fn failed_durable_save_does_not_apply_external_settings_side_effects() {
-        let applied = std::cell::Cell::new(false);
-        let cache_rolled_back = std::cell::Cell::new(false);
-        let durable_rolled_back = std::cell::Cell::new(false);
-
-        let result = persist_then_apply_with_rollback(
-            || Err("disk full".to_string()),
-            || {
-                cache_rolled_back.set(true);
-                Ok(())
-            },
-            || {
-                applied.set(true);
-                Ok(())
-            },
-            || {
-                durable_rolled_back.set(true);
-                Ok(())
-            },
-        );
-
-        assert_eq!(result.unwrap_err(), "disk full");
-        assert!(!applied.get());
-        assert!(cache_rolled_back.get());
-        assert!(!durable_rolled_back.get());
-    }
-
-    #[test]
-    fn failed_external_settings_apply_rolls_back_the_durable_save() {
-        let cache_rolled_back = std::cell::Cell::new(false);
-        let rolled_back = std::cell::Cell::new(false);
-        let result = persist_then_apply_with_rollback(
-            || Ok(()),
-            || {
-                cache_rolled_back.set(true);
-                Ok(())
-            },
-            || Err("profile write failed".to_string()),
-            || {
-                rolled_back.set(true);
-                Ok(())
-            },
-        );
-
-        assert_eq!(result.unwrap_err(), "profile write failed");
-        assert!(!cache_rolled_back.get());
-        assert!(rolled_back.get());
-    }
 
     #[test]
     fn settings_side_write_commits_the_same_canonical_value_that_is_persisted() {
@@ -5576,64 +5395,15 @@ mod hooks_disk_compat_tests {
 }
 
 #[cfg(test)]
-mod external_cli_materialize_gate_tests {
+mod retired_cli_tests {
     use super::*;
-
-    fn with_provider(current: &str) -> Settings {
+    #[test]
+    fn legacy_cli_default_becomes_builtin() {
         let mut settings = Settings::default();
-        settings.chat.external_cli_agents.insert(
-            "grok".to_string(),
-            ExternalCliAgentConfig {
-                current_provider: current.to_string(),
-                providers: vec![ExternalCliProvider {
-                    id: "relay".to_string(),
-                    name: "Relay".to_string(),
-                    config_toml: "[models]\nx = 1".to_string(),
-                    ..ExternalCliProvider::default()
-                }],
-                ..ExternalCliAgentConfig::default()
-            },
-        );
-        settings
-    }
-
-    /// 回归：`persist_settings` 是所有设置写盘的总出口。收藏模型 / 热键 / 主题这类
-    /// 与外部 CLI 无关的保存，不得触发 `materialize_all` 重写 `~/.grok/config.toml`
-    /// 之类的用户家目录文件。
-    #[test]
-    fn unrelated_settings_change_does_not_rematerialize() {
-        let previous = with_provider("relay");
-        let mut next = previous.clone();
-        next.favorite_models.push("p:m".to_string());
-        next.hotkey = "Alt+Shift+Z".to_string();
-        assert!(!external_cli_agents_changed(&previous, &next));
-    }
-
-    #[test]
-    fn switching_provider_rematerializes() {
-        let previous = with_provider("relay");
-        let next = with_provider("");
-        assert!(external_cli_agents_changed(&previous, &next));
-    }
-
-    #[test]
-    fn editing_provider_body_rematerializes() {
-        let previous = with_provider("relay");
-        let mut next = previous.clone();
-        next.chat
-            .external_cli_agents
-            .get_mut("grok")
-            .unwrap()
-            .providers[0]
-            .config_toml = "[models]\nx = 2".to_string();
-        assert!(external_cli_agents_changed(&previous, &next));
-    }
-
-    #[test]
-    fn adding_or_removing_agent_entry_rematerializes() {
-        let previous = Settings::default();
-        let next = with_provider("relay");
-        assert!(external_cli_agents_changed(&previous, &next));
-        assert!(external_cli_agents_changed(&next, &previous));
+        settings.chat.default_agent_runtime.kind = crate::chat::types::AgentRuntimeKind::External;
+        settings.chat.default_agent_runtime.external_agent_id = Some("codex".into());
+        let next = sanitize_settings(settings);
+        assert!(!next.chat.default_agent_runtime.is_external());
+        assert!(next.chat.default_agent_runtime.external_agent_id.is_none());
     }
 }

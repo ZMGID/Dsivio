@@ -10,18 +10,15 @@ pub mod commands;
 mod computer_control;
 pub mod connectors;
 pub mod dock;
-pub mod external_agents;
 pub mod fonts;
 pub mod image_studio;
-pub mod video_studio;
-pub mod studio;
-pub mod market;
 pub mod lens;
 pub mod lens_commands;
 #[cfg(any(target_os = "macos", test))]
 mod macos_hang_watchdog;
 #[cfg(target_os = "macos")]
 pub mod macos_ocr;
+pub mod market;
 pub mod mcp;
 pub mod native_tools;
 pub mod notes;
@@ -43,9 +40,11 @@ pub mod settings;
 pub mod shortcuts;
 pub mod skills;
 pub mod state;
+pub mod studio;
 pub mod updates;
 pub mod usage;
 pub mod utils;
+pub mod video_studio;
 pub mod web_search;
 #[cfg(any(test, target_os = "macos"))]
 pub(crate) mod window_focus;
@@ -277,25 +276,6 @@ pub fn run() {
             // 会话副产物：空/孤儿工作区目录、已删会话残留的附件目录。只碰 Kivio 自己造的
             // `conv_*` 目录，非空的孤儿工作区只报数不删（里面是用户产物）。
             chat::gc::sweep_conversation_side_artifacts(app.handle());
-
-            // 周期性回收闲置的持久外部 CLI **进程**（10 分钟无活动即丢弃 → actor 关闭子进程）。
-            // 原生会话 id 仍落在 disk 上，下一轮（或重新打开这条对话）必须 resume，不是开新会话。
-            {
-                let sweeper = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                        // 启动竞态加固：AppState 可能尚未 manage（极早期 tick），此时跳过本轮，
-                        // 120s 后再试，避免 state() panic。
-                        let Some(state) = sweeper.try_state::<AppState>() else {
-                            continue;
-                        };
-                        state.external_live_sessions().sweep_idle(
-                            crate::external_agents::session::live::LIVE_SESSION_IDLE_TTL,
-                        );
-                    }
-                });
-            }
 
             let mut settings = load_settings(&app.handle());
             video_studio::sync_settings(&mut settings);
@@ -601,7 +581,6 @@ pub fn run() {
             chat::commands::catalog::chat_get_conversations,
             chat::commands::interaction::chat_list_background_tasks,
             chat::commands::interaction::chat_clear_finished_background_tasks,
-            chat::commands::interaction::chat_stop_external_background_task,
             chat::commands::interaction::chat_kill_background_command,
             chat::commands::catalog::chat_search_conversations,
             chat::commands::catalog::chat_query_conversations,
@@ -651,6 +630,7 @@ pub fn run() {
             chat::commands::interaction::chat_confirm_tool_call,
             chat::commands::interaction::chat_respond_session_consent,
             chat::commands::interaction::chat_submit_user_choice,
+            chat::commands::runtime::chat_set_agent_runtime,
             chat::commands::interaction::chat_steer_message,
             chat::commands::interaction::chat_follow_up_message,
             chat::commands::attachments::chat_read_attachment,
@@ -680,45 +660,6 @@ pub fn run() {
             chat::commands::mutations::chat_regenerate_message,
             chat::commands::mutations::chat_rewind_to_message,
             chat::commands::mutations::chat_fork_conversation,
-            external_agents::commands::chat_detect_external_agents,
-            external_agents::commands::chat_detect_external_agent_models,
-            external_agents::commands::chat_list_external_cli_slash_commands,
-            external_agents::commands::chat_external_cli_provider_cleanup,
-            external_agents::commands::chat_external_cli_pi_agent_dir,
-            external_agents::commands::chat_external_cli_scan_cc_switch,
-            external_agents::commands::chat_external_cli_fetch_relay_models,
-            external_agents::installer::chat_external_cli_install_info,
-            external_agents::installer::chat_external_cli_install,
-            external_agents::installer::chat_external_cli_open_config_dir,
-            external_agents::pi_extensions::chat_pi_extensions_inventory,
-            external_agents::pi_extensions::chat_pi_extension_set_enabled,
-            external_agents::pi_extensions::chat_pi_extension_install,
-            external_agents::pi_extensions::chat_pi_extension_update,
-            external_agents::pi_extensions::chat_pi_extension_remove,
-            external_agents::pi_extensions::chat_pi_extension_open,
-            external_agents::pi_extensions::chat_pi_extensions_open_dir,
-            external_agents::pi_skills::chat_pi_skills_inventory,
-            external_agents::pi_skills::chat_pi_skill_set_enabled,
-            external_agents::pi_skills::chat_pi_skill_commands_set_enabled,
-            external_agents::pi_skills::chat_pi_skill_add_path,
-            external_agents::pi_skills::chat_pi_skill_remove_path,
-            external_agents::pi_skills::chat_pi_skill_remove,
-            external_agents::pi_skills::chat_pi_skill_open,
-            external_agents::pi_skills::chat_pi_skills_open_dir,
-            external_agents::dsh_plugins::chat_dsh_plugin_settings_get,
-            external_agents::dsh_plugins::chat_dsh_plugin_settings_save,
-            external_agents::dsh_plugins::chat_dsh_plugin_inventory,
-            external_agents::dsh_plugins::chat_dsh_open_settings_file,
-            external_agents::dsh_plugins::chat_dsh_official_credential_status,
-            external_agents::dsh_plugins::chat_dsh_official_credential_save,
-            external_agents::dsh_plugins::chat_dsh_native_provider_get,
-            external_agents::dsh_plugins::chat_dsh_native_provider_delete,
-            external_agents::dsh_profile::chat_dsh_list_agent_presets,
-            external_agents::commands::chat_set_agent_runtime,
-            external_agents::commands::chat_list_importable_cli_sessions,
-            external_agents::commands::chat_import_cli_sessions,
-            external_agents::commands::chat_imported_history_stale,
-            external_agents::commands::chat_external_native_session_id,
             chat::memory::chat_memory_get,
             chat::memory::chat_memory_save,
             chat::memory::chat_memory_open_folder,
@@ -887,21 +828,6 @@ pub fn run() {
                         eprintln!(
                             "MCP disconnect timed out on exit; killed {killed} stdio child process tree(s)."
                         );
-                    }
-                    // 外部 CLI 会话：必须**同步**等它们关完。只 clear 掉 sender 是不够的
-                    // —— actor 要等下一次被 poll 才会走 close()，而运行时马上就随进程走了，
-                    // `kill_on_drop` 也因此不会触发（Child 在那个永不 drop 的帧里）。
-                    // 结果是每次退出留下一批 CLI 进程，各自还挂着自己拉起的 MCP 子进程。
-                    // 同上：timeout 必须在 async 块里构造。
-                    let closed = tauri::async_runtime::block_on(async {
-                        tokio::time::timeout(
-                            std::time::Duration::from_secs(3),
-                            state.external_live_sessions().close_all(),
-                        )
-                        .await
-                    });
-                    if closed.is_err() {
-                        eprintln!("External CLI sessions did not close in time on exit.");
                     }
                     // 杀掉所有跟踪中的后台 run_command 进程组（跨 turn 存活，只在这里或
                     // 显式 kill_background 才清理），删除其 per-job 日志，避免孤儿进程/文件。

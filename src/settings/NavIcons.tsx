@@ -93,7 +93,7 @@ export function LensIcon(props: IconProps) {
 export function ChatIcon({ size = 24, className }: IconProps) {
   return (
     <img
-      src="/logo-mark.png"
+      src="/icon.png"
       alt=""
       aria-hidden="true"
       width={size}

@@ -12,9 +12,6 @@ use crate::chat::{
     ChatMessage, CompactionBoundaryRecord, ContextClearBoundaryRecord, ContextUsageSegment,
     Conversation, ConversationContextState, ConversationContextSummary,
 };
-use crate::external_agents::detection::{
-    EXTERNAL_AGENT_MODELS_CACHE_TTL, EXTERNAL_AGENT_MODELS_FALLBACK_TTL,
-};
 use crate::mcp::ChatToolDefinition;
 use crate::settings::{ModelProvider, ProviderApiFormat};
 use crate::skills;
@@ -41,20 +38,7 @@ pub(crate) async fn chat_get_context_stats(
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
     let context_state = if conversation.agent_runtime.is_external() {
-        let cwd = crate::external_agents::workspace::resolve_effective_cwd(
-            &app,
-            &conversation.id,
-            conversation.project_id.as_deref(),
-        )?;
-        crate::external_agents::context::compute_external_context_state_with_probe(
-            &conversation,
-            true,
-            None,
-            None,
-            Some(&cwd),
-            Some(&cwd),
-        )
-        .await
+        conversation.context_state.clone()
     } else {
         compute_context_state(&app, &state, &conversation, None, &[]).await?
     };
@@ -130,36 +114,7 @@ pub(crate) async fn chat_compress_context(
 ) -> Result<serde_json::Value, String> {
     let mut conversation = load_conversation(&app, &conversation_id)?;
     if conversation.agent_runtime.is_external() {
-        crate::external_agents::compact::request_external_compaction(
-            &app,
-            &state,
-            &mut conversation,
-        )
-        .await?;
-        let context_state_after_compact = conversation.context_state.clone();
-        // 同 `chat_get_context_stats`：压缩**已经发生**了，落盘缓存抢不到版本不该报错。
-        conversation = persist_context_state_best_effort(
-            &app,
-            &conversation_id,
-            conversation,
-            context_state_after_compact.clone(),
-        )
-        .await?;
-        // 用**压缩后算出来的**那份，不能读回 `conversation.context_state`：落盘被让位时
-        // 上面返回的是重新读到的会话，它身上还是压缩前的状态。
-        let context_state = context_state_after_compact;
-        emit_chat_context_state(
-            &app,
-            &conversation.id,
-            conversation.revision,
-            &context_state,
-        );
-        strip_transcripts_for_frontend(&mut conversation);
-        return Ok(serde_json::json!({
-            "success": true,
-            "contextState": context_state,
-            "conversation": conversation,
-        }));
+        return Err("Legacy CLI history is read-only".into());
     }
     compress_conversation_context(&state, &mut conversation, "manual").await?;
     finalize_local_context_change(&app, &state, &conversation_id, conversation).await
@@ -205,7 +160,7 @@ async fn finalize_local_context_change(
 
 pub(super) fn apply_context_clear(conversation: &mut Conversation) -> Result<(), String> {
     if conversation.agent_runtime.is_external() {
-        return Err("清空上下文仅支持 Kivio Agent 和 Kivio Chat".to_string());
+        return Err("清空上下文仅支持 Dsivio Agent 和 Kivio Chat".to_string());
     }
     let last_id = conversation
         .messages
@@ -679,49 +634,7 @@ pub(super) async fn compute_context_state(
     last_user_image_paths: &[PathBuf],
 ) -> Result<ConversationContextState, String> {
     if conversation.agent_runtime.is_external() {
-        // 缓存 key 必须与写入方 chat_detect_external_agent_models 一致：探测 cwd
-        // （resolve_detection_cwd，非项目会话 = __global__），否则该读取恒 miss。
-        let model_cache_key =
-            crate::external_agents::workspace::resolve_detection_cwd(app, Some(&conversation.id))
-                .ok()
-                .and_then(|cwd| {
-                    conversation
-                        .agent_runtime
-                        .external_agent_id
-                        .as_deref()
-                        .map(|agent_id| {
-                            crate::external_agents::slash::cache_key(
-                                agent_id,
-                                cwd.to_string_lossy().as_ref(),
-                            )
-                        })
-                });
-        let cached_models = model_cache_key.as_deref().and_then(|cache_key| {
-            state.external_discovery().get_cached_external_agent_models(
-                cache_key,
-                EXTERNAL_AGENT_MODELS_CACHE_TTL,
-                EXTERNAL_AGENT_MODELS_FALLBACK_TTL,
-            )
-        });
-        // 执行 cwd（resolve_effective_cwd，每会话独立 workspace）与上面的探测 cwd 是两回事：
-        // 它只用于按 workDir 关联 kimi 落盘的 wire.jsonl（见 kimi_usage 模块）。拿不到不影响其余。
-        let work_dir = crate::external_agents::workspace::resolve_effective_cwd(
-            app,
-            &conversation.id,
-            conversation.project_id.as_deref(),
-        )
-        .ok();
-        return Ok(
-            crate::external_agents::context::compute_external_context_state_with_probe(
-                conversation,
-                false,
-                None,
-                cached_models.as_ref().map(|c| c.models.as_slice()),
-                None,
-                work_dir.as_deref(),
-            )
-            .await,
-        );
+        return Ok(conversation.context_state.clone());
     }
 
     let settings = state.settings_read().clone();
@@ -965,7 +878,7 @@ pub(super) async fn compute_context_state(
         compaction_boundaries: conversation.context_state.compaction_boundaries.clone(),
         clear_boundaries: conversation.context_state.clear_boundaries.clone(),
         warning: memory_warning.or_else(|| conversation.context_state.warning.clone()),
-        context_source: Some(crate::external_agents::context::CONTEXT_SOURCE_BUILTIN.to_string()),
+        context_source: Some("builtin".to_string()),
         token_count_source: crate::chat::agent::context_estimate::token_count_source(
             anchored,
             anchor_trailing,

@@ -41,28 +41,28 @@ const base = {
 
 describe('ConversationTitlebarControls', () => {
   it('renders the external model picker for a CLI runtime', () => {
-    const { getByTestId, queryByTestId } = render(
+    const { queryByTestId } = render(
       <ConversationTitlebarControls
         {...base}
         activeAgentRuntime={{ kind: 'external', externalAgentId: 'claude' }}
         usesExternalRuntime
       />,
     )
-    expect(getByTestId('external-model')).toBeTruthy()
+    expect(queryByTestId('external-model')).toBeNull()
     expect(queryByTestId('model-selector')).toBeNull()
     expect(queryByTestId('thinking')).toBeNull()
   })
 
   it('renders the built-in model + thinking selectors otherwise', () => {
-    const { getByTestId, queryByTestId } = render(
+    const { queryByTestId } = render(
       <ConversationTitlebarControls
         {...base}
         activeAgentRuntime={{ kind: 'builtin' }}
         usesExternalRuntime={false}
       />,
     )
-    expect(getByTestId('model-selector')).toBeTruthy()
-    expect(getByTestId('thinking')).toBeTruthy()
+    expect(queryByTestId('model-selector')).toBeTruthy()
+    expect(queryByTestId('thinking')).toBeTruthy()
     expect(queryByTestId('external-model')).toBeNull()
   })
 })

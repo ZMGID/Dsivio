@@ -460,7 +460,7 @@ pub struct Attachment {
 pub enum AgentRuntimeKind {
     #[default]
     Builtin,
-    /// Built-in conversational runtime: research tools only (search/fetch/KB/read-only MCP).
+    /// Legacy value; AgentRuntimeConfig deserialization migrates it to Builtin.
     Chat,
     External,
 }
@@ -469,7 +469,7 @@ pub enum AgentRuntimeKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AgentRuntimeConfig {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_agent_runtime_kind")]
     pub kind: AgentRuntimeKind,
     #[serde(default)]
     pub external_agent_id: Option<String>,
@@ -483,6 +483,16 @@ pub struct AgentRuntimeConfig {
     /// dsh Agent preset：`standard` / `code` / `minimal` / `cordis`。其它 CLI 忽略。
     #[serde(default)]
     pub external_agent_preset: Option<String>,
+}
+
+fn deserialize_agent_runtime_kind<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<AgentRuntimeKind, D::Error> {
+    let kind = AgentRuntimeKind::deserialize(deserializer)?;
+    Ok(match kind {
+        AgentRuntimeKind::Chat => AgentRuntimeKind::Builtin,
+        other => other,
+    })
 }
 
 impl Default for AgentRuntimeConfig {

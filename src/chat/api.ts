@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { isPlaceholderTitle, optimisticConversationTitle } from './conversationTitle'
 import { estimateTokens } from '../utils/tokens'
 import { isTauriRuntime } from './utils'
-import { externalCliSettingsApi } from '../api/externalCliSettings'
 import type { ConversationPin } from './conversationPins'
 import type {
   AgentRuntimeConfig,
@@ -22,10 +21,8 @@ import type {
   PendingAttachment,
 } from './types'
 import type { ThinkingLevel, WebSearchMode, ModelRef, AdditionalDirectory } from './types'
-import type { CliImportResult, ImportableCliSession } from './types'
 
 export type { AgentRuntimeConfig }
-export type { DetectedExternalAgent } from '../api/externalCliSettings'
 
 async function invokeGoalMutation(command: string, conversationId: string, extra: Record<string, unknown> = {}): Promise<Conversation> {
   const result = await invoke<{ success: boolean; conversation?: Conversation; error?: string }>(command, { conversationId, ...extra })
@@ -45,26 +42,8 @@ function mockGoalStatus(conversationId: string, status: GoalState['status']): Co
   return conversations[index]
 }
 
-export type {
-  CcSwitchProvider, CcSwitchScan, DshPluginSettingsSnapshot, DshPluginSettingsPatch,
-  DshPluginEntry, DshOfficialCredential, DshNativeProviderModel, DshNativeProviderDetail,
-  DshAgentPresetOption, PiExtensionInventory, PiExtensionPackage, PiLocalExtension,
-  PiExtensionCommandResult, PiSkillInventory, PiSkillConfiguredPath, PiSkillEntry,
-  ExternalCliInstallInfo,
-} from '../api/externalCliSettings'
-export { onExternalCliInstallLog, onExternalAgentsUpdated } from '../api/externalCliSettings'
-
 export const BUILTIN_AGENT_RUNTIME: AgentRuntimeConfig = {
   kind: 'builtin',
-  externalAgentId: null,
-  externalModel: null,
-  externalReasoning: null,
-  externalSandbox: null,
-  externalAgentPreset: null,
-}
-
-export const CHAT_AGENT_RUNTIME: AgentRuntimeConfig = {
-  kind: 'chat',
   externalAgentId: null,
   externalModel: null,
   externalReasoning: null,
@@ -76,11 +55,8 @@ export function normalizeAgentRuntime(
   conversation?: Pick<Conversation, 'agent_runtime' | 'agentRuntime'> | Pick<ConversationListItem, 'agent_runtime' | 'agentRuntime'> | null,
 ): AgentRuntimeConfig {
   const raw = conversation?.agent_runtime ?? conversation?.agentRuntime
-  if (!raw || raw.kind === 'builtin') {
+  if (!raw || raw.kind === 'builtin' || raw.kind === 'chat') {
     return { ...BUILTIN_AGENT_RUNTIME }
-  }
-  if (raw.kind === 'chat') {
-    return { ...CHAT_AGENT_RUNTIME }
   }
   return {
     kind: 'external',
@@ -98,7 +74,6 @@ export function agentRuntimesEqual(
 ): boolean {
   const normalize = (value: AgentRuntimeConfig): AgentRuntimeConfig => {
     if (value.kind === 'external') return value
-    if (value.kind === 'chat') return CHAT_AGENT_RUNTIME
     return BUILTIN_AGENT_RUNTIME
   }
   const a = normalize(left)
@@ -1871,30 +1846,6 @@ export const chatApi = {
     await invoke<void>('chat_cancel_stream', { conversationId })
   },
 
-  ...externalCliSettingsApi,
-  async listExternalCliSlashCommands(
-    agentId: string,
-    conversationId?: string | null,
-  ): Promise<import('./externalCliSlashCommands').ExternalCliSlashCommandsResult> {
-    if (!isTauriRuntime()) {
-      return { supportsSlashCommands: false, commands: [], message: 'CLI slash commands unavailable in browser preview' }
-    }
-    const result = await invoke<{
-      success: boolean
-      supportsSlashCommands: boolean
-      commands: import('./externalCliSlashCommands').ExternalCliSlashCommandDto[]
-      message?: string | null
-    }>('chat_list_external_cli_slash_commands', {
-      agentId,
-      conversationId: conversationId ?? null,
-    })
-    return {
-      supportsSlashCommands: result.supportsSlashCommands,
-      commands: result.commands ?? [],
-      message: result.message ?? null,
-    }
-  },
-
   async setAgentRuntime(
     conversationId: string,
     agentRuntime: AgentRuntimeConfig,
@@ -1928,40 +1879,6 @@ export const chatApi = {
       throw new Error('Failed to set agent runtime')
     }
     return result.conversation
-  },
-
-  // ── 从本地 CLI 导入对话 ───────────────────────────────────────────────────
-  // 导入是**项目内的动作**：只列出工作目录等于该项目根的原生会话，导入后仍由原 CLI 续聊。
-  // 契约见 docs/adr/0001..0003。
-
-  async listImportableCliSessions(projectId: string): Promise<ImportableCliSession[]> {
-    if (!isTauriRuntime()) return []
-    const result = await invoke<{ success: boolean; sessions: ImportableCliSession[] }>(
-      'chat_list_importable_cli_sessions',
-      { projectId },
-    )
-    return result.sessions ?? []
-  },
-
-  async importCliSessions(
-    projectId: string,
-    items: { agentId: string; sessionId: string }[],
-  ): Promise<CliImportResult> {
-    if (!isTauriRuntime()) return { success: false, imported: [], failures: [] }
-    return invoke<CliImportResult>('chat_import_cli_sessions', { projectId, items })
-  },
-
-  // 打开已导入的对话时问一次：CLI 那边有没有新内容。只提示，不同步（ADR-0002）。
-  async importedHistoryStale(conversationId: string): Promise<boolean> {
-    if (!isTauriRuntime()) return false
-    return invoke<boolean>('chat_imported_history_stale', { conversationId })
-  },
-
-  /** 本地 CLI 对话绑定的原生会话 id；未聊过 / 无绑定文件时为 null。 */
-  async getExternalNativeSessionId(conversationId: string): Promise<string | null> {
-    if (!isTauriRuntime()) return null
-    const id = await invoke<string | null>('chat_external_native_session_id', { conversationId })
-    return id && id.trim() ? id : null
   },
 
   async openConversationPopout(conversationId: string): Promise<void> {

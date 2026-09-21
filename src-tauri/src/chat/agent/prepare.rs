@@ -1163,7 +1163,7 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
         );
     } else if has("automation_list") {
         bullets.push(
-            "You can inspect automations with automation_list / automation_get / automation_runs. Creating or editing graphs requires Kivio Agent (automation_upsert).".to_string(),
+            "You can inspect automations with automation_list / automation_get / automation_runs. Creating or editing graphs requires Dsivio Agent (automation_upsert).".to_string(),
         );
     }
     if has_write || has_edit || has_bash {
@@ -2020,7 +2020,7 @@ mod tests {
         assert!(!prompt.contains("conversational research"), "{prompt}");
         assert!(!prompt.contains("These limits override"), "{prompt}");
         assert!(!prompt.contains("Do not edit files"), "{prompt}");
-        assert!(!prompt.contains("switch to Kivio Agent"), "{prompt}");
+        assert!(!prompt.contains("switch to Dsivio Agent"), "{prompt}");
         assert!(!prompt.contains("Built-in tools enabled"), "{prompt}");
         assert!(!prompt.contains("search_web"), "{prompt}");
         assert!(!prompt.contains("ask_user"), "{prompt}");

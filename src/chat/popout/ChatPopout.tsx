@@ -176,7 +176,7 @@ function ChatPopoutBody({
         <MessageList key={conversationId} {...session.messageListProps} />
       </Suspense>
       <PopoutPendingSlot session={session} />
-      <InputBar {...session.inputBarProps} goalSlot={visibleGoal && (
+      {session.inputBarProps.usesExternalRuntime ? <p className="p-4 text-center text-sm text-neutral-500">本地 CLI 支持已移除，此对话仅保留历史。请新建 Dsivio Agent 对话。</p> : <InputBar {...session.inputBarProps} goalSlot={visibleGoal && (
         <GoalCard
           goal={visibleGoal}
           onEdit={session.editGoal}
@@ -184,7 +184,7 @@ function ChatPopoutBody({
           onResume={session.resumeGoal}
           onCancel={session.cancelGoal}
         />
-      )} />
+      )} />}
     </>
   )
 

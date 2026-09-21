@@ -240,28 +240,6 @@ pub(crate) fn chat_list_background_tasks(
         }
     }
 
-    {
-        for t in state
-            .external_background_tasks()
-            .snapshot_reconciled(wanted, |id| {
-                state.external_live_sessions().control_any(id).is_some()
-            })
-        {
-            let value = serde_json::json!({
-                "id": t.task_id,
-                "source": "external",
-                "kind": t.kind,
-                "title": t.description,
-                "status": t.status,
-                "summary": t.summary,
-                "conversationId": t.conversation_id,
-                "elapsedSecs": t.started_at.elapsed().map(|d| d.as_secs()).unwrap_or(0),
-                "startedAtMs": epoch_ms(t.started_at),
-            });
-            out.push((t.started_at, value));
-        }
-    }
-
     out.sort_by_key(|(started_at, _)| *started_at);
     out.into_iter().map(|(_, value)| value).collect()
 }
@@ -282,33 +260,11 @@ pub(crate) fn chat_clear_finished_background_tasks(
 ) {
     let wanted = conversation_id.as_deref();
     state.background_commands_handle().clear_finished(wanted);
-    state.external_background_tasks().clear_finished(wanted);
 }
 
 /// 面板停止一条外部 CLI 后台任务：往常驻会话 actor 送 `StopTask`（claude 写
 /// `stop_task` 控制请求；dsh 写 `session/stop-job`）。乐观置 stopped —— 确认帧
 /// 要到下一次读 stdout 才到，等它面板会像没反应；真没停掉的话下一轮的帧会把状态改回来。
-#[tauri::command]
-pub(crate) async fn chat_stop_external_background_task(
-    state: State<'_, AppState>,
-    conversation_id: String,
-    task_id: String,
-) -> Result<(), String> {
-    if let Some(control) = state.external_live_sessions().control_any(&conversation_id) {
-        let _ = control
-            .send(
-                crate::external_agents::session::live::SessionCommand::StopTask {
-                    task_id: task_id.clone(),
-                },
-            )
-            .await;
-    }
-    // 会话已没了 ⇒ 任务随进程消失，同样落到 stopped。
-    state
-        .external_background_tasks()
-        .upsert_external_background_task(&conversation_id, &task_id, "stopped", None, None, None);
-    Ok(())
-}
 
 /// 从 UI 终止一个后台命令。复用 agent 的 `kill_background`（整组杀 + 标记 Killed）。
 /// 用户从 UI 面板显式操作（面板已按对话过滤过），不再二次传会话过滤。
@@ -387,26 +343,7 @@ pub(crate) async fn chat_steer_message(
         return Ok(false);
     };
     // 常驻 CLI 会话优先：这条对话由外部 CLI 在跑时，内置信箱根本没人来取。
-    if let Some(control) = state.external_live_sessions().control_any(&conversation_id) {
-        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
-        let sent = control
-            .send(
-                crate::external_agents::session::live::SessionCommand::Steer {
-                    id: message.id,
-                    text: message.text,
-                    images: Vec::new(),
-                    kind: crate::external_agents::session::live::MessageInjectionKind::Steer,
-                    accepted: accepted_tx,
-                },
-            )
-            .await
-            .is_ok();
-        if !sent {
-            return Ok(false);
-        }
-        // actor 每条命令都会答复；真丢了（actor 中途没了）按未受理处理。
-        return Ok(accepted_rx.await.unwrap_or(false));
-    }
+
     Ok(state
         .chat_runtime()
         .push_steering(&conversation_id, message))
@@ -415,7 +352,7 @@ pub(crate) async fn chat_steer_message(
 /// 原生 follow-up：把消息排到当前运行结束后，由同一个常驻会话 / 内置循环继续处理。
 ///
 /// 外部 CLI：Pi RPC `follow_up`；dsh 官方 `session/prompt` → `agent.followup()`。
-/// 内置 Kivio Agent / Chat：放进 `pending_chat_follow_up` 信箱，终答边界注入（不打断工具循环）。
+/// 内置 Dsivio Agent / Chat：放进 `pending_chat_follow_up` 信箱，终答边界注入（不打断工具循环）。
 /// 空闲（没有在飞轮次）时回 false，前端再按普通新轮发出。
 ///
 /// 返回 false 时前端保留本地队列，轮末按普通消息发送；只有对端明确响应 success 才返回 true。
@@ -428,52 +365,9 @@ pub(crate) async fn chat_follow_up_message(
     attachments: Vec<String>,
     text_attachments: Option<Vec<TextAttachmentInput>>,
 ) -> Result<bool, String> {
-    let mut content =
-        compose_text_attachments_for_api(&content, &text_attachments.unwrap_or_default());
-    let paths: Vec<std::path::PathBuf> = attachments.into_iter().map(Into::into).collect();
-    let (image_paths, file_paths): (Vec<_>, Vec<_>) = paths
-        .into_iter()
-        .partition(|path| crate::external_agents::attachments::image_mime_for_path(path).is_some());
-    if let Some((control, image_mime_whitelist)) = state
-        .external_live_sessions()
-        .follow_up_control(&conversation_id)
-    {
-        let (images, degraded_images) = crate::external_agents::attachments::load_image_blocks(
-            &image_paths,
-            image_mime_whitelist,
-        );
-        content.push_str(&crate::external_agents::attachments::image_paths_note(
-            &degraded_images,
-        ));
-        content.push_str(&crate::external_agents::attachments::file_attachments_note(
-            &file_paths,
-        ));
-        if content.trim().is_empty() && images.is_empty() {
-            return Ok(false);
-        }
-        let text = crate::chat::agent::SteeringMessage::new(follow_up_id.clone(), &content)
-            .map(|message| message.text)
-            .unwrap_or_default();
-        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
-        let sent = control
-            .send(
-                crate::external_agents::session::live::SessionCommand::Steer {
-                    id: follow_up_id,
-                    text,
-                    images,
-                    kind: crate::external_agents::session::live::MessageInjectionKind::FollowUp,
-                    accepted: accepted_tx,
-                },
-            )
-            .await
-            .is_ok();
-        if !sent {
-            return Ok(false);
-        }
-        return Ok(accepted_rx.await.unwrap_or(false));
-    }
-    // 内置循环只接文本（含虚拟文本附件）。磁盘/图片走轮末普通发送，避免静默丢附件。
-    if !image_paths.is_empty() || !file_paths.is_empty() {
+    let content = compose_text_attachments_for_api(&content, &text_attachments.unwrap_or_default());
+    // Attachments remain queued for a normal turn so none are silently discarded.
+    if !attachments.is_empty() {
         return Ok(false);
     }
     let Some(message) = crate::chat::agent::SteeringMessage::new(follow_up_id, &content) else {

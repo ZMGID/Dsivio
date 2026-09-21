@@ -264,24 +264,9 @@ pub(crate) async fn push_assistant_message(
     // 标题还是自动生成的样子吗——占位「新对话」，或者等于第一句用户消息的启发式结果。
     // 用户手动重命名过的标题不会等于启发式结果，所以据此判断不会覆盖用户的命名。
     let title_looks_auto = is_auto_title(&conversation.title, title_from_first_user);
-    let is_external =
-        conversation.agent_runtime.kind == crate::chat::types::AgentRuntimeKind::External;
-
-    // 外部 CLI 对话优先用 CLI 自己生成的标题：那是用户在 CLI 里看到的那个，而且不花模型调用。
-    //
-    // **每轮都试一次**（一次文件读，很便宜）：CLI 是异步写标题的（claude 的 `ai-title`），
-    // 首轮回复落盘时往往还没有，只在第一轮试就永远拿不到。
-    let external_cli_title = if is_external && title_looks_auto {
-        crate::external_agents::import::cli_session_title(app, &conversation.id)
-            .filter(|title| !title.trim().is_empty() && *title != conversation.title)
-    } else {
-        None
-    };
 
     let mut background_title_user = None;
-    let generated_title = if external_cli_title.is_some() {
-        external_cli_title
-    } else if let Some(user_content) = title_from_first_user {
+    let generated_title = if let Some(user_content) = title_from_first_user {
         // 首轮发送后标题可能已经落成「第一句用户消息」截断（不再是占位「新对话」），
         // 卡在 `== "新对话"` 上的话，标题模型这一步压根不会触发。
         // 工具型首轮会在生成中落 assistant 草稿快照，不能用 messages.len() == 1

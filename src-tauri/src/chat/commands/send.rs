@@ -32,6 +32,11 @@ pub(crate) async fn chat_continue_goal(
         return Ok(serde_json::json!({ "success": false, "error": CHAT_REPLY_BUSY_ERROR }));
     };
     let mut conversation = load_conversation(&app, &conversation_id)?;
+    if conversation.agent_runtime.kind == crate::chat::types::AgentRuntimeKind::External {
+        return Err(
+            "Local CLI history is read-only. Start a new Dsivio Agent conversation.".into(),
+        );
+    }
     let goal = conversation.goal_state.as_ref().ok_or("No Goal exists")?;
     if !crate::chat::goal::is_running(goal.status) {
         return Err("Goal is not active".into());
@@ -92,6 +97,11 @@ pub(crate) async fn chat_send_message(
     };
 
     let mut conversation = load_conversation(&app, &conversation_id)?;
+    if conversation.agent_runtime.kind == crate::chat::types::AgentRuntimeKind::External {
+        return Err(
+            "Local CLI history is read-only. Start a new Dsivio Agent conversation.".into(),
+        );
+    }
 
     let plan_message_id = plan_message_id.or_else(|| {
         (conversation.agent_plan_state.document.is_some()

@@ -60,7 +60,7 @@ import {
 import type { AssistantStreamStats, MessageListProps } from './MessageList'
 import type { InputBarProps } from './InputBar'
 import { SessionUsageStrip } from './SessionUsageStrip'
-import { deriveDshPresetModes, derivePermissionModes, useDetectedExternalAgents, useDshCustomPresets } from './permissionModes'
+import { derivePermissionModes } from './permissionModes'
 import { ContextIndicator } from './ContextIndicator'
 import {
   agentRuntimesEqual,
@@ -477,7 +477,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const [protocolVersionMismatch, setProtocolVersionMismatch] = useState(false)
   const [imageViewerItem, setImageViewerItem] = useState<ChatImageViewerItem | null>(null)
   // 导入的对话：CLI 那边是否已经有新内容（ADR-0002）。只提示，不同步。
-  const [importedHistoryStale, setImportedHistoryStale] = useState(false)
   const currentConversationIdRef = useRef<string | null>(null)
   // 始终指向最新 currentConversation。消息操作 handler（编辑/删除/重发）借此读取最新会话，
   // 而无需把 currentConversation 列进 useCallback 依赖——否则每次切模型/思考等级（currentConversation
@@ -508,26 +507,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     ? compactingConversationIds.has(currentConversation.id)
     : false
 
-  useEffect(() => {
-    const id = currentConversation?.id
-    if (!id) {
-      setImportedHistoryStale(false)
-      return
-    }
-    let cancelled = false
-    void chatApi
-      .importedHistoryStale(id)
-      .then((stale) => {
-        if (!cancelled) setImportedHistoryStale(stale)
-      })
-      // 检查不了就当没过期——这只是个提示，不该因为它报错打断打开对话。
-      .catch(() => {
-        if (!cancelled) setImportedHistoryStale(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [currentConversation?.id])
   const streamErrorsRef = useRef<Record<string, string>>({})
   const settingsRef = useRef<SettingsShellHandle>(null)
   // A 合帧（render coalescing）：高频 stream/tool/subagent/userprompt 事件不再每条都同步
@@ -764,7 +743,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   })
   // 底栏模式胶囊：内置 Agent = Act/Plan/Orchestrate；Kivio Chat 无此胶囊；本地 CLI = 沙盒档位。
   // CLI 没有档位时返回空表 → 胶囊隐藏。
-  const detectedExternalAgents = useDetectedExternalAgents(currentConversation?.id ?? null)
   const activeAgentPlanMode = currentConversation?.agent_plan_state?.mode
     ?? currentConversation?.agentPlanState?.mode
     ?? 'act'
@@ -775,17 +753,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     () => derivePermissionModes({
       target: 'composer',
       agentRuntime: activeAgentRuntime,
-      agents: detectedExternalAgents,
       agentPlanMode: activeAgentPlanMode,
       goalActive,
     }),
-    [activeAgentRuntime, detectedExternalAgents, activeAgentPlanMode, goalActive],
+    [activeAgentRuntime, activeAgentPlanMode, goalActive],
   )
-  const dshCustomPresets = useDshCustomPresets(activeAgentRuntime)
-  const composerPresets = useMemo(
-    () => deriveDshPresetModes(activeAgentRuntime, dshCustomPresets),
-    [activeAgentRuntime, dshCustomPresets],
-  )
+  const composerPresets = useMemo(() => ({ options: [], current: '' }), [])
   const currentConversationIsBlank = isPlainBlankConversation(currentConversation)
   const activeProviderId = currentConversation && !currentConversationIsBlank
     ? currentConversation.provider_id
@@ -1854,25 +1827,13 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   //     codex 有 `turn/steer`；pi 有 RPC `steer`；dsh 有 bridge `session/steer`。
   //     claude 的 stream-json 输入是顺序处理的、ACP 只有 prompt/cancel。
   //   - 多模型一问多答 → 一律不给：同会话 N 条并发 run，按 conversation 键的信箱定不到某条臂。
-  const activeExternalAgentSupportsSteering = useMemo(() => {
-    const agentId = activeAgentRuntime.externalAgentId
-    if (!agentId) return false
-    const agent = detectedExternalAgents.find((item) => item.id === agentId)
-    return Boolean(agent?.supportsSteering ?? agent?.supports_steering)
-  }, [activeAgentRuntime.externalAgentId, detectedExternalAgents])
-  const activeExternalAgentSupportsFollowUp = useMemo(() => {
-    const agentId = activeAgentRuntime.externalAgentId
-    if (!agentId) return false
-    const agent = detectedExternalAgents.find((item) => item.id === agentId)
-    return Boolean(agent?.supportsFollowUp ?? agent?.supports_follow_up)
-  }, [activeAgentRuntime.externalAgentId, detectedExternalAgents])
   const canSteerCurrentConversation =
-    (usesExternalRuntime ? activeExternalAgentSupportsSteering : true)
+    !usesExternalRuntime
     && activeReplyModels.length < 2
   // Goal 的用户输入必须先于自动续跑，因此复用原生 follow-up；普通内置循环仍保留
   // 可见队列和「立刻引导」。外部 CLI 仅在协议原生支持时启用，多模型一问多答不给。
   const canFollowUpCurrentConversation =
-    ((usesExternalRuntime && activeExternalAgentSupportsFollowUp) || goalActive)
+    (!usesExternalRuntime && goalActive)
     && activeReplyModels.length < 2
 
   const handleQueueMessage = useCallback((content: string, attachments: PendingAttachment[]) => {
@@ -2982,7 +2943,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             onDismissHookWarning={handleDismissHookWarning}
             forkOrigin={forkOrigin}
             onSelectConversation={handleSelectConversation}
-            importedHistoryStale={importedHistoryStale}
+            importedHistoryStale={false}
             pendingSlot={pendingSlot}
             subAgentSlot={currentConversation?.id && <SubAgentIndicator key={currentConversation.id} conversationId={currentConversation.id} lang={uiLang} onOpen={handleOpenDockTasks} />}
             goalSlot={visibleGoal ? (

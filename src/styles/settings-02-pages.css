@@ -205,13 +205,14 @@
   color: var(--text-muted);
 }
 .kv-nav-item.active svg { color: var(--accent); }
-/* Kivio logo mark：纯黑 PNG，尺寸对齐其它线性图标；暗色反白。 */
+/* Dsivio 应用图标；白底在浅色主题融合，暗色下反白并融合黑底。 */
 .kv-nav-logo-mark {
   display: block;
   width: 14px;
   height: 14px;
   flex-shrink: 0;
   object-fit: contain;
+  mix-blend-mode: multiply;
   opacity: 0.72;
 }
 .kv-nav-item.active .kv-nav-logo-mark {
@@ -219,6 +220,7 @@
 }
 .dark .kv-nav-logo-mark {
   filter: invert(1);
+  mix-blend-mode: screen;
 }
 .settings-embedded-nav-icon .kv-nav-logo-mark {
   width: 17px;

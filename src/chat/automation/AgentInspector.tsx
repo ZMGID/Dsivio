@@ -4,8 +4,6 @@ import { getSettingsCached } from '../../api/settingsCache'
 import { FieldBlock, Select } from '../../settings/public/controls'
 import { isProviderEnabled, type SelectOption } from '../../settings/public/providers'
 import { useT } from '../../components/i18n'
-import { chatApi, type DetectedExternalAgent } from '../api'
-import { AgentIcon } from '../../components/AgentIcon'
 import { normalizeAgent, toAgentData, withRuntimeKind, type NormalizedAgent } from './agentModel'
 import { isAutomationOptInTool, pruneAlwaysOnToolIds } from './agentTools'
 import type { AgentSlot, FlowNode } from '../../api/automationContracts'
@@ -85,9 +83,6 @@ export function AgentInspector({
       },
     })
   const [providers, setProviders] = useState<ModelProvider[]>([])
-  const [cliAgents, setCliAgents] = useState<DetectedExternalAgent[]>([])
-  const [cliModels, setCliModels] = useState<Array<{ id: string, label: string }>>([])
-  const [cliCurrentModel, setCliCurrentModel] = useState<string | null>(null)
   const [tools, setTools] = useState<ChatToolDefinition[]>([])
   const [skills, setSkills] = useState<Array<{ id: string, name: string, description?: string }>>([])
 
@@ -99,9 +94,6 @@ export function AgentInspector({
       })
       .catch(() => {})
     if (!isTauriRuntime()) return () => { cancelled = true }
-    void chatApi.detectExternalAgents(false).then((list) => {
-      if (!cancelled) setCliAgents(list.filter((agent) => agent.available && !agent.disabled))
-    }).catch(() => {})
     void api.chatMcpListTools().then((result) => {
       if (!cancelled) setTools(result.tools ?? [])
     }).catch(() => {})
@@ -117,21 +109,6 @@ export function AgentInspector({
     return () => { cancelled = true }
   }, [])
 
-  useEffect(() => {
-    if (agent.runtimeKind !== 'external' || !agent.externalAgentId || !isTauriRuntime()) {
-      setCliModels([])
-      setCliCurrentModel(null)
-      return
-    }
-    let cancelled = false
-    void chatApi.detectExternalAgentModels(agent.externalAgentId).then((result) => {
-      if (cancelled) return
-      setCliModels(result.models ?? [])
-      setCliCurrentModel(result.currentModel ?? null)
-    }).catch(() => {})
-    return () => { cancelled = true }
-  }, [agent.runtimeKind, agent.externalAgentId])
-
   const kivioModelValue = agent.providerId && agent.model
     ? `${agent.providerId}:${agent.model}`
     : ''
@@ -142,23 +119,6 @@ export function AgentInspector({
     ),
     [providers, kivioModelValue, t.chatAutomationAgentModelDefault],
   )
-  const cliModelOptions = useMemo(
-    () => withOrphanOption(
-      [
-        {
-          value: '',
-          label: t.chatRuntimeAutoCliDefault,
-          title: cliCurrentModel
-            ? `${t.chatRuntimeAutoCliDefault} · ${cliCurrentModel}`
-            : t.chatRuntimeAutoCliDefault,
-        },
-        ...cliModels.map((model) => ({ value: model.id, label: model.label || model.id })),
-      ],
-      agent.externalModel ?? '',
-    ),
-    [agent.externalModel, cliCurrentModel, cliModels, t.chatRuntimeAutoCliDefault],
-  )
-
   const toolIdsKey = agent.toolIds.join('\0')
   useEffect(() => {
     if (slot !== 'tool' || tools.length === 0) return
@@ -206,34 +166,7 @@ export function AgentInspector({
           >
             {t.chatAutomationKivioAgent}
           </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={agent.runtimeKind === 'chat'}
-            className={`kv-automation-runtime-chip${agent.runtimeKind === 'chat' ? ' is-active' : ''}`}
-            onClick={() => patch(withRuntimeKind(agent, 'chat'), t.chatAutomationKivioChat)}
-          >
-            {t.chatAutomationKivioChat}
-          </button>
-          {cliAgents.map((cli) => (
-            <button
-              key={cli.id}
-              type="button"
-              role="radio"
-              aria-checked={agent.runtimeKind === 'external' && agent.externalAgentId === cli.id}
-              className={`kv-automation-runtime-chip${agent.runtimeKind === 'external' && agent.externalAgentId === cli.id ? ' is-active' : ''}`}
-              onClick={() => patch(
-                withRuntimeKind(agent, 'external', {
-                  externalAgentId: cli.id,
-                  externalModel: null,
-                }),
-                cli.name,
-              )}
-            >
-              <AgentIcon id={cli.id} size={14} />
-              {cli.name}
-            </button>
-          ))}
+
         </div>
         {agent.runtimeKind !== 'external' ? (
           <FieldBlock label={t.chatAutomationAgentModel}>
@@ -254,17 +187,7 @@ export function AgentInspector({
               options={kivioModels}
             />
           </FieldBlock>
-        ) : (
-          <FieldBlock label={t.chatAutomationAgentModel}>
-            <Select
-              value={agent.externalModel ?? ''}
-              onChange={(value) => patch(withRuntimeKind(
-                { ...agent, externalModel: value || null },
-                'external',
-              ))}
-              options={cliModelOptions}
-            />
-          </FieldBlock>
+        ) : (<p>Local CLI support has been removed. Select Dsivio Agent.</p>
         )}
       </Section>
       ) : null}

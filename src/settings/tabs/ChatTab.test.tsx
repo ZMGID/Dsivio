@@ -45,7 +45,6 @@ function renderTab(overrides: Partial<MockedProps> = {}) {
     chatTools: { enabled: false, servers: [], nativeTools: { workingDirectory: '/w' } } as unknown as Props['chatTools'],
     chatMemory: { enabled: false } as Props['chatMemory'],
     chatDefaults: 'You are the AI assistant inside Kivio.',
-    chatRuntimeDefaults: 'Chat runtime (internal runtime mode): this conversation uses Kivio Chat.',
     effectiveChatMaxOutput: { maxOutput: 131072, source: 'override' },
     chatMaxOutputSourceLabel: '来自模型覆盖',
     chatMaxOutputModelLabel: 'p1 / gpt-4o',
@@ -105,11 +104,10 @@ describe('ChatTab', () => {
     expect(screen.getByDisplayValue('You are the AI assistant inside Kivio.')).toBeTruthy()
   })
 
-  it('Chat runtime 提示词为空时显示内置 defaultText（英文原文）', () => {
+  it('only exposes Dsivio Agent settings', () => {
     renderTab()
-    expect(
-      screen.getByDisplayValue('Chat runtime (internal runtime mode): this conversation uses Kivio Chat.'),
-    ).toBeTruthy()
+    expect(screen.getByText('Dsivio Agent')).toBeTruthy()
+    expect(screen.queryByText('Kivio Chat')).toBeNull()
   })
 
   it('恢复默认写回空字符串', async () => {
@@ -142,7 +140,7 @@ describe('ChatTab', () => {
   })
 
   it('无默认提示词时 Agent 恢复默认按钮禁用', () => {
-    renderTab({ chatDefaults: undefined, chatRuntimeDefaults: undefined })
+    renderTab({ chatDefaults: undefined })
     const restores = screen.getAllByRole('button', { name: t.restoreDefaultPrompt })
     expect(restores.some((btn) => (btn as HTMLButtonElement).disabled)).toBe(true)
   })

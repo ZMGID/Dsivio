@@ -271,7 +271,7 @@ export const ChatConversationPane = memo(function ChatConversationPane({
               </div>
             )}
 
-            <InputBar {...inputBarProps} goalSlot={goalSlot} subAgentSlot={subAgentSlot} />
+            {inputBarProps.usesExternalRuntime ? <p className="p-4 text-center text-sm text-neutral-500">本地 CLI 支持已移除，此对话仅保留历史。请新建 Dsivio Agent 对话。</p> : <InputBar {...inputBarProps} goalSlot={goalSlot} subAgentSlot={subAgentSlot} />}
           </>
         )}
         {conversationLoading && (

@@ -1,7 +1,7 @@
 import { RefreshCw, FolderOpen } from 'lucide-react'
 import { open } from '@tauri-apps/plugin-dialog'
 import { homeDir, join } from '@tauri-apps/api/path'
-import { Select, Input, SettingRow, SettingsGroup, Toggle } from '../components'
+import { Select, Input, SettingRow, SettingsGroup } from '../components'
 import { Button } from '../../components/Button'
 import { PromptField } from '../ScreenshotTranslationSettings'
 import type { I18n, Lang } from '../../components/i18n'
@@ -12,7 +12,6 @@ import type {
   Settings as SettingsData,
   ChatToolsConfig,
   ChatMemoryConfig,
-  ChatModeConfig,
 } from '../../api/tauri'
 
 /** 对齐 Pi：自定义模型未填 maxTokens 时的缺省，也是唯一的协议兜底。 */
@@ -21,17 +20,6 @@ const CHAT_FALLBACK_MAX_OUTPUT_TOKENS = 16384
 function formatTokenCount(tokens?: number): string {
   if (!tokens || !Number.isFinite(tokens)) return ''
   return `${tokens.toLocaleString()} tokens`
-}
-
-function resolveChatMode(config?: ChatModeConfig | null): Required<ChatModeConfig> {
-  return {
-    systemPrompt: config?.systemPrompt ?? '',
-    webSearch: config?.webSearch ?? true,
-    webFetch: config?.webFetch ?? true,
-    knowledgeSearch: config?.knowledgeSearch ?? true,
-    memoryTools: config?.memoryTools ?? true,
-    mcpReadOnly: config?.mcpReadOnly ?? true,
-  }
 }
 
 interface ChatTabProps {
@@ -43,8 +31,6 @@ interface ChatTabProps {
   chatMemory: ChatMemoryConfig
   /** Built-in Agent system prompt (exact string used when systemPrompt is empty). */
   chatDefaults: string | undefined
-  /** Built-in Chat runtime prompt (exact string used when chatMode.systemPrompt is empty). */
-  chatRuntimeDefaults: string | undefined
   effectiveChatMaxOutput: { maxOutput: number; source: string }
   chatMaxOutputSourceLabel: string
   chatMaxOutputModelLabel: string
@@ -55,7 +41,7 @@ interface ChatTabProps {
   onNavigateTab: (tab: SettingsTab) => void
 }
 
-/** AI 客户端（聊天）标签页：共用资料 + Kivio Agent / Kivio Chat 两套设置。 */
+/** AI 客户端（聊天）标签页：个人资料和 Dsivio Agent 设置。 */
 export function ChatTab({
   settings,
   t,
@@ -64,7 +50,6 @@ export function ChatTab({
   chatTools,
   chatMemory,
   chatDefaults,
-  chatRuntimeDefaults,
   effectiveChatMaxOutput,
   chatMaxOutputSourceLabel,
   chatMaxOutputModelLabel,
@@ -74,18 +59,6 @@ export function ChatTab({
   onUpdateNativeTools,
   onNavigateTab,
 }: ChatTabProps) {
-  const chatMode = resolveChatMode(chatConfig.chatMode)
-
-  const updateChatMode = (updates: Partial<ChatModeConfig>) => {
-    onUpdateChat({
-      chatMode: {
-        ...chatMode,
-        ...updates,
-      },
-    })
-  }
-
-
   return (
     <>
       <SettingsGroup title={lang === 'zh' ? '个人资料' : 'Profile'}>
@@ -104,7 +77,7 @@ export function ChatTab({
         </div>
       </SettingsGroup>
 
-      {/* ─── Kivio Agent ─── */}
+      {/* ─── Dsivio Agent ─── */}
       <SettingsGroup title={t.kivioAgentSection}>
         {t.kivioAgentSectionHint ? (
           <p className="kv-row-desc mb-2 px-0">{t.kivioAgentSectionHint}</p>
@@ -215,73 +188,7 @@ export function ChatTab({
         onNavigateTab={onNavigateTab}
       />
 
-      {/* ─── Kivio Chat ─── */}
-      <SettingsGroup title={t.kivioChatSection}>
-        {t.kivioChatSectionHint ? (
-          <p className="kv-row-desc mb-1 px-0">{t.kivioChatSectionHint}</p>
-        ) : null}
 
-        <PromptField
-          label={t.kivioChatSystemPrompt}
-          description={t.kivioChatSystemPromptHint}
-          value={chatMode.systemPrompt || ''}
-          defaultText={chatRuntimeDefaults || ''}
-          restoreLabel={t.restoreDefaultPrompt}
-          onChange={(systemPrompt) => updateChatMode({ systemPrompt })}
-        />
-
-
-        <SettingRow
-          label={t.kivioChatWebSearch}
-          description={t.kivioChatWebSearchHint}
-        >
-          <Toggle
-            checked={Boolean(chatMode.webSearch)}
-            onChange={(webSearch) => updateChatMode({ webSearch })}
-          />
-        </SettingRow>
-        <SettingRow
-          label={t.kivioChatWebFetch}
-          description={t.kivioChatWebFetchHint}
-        >
-          <Toggle
-            checked={Boolean(chatMode.webFetch)}
-            onChange={(webFetch) => updateChatMode({ webFetch })}
-          />
-        </SettingRow>
-        <SettingRow
-          label={t.kivioChatKnowledge}
-          description={t.kivioChatKnowledgeHint}
-        >
-          <Toggle
-            checked={Boolean(chatMode.knowledgeSearch)}
-            onChange={(knowledgeSearch) => updateChatMode({ knowledgeSearch })}
-          />
-        </SettingRow>
-        <SettingRow
-          label={t.kivioChatMemory}
-          description={t.kivioChatMemoryHint}
-        >
-          <Toggle
-            checked={Boolean(chatMode.memoryTools)}
-            onChange={(memoryTools) => updateChatMode({ memoryTools })}
-          />
-        </SettingRow>
-        <SettingRow
-          label={t.kivioChatMcpReadonly}
-          description={t.kivioChatMcpReadonlyHint}
-        >
-          <Toggle
-            checked={Boolean(chatMode.mcpReadOnly)}
-            onChange={(mcpReadOnly) => updateChatMode({ mcpReadOnly })}
-          />
-        </SettingRow>
-        <p className="kv-row-desc px-0 pb-1 pt-1">
-          {lang === 'zh'
-            ? '以上开关仅影响 Kivio Chat。写文件 / Shell / Subagent 始终只在 Kivio Agent 中可用。'
-            : 'These toggles only affect Kivio Chat. Write / shell / sub-agents stay Agent-only.'}
-        </p>
-      </SettingsGroup>
     </>
   )
 }

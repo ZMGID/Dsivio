@@ -55,7 +55,6 @@ import {
   type SlashCommandDefinition,
   type SlashSkill,
 } from './slashCommands'
-import { mapExternalCliSlashCommands, externalCliAgentLabel } from './externalCliSlashCommands'
 import type { ModeOption, ModeTone } from './permissionModes'
 import { isTauriRuntime } from './utils'
 import { isVideoFile } from './attachmentType'
@@ -574,9 +573,6 @@ export const InputBar = memo(function InputBar({
   const [slashPanelOpen, setSlashPanelOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const [activeSlashToken, setActiveSlashToken] = useState<ActiveSlashToken | null>(null)
-  const [externalCliSlashCommands, setExternalCliSlashCommands] = useState<SlashCommandDefinition[]>([])
-  const [externalCliSlashHint, setExternalCliSlashHint] = useState<string | null>(null)
-  const [externalCliSlashLoading, setExternalCliSlashLoading] = useState(false)
   const [slashPanelLeft, setSlashPanelLeft] = useState(0)
   const [optimizing, setOptimizing] = useState(false)
   const [optimizeMotion, setOptimizeMotion] = useState<'idle' | 'out' | 'in'>('idle')
@@ -874,61 +870,15 @@ export const InputBar = memo(function InputBar({
 
   const allSlashCommands = useMemo(
     () => {
-      if (usesExternalRuntime) return externalCliSlashCommands
+      if (usesExternalRuntime) return []
       const local = usesChatRuntime
         ? LOCAL_SLASH_COMMANDS.filter((command) => command.id !== 'plan' && command.id !== 'orchestrate')
         : LOCAL_SLASH_COMMANDS
       return buildSlashCommands(local, usesChatRuntime ? [] : enabledSkills)
     },
-    [enabledSkills, externalCliSlashCommands, usesChatRuntime, usesExternalRuntime],
+    [enabledSkills, usesChatRuntime, usesExternalRuntime],
   )
 
-  useEffect(() => {
-    if (!usesExternalRuntime || !externalAgentName) {
-      setExternalCliSlashCommands([])
-      setExternalCliSlashHint(null)
-      setExternalCliSlashLoading(false)
-      return
-    }
-
-    let cancelled = false
-    setExternalCliSlashLoading(true)
-    void chatApi.listExternalCliSlashCommands(externalAgentName, conversationId)
-      .then((result) => {
-        if (cancelled) return
-        setExternalCliSlashCommands(mapExternalCliSlashCommands(externalAgentName, result.commands))
-        setExternalCliSlashHint(result.message ?? null)
-      })
-      .catch((err) => {
-        if (cancelled) return
-        setExternalCliSlashCommands([])
-        setExternalCliSlashHint(
-          typeof err === 'string' ? err : err instanceof Error ? err.message : t.chatCliCommandsLoadFailed,
-        )
-      })
-      .finally(() => {
-        if (!cancelled) setExternalCliSlashLoading(false)
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [conversationId, externalAgentName, usesExternalRuntime, t])
-
-  useEffect(() => {
-    if (!slashPanelOpen || !usesExternalRuntime || !externalAgentName) return
-    let cancelled = false
-    void chatApi.listExternalCliSlashCommands(externalAgentName, conversationId)
-      .then((result) => {
-        if (cancelled) return
-        setExternalCliSlashCommands(mapExternalCliSlashCommands(externalAgentName, result.commands))
-        setExternalCliSlashHint(result.message ?? null)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [slashPanelOpen, conversationId, externalAgentName, usesExternalRuntime])
   const filteredSlashCommands = useMemo(
     () => allSlashCommands.filter((command) => (
       commandMatches(command, activeSlashToken?.query ?? '')
@@ -1855,7 +1805,7 @@ export const InputBar = memo(function InputBar({
   // 发送键 —— 就是原本那个键、原本的样子，按下去这一条进队列。这一刻停止走 Esc（见
   // handleKeyDown）或清空输入框让停止键回来；否则用户在生成中打完字会发现没有键可按。
   const stopOwnsSendSlot = Boolean(cancelVisible && onCancel) && !(queueMode && canSend)
-  const cliAgentLabel = externalCliAgentLabel(externalAgentName)
+  const cliAgentLabel = externalAgentName ?? ''
 
   const wrapperClass =
     layout === 'inline'
@@ -2081,9 +2031,7 @@ export const InputBar = memo(function InputBar({
               ) : (
                 <div className="flex h-[26px] items-center px-2 text-[11px] font-medium text-neutral-400 dark:text-neutral-500">
                   {usesExternalRuntime
-                    ? (externalCliSlashLoading
-                      ? t.chatLoadingCliCommands
-                      : externalCliSlashHint ?? 'No matching CLI command')
+                    ? 'Local CLI support has been removed'
                     : 'No matching command'}
                 </div>
               )}

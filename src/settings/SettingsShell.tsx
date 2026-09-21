@@ -31,7 +31,7 @@ import { applyProviderDraftIntent, type ProviderDraftIntent } from './providerDr
 import { i18n, type Lang } from '../components/i18n'
 import {
   GeneralIcon, HotkeysIcon, TranslateIcon, LensIcon, ChatIcon, MemoryIcon, MixerIcon,
-  AgentIcon, WebSearchIcon, PluginsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
+  WebSearchIcon, PluginsIcon, SessionsIcon, UsageIcon, ProvidersIcon, AboutIcon, HooksIcon,
 } from './NavIcons'
 import { formatHotkeyError, getPlatform } from './utils'
 import { type ProviderPreset } from './providerPresets'
@@ -39,7 +39,6 @@ import { ProviderModelsPicker } from './ProviderModelsPicker'
 import { ScreenshotTranslationSettings } from './ScreenshotTranslationSettings'
 import { UsageStatsPanel } from './UsageStatsPanel'
 import { RequestDebugPanel } from './RequestDebugPanel'
-import { ExternalAgentsSettings } from './ExternalAgentsSettings'
 import { HotkeysTab } from './tabs/HotkeysTab'
 import { LensTab } from './tabs/LensTab'
 import { MixerTab } from './tabs/MixerTab'
@@ -72,7 +71,7 @@ import {
 import { ConnectorsPanel } from './ConnectorsPanel'
 import { WebSearchPanel } from './WebSearchPanel'
 
-export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'externalAgents' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 // UI 字号：以 px 展示、以整体缩放（zoom）实现。CSS 全是 px 硬编码，做不了真正的 rem 基准字号，
@@ -794,7 +793,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   const lensDefaults = defaultPrompts?.lensPrompts?.[settings.lens.defaultLanguage === 'en' ? 'en' : 'zh']
   const chatLangKey = settings.chat.defaultLanguage === 'en' ? 'en' : 'zh'
   const chatDefaults = defaultPrompts?.chatPrompts?.[chatLangKey]
-  const chatRuntimeDefaults = defaultPrompts?.chatRuntimePrompt
   const chatConfig = settings.chat
   const themeColor = settings.themeColor
   const chatMemory = settings.chatMemory
@@ -819,7 +817,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'chat' as const, label: t.tabChatClient, icon: ChatIcon },
     { id: 'memory' as const, label: t.tabMemory, icon: MemoryIcon },
     { id: 'mixer' as const, label: t.tabMixer, icon: MixerIcon },
-    { id: 'externalAgents' as const, label: t.tabExternalAgents, icon: AgentIcon },
     { id: 'computerControl' as const, label: lang === 'zh' ? '电脑操控' : 'Computer control', icon: Monitor },
     { id: 'hooks' as const, label: t.tabHooks, icon: HooksIcon },
     { id: 'plugins' as const, label: t.tabPlugins, icon: PluginsIcon },
@@ -867,12 +864,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     computerControl: {
       title: lang === 'zh' ? '电脑操控' : 'Computer control',
       subtitle: lang === 'zh' ? '管理桌面、浏览器和文档操作工具。' : 'Manage desktop, browser, and document control tools.',
-    },
-    externalAgents: {
-      title: t.tabExternalAgents,
-      subtitle: lang === 'zh'
-        ? '检测外部 CLI 编码代理，管理版本、路径、模型与环境变量。'
-        : 'Detect external CLI coding agents; manage versions, paths, models, and env vars.',
     },
     hooks: {
       title: t.tabHooks,
@@ -1152,7 +1143,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 chatTools={settings.chatTools}
                 chatMemory={chatMemory}
                 chatDefaults={chatDefaults}
-                chatRuntimeDefaults={chatRuntimeDefaults}
                 effectiveChatMaxOutput={effectiveChatMaxOutput}
                 chatMaxOutputSourceLabel={chatMaxOutputSourceLabel}
                 chatMaxOutputModelLabel={chatMaxOutputModelLabel}
@@ -1199,13 +1189,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               />
             )}
 
-            {activeTab === 'externalAgents' && (
-              <ExternalAgentsSettings
-                lang={lang}
-                settings={settings}
-                updateChat={updateChat}
-              />
-            )}
 
             {activeTab === 'computerControl' && (
               <ComputerControlTab onRequestAiInstall={onRequestAiInstall} lang={lang} tools={settings.chatTools} onChange={updateChatTools} />

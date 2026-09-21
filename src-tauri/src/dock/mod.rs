@@ -29,14 +29,7 @@ pub async fn dock_resolve_cwd(
         if let Some(conv_id) = conversation_id.as_deref() {
             if let Ok(conversation) = crate::chat::storage::load_conversation(&app, conv_id) {
                 if conversation.agent_runtime.is_external() {
-                    // 右栏是用户主动打开的，且 `dock_fs_list` 要求 workdir 已存在 ⇒ 这里按需建。
-                    // 与下面内置分支同一口径（项目根不建，避免把配错的路径悄悄建成空目录）。
-                    let path = crate::external_agents::workspace::ensure_effective_cwd(
-                        &app,
-                        &conversation.id,
-                        conversation.project_id.as_deref(),
-                    )?;
-                    return Ok(path.to_string_lossy().to_string());
+                    return Err("Legacy CLI history has no active workspace".into());
                 }
                 let settings = crate::settings::load_settings(&app);
                 let path = crate::chat::storage::resolve_conversation_working_directory(
@@ -64,9 +57,9 @@ pub async fn dock_resolve_cwd(
         {
             if let Ok(project) = crate::chat::storage::find_project_by_id(&app, project_id) {
                 if let Some(root) = project.root_path.filter(|p| !p.trim().is_empty()) {
-                    if let Some(path) = crate::external_agents::workspace::cli_dir_if_exists(
-                        std::path::PathBuf::from(root),
-                    ) {
+                    if let Some(path) =
+                        Some(std::path::PathBuf::from(root)).filter(|path| path.is_dir())
+                    {
                         return Ok(path.to_string_lossy().to_string());
                     }
                 }

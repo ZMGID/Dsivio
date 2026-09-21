@@ -20,10 +20,7 @@ import { dockApi } from '../dock/api'
 import { useTauriEvent } from '../hooks/useTauriEvent'
 import type { InputBarProps } from '../InputBar'
 import {
-  deriveDshPresetModes,
   derivePermissionModes,
-  useDetectedExternalAgents,
-  useDshCustomPresets,
 } from '../permissionModes'
 import { SessionUsageStrip } from '../SessionUsageStrip'
 import { resolveSendSkillId } from '../skillSelection'
@@ -163,8 +160,6 @@ export function usePopoutComposer({
   const [boundSet, setBoundSet] = useState<ChatSet | null>(null)
   const [gitWorkdir, setGitWorkdir] = useState('')
 
-  const detectedExternalAgents = useDetectedExternalAgents(conversationId)
-  const dshCustomPresets = useDshCustomPresets(runtime)
   const activeAgentPlanMode = conversation?.agent_plan_state?.mode
     ?? conversation?.agentPlanState?.mode
     ?? 'act'
@@ -174,16 +169,12 @@ export function usePopoutComposer({
     () => derivePermissionModes({
       target: 'composer',
       agentRuntime: runtime,
-      agents: detectedExternalAgents,
       agentPlanMode: activeAgentPlanMode,
       goalActive,
     }),
-    [runtime, detectedExternalAgents, activeAgentPlanMode, goalActive],
+    [runtime, activeAgentPlanMode, goalActive],
   )
-  const composerPresets = useMemo(
-    () => deriveDshPresetModes(runtime, dshCustomPresets),
-    [runtime, dshCustomPresets],
-  )
+  const composerPresets = { options: [], current: '' }
 
   const projectId = conversation?.project_id ?? conversation?.projectId ?? null
   const setId = conversation?.set_id ?? conversation?.setId ?? null

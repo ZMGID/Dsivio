@@ -14,14 +14,11 @@ use tauri::{AppHandle, Manager};
 
 use crate::chat::agent::prepare::{available_builtin_tool_names, build_chat_system_prompt};
 use crate::chat::agent::{
-    run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, AgentRunEntry,
-    ToolExecutionContext, ToolExecutor, ToolExecutorFuture,
+    run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, ToolExecutionContext, ToolExecutor,
+    ToolExecutorFuture,
 };
 use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
-use crate::chat::types::{
-    AgentPlanState, AgentRuntimeConfig, AgentRuntimeKind, AgentTodoState, ChatMessage,
-    ChatMessageSegment, Conversation, ConversationContextState, ToolCallRecord, WebSearchMode,
-};
+use crate::chat::types::{AgentRuntimeKind, ChatMessageSegment, ToolCallRecord, WebSearchMode};
 use crate::mcp::ChatToolDefinition;
 use crate::skills;
 use crate::state::AppState;
@@ -316,14 +313,7 @@ pub(crate) async fn run_agent_node(
         return Err("Agent prompt is empty".to_string());
     }
     if spec.runtime_kind == AgentRuntimeKind::External {
-        return run_external_agent_node(
-            app,
-            &request.automation_id,
-            &request.run_id,
-            &request.node_id,
-            &spec,
-        )
-        .await;
+        return Err("Local CLI support has been removed; select Dsivio Agent.".into());
     }
     run_builtin_agent_node(app, &request.automation_id, &request.run_id, prompt, &spec).await
 }
@@ -356,7 +346,7 @@ impl AgentSpec {
             }
         }
         let runtime_kind = match str_field("runtimeKind").as_deref() {
-            Some("chat") => AgentRuntimeKind::Chat,
+            Some("chat") => AgentRuntimeKind::Builtin,
             Some("external") => AgentRuntimeKind::External,
             _ => AgentRuntimeKind::Builtin,
         };
@@ -677,172 +667,6 @@ fn extra_skill_bodies(
     }
 }
 
-fn workflow_user_message(content: String) -> ChatMessage {
-    ChatMessage {
-        id: format!("msg_{}", uuid::Uuid::new_v4()),
-        role: "user".to_string(),
-        content,
-        attachments: Vec::new(),
-        reasoning: None,
-        artifacts: Vec::new(),
-        tool_calls: Vec::new(),
-        segments: Vec::new(),
-        agent_plan: None,
-        api_messages: Vec::new(),
-        model_messages: Vec::new(),
-        active_skill_id: None,
-        run_entry: None,
-        stream_outcome: None,
-        usage: None,
-        anchor_usage: None,
-        group_id: None,
-        provider_id: None,
-        model: None,
-        timestamp: chrono::Local::now().timestamp(),
-        degraded: None,
-    }
-}
-
-async fn run_external_agent_node(
-    app: &AppHandle,
-    automation_id: &str,
-    _run_id: &str,
-    node_id: &str,
-    spec: &AgentSpec,
-) -> Result<NodeOutput, String> {
-    let agent_id = spec
-        .external_agent_id
-        .as_deref()
-        .ok_or_else(|| "Select an external CLI on the Agent runtime slot".to_string())?;
-    let mut prompt = spec.prompt.clone();
-    let settings = app.state::<AppState>().settings_read().clone();
-    let workdir = workspace::workbench_dir(
-        &settings.chat_tools.native_tools.working_directory,
-        automation_id,
-    );
-    if let Some(extra) = extra_skill_bodies(
-        app,
-        &settings.chat_tools.skill_scan_paths,
-        workdir.as_deref(),
-        &spec.skill_ids,
-    ) {
-        prompt = format!("{extra}\n\n{prompt}");
-    }
-
-    let mut conversation =
-        load_or_create_external_conversation(app, automation_id, node_id, spec, agent_id).await?;
-    let user_message = workflow_user_message(prompt.clone());
-    conversation = crate::chat::repository::repository(app)
-        .mutate(app, &conversation.id, {
-            let user_message = user_message.clone();
-            move |latest| {
-                latest.messages.push(user_message);
-                Ok(())
-            }
-        })
-        .await
-        .map_err(crate::chat::repository::repository_error)?;
-
-    let state = app.state::<AppState>();
-    crate::external_agents::run_external_cli_reply_in(
-        app,
-        &state,
-        &mut conversation,
-        None,
-        &prompt,
-        &[],
-        &[],
-        spec.skill_ids.first().map(|id| id.as_str()),
-        AgentRunEntry::Send,
-        workdir.as_deref(),
-    )
-    .await?;
-
-    let text = conversation
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role == "assistant")
-        .map(|message| message.content.clone())
-        .unwrap_or_default();
-    if text.trim().is_empty() {
-        Err("Agent returned an empty response".to_string())
-    } else {
-        Ok(NodeOutput::from_text(text))
-    }
-}
-
-async fn load_or_create_external_conversation(
-    app: &AppHandle,
-    automation_id: &str,
-    node_id: &str,
-    spec: &AgentSpec,
-    agent_id: &str,
-) -> Result<Conversation, String> {
-    let id = workspace::external_conversation_id(automation_id, node_id);
-    let repo = crate::chat::repository::repository(app);
-    let runtime = AgentRuntimeConfig {
-        kind: AgentRuntimeKind::External,
-        external_agent_id: Some(agent_id.to_string()),
-        external_model: spec.external_model.clone(),
-        external_reasoning: None,
-        external_sandbox: None,
-        external_agent_preset: None,
-    };
-    let active_skill_id = spec.skill_ids.first().cloned();
-    if repo.get(app, &id).await.is_ok() {
-        return repo
-            .mutate(app, &id, {
-                let runtime = runtime.clone();
-                let active_skill_id = active_skill_id.clone();
-                move |latest| {
-                    latest.archived = true;
-                    latest.agent_runtime = runtime;
-                    latest.active_skill_id = active_skill_id;
-                    Ok(())
-                }
-            })
-            .await
-            .map_err(crate::chat::repository::repository_error);
-    }
-
-    let now = chrono::Local::now().timestamp();
-    let conversation = Conversation {
-        id,
-        revision: 0,
-        title: format!("Automation {automation_id}"),
-        provider_id: String::new(),
-        model: String::new(),
-        messages: Vec::new(),
-        active_skill_id,
-        assistant_id: None,
-        assistant_snapshot: None,
-        created_at: now,
-        updated_at: now,
-        pinned: false,
-        archived: true,
-        folder: None,
-        project_id: None,
-        set_id: None,
-        context_state: ConversationContextState::default(),
-        agent_todo_state: AgentTodoState::default(),
-        agent_plan_state: AgentPlanState::default(),
-        goal_state: None,
-        knowledge_base_ids: Vec::new(),
-        force_knowledge_search: false,
-        additional_directories: Vec::new(),
-        thinking_level: None,
-        web_search_mode: None,
-        reply_models: Vec::new(),
-        group_selections: std::collections::HashMap::new(),
-        forked_from: None,
-        agent_runtime: runtime,
-    };
-    repo.create(app, conversation)
-        .await
-        .map_err(crate::chat::repository::repository_error)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -962,7 +786,7 @@ mod tests {
             "providerId": "openai",
             "model": "gpt-4.1",
         }));
-        assert_eq!(spec.runtime_kind, AgentRuntimeKind::Chat);
+        assert_eq!(spec.runtime_kind, AgentRuntimeKind::Builtin);
         assert_eq!(spec.provider_id.as_deref(), Some("openai"));
         assert_eq!(spec.model.as_deref(), Some("gpt-4.1"));
     }
