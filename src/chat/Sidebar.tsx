@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { save } from '@tauri-apps/plugin-dialog'
 import {
@@ -14,7 +14,6 @@ import {
   NotebookPen,
   Plus,
   Search,
-  Settings,
   SquarePen,
   Workflow,
 } from 'lucide-react'
@@ -28,33 +27,25 @@ import { ProjectDialog } from './ProjectDialog'
 import { CliImportDialog } from './CliImportDialog'
 import { SetContextMenu } from './SetContextMenu'
 import { SetDialog } from './SetDialog'
-import { SidebarAccountMenu } from './SidebarAccountMenu'
-import { getSettingsCached } from '../api/settingsCache'
 import { IconButton } from '../components/Button'
 import { chatApi } from './api'
 import { applyIdOrder, moveIdToIndex } from '../utils/pointerReorder'
 import { useInsertionReorder } from '../utils/insertionReorder'
 import { applyConversationPins, withPinAt, type ConversationPin } from './conversationPins'
 import { ChatTitlebarActions } from './ChatTitlebarActions'
+import { ProductModeSwitcher } from './ProductModeSwitcher'
+import { SidebarShell } from './SidebarShell'
+import { SidebarUserFooter } from './SidebarUserFooter'
+import { NavRow } from './SidebarNavRow'
+import type { ProductMode } from './productMode'
 import { chatTitlebarMacInsetClass, isMac, usesNativeTitlebar } from './platform'
-import { clampSidebarWidth, SIDEBAR_DEFAULT_WIDTH } from './persistence'
+import { SIDEBAR_DEFAULT_WIDTH } from './persistence'
 import { useChatPerfRenderProbe } from './chatPerformanceProbe'
 import type { ConversationMenuAnchor } from './ConversationContextMenu'
-import type { ChatUserProfile } from './types'
-import { UserAvatar } from './UserAvatar'
 import { i18n, useT, type I18n, type Lang } from '../components/i18n'
 import { conversationMarkdownFilename } from './conversationExport'
 import { displayConversationTitle, isPlaceholderTitle, isProvisionalTitle } from './conversationTitle'
 import { SwapTitle } from './SwapTitle'
-
-function resolveChatUserProfile(
-  chat?: { userDisplayName?: string; userAvatar?: string } | null,
-): ChatUserProfile {
-  return {
-    displayName: chat?.userDisplayName?.trim() || '',
-    avatarUrl: chat?.userAvatar?.trim() || '',
-  }
-}
 
 const modLabel = isMac ? '⌘' : 'Ctrl'
 
@@ -217,6 +208,8 @@ export interface SidebarProps {
   onOpenExtensionsItem: (item: ExtensionsNavItem) => void
   onSelectLang: (lang: Lang) => void
   onOpenUsage: () => void
+  productMode: ProductMode
+  onSelectProductMode: (mode: ProductMode) => void
   settingsActive?: boolean
   extensionsActive?: ExtensionsNavItem | null
   collapsed: boolean
@@ -228,120 +221,6 @@ export interface SidebarProps {
   profileRefreshKey?: number
   searchOpen: boolean
   onSearchOpenChange: (open: boolean) => void
-}
-
-function SidebarUserFooter({
-  profile,
-  lang,
-  settingsActive,
-  onOpenSettings,
-  onSelectLang,
-  onOpenUsage,
-}: {
-  profile: ChatUserProfile
-  lang: Lang
-  settingsActive: boolean
-  onOpenSettings: () => void
-  onSelectLang: (lang: Lang) => void
-  onOpenUsage: () => void
-}) {
-  const [menuRect, setMenuRect] = useState<{ left: number; top: number; width: number } | null>(null)
-  const rowRef = useRef<HTMLDivElement>(null)
-  const t = i18n[lang]
-
-  const toggleMenu = () => {
-    if (menuRect) {
-      setMenuRect(null)
-      return
-    }
-    const rect = rowRef.current?.getBoundingClientRect()
-    if (!rect) return
-    setMenuRect({ left: rect.left, top: rect.top, width: rect.width })
-  }
-
-  return (
-    <div
-      className="shrink-0 border-t border-neutral-200/60 p-1.5 dark:border-neutral-800/80"
-      data-tauri-drag-region="false"
-    >
-      <div
-        ref={rowRef}
-        className={`flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors ${
-          menuRect || settingsActive
-            ? 'bg-black/[0.06] dark:bg-white/[0.1]'
-            : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
-        }`}
-      >
-        <button
-          type="button"
-          onClick={toggleMenu}
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          aria-haspopup="menu"
-          aria-expanded={menuRect !== null}
-        >
-          <UserAvatar profile={profile} size={22} />
-          <span
-            className="min-w-0 flex-1 truncate text-[12.5px] text-neutral-700 dark:text-neutral-300"
-            title={profile.displayName || undefined}
-          >
-            {profile.displayName || 'Dsivio'}
-          </span>
-        </button>
-        <IconButton
-          size="xs"
-          label={`${t.settings} (${isMac ? '⌘,' : 'Ctrl+,'})`}
-          onClick={() => {
-            setMenuRect(null)
-            onOpenSettings()
-          }}
-        >
-          <Settings strokeWidth={1.75} />
-        </IconButton>
-      </div>
-
-      {menuRect && (
-        <SidebarAccountMenu
-          triggerRect={menuRect}
-          lang={lang}
-          onSelectLang={onSelectLang}
-          onOpenUsage={onOpenUsage}
-          onClose={() => setMenuRect(null)}
-        />
-      )}
-    </div>
-  )
-}
-
-interface NavRowProps {
-  icon: React.ReactNode
-  label: string
-  onClick?: () => void
-  disabled?: boolean
-  active?: boolean
-  /** 图标在 hover 时的微动效（group-hover transform 工具类） */
-  iconMotion?: string
-}
-
-function NavRow({ icon, label, onClick, disabled, active, iconMotion }: NavRowProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] transition-colors disabled:cursor-default disabled:opacity-40 ${
-        active
-          ? 'bg-black/[0.06] font-medium text-neutral-900 dark:bg-white/[0.1] dark:text-neutral-50'
-          : 'text-neutral-800 hover:bg-black/[0.04] dark:text-neutral-200 dark:hover:bg-white/[0.06]'
-      }`}
-    >
-      <span
-        className={`flex h-5 w-5 shrink-0 items-center justify-center text-neutral-600 transition duration-300 ease-out group-hover:text-neutral-800 group-active:scale-90 dark:text-neutral-400 dark:group-hover:text-neutral-200 ${iconMotion ?? ''}`}
-      >
-        {icon}
-      </span>
-      <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
-    </button>
-  )
 }
 
 function ExtensionsNav({
@@ -592,22 +471,6 @@ function SearchDialog({
   )
 }
 
-function applySidebarWidthCss(aside: HTMLElement | null, nextWidth: number) {
-  const px = `${nextWidth}px`
-  aside?.style.setProperty('--chat-sidebar-width', px)
-  const shell = aside?.closest('.chat-window-shell')
-  if (shell instanceof HTMLElement) {
-    shell.style.setProperty('--chat-sidebar-width', px)
-  }
-}
-
-function setSidebarResizing(aside: HTMLElement | null, resizing: boolean) {
-  const shell = aside?.closest('.chat-window-shell')
-  if (shell instanceof HTMLElement) {
-    shell.classList.toggle('is-sidebar-resizing', resizing)
-  }
-}
-
 export const Sidebar = memo(function Sidebar({
   lang,
   currentConversationId,
@@ -628,6 +491,8 @@ export const Sidebar = memo(function Sidebar({
   onOpenExtensionsItem,
   onSelectLang,
   onOpenUsage,
+  productMode,
+  onSelectProductMode,
   settingsActive = false,
   extensionsActive = null,
   collapsed,
@@ -640,56 +505,6 @@ export const Sidebar = memo(function Sidebar({
   onSearchOpenChange,
 }: SidebarProps) {
   const t = i18n[lang]
-  const asideRef = useRef<HTMLElement>(null)
-  const dragStateRef = useRef<{ startX: number; startWidth: number; width: number; raf: number } | null>(null)
-  // 折叠后侧栏仍挂载（用于滑出动画），用 inert 让其退出 tab 序 / 不可点击 / 不进 a11y 树。
-  // useLayoutEffect：在绘制前与 JSX 里的 aria-hidden 原子地一起生效，避免短暂可聚焦窗口。
-  useLayoutEffect(() => {
-    const el = asideRef.current
-    if (el) el.inert = collapsed
-  }, [collapsed])
-  useLayoutEffect(() => {
-    applySidebarWidthCss(asideRef.current, width)
-  }, [width])
-  const handleResizeStart = useCallback(
-    (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0) return
-      event.preventDefault()
-      event.stopPropagation()
-      const aside = asideRef.current
-      const measured = aside?.getBoundingClientRect().width ?? 0
-      const startWidth = measured > 0 ? measured : width
-      dragStateRef.current = { startX: event.clientX, startWidth, width: startWidth, raf: 0 }
-      setSidebarResizing(aside, true)
-
-      const onMove = (moveEvent: PointerEvent) => {
-        const state = dragStateRef.current
-        if (!state) return
-        const nextWidth = clampSidebarWidth(state.startWidth + (moveEvent.clientX - state.startX), window.innerWidth)
-        state.width = nextWidth
-        if (!state.raf) {
-          state.raf = window.requestAnimationFrame(() => {
-            state.raf = 0
-            applySidebarWidthCss(asideRef.current, state.width)
-          })
-        }
-      }
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove)
-        window.removeEventListener('pointerup', onUp)
-        const state = dragStateRef.current
-        dragStateRef.current = null
-        setSidebarResizing(asideRef.current, false)
-        if (!state) return
-        if (state.raf) window.cancelAnimationFrame(state.raf)
-        applySidebarWidthCss(asideRef.current, state.width)
-        if (state.width !== Math.round(startWidth)) onWidthChange?.(state.width)
-      }
-      window.addEventListener('pointermove', onMove)
-      window.addEventListener('pointerup', onUp)
-    },
-    [onWidthChange, width],
-  )
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [projects, setProjects] = useState<ChatProject[]>([])
   const [sets, setSets] = useState<ChatSet[]>([])
@@ -737,25 +552,12 @@ export const Sidebar = memo(function Sidebar({
   const [setDialogError, setSetDialogError] = useState('')
   const sectionMenuButtonRef = useRef<HTMLButtonElement>(null)
   const sidebarLoadedRef = useRef(false)
-  const [userProfile, setUserProfile] = useState(() => resolveChatUserProfile())
   useChatPerfRenderProbe('Sidebar', {
     collapsed,
     settingsActive,
     activeTab,
     conversations: conversations.length,
   })
-
-  useEffect(() => {
-    let cancelled = false
-    void getSettingsCached().then((settings) => {
-      if (!cancelled) setUserProfile(resolveChatUserProfile(settings.chat))
-    }).catch((err) => {
-      console.error('Failed to load chat user profile:', err)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [profileRefreshKey])
 
   const loadSidebarData = useCallback(async (options?: { silent?: boolean; projectOverride?: ChatProject | null; setOverride?: ChatSet | null }) => {
     const projectForLoad = options?.projectOverride === undefined ? selectedProject : options.projectOverride
@@ -1377,20 +1179,12 @@ export const Sidebar = memo(function Sidebar({
 
   return (
     <>
-      <aside
-        ref={asideRef}
-        className={`chat-sidebar-shell relative flex shrink-0 flex-col overflow-hidden${
-          collapsed ? ' is-collapsed' : ''
-        }${settingsActive ? ' is-settings-cover' : ''}`}
-        aria-hidden={collapsed}
+      <SidebarShell
+        collapsed={collapsed}
+        settingsActive={settingsActive}
+        width={width}
+        onWidthChange={onWidthChange}
       >
-        {!collapsed && (
-          <div
-            className="chat-sidebar-resize"
-            data-tauri-drag-region="false"
-            onPointerDown={handleResizeStart}
-          />
-        )}
         {/* 侧栏内顶栏行只在 macOS 存在：那两枚按钮要贴着系统交通灯排。
             Windows / Linux 已把它们常驻到全宽标题栏带（见 ChatTitlebar），此处渲染会重复。 */}
         {usesNativeTitlebar && (
@@ -1407,8 +1201,12 @@ export const Sidebar = memo(function Sidebar({
           </div>
         )}
 
+      <div className="chat-sidebar-brand-row" data-tauri-drag-region="false">
+        <ProductModeSwitcher mode={productMode} onSelect={onSelectProductMode} />
+      </div>
+
       <nav
-        className={`shrink-0 space-y-0.5 px-2 pb-2 ${usesNativeTitlebar ? '' : 'pt-2'}`}
+        className="shrink-0 space-y-0.5 px-2 pb-2"
         data-tauri-drag-region="false"
       >
         <NavRow
@@ -1430,9 +1228,9 @@ export const Sidebar = memo(function Sidebar({
           onClick={() => onOpenExtensionsItem('artifacts')}
           active={extensionsActive === 'artifacts'}
         />
-        <NavRow icon={<Image size={17} />} label={'图片'} onClick={() => onOpenExtensionsItem('images')} active={extensionsActive === 'images'} />
-        <NavRow icon={<Video size={17} />} label={'视频'} onClick={() => onOpenExtensionsItem('videos')} active={extensionsActive === 'videos'} />
-        <NavRow icon={<Store size={17} />} label={'应用市场'} onClick={() => onOpenExtensionsItem('market')} active={extensionsActive === 'market'} />
+        <NavRow icon={<Image size={17} />} label={t.chatNavImages} onClick={() => onOpenExtensionsItem('images')} active={extensionsActive === 'images'} />
+        <NavRow icon={<Video size={17} />} label={t.chatNavVideos} onClick={() => onOpenExtensionsItem('videos')} active={extensionsActive === 'videos'} />
+        <NavRow icon={<Store size={17} />} label={t.chatNavMarket} onClick={() => onOpenExtensionsItem('market')} active={extensionsActive === 'market'} />
         <ExtensionsNav
           activeItem={extensionSubItems.some((item) => item.id === extensionsActive) ? extensionsActive : null}
           onSelectItem={onOpenExtensionsItem}
@@ -1925,9 +1723,9 @@ export const Sidebar = memo(function Sidebar({
       </div>
 
       <SidebarUserFooter
-        profile={userProfile}
         lang={lang}
         settingsActive={settingsActive}
+        profileRefreshKey={profileRefreshKey}
         onOpenSettings={onOpenSettings}
         onSelectLang={onSelectLang}
         onOpenUsage={onOpenUsage}
@@ -1995,7 +1793,7 @@ export const Sidebar = memo(function Sidebar({
           onClose={() => setDialogSet(undefined)}
         />
       )}
-    </aside>
+      </SidebarShell>
 
     {searchOpen && (
       <SearchDialog

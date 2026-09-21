@@ -24,3 +24,5 @@
 @import "./notes-editor.css";
 /* Former index.css 8275-8401: Chat-owned selection and loading overlays. */
 @import "./chat-03-overlays.css";
+/* Chat-owned product-mode switcher and workbench shell (added after the split). */
+@import "./chat-04-workbench.css";

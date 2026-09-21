@@ -28,6 +28,7 @@ import {
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatArtifactsPath,
+  isChatWorkbenchPath,
   isChatImagesPath,
   isChatVideosPath,
   isChatMarketPath,
@@ -196,6 +197,7 @@ import { MarketPage } from './market/MarketPage'
 import { marketApi } from './market/api'
 import type { MarketLocal } from './market/types'
 const ArtifactsCenter = lazy(() => import('./ArtifactsCenter').then((module) => ({ default: module.ArtifactsCenter })))
+const WorkbenchHome = lazy(() => import('./workbench/WorkbenchHome').then((module) => ({ default: module.WorkbenchHome })))
 
 const AutomationCenter = lazy(() => import('./automation/AutomationCenter').then((module) => ({
   default: module.AutomationCenter,
@@ -346,6 +348,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (isChatMcpCenterPath(path)) return 'mcp'
     if (isChatKnowledgeCenterPath(path)) return 'knowledge'
     if (isChatNotesPath(path)) return 'notes'
+    if (isChatWorkbenchPath(path)) return 'workbench'
     if (isChatImagesPath(path)) return 'images'
     if (isChatVideosPath(path)) return 'videos'
     if (isChatMarketPath(path)) return 'market'
@@ -2901,6 +2904,13 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             {centerPageTopStrip}
             <Suspense fallback={null}>
               <ArtifactsCenter onOpenConversation={handleSidebarSelectConversation} />
+            </Suspense>
+          </div>
+        ) : chatView === 'workbench' ? (
+          <div key="center" className={centerPageClass}>
+            {centerPageTopStrip}
+            <Suspense fallback={null}>
+              <WorkbenchHome />
             </Suspense>
           </div>
         ) : chatView === 'videos' ? (

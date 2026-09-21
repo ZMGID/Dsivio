@@ -9,6 +9,7 @@ import {
   isChatMcpCenterPath,
   isChatNotesPath,
   isChatArtifactsPath,
+  isChatWorkbenchPath,
   isChatImagesPath,
   isChatVideosPath,
   isChatMarketPath,
@@ -120,6 +121,7 @@ export function useChatRouting({
         onViewChange('notes')
         return
       }
+      if (isChatWorkbenchPath(path)) { onLeaveConversation(); onViewChange('workbench'); return }
       if (isChatImagesPath(path)) { onLeaveConversation(); onViewChange('images'); return }
       if (isChatVideosPath(path)) { onLeaveConversation(); onViewChange('videos'); return }
       if (isChatMarketPath(path)) { onLeaveConversation(); onViewChange('market'); return }
@@ -214,7 +216,16 @@ export function useChatRouting({
 
   const openExtensionsItem = useCallback((item: ChatExtensionsNavItem) => {
     setExtensionsNavItem(item)
-    if (item === 'images' || item === 'videos' || item === 'market') { onViewChange(item); syncNonConversationRoute(`#chat/${item}`); return }
+    if (item === 'workbench' || item.startsWith('workbench/')) {
+      onViewChange('workbench')
+      syncNonConversationRoute(`#chat/${item}`)
+      return
+    }
+    if (item === 'images' || item === 'videos' || item === 'market') {
+      onViewChange(item)
+      syncNonConversationRoute(`#chat/${item}`)
+      return
+    }
     if (item === 'artifacts') {
       onViewChange('artifacts')
       syncNonConversationRoute('#chat/artifacts')

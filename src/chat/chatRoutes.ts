@@ -60,6 +60,9 @@ export function isChatNotesPath(path: string): boolean {
   return chatRouteKind(path) === 'notes'
 }
 
+/** 工作台形态的首页。两种形态都能打开它，形态本身不写进路由（见 productMode.ts）。 */
+export function isChatWorkbenchPath(path: string): boolean { return chatRouteKind(path) === 'workbench' }
+
 export function isChatImagesPath(path: string): boolean { return chatRouteKind(path) === 'images' }
 
 export function isChatVideosPath(path: string): boolean { return chatRouteKind(path) === 'videos' }
@@ -90,9 +93,42 @@ export function setHash(next: string): void {
 }
 
 /** 扩展中心页导航高亮：只跟当前 view 走，设置页不算。 */
-export type ChatExtensionsNavItem = 'assistants' | 'skill' | 'mcp' | 'knowledge' | 'notes' | 'automations' | 'artifacts' | 'images' | 'videos' | 'market'
+export type ChatExtensionsNavItem =
+  | 'assistants'
+  | 'skill'
+  | 'mcp'
+  | 'knowledge'
+  | 'notes'
+  | 'automations'
+  | 'artifacts'
+  | 'workbench'
+  | 'workbench/shops'
+  | 'workbench/overview'
+  | 'workbench/products'
+  | 'workbench/listing'
+  | 'workbench/check'
+  | 'workbench/workflows'
+  | 'images'
+  | 'videos'
+  | 'market'
 
 export function extensionsNavItemForView(chatView: string): ChatExtensionsNavItem | null {
+  if (chatView === 'workbench') {
+    const path = hashPath()
+    if (path.startsWith('chat/workbench/')) {
+      const id = path.slice('chat/workbench/'.length).split('/')[0]
+      const item = `workbench/${id}` as ChatExtensionsNavItem
+      if (
+        item === 'workbench/shops'
+        || item === 'workbench/overview'
+        || item === 'workbench/products'
+        || item === 'workbench/listing'
+        || item === 'workbench/check'
+        || item === 'workbench/workflows'
+      ) return item
+    }
+    return 'workbench'
+  }
   if (chatView === 'images' || chatView === 'videos' || chatView === 'market') return chatView
   if (chatView === 'artifacts') return 'artifacts'
   if (chatView === 'assistants') return 'assistants'

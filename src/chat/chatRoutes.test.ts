@@ -180,6 +180,10 @@ describe('extensionsNavItemForView', () => {
     expect(extensionsNavItemForView('knowledge')).toBe('knowledge')
     expect(extensionsNavItemForView('notes')).toBe('notes')
     expect(extensionsNavItemForView('automations')).toBe('automations')
+    expect(extensionsNavItemForView('workbench')).toBe('workbench')
+    window.location.hash = '#chat/workbench/shops'
+    expect(extensionsNavItemForView('workbench')).toBe('workbench/shops')
+    window.location.hash = '#chat'
     expect(extensionsNavItemForView('settings')).toBeNull()
     expect(extensionsNavItemForView('conversation')).toBeNull()
     expect(extensionsNavItemForView('onboarding')).toBeNull()

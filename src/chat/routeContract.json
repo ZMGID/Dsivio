@@ -13,6 +13,7 @@
     "artifacts",
     "onboarding",
     "popout",
+    "workbench",
     "images",
     "videos",
     "market"
@@ -27,6 +28,7 @@
     "knowledge",
     "notes",
     "artifacts",
+    "workbench",
     "images",
     "videos",
     "market"
@@ -229,6 +231,24 @@
       "decodedConversationId": null,
       "rememberable": false,
       "restorable": false
+    },
+    {
+      "name": "workbench home",
+      "raw": "#chat/workbench",
+      "path": "chat/workbench",
+      "kind": "workbench",
+      "decodedConversationId": null,
+      "rememberable": true,
+      "restorable": true
+    },
+    {
+      "name": "workbench shop binding",
+      "raw": "#chat/workbench/shops",
+      "path": "chat/workbench/shops",
+      "kind": "workbench",
+      "decodedConversationId": null,
+      "rememberable": true,
+      "restorable": true
     },
     {
       "name": "images workbench",

@@ -83,6 +83,8 @@ describe('Sidebar conversation navigation', () => {
         refreshKey={0}
         searchOpen={false}
         onSearchOpenChange={vi.fn()}
+        productMode="chat"
+        onSelectProductMode={vi.fn()}
       />,
     )
 
@@ -132,6 +134,8 @@ describe('Sidebar conversation navigation', () => {
         refreshKey={0}
         searchOpen={false}
         onSearchOpenChange={vi.fn()}
+        productMode="chat"
+        onSelectProductMode={vi.fn()}
       />,
     )
 
@@ -186,6 +190,8 @@ describe('Sidebar pin while generating', () => {
         refreshKey={0}
         searchOpen={false}
         onSearchOpenChange={vi.fn()}
+        productMode="chat"
+        onSelectProductMode={vi.fn()}
       />,
     )
 
@@ -227,6 +233,8 @@ describe('Sidebar open archived conversation', () => {
         refreshKey={0}
         searchOpen={false}
         onSearchOpenChange={vi.fn()}
+        productMode="chat"
+        onSelectProductMode={vi.fn()}
       />,
     )
 
@@ -280,6 +288,8 @@ describe('Sidebar archive race', () => {
         refreshKey={0}
         searchOpen={false}
         onSearchOpenChange={vi.fn()}
+        productMode="chat"
+        onSelectProductMode={vi.fn()}
       />,
     )
 
@@ -309,6 +319,8 @@ describe('Sidebar archive race', () => {
         refreshKey={1}
         searchOpen={false}
         onSearchOpenChange={vi.fn()}
+        productMode="chat"
+        onSelectProductMode={vi.fn()}
       />,
     )
 
@@ -344,6 +356,8 @@ describe('Sidebar resize handle', () => {
         refreshKey={0}
         searchOpen={false}
         onSearchOpenChange={vi.fn()}
+        productMode="chat"
+        onSelectProductMode={vi.fn()}
       />,
     )
   }
@@ -380,6 +394,8 @@ describe('Sidebar resize handle', () => {
         refreshKey={0}
         searchOpen={false}
         onSearchOpenChange={vi.fn()}
+        productMode="chat"
+        onSelectProductMode={vi.fn()}
       />,
     )
     expect(container.querySelector('.chat-sidebar-resize')).toBeNull()
@@ -406,6 +422,7 @@ describe('Sidebar extension navigation', () => {
       onSelectLang={vi.fn()} onOpenUsage={vi.fn()}
       collapsed={false} onToggleCollapsed={vi.fn()} refreshKey={0}
       searchOpen={false} onSearchOpenChange={vi.fn()}
+      productMode="chat" onSelectProductMode={vi.fn()}
     />
   }
 

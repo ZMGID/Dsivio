@@ -290,4 +290,12 @@ describe('useChatRouting center openers', () => {
     expect(onViewChange).toHaveBeenCalledWith('mcp')
     expect(window.location.hash).toBe('#chat/mcp')
   })
+
+  it('openExtensionsItem keeps workbench subpages on the workbench view', () => {
+    const { result, onViewChange, setExtensionsNavItem } = setup('#chat')
+    act(() => { result.current.routing.openExtensionsItem('workbench/shops') })
+    expect(setExtensionsNavItem).toHaveBeenCalledWith('workbench/shops')
+    expect(onViewChange).toHaveBeenCalledWith('workbench')
+    expect(window.location.hash).toBe('#chat/workbench/shops')
+  })
 })
