@@ -29,7 +29,7 @@ describe('matchModel', () => {
 
   it('resolves September models through provider and effort aliases without losing variants', () => {
     expect(matchModel('gemini-3.8-flash-high')).toEqual(matchModelExact('gemini-3.8-flash'))
-    expect(matchModel('openai/gpt-6-astra')?.contextWindow).toBe(256000)
+    expect(matchModel('openai/gpt-6-astra')?.contextWindow).toBe(1_050_000)
     expect(matchModel('anthropic/claude-fable-5-1')?.displayName).toBe('Claude Fable 5.1')
     expect(matchModel('claude-mythos-5-1')?.displayName).toBe('Claude Mythos 5.1')
     expect(matchModel('meta/muse-spark-1.3-contributor')?.pricing?.input).toBe(0.1)
@@ -91,7 +91,7 @@ describe('matchModel', () => {
     expect(matchModel('gpt-5.6-sol')?.contextWindow).toBe(256_000)
     expect(matchModel('gpt-5.6-terra')?.contextWindow).toBe(256_000)
     expect(matchModel('gpt-5.6-luna')?.contextWindow).toBe(256_000)
-    expect(matchModel('gpt-6-astra')?.contextWindow).toBe(256_000)
+    expect(matchModel('gpt-6-astra')?.contextWindow).toBe(1_050_000)
     expect(matchModel('gpt-5.5')?.displayName).toBe('GPT-5.5')
     expect(matchModel('gpt-5')?.displayName).toBe('GPT-5')
   })
@@ -172,6 +172,18 @@ describe('matchModel', () => {
     expect(matchModel('anthropic/claude-opus-5')?.displayName).toBe('Claude Opus 5')
     // Must not degrade to Opus 4
     expect(matchModel('claude-opus-5')?.displayName).not.toBe('Claude Opus 4')
+  })
+
+  it('matches the official GPT-6 and Claude Opus 5.5 model IDs and metadata', () => {
+    expect(matchModelExact('gpt-6-astra')?.reasoningEfforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(matchModel('openai/gpt-6-sol')?.contextWindow).toBe(1_050_000)
+    expect(matchModel('gpt-6-sol')?.pricing).toEqual({ input: 2, output: 10, cachedInput: 0.2 })
+    expect(matchModel('gpt-6-luna')?.pricing).toEqual({ input: 0.1, output: 0.5, cachedInput: 0.01 })
+    expect(matchModel('gpt-6-luna')?.reasoningEfforts).toContain('none')
+    expect(matchModel('anthropic/claude-opus-5-5')?.displayName).toBe('Claude Opus 5.5')
+    expect(matchModelExact('claude-opus-5.5')?.contextWindow).toBe(1_000_000)
+    expect(matchModel('claude-opus-5-5')?.pricing).toEqual({ input: 4, output: 20, cachedInput: 0.2 })
+    expect(matchModel('claude-opus-5-5')?.reasoningEfforts).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('matches latest Gemini Flash family ids', () => {
