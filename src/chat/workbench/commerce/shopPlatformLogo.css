@@ -1,0 +1,17 @@
+.shop-platform-logo-frame {
+  width: 48px;
+  height: 48px;
+  flex: none;
+  /* Brand artwork includes black strokes and needs a white canvas in dark mode. */
+  background: #fff;
+}
+
+.shop-platform-logo-frame img {
+  display: block;
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+.shop-platform-logo-frame--shein img { width: 42px; }
+.shop-platform-logo-frame--mercadolibre img { width: 36px; height: 36px; }

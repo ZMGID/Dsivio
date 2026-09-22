@@ -65,7 +65,7 @@ rmcp = { version = "3.0.1", default-features = false, features = [
 ] }
 
 # HTTP 客户端与异步运行时
-reqwest = { version = "0.13", features = ["json", "rustls", "multipart", "form"] }
+reqwest = { version = "0.13", features = ["json", "rustls", "multipart", "form", "query"] }
 tokio = { version = "1", features = ["time", "process", "io-util", "net", "sync", "rt-multi-thread", "macros"] }
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 scraper = "0.23"
@@ -95,6 +95,8 @@ keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
 # url 构造/解析 authorize URL 与回调 query。
 sha2 = "0.10"
 hmac = "0.12"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
 md-5 = "0.10"
 rand = "0.8"
 url = "2.5"

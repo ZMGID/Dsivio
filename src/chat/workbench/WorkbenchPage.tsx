@@ -7,6 +7,7 @@ export function WorkbenchPage({
   crumb,
   crumbCurrent,
   title,
+  className,
   subtitle,
   actions,
   mediaPool,
@@ -16,6 +17,7 @@ export function WorkbenchPage({
   crumb?: string
   crumbCurrent?: string
   title: string
+  className?: string
   subtitle?: string
   actions?: ReactNode
   mediaPool?: MediaPoolKind
@@ -23,7 +25,7 @@ export function WorkbenchPage({
   children: ReactNode
 }) {
   return (
-    <div className={`custom-scrollbar workbench-page${fill ? ' workbench-page--fill' : ''}`}>
+    <div className={`custom-scrollbar workbench-page${fill ? ' workbench-page--fill' : ''}${className ? ` ${className}` : ''}`}>
       <div className="workbench-page-inner">
         <header className="workbench-page-head">
           <div className="min-w-0">
@@ -94,14 +96,16 @@ export function WorkbenchCta({
 export function WorkbenchEmpty({
   icon,
   title,
+  compact = false,
   children,
 }: {
   icon?: ReactNode
   title?: string
+  compact?: boolean
   children?: ReactNode
 }) {
   return (
-    <div className="workbench-empty">
+    <div className={`workbench-empty${compact ? ' workbench-empty--compact' : ''}`}>
       {icon ? <div className="workbench-empty-icon">{icon}</div> : null}
       {title ? <p className="workbench-empty-title">{title}</p> : null}
       {children ? (

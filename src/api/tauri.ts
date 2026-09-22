@@ -1745,6 +1745,29 @@ async function onChatProtocol(
 
 // ========== API 导出 ==========
 
+export type ShopPlatform = 'shopee' | 'shein' | 'tiktok' | 'mercadolibre'
+export type ShopConnection = {
+  id: string
+  platform: ShopPlatform
+  remoteId: string
+  name: string
+  region: string | null
+  boundAt: string
+  checkedAt: string
+  status: 'connected' | 'disabled' | 'needs_reauthorization' | 'error'
+  detail: string | null
+}
+export type ShopAppConfig = {
+  platform: ShopPlatform
+  appId: string
+  appSecret: string
+  redirectUrl: string
+  authorizeUrl: string
+  region: string
+  pkce: boolean
+}
+export type ShopBeginResult = { requestId: string; url: string }
+
 export type SubAgentExecution = {
   startedAt?: number | null; finishedAt?: number | null
   id: string; status: string; prompt: string; result?: string; error?: string; usage?: unknown
@@ -1771,6 +1794,11 @@ function chatSubagentControl(conversationId: string, args: SubAgentControlReques
 }
 
 export const api = {
+  shopBegin: (config: ShopAppConfig) => invoke<ShopBeginResult>('shop_begin', { config }),
+  shopComplete: (requestId: string, callbackUrl: string) => invoke<ShopConnection[]>('shop_complete', { requestId, callbackUrl }),
+  shopList: () => invoke<ShopConnection[]>('shop_list'),
+  shopCheck: (id: string) => invoke<ShopConnection>('shop_check', { id }),
+  shopUnbind: (id: string) => invoke<void>('shop_unbind', { id }),
   sourcingSearch: (request: LookalikeRequest) => invoke<SourcingSearch>('sourcing_search', { request }),
   sourcingHistory: () => invoke<SourcingSearchSummary[]>('sourcing_history'),
   sourcingGetSearch: (id: string) => invoke<SourcingSearch>('sourcing_get_search', { id }),

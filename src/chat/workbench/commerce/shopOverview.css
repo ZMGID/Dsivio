@@ -1,0 +1,23 @@
+.shop-overview-page {
+  min-width: 0;
+}
+
+.shop-overview-page .workbench-page-head {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.shop-overview-page .workbench-page-head > :first-child {
+  flex: 1 0 180px;
+}
+
+.shop-overview-page .workbench-page-actions {
+  flex: 0 1 auto;
+  max-width: none;
+  white-space: nowrap;
+}
+
+.shop-overview-page .workbench-card-block-head {
+  align-items: center;
+  flex-wrap: wrap;
+}

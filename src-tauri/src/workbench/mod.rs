@@ -2,3 +2,4 @@
 pub(crate) mod image_projects;
 
 pub(crate) mod video_projects;
+pub(crate) mod shops;

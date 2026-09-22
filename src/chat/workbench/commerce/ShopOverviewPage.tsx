@@ -1,8 +1,11 @@
-import { useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { RefreshCw, Store } from 'lucide-react'
+import { api, isTauriRuntime, type ShopConnection } from '../../../api/tauri'
 import { IconButton } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import './shopOverview.css'
+import { SHOP_PLATFORMS } from './shopPlatforms'
 
 type RangeId = 'today' | 'yesterday' | '7d' | '30d'
 
@@ -27,6 +30,13 @@ export function ShopOverviewPage() {
   const t = useT()
   const [range, setRange] = useState<RangeId>('today')
   const [notice, setNotice] = useState('')
+  const [shops, setShops] = useState<ShopConnection[]>([])
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let active = true
+    api.shopList().then(items => { if (active) setShops(items) }).catch(() => {})
+    return () => { active = false }
+  }, [])
   const ranges: { id: RangeId; label: string }[] = [
     { id: 'today', label: t.workbenchRangeToday },
     { id: 'yesterday', label: t.workbenchRangeYesterday },
@@ -36,15 +46,18 @@ export function ShopOverviewPage() {
 
   return (
     <WorkbenchPage
+      className="shop-overview-page"
       crumb={t.workbenchGroupCommerce}
       title={t.workbenchNavOverview}
       actions={(
-        <div className="workbench-page-actions">
+        <>
           {ranges.map((item) => (
+            // ui-guard-ignore:raw-primitive -- 时间范围是分段选择控件，沿用工作台 chip 样式。
             <button
               key={item.id}
               type="button"
               className={`workbench-chip${range === item.id ? ' is-active' : ''}`}
+              aria-pressed={range === item.id}
               onClick={() => setRange(item.id)}
             >
               {item.label}
@@ -53,7 +66,7 @@ export function ShopOverviewPage() {
           <IconButton label={t.workbenchRefresh} size="sm" onClick={() => setNotice(t.workbenchActionSoon)}>
             <RefreshCw size={14} />
           </IconButton>
-        </div>
+        </>
       )}
     >
       {notice ? <p className="workbench-inline-note">{notice}</p> : null}
@@ -71,26 +84,29 @@ export function ShopOverviewPage() {
         title={t.workbenchOverviewDetail}
         extra={(
           <div className="workbench-tabs">
-            <span className="workbench-tab is-active">{t.workbenchFilterAll}<span className="workbench-tab-count">0</span></span>
-            <span className="workbench-tab">抖店<span className="workbench-tab-count">0</span></span>
-            <span className="workbench-tab">快手小店<span className="workbench-tab-count">0</span></span>
-            <span className="workbench-tab">微信小店<span className="workbench-tab-count">0</span></span>
+            <span className="workbench-tab is-active">{t.workbenchFilterAll}<span className="workbench-tab-count">{shops.length}</span></span>
+              {SHOP_PLATFORMS.map((item) => (
+                <span className="workbench-tab" key={item.id}>{item.name}<span className="workbench-tab-count">{shops.filter(shop => shop.platform === item.id).length}</span></span>
+              ))}
           </div>
         )}
       >
-        <p className="workbench-page-sub workbench-page-sub--flush">{t.workbenchOverviewDetailHint}</p>
-        <table className="workbench-table">
-          <thead>
-            <tr>
-              <th>{t.workbenchOverviewColShop}</th>
-              <th>{t.workbenchKpiGmv}</th>
-              <th>{t.workbenchKpiOrders}</th>
-              <th>{t.workbenchKpiRefund}</th>
-              <th>{t.workbenchColAction}</th>
-            </tr>
-          </thead>
-        </table>
-        <WorkbenchEmpty>{t.workbenchOverviewEmpty}</WorkbenchEmpty>
+        <div className="custom-scrollbar workbench-table-scroll">
+          <table className="workbench-table">
+            <thead>
+              <tr>
+                <th>{t.workbenchOverviewColShop}</th>
+                <th>{t.workbenchKpiGmv}</th>
+                <th>{t.workbenchKpiOrders}</th>
+                <th>{t.workbenchKpiRefund}</th>
+                <th>{t.workbenchColAction}</th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+        <WorkbenchEmpty compact icon={<Store size={24} />} title={t.workbenchOverviewEmpty}>
+          {t.workbenchOverviewDetailHint}
+        </WorkbenchEmpty>
       </WorkbenchCard>
     </WorkbenchPage>
   )

@@ -1,0 +1,68 @@
+.shop-binding-catalog-tabs { margin-bottom: 16px; }
+.shop-binding-catalog-hint { margin: 0 0 16px; }
+.shop-binding-platform-grid { gap: 12px; }
+.shop-binding-platform-grid--planned {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.shop-binding-platform-grid--planned > .shop-binding-platform-card {
+  flex: 1 1 160px;
+  max-width: 220px;
+}
+.shop-binding-platform-card {
+  min-width: 0;
+  gap: 12px;
+  padding: 20px 12px;
+  background: var(--theme-surface);
+  transition: border-color var(--kv-dur-fast) var(--kv-ease-out);
+}
+.shop-binding-platform-card:hover,
+.shop-binding-platform-card.is-selected { border-color: var(--wb-accent); }
+.shop-binding-platform-card .workbench-platform-name {
+  min-width: 0;
+  font-size: 14px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+.shop-binding-platform-action { margin-top: auto; }
+.shop-binding-platform-card--planned { background: var(--theme-surface-muted); }
+.shop-binding-platform-card--planned .workbench-platform-name { color: var(--text-faint); }
+.shop-binding-planned-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  background: var(--theme-surface);
+  color: var(--text-faint);
+  font-size: 18px;
+  font-weight: 600;
+}
+.shop-binding-planned-status {
+  margin-top: auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--theme-surface);
+  color: var(--text-faint);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.shop-bind-form {
+  display: grid;
+  gap: 12px;
+  max-width: 620px;
+  margin-top: 20px;
+  padding: 16px;
+  border: 1px solid var(--theme-surface-border);
+  border-radius: 12px;
+}
+.shop-bind-form-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.shop-bind-form label { display: grid; gap: 6px; font-size: 12px; color: var(--text-faint); }
+.shop-bind-form > .workbench-page-sub { margin: 0; }
+.shop-bind-form > button { justify-self: start; }
+.shop-row-actions { display: flex; align-items: center; gap: 6px; }
+.shop-region { margin-left: 8px; color: var(--text-faint); font-size: 11px; }
+.shop-checked-at { display: block; margin-top: 4px; color: var(--text-faint); font-size: 11px; }

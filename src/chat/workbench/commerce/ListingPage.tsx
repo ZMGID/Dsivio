@@ -1,18 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { api, isTauriRuntime, type ShopConnection } from '../../../api/tauri'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { workbenchHash } from '../workbenchPages'
+import { SHOP_PLATFORMS } from './shopPlatforms'
+import { ShopPlatformLogo } from './ShopPlatformLogo'
 
 type ListingTab = 'create' | 'running' | 'waiting' | 'done' | 'failed'
-
-const PLATFORMS = [
-  { id: 'douyin', name: '抖店', ready: true },
-  { id: 'kuaishou', name: '快手小店', ready: true },
-  { id: 'wechat', name: '微信小店', ready: true },
-  { id: 'taobao', name: '淘宝', ready: false },
-  { id: 'pdd', name: '拼多多', ready: false },
-] as const
 
 /**
  * 自动化上架：先看已绑店铺，再按任务状态挑可发布档案。
@@ -21,6 +16,13 @@ const PLATFORMS = [
 export function ListingPage() {
   const t = useT()
   const [tab, setTab] = useState<ListingTab>('create')
+  const [shops, setShops] = useState<ShopConnection[]>([])
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let active = true
+    api.shopList().then(items => { if (active) setShops(items) }).catch(() => {})
+    return () => { active = false }
+  }, [])
   const tabs: { id: ListingTab; label: string }[] = [
     { id: 'create', label: t.workbenchListingCreate },
     { id: 'running', label: t.workbenchListingRunning },
@@ -33,31 +35,31 @@ export function ListingPage() {
     <WorkbenchPage crumb={t.workbenchGroupCommerce} title={t.workbenchNavListing}>
       <WorkbenchCard
         title={t.workbenchListingPlatforms}
-        extra={<span className="workbench-page-sub">{t.workbenchListingManageAll}</span>}
+        extra={<Button size="sm" onClick={() => { window.location.hash = workbenchHash('shops') }}>{t.workbenchShopsBindTitle}</Button>}
       >
         <div className="workbench-platform-grid">
-          {PLATFORMS.map((item) => (
+          {SHOP_PLATFORMS.map((item) => (
             <div key={item.id} className="workbench-platform-card workbench-platform-card--row">
-              <span className="workbench-platform-mark">{item.name.slice(0, 1)}</span>
+              <ShopPlatformLogo platform={item.id} />
               <div className="min-w-0">
                 <div className="workbench-platform-name">{item.name}</div>
                 <div className="workbench-page-sub">
-                  {item.ready ? t.workbenchShopsBoundCount.replace('{n}', '0') : t.workbenchComingSoon}
+                  {t.workbenchShopsBoundCount.replace('{n}', String(shops.filter(shop => shop.platform === item.id).length))}
                 </div>
               </div>
             </div>
           ))}
-          <Button size="sm" onClick={() => { window.location.hash = workbenchHash('shops') }}>{t.workbenchShopsBindTitle}</Button>
         </div>
       </WorkbenchCard>
 
       <WorkbenchCard>
-        <div className="workbench-tabs">
+        <div className="custom-scrollbar workbench-tabs workbench-tabs--scroll">
           {tabs.map((item) => (
             <button
               key={item.id}
               type="button"
               className={`workbench-tab${tab === item.id ? ' is-active' : ''}`}
+              aria-pressed={tab === item.id}
               onClick={() => setTab(item.id)}
             >
               {item.label}
@@ -69,21 +71,23 @@ export function ListingPage() {
           <input className="workbench-search" type="search" placeholder={t.workbenchListingSearch} />
           <Button size="sm" variant="primary" disabled>{t.workbenchListingCreateTask}</Button>
         </div>
-        <table className="workbench-table">
-          <thead>
-            <tr>
-              <th>{t.workbenchNavProducts}</th>
-              <th>{t.workbenchListingColCategory}</th>
-              <th>{t.workbenchListingColImage}</th>
-              <th>SKU</th>
-              <th>{t.workbenchListingColCreated}</th>
-              <th>{t.workbenchListingColPlatforms}</th>
-              <th>{t.workbenchShopsColStatus}</th>
-              <th>{t.workbenchColAction}</th>
-            </tr>
-          </thead>
-        </table>
-        <WorkbenchEmpty>{t.workbenchListingEmpty}</WorkbenchEmpty>
+        <div className="custom-scrollbar workbench-table-scroll">
+          <table className="workbench-table">
+            <thead>
+              <tr>
+                <th>{t.workbenchNavProducts}</th>
+                <th>{t.workbenchListingColCategory}</th>
+                <th>{t.workbenchListingColImage}</th>
+                <th>SKU</th>
+                <th>{t.workbenchListingColCreated}</th>
+                <th>{t.workbenchListingColPlatforms}</th>
+                <th>{t.workbenchShopsColStatus}</th>
+                <th>{t.workbenchColAction}</th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+        <WorkbenchEmpty compact>{t.workbenchListingEmpty}</WorkbenchEmpty>
       </WorkbenchCard>
     </WorkbenchPage>
   )

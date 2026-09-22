@@ -489,6 +489,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            workbench::shops::shop_begin,
+            workbench::shops::shop_complete,
+            workbench::shops::shop_list,
+            workbench::shops::shop_check,
+            workbench::shops::shop_unbind,
             sourcing::sourcing_search,
             sourcing::sourcing_history,
             sourcing::sourcing_get_search,
