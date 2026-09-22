@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { ChevronsDownUp, ChevronsUpDown, ChevronRight, Home } from 'lucide-react'
+import { ChevronRight, Home } from 'lucide-react'
 import { useT } from '../../components/i18n'
 import { ChatTitlebarActions } from '../ChatTitlebarActions'
 import { ProductModeSwitcher } from '../ProductModeSwitcher'
@@ -42,6 +42,35 @@ function saveAllGroups(next: Record<string, boolean>): void {
   } catch {
     /* 写不进去就当这次没记住 */
   }
+}
+
+/** 一键展开/收起：两片圆角叠片，收起靠拢、展开留缝。 */
+function NavGroupsToggleIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {expanded ? (
+        <>
+          <rect x="5" y="6.5" width="14" height="4.5" rx="1.6" />
+          <rect x="5" y="13" width="14" height="4.5" rx="1.6" />
+        </>
+      ) : (
+        <>
+          <rect x="5" y="4.6" width="14" height="5" rx="1.7" />
+          <rect x="5" y="14.4" width="14" height="5" rx="1.7" />
+        </>
+      )}
+    </svg>
+  )
 }
 
 export type WorkbenchSidebarProps = Pick<
@@ -142,11 +171,7 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
           title={allGroupsOpen ? t.workbenchCollapseAllGroups : t.workbenchExpandAllGroups}
           aria-expanded={allGroupsOpen}
         >
-          {allGroupsOpen ? (
-            <ChevronsDownUp size={16} strokeWidth={1.75} />
-          ) : (
-            <ChevronsUpDown size={16} strokeWidth={1.75} />
-          )}
+          <NavGroupsToggleIcon expanded={allGroupsOpen} />
         </button>
         <SidebarBrandSearchButton
           label={t.workbenchSearchFeatures}
