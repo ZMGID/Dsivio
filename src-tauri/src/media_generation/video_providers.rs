@@ -138,6 +138,9 @@ fn protocol_definition(protocol: &str) -> Result<&'static Protocol, String> {
         .get(protocol)
         .ok_or_else(|| "未知视频协议，请在模型详情中选择原生视频协议".into())
 }
+pub(crate) fn download_auth(protocol: &str) -> Result<&'static str, String> {
+    Ok(&protocol_definition(protocol)?.auth)
+}
 fn endpoint(base: &str, path: &str) -> Result<String, String> {
     let parsed = reqwest::Url::parse(base.trim()).map_err(|_| "视频 API 地址无效")?;
     if !matches!(parsed.scheme(), "http" | "https")

@@ -848,6 +848,7 @@ async fn refresh_cloud_at(state: &AppState, root: &Path, id: &str) -> Result<Med
             &p,
             &saved.base_url,
             &url,
+            &saved.protocol,
             saved.download_requires_auth,
             &path,
         )
@@ -864,11 +865,20 @@ async fn download(
     provider: &ModelProvider,
     base: &str,
     url: &str,
+    protocol: &str,
     auth: bool,
     path: &Path,
 ) -> Result<MediaOutput, String> {
-    let mut url = reqwest::Url::parse(url).map_err(|_| "结果地址无效")?;
     let original = reqwest::Url::parse(base).map_err(|_| "原服务地址无效")?;
+    let relative = url.starts_with('/') && !url.starts_with("//");
+    let mut url = if relative {
+        original.join(url).map_err(|_| "结果地址无效")?
+    } else {
+        reqwest::Url::parse(url).map_err(|_| "结果地址无效")?
+    };
+    // A provider-relative media path belongs to its authenticated API. Absolute CDN URLs
+    // remain unauthenticated unless the protocol explicitly requires credentials.
+    let auth = auth || relative;
     if auth && original.origin() != url.origin() {
         return Err("结果下载要求鉴权，但地址与原服务不一致，已阻止发送密钥".into());
     }
@@ -893,7 +903,11 @@ async fn download(
                 .get(provider.active_key_index)
                 .or_else(|| provider.api_keys.first())
                 .ok_or("缺少下载密钥")?;
-            request = request.header("x-goog-api-key", key);
+            request = match providers::download_auth(protocol)? {
+                "google" => request.header("x-goog-api-key", key),
+                "token" => request.header("Authorization", format!("Token {key}")),
+                _ => request.bearer_auth(key),
+            };
         }
         let response = request
             .send()
@@ -1251,6 +1265,59 @@ mod tests {
         assert!(!requests[2].contains("test-key"));
     }
     #[tokio::test]
+    async fn relative_video_result_downloads_from_original_provider_with_auth() {
+        let (base, server) = server(|_| {
+            vec![
+                (200, br#"{"request_id":"r1"}"#.to_vec()),
+                (200, br#"{"status":"done","video":{"url":"/videos/r1/content"}}"#.to_vec()),
+                (200, b"\x00\x00\x00\x18ftypisom-saved-video".to_vec()),
+            ]
+        });
+        let root = tempfile::tempdir().unwrap();
+        let (settings, task, request) = fixture(&base, MediaKind::Video);
+        let state = AppState::new_headless(settings, root.path().join("usage"));
+        save(root.path(), &task).unwrap();
+        submit_cloud_at(root.path(), &state, &task.task.id, request)
+            .await
+            .unwrap();
+        let complete = refresh_cloud_at(&state, root.path(), &task.task.id)
+            .await
+            .unwrap();
+        assert_eq!(complete.status, MediaStatus::Succeeded);
+        assert!(Path::new(&complete.outputs[0].path).is_file());
+        let requests = server.join().unwrap();
+        assert_eq!(requests.iter().filter(|s| s.starts_with("POST ")).count(), 1);
+        assert!(requests[2].starts_with("GET /videos/r1/content "));
+        assert!(requests[2].to_ascii_lowercase().contains("authorization: bearer test-key"));
+    }
+    #[tokio::test]
+    async fn relative_video_result_uses_each_protocols_auth_header() {
+        for (protocol, header) in [
+            ("vidu", "authorization: token test-key"),
+            ("veo", "x-goog-api-key: test-key"),
+        ] {
+            let (base, server) = server(|_| {
+                vec![(200, b"\x00\x00\x00\x18ftypisom-saved-video".to_vec())]
+            });
+            let root = tempfile::tempdir().unwrap();
+            let (settings, _, _) = fixture(&base, MediaKind::Video);
+            let path = root.path().join("output.mp4");
+            download(
+                &settings.providers[0],
+                &base,
+                "/video.mp4",
+                protocol,
+                false,
+                &path,
+            )
+            .await
+            .unwrap();
+            let requests = server.join().unwrap();
+            assert!(requests[0].starts_with("GET /video.mp4 "));
+            assert!(requests[0].to_ascii_lowercase().contains(header));
+        }
+    }
+    #[tokio::test]
     async fn async_image_gateway_recovers_receipt_without_resubmission() {
         let png="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO6sAAAAASUVORK5CYII=";
         let (base,server)=server(|_|vec![
@@ -1574,13 +1641,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (settings, _, _) = fixture(&base, MediaKind::Video);
         let path = root.path().join("output.mp4");
-        assert!(download(&settings.providers[0], &base, &base, false, &path)
+        assert!(download(&settings.providers[0], &base, &base, "xai_video", false, &path)
             .await
             .is_err());
         assert!(!path.exists());
         assert!(!path.with_extension("part").exists());
         assert_eq!(
-            download(&settings.providers[0], &base, &base, false, &path)
+            download(&settings.providers[0], &base, &base, "xai_video", false, &path)
                 .await
                 .unwrap()
                 .mime,
@@ -1629,6 +1696,7 @@ mod tests {
             &settings.providers[0],
             "https://example.test",
             "https://unrelated.test/video",
+            "veo",
             true,
             &temp.path().join("v.mp4"),
         )
