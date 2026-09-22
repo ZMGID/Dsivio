@@ -1,5 +1,5 @@
 //! Self-hosted ComfyUI workflows. One typed contract for settings, validation and Workbench.
-use crate::{settings::ModelProvider, state::AppState};
+use crate::settings::ModelProvider;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -8,7 +8,6 @@ use std::{
     sync::LazyLock,
     time::Duration,
 };
-use tauri::State;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
@@ -246,7 +245,7 @@ pub async fn test_comfy_connection(
         missing_nodes: missing,
     })
 }
-fn root() -> Result<PathBuf, String> {
+pub(crate) fn root() -> Result<PathBuf, String> {
     Ok(crate::app_data::app_data_dir()
         .ok_or("无法定位应用数据目录")?
         .join("comfy-tasks"))
@@ -255,7 +254,7 @@ fn task_dir(root: &Path, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "无效任务编号")?;
     Ok(root.join(id))
 }
-fn save(root: &Path, task: &ComfyTask) -> Result<(), String> {
+pub(crate) fn save(root: &Path, task: &ComfyTask) -> Result<(), String> {
     let dir = task_dir(root, &task.id)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     crate::chat::storage::atomic_write(
@@ -264,14 +263,13 @@ fn save(root: &Path, task: &ComfyTask) -> Result<(), String> {
         "ComfyUI task",
     )
 }
-fn read_task(root: &Path, id: &str) -> Result<ComfyTask, String> {
+pub(crate) fn read_task(root: &Path, id: &str) -> Result<ComfyTask, String> {
     serde_json::from_slice(
         &std::fs::read(task_dir(root, id)?.join("task.json")).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())
 }
-#[tauri::command]
-pub fn list_comfy_tasks(
+pub(crate) fn list_comfy_tasks(
     provider_id: String,
     workflow_id: String,
 ) -> Result<Vec<ComfyTask>, String> {
@@ -323,44 +321,7 @@ fn task_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     locks.insert(id.to_owned(), std::sync::Arc::downgrade(&lock));
     lock
 }
-#[tauri::command]
-pub async fn submit_comfy_workflow(
-    state: State<'_, AppState>,
-    provider_id: String,
-    workflow_id: String,
-    values: BTreeMap<String, Value>,
-) -> Result<ComfyTask, String> {
-    let provider = state
-        .settings_read()
-        .providers
-        .iter()
-        .find(|p| p.id == provider_id && p.enabled)
-        .cloned()
-        .ok_or("供应商未启用")?;
-    let workflow = provider
-        .request
-        .comfy
-        .as_ref()
-        .and_then(|c| c.workflows.iter().find(|w| w.id == workflow_id))
-        .ok_or("工作流不存在")?
-        .clone();
-    let in_pool = {
-        let settings = state.settings_read();
-        let pool = if workflow.kind == ComfyMediaKind::Image {
-            &settings.workbench_media.image_models
-        } else {
-            &settings.workbench_media.video_models
-        };
-        pool.iter()
-            .any(|s| s.provider_id == provider_id && s.model == workflow_id)
-    };
-    if !in_pool {
-        return Err("请先将工作流加入媒体创作模型池".into());
-    }
-    submit_to_store(&root()?, provider, workflow, values).await
-}
-
-async fn submit_to_store(
+pub(crate) async fn submit_to_store(
     root: &Path,
     provider: ModelProvider,
     workflow: ComfyWorkflow,
@@ -475,7 +436,10 @@ fn decode_history(task: &mut ComfyTask, history: &Value) {
         return;
     }
     task.outputs.clear();
-    for id in &task.output_nodes {
+    let output_nodes = if task.output_nodes.is_empty() {
+        history["outputs"].as_object().map(|v|v.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()
+    } else { task.output_nodes.clone() };
+    for id in &output_nodes {
         for key in ["images", "gifs", "videos"] {
             for item in history["outputs"][id][key].as_array().into_iter().flatten() {
                 if let Some(filename) = item["filename"].as_str() {
@@ -510,12 +474,7 @@ fn decode_history(task: &mut ComfyTask, history: &Value) {
         task.error = Some("选定输出节点未返回可读取的媒体文件，请检查输出节点和媒体类型。".into());
     }
 }
-#[tauri::command]
-pub async fn refresh_comfy_task(id: String) -> Result<ComfyTask, String> {
-    refresh_at(&root()?, &id).await
-}
-
-async fn refresh_at(root: &Path, id: &str) -> Result<ComfyTask, String> {
+pub(crate) async fn refresh_at(root: &Path, id: &str) -> Result<ComfyTask, String> {
     let lock = task_lock(&id);
     let _lock = lock.lock().await;
     let mut task = read_task(root, id)?;

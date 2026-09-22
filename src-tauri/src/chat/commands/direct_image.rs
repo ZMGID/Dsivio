@@ -26,7 +26,7 @@ pub(super) async fn complete_direct_image_generation_reply(
     run_id: &str,
     assistant_message_id: String,
     run_generation: u64,
-    retry_attempts: usize,
+    _retry_attempts: usize,
     entry: crate::chat::agent::AgentRunEntry,
 ) -> Result<(), String> {
     let prompt = direct_image_generation_prompt(conversation, last_user_api_content)?;
@@ -49,14 +49,12 @@ pub(super) async fn complete_direct_image_generation_reply(
 
     let model = conversation.model.clone();
     let result = tokio::select! {
-        result = crate::chat::image_generation::generate_image_with_provider(
-            state.inner(),
+        result = crate::chat::image_generation::generate_shared(
+            app,
             provider,
             &model,
             &arguments,
             &input_images,
-            retry_attempts,
-            "Chat image generation",
         ) => result,
         _ = wait_for_chat_cancel(state.inner(), &conversation.id, run_generation) => {
             crate::chat::protocol::finish_run(

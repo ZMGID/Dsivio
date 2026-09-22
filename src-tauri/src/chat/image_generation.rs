@@ -58,8 +58,8 @@ struct ImageGenerationRequest {
 
 #[derive(Debug, Clone)]
 pub(crate) struct InputImage {
-    mime_type: String,
-    base64: String,
+    pub(crate) mime_type: String,
+    pub(crate) base64: String,
 }
 
 struct GeneratedImage {
@@ -94,18 +94,22 @@ pub async fn tool_generate_image(
         .get_provider(&provider_id)
         .cloned()
         .ok_or_else(|| "Mixer image generation provider is missing".to_string())?;
-    let retry_attempts = crate::api::effective_retry_attempts(&settings);
     let input_images = collect_mixer_input_images(app, conversation.as_ref(), &drafts, arguments)?;
-    generate_image_with_provider(
-        state,
-        &provider,
-        &model,
-        arguments,
-        &input_images,
-        retry_attempts,
-        "Mixer image generation",
-    )
-    .await
+    generate_shared(app, &provider, &model, arguments, &input_images).await
+
+}
+
+pub(crate) async fn generate_shared(
+    app: &AppHandle, provider: &ModelProvider, model: &str, arguments: &Value, images: &[InputImage],
+) -> Result<McpToolCallResult, String> {
+    let mut options: std::collections::BTreeMap<String,Value> = serde_json::from_value(arguments.clone()).map_err(|e|e.to_string())?;
+    let prompt=options.remove("prompt").and_then(|v|v.as_str().map(str::to_owned)).ok_or("请填写提示词")?;
+    options.remove("paths"); options.remove("artifact_ids");
+    let task=crate::media_generation::start(app,crate::media_generation::MediaRequest{
+        provider_id:provider.id.clone(),model:model.into(),kind:crate::media_generation::MediaKind::Image,
+        prompt, images:images.iter().map(data_url_for_input).collect(), options,
+    }).await?;
+    Ok(crate::media_generation::tool_result(crate::media_generation::wait(app,&task.id,285).await?))
 }
 
 pub(crate) async fn generate_image_with_provider(
@@ -1006,7 +1010,7 @@ async fn fetch_image_url(
     Ok((mime_type, general_purpose::STANDARD.encode(bytes)))
 }
 
-fn parse_image_data_url(data_url: &str) -> Result<(String, String), String> {
+pub(crate) fn parse_image_data_url(data_url: &str) -> Result<(String, String), String> {
     let trimmed = data_url.trim();
     let Some(rest) = trimmed.strip_prefix("data:") else {
         return Err("OpenRouter image response did not return a data URL".to_string());
@@ -1451,7 +1455,7 @@ fn images_api_url(base_url: &str, has_input_images: bool) -> String {
     format!("{}/{path}", base_url.trim_end_matches('/'))
 }
 
-fn data_url_for_input(image: &InputImage) -> String {
+pub(crate) fn data_url_for_input(image: &InputImage) -> String {
     format!("data:{};base64,{}", image.mime_type, image.base64)
 }
 

@@ -4,15 +4,15 @@
   "version": "1.0.1",
   "identifier": "com.zmair.kivio",
   "build": {
-    "beforeDevCommand": "npm run build:video-runtime && npm run dev:ui",
-    "beforeBuildCommand": "npm run build:video-runtime && npm run build:ui",
+    "beforeDevCommand": "npm run dev:ui",
+    "beforeBuildCommand": "npm run build:ui",
     "devUrl": "http://localhost:5713",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [],
     "macOSPrivateApi": true,
-    "security": { "assetProtocol": { "enable": true, "scope": ["$APPDATA/comfy-tasks/**"] } }
+    "security": { "assetProtocol": { "enable": true, "scope": ["$APPDATA/comfy-tasks/**", "$APPDATA/media-tasks/**", "$APPDATA/video-studio/outputs/**"] } }
   },
   "bundle": {
     "active": true,
@@ -27,10 +27,7 @@
     "resources": {
       "resources/skills": "skills",
       "../docs/licenses": "licenses",
-      "resources/image-studio": "image-studio",
-      "resources/video-studio": "video-studio",
-      "resources/plugins/dsvideo-plugin": "plugins/dsvideo-plugin",
-      "resources/video-runtime": "video-runtime"
+      "resources/image-studio": "image-studio"
     },
     "windows": {
       "nsis": {

@@ -74,7 +74,6 @@ pub fn save_task(task: &mut Task) -> Result<(), String> {
             .join(format!("{}.json", safe_id(&task.id)?)),
         task,
     )?;
-    crate::studio::wait::changed("image", &task.id);
     Ok(())
 }
 pub fn config() -> Result<StudioConfig, String> {

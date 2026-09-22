@@ -87,7 +87,7 @@ pub fn available_builtin_tool_names(tools: &[ChatToolDefinition]) -> Vec<String>
 pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
     // Builtin name set = static native registry (17 native + todo/ask_user)
     // plus the non-native builtin sources listed here.
-    const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image", "mixer_video_analysis"];
+    const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image", "mixer_generate_video", "mixer_media_task", "mixer_video_analysis"];
     // 模型按 wire 名（保留名别名）或改名前的旧名调用——规整到现名再比对注册表。
     let function_name = crate::mcp::types::resolve_reserved_wire_alias(function_name);
     let canonical = crate::mcp::types::canonical_tool_name(function_name);
@@ -1146,6 +1146,9 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
     }
     if has_video_analysis {
         bullets.push("When the user's request needs video details not already in saved observations, call mixer_video_analysis yourself. Do not ask the user to choose an analysis mode or type a command. Reuse observations for follow-ups; unrelated messages need no analysis.".to_string());
+    }
+    if has("mixer_generate_video") {
+        bullets.push("To generate a video, call mixer_generate_video with the user prompt and reference inputs. Use the configured model; do not invoke retired dsvideo scripts, director planning or script approval. After submission, use mixer_media_task on the returned ID to check completion and present the resulting video artifact. Never submit again just because a query or download failed.".to_string());
     }
     if has_image_generation {
         bullets.push(

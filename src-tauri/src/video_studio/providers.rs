@@ -4,7 +4,6 @@ use crate::{settings::ModelProvider, state::AppState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, sync::LazyLock};
-use tauri::State;
 use ts_rs::TS;
 
 #[derive(Deserialize)]
@@ -58,6 +57,14 @@ fn model_profile(model: &str) -> Option<&'static Model> {
         .models
         .iter()
         .find(|item| item.id.eq_ignore_ascii_case(model.trim()))
+}
+pub(crate) fn input_with_defaults(model: &str, mut input: VideoInput) -> VideoInput {
+    if let Some(profile) = model_profile(model) {
+        if input.duration.is_none() { input.duration = profile.defaults["duration"].as_u64().map(|n| n as u32); }
+        if input.resolution.is_none() { input.resolution = profile.defaults["resolution"].as_str().map(str::to_owned); }
+        if input.ratio.is_none() { input.ratio = profile.defaults["ratio"].as_str().map(str::to_owned); }
+    }
+    input
 }
 pub(crate) fn is_video_model(provider: &ModelProvider, model: &str) -> bool {
     let info = provider.model_overrides.get(model);
@@ -345,7 +352,7 @@ fn luma_image(value: &str) -> Result<Value, String> {
         Ok(json!({"url":value}))
     }
 }
-fn prepare(
+pub(crate) fn prepare(
     protocol: &str,
     base: &str,
     model: &str,
@@ -658,7 +665,7 @@ fn decode(protocol: &str, value: &Value, id: &str) -> Result<VideoResult, String
         download_requires_auth: protocol == "veo",
     })
 }
-fn selected<'a>(provider: &'a ModelProvider, model: &str) -> Result<&'a str, String> {
+pub(crate) fn selected<'a>(provider: &'a ModelProvider, model: &str) -> Result<&'a str, String> {
     if !provider.enabled
         || !provider.enabled_models.iter().any(|m| m == model)
         || !is_video_model(provider, model)
@@ -731,9 +738,8 @@ async fn send(
 }
 
 /// Submit once, return the remote receipt immediately. Caller must persist it before polling.
-#[tauri::command]
-pub async fn submit_video_model_request(
-    state: State<'_, AppState>,
+pub(crate) async fn submit_video_model_request(
+    state: &AppState,
     provider_id: String,
     model: String,
     input: VideoInput,
@@ -762,9 +768,8 @@ pub async fn submit_video_model_request(
 }
 
 /// Query the original connection only; changing provider/model must never re-submit a task.
-#[tauri::command]
-pub async fn query_video_model_request(
-    state: State<'_, AppState>,
+pub(crate) async fn query_video_model_request(
+    state: &AppState,
     provider_id: String,
     model: String,
     protocol: String,

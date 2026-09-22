@@ -684,7 +684,7 @@ pub(super) async fn compute_context_state(
             crate::settings::chat_image_generation_enabled_for_session(
                 &settings,
                 Some(session_model_for_conversation(conversation)),
-            ),
+            ) || settings.default_models.video_generation.is_configured(),
         );
     let mut tools = list_tools_for_chat(
         app,

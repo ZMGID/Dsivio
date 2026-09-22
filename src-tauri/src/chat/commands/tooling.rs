@@ -178,6 +178,7 @@ pub(crate) async fn list_tools_for_chat(
         || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
         || crate::settings::chat_memory_tools_enabled(settings)
         || crate::settings::chat_image_generation_enabled_for_session(settings, session)
+        || settings.default_models.video_generation.is_configured()
         || settings.advisor_model().is_some())
     {
         return ChatToolList::default();
@@ -245,7 +246,7 @@ pub(super) fn apply_agent_plan_tool_filter(
     blocked
 }
 
-/// Chat mode: conversational research tools only — gated by `ChatModeConfig` toggles.
+/// Chat mode: conversational research and configured media generation tools.
 /// Blocks local fs mutation, shell, sub-agents, skills, todos, and write-capable MCP.
 pub(crate) fn apply_chat_mode_tool_filter(
     tools: &mut Vec<ChatToolDefinition>,
@@ -270,7 +271,9 @@ fn chat_mode_allows_tool(
     tool: &ChatToolDefinition,
     config: &crate::settings::ChatModeConfig,
 ) -> bool {
-    if tool.source == "mixer" && tool.name == "mixer_video_analysis" {
+    if tool.source == "mixer"
+        && matches!(tool.name.as_str(), "mixer_video_analysis" | "mixer_generate_image" | "mixer_generate_video" | "mixer_media_task")
+    {
         return true;
     }
     if tool.source == "native" && crate::chat::ask_user::is_ask_user_tool_name(&tool.name) {
@@ -293,7 +296,9 @@ fn chat_mode_allows_tool(
 }
 
 fn agent_plan_allows_tool(tool: &ChatToolDefinition) -> bool {
-    if tool.source == "mixer" && tool.name == "mixer_video_analysis" {
+    if tool.source == "mixer"
+        && matches!(tool.name.as_str(), "mixer_video_analysis" | "mixer_media_task")
+    {
         return true;
     }
     if tool.source == "native" && crate::chat::ask_user::is_ask_user_tool_name(&tool.name) {

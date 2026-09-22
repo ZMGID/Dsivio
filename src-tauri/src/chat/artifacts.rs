@@ -387,7 +387,8 @@ pub fn prepare_output<'a>(
     let message_id = message_id.to_string();
     let source_tool = tool.name.clone();
     let trusted_native = tool.source == "native";
-    let generated = tool.source == "mixer" && tool.name == "mixer_generate_image";
+    let generated = tool.source == "mixer" && matches!(tool.name.as_str(), "mixer_generate_image" | "mixer_generate_video" | "mixer_media_task");
+    let media_task_id = generated.then(||output.raw["id"].as_str().map(str::to_owned)).flatten();
     let prepared = trusted_native
         && tool.name == "present_artifacts"
         && arguments["mode"].as_str() != Some("preview");
@@ -443,7 +444,7 @@ pub fn prepare_output<'a>(
                 None
             };
             for artifact in &mut output.artifacts {
-                let id = format!("art_{}", uuid::Uuid::new_v4().simple());
+                let id = media_task_id.as_ref().map(|task|format!("art_{:x}", Sha256::digest(format!("{conversation_id}:{task}:{}", artifact.path.as_deref().unwrap_or(&artifact.name)).as_bytes()))).unwrap_or_else(||format!("art_{}", uuid::Uuid::new_v4().simple()));
                 artifact.id = Some(id.clone());
                 let path = artifact
                     .path
@@ -577,7 +578,7 @@ fn import_conversation(
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or(Value::Null);
             let delivered = tool == "direct"
-                || tool == "mixer_generate_image"
+                || matches!(tool, "mixer_generate_image" | "mixer_generate_video" | "mixer_media_task")
                 || (tool == "present_artifacts" && args["mode"].as_str() != Some("preview"))
                 || referenced.contains(&id);
             live_ids.insert(id.clone());
@@ -650,7 +651,7 @@ fn omit_repeated_image_reads(items: &mut Vec<LibraryItem>) {
         .filter(|item| {
             matches!(
                 item.record.source_tool.as_str(),
-                "mixer_generate_image" | "direct"
+                "mixer_generate_image" | "mixer_generate_video" | "mixer_media_task" | "direct"
             )
         })
         .filter_map(|item| {

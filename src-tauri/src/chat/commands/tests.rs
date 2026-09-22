@@ -101,6 +101,23 @@ fn video_analysis_tool_is_available_in_chat_and_plan_without_extra_approval() {
 }
 
 #[test]
+fn chat_keeps_media_generation_and_plan_only_keeps_existing_task_queries() {
+    let mut tools = vec![
+        crate::mcp::types::mixer_generate_image_tool(),
+        crate::mcp::types::mixer_generate_video_tool("grok-imagine-video"),
+        crate::mcp::types::mixer_media_task_tool(),
+    ];
+    assert!(apply_chat_mode_tool_filter(&mut tools, true, &Default::default()).is_empty());
+    assert_eq!(tools.len(), 3);
+    let blocked = apply_agent_plan_tool_filter(&mut tools, true);
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name, "mixer_media_task");
+    assert_eq!(blocked.len(), 2);
+    assert!(blocked.iter().any(|tool| tool.name == "mixer_generate_video"));
+    assert!(blocked.iter().any(|tool| tool.name == "mixer_generate_image"));
+}
+
+#[test]
 fn resolve_thinking_drops_level_for_models_without_effort_knob() {
     // 模型库里 `reasoningEfforts: []` = 没有思考深度旋钮。
     assert_eq!(

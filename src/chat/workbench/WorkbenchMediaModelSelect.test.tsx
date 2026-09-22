@@ -4,11 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, type Settings } from '../../api/tauri'
 import { getSettingsCached, subscribeSettings } from '../../api/settingsCache'
 import { makeProvider, makeSettings } from '../../settings/tabs/testFixtures'
+import { PosterPage } from './image/PosterPage'
 import { WorkbenchMediaModelSelect } from './WorkbenchMediaModelSelect'
 
 vi.mock('../../api/settingsCache',()=>({getSettingsCached:vi.fn(),subscribeSettings:vi.fn()}))
 let listener: (settings:Settings)=>void
-beforeEach(()=>{localStorage.clear();vi.mocked(subscribeSettings).mockImplementation(fn=>{listener=fn;return ()=>{}})})
+beforeEach(()=>{vi.spyOn(api, 'listMediaTasks').mockResolvedValue([]);localStorage.clear();vi.mocked(subscribeSettings).mockImplementation(fn=>{listener=fn;return ()=>{}})})
 
 describe('Workbench pool selection',()=>{
   it('offers only pool members, persists the explicit choice, and never auto-switches after removal',async()=>{
@@ -27,8 +28,8 @@ describe('Workbench pool selection',()=>{
     expect(screen.getByRole('button',{name:'视频模型'})).toHaveTextContent('请选择本次使用的模型')
     expect(screen.getByText('上次选择的模型已不可用，请重新选择。')).toBeInTheDocument()
   })
-  it('opens the configured ComfyUI form inside Workbench when its pool entry is selected', async () => {
-    vi.spyOn(api, 'listComfyTasks').mockResolvedValue([])
+  it('keeps the existing page when opening the configured ComfyUI form inside Workbench when its pool entry is selected', async () => {
+    vi.spyOn(api, 'listMediaTasks').mockResolvedValue([])
     const workflow = { id: 'wf', name: '商品换背景', kind: 'image' as const, graph: { '1': { class_type: 'CLIPTextEncode', inputs: { text: '白色背景' } } }, inputs: [{ nodeId: '1', input: 'text', label: '提示词', kind: 'text' as const }], outputNodes: ['1'] }
     const settings = makeSettings({ providers: [makeProvider({ enabledModels: ['wf'], request: { comfy: { workflows: [workflow] } } })], workbenchMedia: { imageModels: [{ providerId: 'p1', model: 'wf' }], videoModels: [] } })
     vi.mocked(getSettingsCached).mockResolvedValue(settings)
@@ -37,7 +38,35 @@ describe('Workbench pool selection',()=>{
     await userEvent.click(screen.getByRole('option', { name: 'OpenAI / 商品换背景' }))
     expect(await screen.findByLabelText('提示词')).toHaveValue('白色背景')
     expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument()
-    expect(screen.queryByText('原图片工具')).toBeNull()
+    expect(screen.getByText('原图片工具')).toBeVisible()
   })
 
+})
+
+it('keeps the real poster form editable with no model and preserves input across selection changes', async () => {
+  vi.mocked(getSettingsCached).mockResolvedValue(makeSettings())
+  render(<PosterPage />)
+  const brief = screen.getByRole('textbox')
+  await userEvent.type(brief, '夏季促销海报')
+  expect(await screen.findByText('请先在「设置 → 媒体创作」中添加可用模型。')).toBeVisible()
+  expect(brief).toBeVisible()
+  expect(brief).toBeEnabled()
+  const provider = makeProvider({ enabledModels: ['gpt-image-1'], modelOverrides: { 'gpt-image-1': { capabilities: { imageGeneration: true } } } })
+  act(() => listener(makeSettings({ providers: [provider], workbenchMedia: { imageModels: [{ providerId: provider.id, model: 'gpt-image-1' }], videoModels: [] } })))
+  await userEvent.click(screen.getByRole('button', { name: '图片模型' }))
+  await userEvent.click(screen.getByRole('option', { name: 'OpenAI / gpt-image-1' }))
+  expect(screen.getByRole('textbox')).toBe(brief)
+  expect(brief).toHaveValue('夏季促销海报')
+  act(() => listener(makeSettings()))
+  expect(brief).toBeVisible()
+  expect(brief).toHaveValue('夏季促销海报')
+})
+
+it('keeps page settings available when loading the model pool fails', async () => {
+  vi.mocked(getSettingsCached).mockRejectedValueOnce(new Error('offline'))
+  render(<PosterPage />)
+  await screen.findByRole('alert')
+  expect(screen.getByRole('textbox')).toBeVisible()
+  await userEvent.type(screen.getByRole('textbox'), '可继续填写')
+  expect(screen.getByRole('textbox')).toHaveValue('可继续填写')
 })

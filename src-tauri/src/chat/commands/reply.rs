@@ -446,7 +446,7 @@ pub(super) async fn complete_assistant_reply_inner(
         crate::settings::chat_image_generation_enabled_for_session(
             &settings,
             Some(session_model_for_conversation(conversation)),
-        ),
+        ) || settings.default_models.video_generation.is_configured(),
     ) || video_plan.model.is_some();
     let tool_list = await_chat_tool_discovery(
         state.inner(),

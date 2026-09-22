@@ -708,6 +708,27 @@ pub fn native_memory_search_tool() -> ChatToolDefinition {
     }
 }
 
+pub fn mixer_generate_video_tool(model: &str) -> ChatToolDefinition {
+    ChatToolDefinition {
+        id:"mixer__generate_video".into(), name:"mixer_generate_video".into(), source:"mixer".into(),
+        description:format!("Generate a video with the configured model {model}. Use the user's prompt and optional reference inputs directly; no director, script approval or prompt-writing stages. Returns a saved task ID immediately. Use mixer_media_task to wait/check the SAME task and get the local video. Never automatically resubmit an uncertain or failed request. Omit optional parameters unless requested; unsupported model capabilities return an error."),
+        server_id:None, server_name:Some("Dsivio".into()), sensitive:false, annotations:None, output_schema:None,
+        input_schema:serde_json::json!({"type":"object","additionalProperties":false,"required":["prompt"],"properties":{
+            "prompt":{"type":"string"},"duration":{"type":"integer","minimum":1},"resolution":{"type":"string"},"ratio":{"type":"string"},
+            "firstFrame":{"type":"string","description":"First frame: local image path, data URL or public URL. Use only when supported."},"lastFrame":{"type":"string"},
+            "referenceImages":{"type":"array","items":{"type":"string"}},"referenceVideos":{"type":"array","items":{"type":"string","description":"Public video URL"}},"referenceAudios":{"type":"array","items":{"type":"string","description":"Public audio URL"}},"generateAudio":{"type":"boolean"}
+        }}),
+    }
+}
+pub fn mixer_media_task_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id:"mixer__media_task".into(),name:"mixer_media_task".into(),source:"mixer".into(),
+        description:"Read a saved image/video generation task and return its local output artifacts when completed. waitSeconds (0–30) waits without submitting again. resume=true only retries queries/downloads when canResume is true; it never starts a new generation. A running task is not a failure.".into(),
+        server_id:None,server_name:Some("Dsivio".into()),sensitive:false,annotations:None,output_schema:None,
+        input_schema:serde_json::json!({"type":"object","additionalProperties":false,"required":["id"],"properties":{"id":{"type":"string"},"waitSeconds":{"type":"integer","minimum":0,"maximum":30},"resume":{"type":"boolean"}}}),
+    }
+}
+
 pub fn mixer_generate_image_tool() -> ChatToolDefinition {
     mixer_generate_image_tool_for(None)
 }

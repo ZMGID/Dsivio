@@ -10,9 +10,3 @@ export type ComfyInput = { nodeId: string, input: string, label: string, kind: C
 export type ComfyInputKind = "text" | "number" | "image";
 
 export type ComfyConnection = { devices: Array<string>, missingNodes: Array<string>, };
-
-export type ComfyArtifact = { filename: string, subfolder: string, folderType: string, localPath: string | null, };
-
-export type ComfyTask = { id: string, providerId: string, workflowId: string, workflowName: string, kind: ComfyMediaKind, baseUrl: string, outputNodes: Array<string>, promptId: string | null, status: ComfyTaskStatus, error: string | null, outputs: Array<ComfyArtifact>, createdAt: string, };
-
-export type ComfyTaskStatus = "submitting" | "queued" | "running" | "succeeded" | "failed" | "uncertain" | "download_pending";

@@ -45,6 +45,7 @@ pub mod updates;
 pub mod usage;
 pub mod utils;
 pub mod video_studio;
+pub mod media_generation;
 pub mod comfyui;
 pub mod web_search;
 #[cfg(any(test, target_os = "macos"))]
@@ -250,7 +251,6 @@ pub fn run() {
             _ => {}
         })
         .setup(|app| {
-            if let Err(error) = video_studio::initialize(app.handle()) { eprintln!("Video initialization failed: {error}"); }
             if let Err(error) = image_studio::initialize_skill_workspace(app.handle()) { eprintln!("Image initialization failed: {error}"); }
             let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
 
@@ -279,7 +279,7 @@ pub fn run() {
             chat::gc::sweep_conversation_side_artifacts(app.handle());
 
             let mut settings = load_settings(&app.handle());
-            video_studio::sync_settings(&mut settings);
+            if let Err(error) = video_studio::migration::migrate(app.handle(), &mut settings) { eprintln!("Video settings migration failed: {error}"); }
             // 非破坏性初始化：保留用户助手，成功持久化后标记已完成。
             if !settings.builtin_assistants_seeded_v1 {
                 let now = chrono::Local::now().timestamp();
@@ -489,12 +489,12 @@ pub fn run() {
             studio::studio_draft,
             studio::library::studio_task_library,
             studio::library::studio_task_file_action,
-            video_studio::video_studio,
+            video_studio::migration::legacy_video_outputs,
             comfyui::validate_comfy_workflow,
             comfyui::test_comfy_connection,
-            comfyui::submit_comfy_workflow,
-            comfyui::list_comfy_tasks,
-            comfyui::refresh_comfy_task,
+            media_generation::start_media_generation,
+            media_generation::get_media_task,
+            media_generation::list_media_tasks,
             image_studio::image_studio_bootstrap,
             image_studio::image_studio_get,
             image_studio::image_studio_save,
@@ -540,8 +540,6 @@ pub fn run() {
             lens_commands::lens_read_freeze_frame,
             lens_commands::lens_read_image,
             video_studio::providers::preview_video_model_request,
-            video_studio::providers::submit_video_model_request,
-            video_studio::providers::query_video_model_request,
             commands::fetch_models,
             commands::test_provider_connection,
             commands::test_web_search,

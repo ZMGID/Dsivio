@@ -2181,6 +2181,7 @@ fn mirror_explicit_chat_default_for_persistence(settings: &mut Settings) {
 }
 
 pub fn sanitize_settings(mut settings: Settings) -> Settings {
+    crate::video_studio::migration::retire_servers(&mut settings);
     // RapidOCR 档位归一:非法值回落到各自默认(截图=standard,文档处理=high)。
     if settings.screenshot_translation.rapid_ocr_tier != "standard"
         && settings.screenshot_translation.rapid_ocr_tier != "high"

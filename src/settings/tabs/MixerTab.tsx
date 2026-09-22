@@ -56,7 +56,7 @@ export function MixerTab({
             }}
           />
         </SettingRow>
-        <SettingRow label={lang === 'zh' ? '对话视频生成模型' : 'Chat video generation model'} description={lang === 'zh' ? '独立保存对话视频模型；对话视频工具尚未接入。' : 'A separate chat video assignment; the chat video tool is not connected yet.'}>
+        <SettingRow label={lang === 'zh' ? '对话视频生成模型' : 'Chat video generation model'} description={lang === 'zh' ? '对话生成视频时使用此模型，与 Workbench 共用生成流程。' : 'Used by chat video generation; shares the Workbench generation pipeline.'}>
           <ModelPairSelect
             ariaLabel={lang === 'zh' ? '对话视频生成模型' : 'Chat video generation model'}
             providerId={settings.defaultModels.videoGeneration?.providerId || ''}

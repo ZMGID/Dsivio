@@ -130,6 +130,9 @@ async fn list_enabled_tool_catalog_inner(
         web_search_configured(&settings),
         crate::settings::chat_memory_tools_enabled(&settings),
     );
+    tools.push(super::types::mixer_media_task_tool());
+    let video = &settings.default_models.video_generation;
+    if video.is_configured() { tools.push(super::types::mixer_generate_video_tool(&video.model)); }
     if let Some((provider_id, model)) = settings.image_generation_model() {
         let mut tool = mixer_generate_image_tool_for(Some(&model));
         let provider_name = settings
@@ -987,6 +990,7 @@ async fn call_mixer_tool(
             )
             .await
         }
+        "mixer_generate_video" | "mixer_media_task" => crate::media_generation::tool_call(app, &tool.name, arguments).await,
         other => Err(format!("Unknown mixer tool: {other}")),
     }
 }

@@ -967,6 +967,9 @@ fn effective_tool_timeout_ms(
     if tool.source == "mixer" && tool.name == "mixer_generate_image" {
         return default_timeout_ms.max(crate::chat::image_generation::IMAGE_GENERATION_TIMEOUT_MS);
     }
+    if tool.source == "mixer" && tool.name == "mixer_media_task" {
+        return default_timeout_ms.max(35_000);
+    }
     // 前台 bash 自己等到退出；显式 timeout_ms 由 shell 杀掉进程。外层 60s
     // 工具超时不能再套一层，否则有限长任务会被误杀、逼进 background。
     if tool.source == "native" && tool.name == "bash" {

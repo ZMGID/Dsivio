@@ -1,13 +1,13 @@
-import type { ComfyConfig, ComfyWorkflow, ComfyConnection, ComfyTask } from '../generated/comfyui'
+import type { MediaRequest, MediaTask } from '../generated/mediaGeneration'
+import type { ComfyConfig, ComfyWorkflow, ComfyConnection } from '../generated/comfyui'
 import type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
 export type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
-import type { VideoGenerationInput, VideoGenerationResult, VideoRequestPreview } from '../generated/videoGeneration'
+import type { VideoRequestPreview } from '../generated/videoGeneration'
 import type { VideoProtocol } from '../generated/videoGeneration'
 // Tauri 前端与 Rust 后端的桥接模块
 // 所有 invoke 调用和事件监听都集中在这里，作为前后端的统一接口层
 
 import type { TaskOrganizations, TaskOrganizationPatch } from './studioContracts'
-import type { VideoBootstrap, VideoTask, VideoTemplate, VideoProvider } from './videoStudioContracts'
 import type { ImageAction, ImageBootstrap, ImageBrief, ImageConfig, ImagePlan, ImageProduct, ImageTask, ImageTemplate } from './imageStudioContracts'
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -1767,15 +1767,11 @@ function chatSubagentControl(conversationId: string, args: SubAgentControlReques
 export const api = {
   validateComfyWorkflow: (workflow: ComfyWorkflow) => invoke<void>('validate_comfy_workflow', { workflow }),
   testComfyConnection: (baseUrl: string, workflow: ComfyWorkflow | null = null) => invoke<ComfyConnection>('test_comfy_connection', { baseUrl, workflow }),
-  submitComfyWorkflow: (providerId: string, workflowId: string, values: Record<string, unknown>) => invoke<ComfyTask>('submit_comfy_workflow', { providerId, workflowId, values }),
-  listComfyTasks: (providerId: string, workflowId: string) => invoke<ComfyTask[]>('list_comfy_tasks', { providerId, workflowId }),
-  refreshComfyTask: (id: string) => invoke<ComfyTask>('refresh_comfy_task', { id }),
+  startMediaGeneration: (request: MediaRequest) => invoke<MediaTask>('start_media_generation', { request }),
+  listMediaTasks: (providerId: string, model: string) => invoke<MediaTask[]>('list_media_tasks', { providerId, model }),
+  getMediaTask: (id: string, resume = false) => invoke<MediaTask>('get_media_task', { id, resume }),
   previewVideoModelRequest: (input: { model: string; protocol: VideoProtocol; baseUrl: string }) =>
     invoke<VideoRequestPreview>('preview_video_model_request', input),
-  submitVideoModelRequest: (providerId: string, model: string, input: VideoGenerationInput) =>
-    invoke<VideoGenerationResult>('submit_video_model_request', { providerId, model, input }),
-  queryVideoModelRequest: (receipt: { providerId: string; model: string; protocol: VideoProtocol; baseUrl: string; remoteId: string }) =>
-    invoke<VideoGenerationResult>('query_video_model_request', receipt),
   chatArtifactsList: () => invoke<ArtifactLibraryPage>('chat_artifacts_list'),
   chatArtifactAction: (id: string, action: 'preview' | 'open' | 'reveal' | 'export' | 'delete' | 'rename', destination?: string, name?: string) =>
     invoke<string | null>('chat_artifact_action', { id, action, destination, name }),
@@ -1783,16 +1779,7 @@ export const api = {
     invoke<void>('studio_task_file_action', { domain, id, action }),
   studioTaskLibrary: (domain: 'image' | 'video', ids?: string[], patch?: TaskOrganizationPatch) =>
     invoke<TaskOrganizations>('studio_task_library', { domain, ids: ids ?? null, patch: patch ?? null }),
-  videoStudioBootstrap: () => invoke<VideoBootstrap>('video_studio', { action: 'bootstrap', input: {} }),
-  videoStudioTask: (action: string, input: Record<string, unknown>) => invoke<VideoTask>('video_studio', { action, input }),
-  videoStudioConfig: (input: Record<string, unknown>) => invoke<Record<string, VideoProvider>>('video_studio', { action: 'config', input }),
-  videoStudioTemplate: (action: 'template_save' | 'template_import', input: Record<string, unknown>) => invoke<VideoTemplate>('video_studio', { action, input }),
-  videoStudioOpen: (id?: string, mode: 'open' | 'reveal' = 'open') =>
-    invoke<void>('video_studio', { action: 'open', input: { id, mode } }),
-  videoStudioPreview: (id: string) => invoke<string>('video_studio', { action: 'preview', input: { id } }),
-  videoStudioPoster: (id: string) => invoke<string>('video_studio', { action: 'poster', input: { id } }),
-  videoStudioImage: (path: string) => invoke<string>('video_studio', { action: 'image_preview', input: { path } }),
-  videoStudioInstallComfy: () => invoke<{ installed: boolean }>('video_studio', { action: 'install_comfy', input: {} }),
+  legacyVideoOutputs: () => invoke<import('../generated/mediaGeneration').MediaOutput[]>('legacy_video_outputs'),
   imageStudioBootstrap: () => invoke<ImageBootstrap>('image_studio_bootstrap'),
   imageStudioGet: (id: string) => invoke<ImageTask>('image_studio_get', { id }),
   imageStudioSave: (brief: ImageBrief, id?: string, revision?: number) => invoke<ImageTask>('image_studio_save', { id: id ?? null, revision: revision ?? null, brief }),
