@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type UpdateInfo } from '../api/tauri'
+import { publishUpdateAvailability } from '../api/updateAvailability'
 
 /** Update discovery and installer lifetime are independent of the settings editor. */
 export type SettingsUpdatePort = Pick<typeof api,
@@ -35,6 +36,7 @@ export function useSettingsUpdateController(autoCheckUpdate: boolean | null | un
     port.onUpdateAvailable((available) => {
       if (cancelled) return
       checkSequence.current += 1
+      publishUpdateAvailability(available)
       setInfo(available)
       setStatus('available')
     }).then((dispose) => {
@@ -51,6 +53,7 @@ export function useSettingsUpdateController(autoCheckUpdate: boolean | null | un
     const sequence = ++checkSequence.current
     port.checkUpdate().then((available) => {
       if (cancelled || !live.current || sequence !== checkSequence.current || !available.available) return
+      publishUpdateAvailability(available)
       setInfo(available)
       setStatus('available')
     }).catch(() => {})
@@ -65,6 +68,7 @@ export function useSettingsUpdateController(autoCheckUpdate: boolean | null | un
     try {
       const available = await port.checkUpdate()
       if (!live.current || sequence !== checkSequence.current) return
+      publishUpdateAvailability(available)
       if (available.checkFailed) setStatus('check-failed')
       else if (available.available) {
         setInfo(available)
@@ -87,7 +91,7 @@ export function useSettingsUpdateController(autoCheckUpdate: boolean | null | un
   }, [port])
 
   const openGithubReleases = useCallback(async () => {
-    try { await port.openExternal('https://github.com/ZMGID/kivio/releases') }
+    try { await port.openExternal('https://github.com/ZMGID/Dsivio/releases') }
     catch (error) { console.error('Open GitHub releases failed:', error) }
   }, [port])
 

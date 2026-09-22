@@ -1,5 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { getUpdateAvailable, publishUpdateAvailability } from '../api/updateAvailability'
 import type { UpdateInfo } from '../api/tauri'
 import { useSettingsUpdateController, type SettingsUpdatePort } from './useSettingsUpdateController'
 
@@ -23,6 +24,27 @@ function port(overrides: Partial<SettingsUpdatePort> = {}): SettingsUpdatePort {
 }
 
 describe('useSettingsUpdateController', () => {
+  it('shares successful manual checks with the sidebar notice', async () => {
+    publishUpdateAvailability({ available: false })
+    const updatePort = port({ checkUpdate: vi.fn(async () => ({ available: true, version: '1.0.2' })) })
+    const { result } = renderHook(() => useSettingsUpdateController(false, updatePort))
+    await act(async () => { await result.current.check() })
+    expect(getUpdateAvailable()).toBe(true)
+    vi.mocked(updatePort.checkUpdate).mockResolvedValue({ available: false, checkFailed: true })
+    await act(async () => { await result.current.check() })
+    expect(getUpdateAvailable()).toBe(true)
+    vi.mocked(updatePort.checkUpdate).mockResolvedValue({ available: false })
+    await act(async () => { await result.current.check() })
+    expect(getUpdateAvailable()).toBe(false)
+  })
+
+  it('opens the Dsivio release repository', async () => {
+    const updatePort = port()
+    const { result } = renderHook(() => useSettingsUpdateController(false, updatePort))
+    await act(async () => { await result.current.openGithubReleases() })
+    expect(updatePort.openExternal).toHaveBeenCalledWith('https://github.com/ZMGID/Dsivio/releases')
+  })
+
   it('ignores a stale check after the newer result becomes available', async () => {
     const old = deferred<UpdateInfo>()
     const newer = deferred<UpdateInfo>()

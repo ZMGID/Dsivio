@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { Settings } from 'lucide-react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { api } from '../api/tauri'
+import { getUpdateAvailable, subscribeUpdateAvailable, publishUpdateAvailability } from '../api/updateAvailability'
+import { CircleArrowUp, Settings } from 'lucide-react'
 import { getSettingsCached } from '../api/settingsCache'
 import { IconButton } from '../components/Button'
 import { i18n, type Lang } from '../components/i18n'
@@ -40,6 +42,19 @@ export function SidebarUserFooter({
   const [profile, setProfile] = useState<ChatUserProfile>(() => resolveChatUserProfile())
   const rowRef = useRef<HTMLDivElement>(null)
   const t = i18n[lang]
+  const updateAvailable = useSyncExternalStore(subscribeUpdateAvailable, getUpdateAvailable)
+
+  useEffect(() => {
+    let cancelled = false
+    let unlisten: (() => void) | undefined
+    void api.onUpdateAvailable((info) => {
+      if (!cancelled) publishUpdateAvailability(info)
+    }).then((dispose) => {
+      if (cancelled) dispose()
+      else unlisten = dispose
+    }).catch((error) => console.error('Failed to subscribe to updates:', error))
+    return () => { cancelled = true; unlisten?.() }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -91,6 +106,18 @@ export function SidebarUserFooter({
             {profile.displayName || 'Dsivio'}
           </span>
         </button>
+        {updateAvailable && (
+          <IconButton
+            size="xs"
+            label={t.updateAvailable}
+            onClick={() => {
+              setMenuRect(null)
+              onOpenSettings()
+            }}
+          >
+            <CircleArrowUp color="var(--accent)" strokeWidth={1.75} />
+          </IconButton>
+        )}
         <IconButton
           size="xs"
           label={`${t.settings} (${isMac ? '⌘,' : 'Ctrl+,'})`}

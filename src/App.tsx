@@ -1,3 +1,5 @@
+import { dismissBootSplash } from './bootSplash'
+import { StreamDotLogo } from './chat/StreamDotLogo'
 
 import { lazy, Suspense, useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { Settings as SettingsIcon, Cpu } from 'lucide-react'
@@ -266,6 +268,7 @@ function App() {
     const settings = await getSettingsCached()
     const nextMode = settings.theme
     setThemeMode(nextMode)
+    try { localStorage.setItem('dsivio-theme-mode', nextMode) } catch { /* Startup theme cache is optional. */ }
     setTranslucentSidebar(settings.translucentSidebar)
     const isDark = nextMode === 'dark' || (nextMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
     if (isDark) {
@@ -400,8 +403,7 @@ function App() {
     }
   }, [persistChatWindowGeometry])
 
-  // 首次创建 chat 窗口时后端保持 hidden，把 show 交给前端；此处再把 show 从“App 挂载即弹出”
-  // 推迟到“Chat 首屏内容就绪”（onContentReady → revealChatWindowNow），避免窗口弹出后还在转圈。
+  // 冷启动先露出闪屏（几何恢复后立刻 show），Chat 首屏就绪再揭开。
   const revealedRef = useRef(false)
   const revealTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const revealChatWindowNow = useCallback(() => {
@@ -413,6 +415,14 @@ function App() {
     }
     void revealChatWindow()
   }, [revealChatWindow])
+  const finishChatBoot = useCallback(() => {
+    if (revealTimerRef.current !== undefined) {
+      clearTimeout(revealTimerRef.current)
+      revealTimerRef.current = undefined
+    }
+    revealChatWindowNow()
+    dismissBootSplash()
+  }, [revealChatWindowNow])
 
   useLayoutEffect(() => {
     if (mode !== 'chat' && mode !== 'chat-popout') return
@@ -420,15 +430,12 @@ function App() {
     // 不变量：chat 是专用窗口，其 hash 恒为 #chat（含子路由），mode 一旦为 'chat' 便不再变。
     // 本兜底据此成立——若未来 chat 窗允许 mode 离开 'chat'，cleanup 会清掉未触发的兜底 timer
     // 而新分支早退，可能导致窗口永久 hidden；届时需改为窗口存活期内独立保证 reveal。
-    // 已 reveal 过（防御性：正常不会二次进入）→ 直接校正一次几何/可见性。
-    if (revealedRef.current) {
-      void revealChatWindow()
-      return
-    }
-    // 兜底：内容就绪信号 3s 内未到达（chunk 加载失败 / 组件抛错被 ErrorBoundary 接住 / 信号丢失）
-    // 也强制 show，绝不让窗口永久 hidden。
+    // StrictMode 会重跑 effect：已显示窗口也必须重新挂载关闭闪屏的兜底计时器。
+    if (revealedRef.current) void revealChatWindow()
+    else revealChatWindowNow()
+    // 3s 兜底：chunk 失败 / ErrorBoundary / 信号丢失也揭开。
     revealTimerRef.current = setTimeout(() => {
-      revealChatWindowNow()
+      finishChatBoot()
     }, 3000)
     return () => {
       if (revealTimerRef.current !== undefined) {
@@ -436,7 +443,7 @@ function App() {
         revealTimerRef.current = undefined
       }
     }
-  }, [mode, revealChatWindow, revealChatWindowNow])
+  }, [mode, revealChatWindow, revealChatWindowNow, finishChatBoot])
 
   useEffect(() => {
     if (mode !== 'chat') return
@@ -520,7 +527,7 @@ function App() {
   }
   const chatSuspenseFallback = (
     <div className="flex h-full w-full items-center justify-center bg-transparent">
-      <div className="h-6 w-6 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-800 dark:border-neutral-700 dark:border-t-neutral-200" />
+      <StreamDotLogo size={104} />
     </div>
   )
   if (mode === 'chat-popout') {
@@ -528,7 +535,7 @@ function App() {
       <ChatWindowHost translucentSidebar={translucentSidebar}>
         <Suspense fallback={chatSuspenseFallback}>
           <ChatErrorBoundary>
-            <ChatPopout onContentReady={revealChatWindowNow} />
+            <ChatPopout onContentReady={finishChatBoot} />
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>
@@ -539,7 +546,7 @@ function App() {
       <ChatWindowHost translucentSidebar={translucentSidebar}>
         <Suspense fallback={chatSuspenseFallback}>
           <ChatErrorBoundary>
-            <Chat onSettingsChange={applyTheme} onContentReady={revealChatWindowNow} />
+            <Chat onSettingsChange={applyTheme} onContentReady={finishChatBoot} />
           </ChatErrorBoundary>
         </Suspense>
       </ChatWindowHost>

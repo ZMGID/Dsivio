@@ -1,6 +1,6 @@
 {
   "modules": [
-    { "name": "app", "role": "composition", "purpose": "Application and Lens window mounting roots", "paths": ["src/App.tsx", "src/Lens.tsx", "src/main.tsx"] },
+    { "name": "app", "role": "composition", "purpose": "Application and Lens window mounting roots", "paths": ["src/App.tsx", "src/Lens.tsx", "src/main.tsx", "src/bootSplash.ts"] },
     { "name": "chat", "role": "feature", "purpose": "Chat conversations, execution, and presentation", "paths": ["src/chat/**"] },
     { "name": "settings", "role": "feature", "purpose": "Settings editing and related user flows", "paths": ["src/settings/**"] },
     { "name": "lens", "role": "feature", "purpose": "Lens capture, request, and history lifecycle", "paths": ["src/lens/**"] },
