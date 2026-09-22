@@ -4,7 +4,7 @@ import { filterWorkbenchFeatures, type WorkbenchFeature } from './workbenchFeatu
 const features: WorkbenchFeature[] = [
   { page: 'home', label: '首页', group: '' },
   { page: 'shops', label: '店铺绑定', group: '电商自动化' },
-  { page: 'ranks', label: '视频榜单', group: '智能选品' },
+  { page: 'match', label: '同款找货', group: '智能选品' },
 ]
 
 describe('filterWorkbenchFeatures', () => {

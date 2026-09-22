@@ -1798,6 +1798,8 @@ pub struct Settings {
     #[serde(default)]
     pub workbench_media: WorkbenchMediaConfig,
     #[serde(default)]
+    pub sourcing: crate::sourcing::types::SourcingConfig,
+    #[serde(default)]
     pub translator_prompt: Option<String>,
     #[serde(default)]
     pub providers: Vec<ModelProvider>,
@@ -2009,6 +2011,7 @@ impl Default for Settings {
             chat_model: String::new(),
             default_models: DefaultModelsConfig::default(),
             workbench_media: WorkbenchMediaConfig::default(),
+            sourcing: crate::sourcing::types::SourcingConfig::default(),
             translator_prompt: None,
             providers: vec![],
             capability_config_text: String::new(),
@@ -2181,6 +2184,7 @@ fn mirror_explicit_chat_default_for_persistence(settings: &mut Settings) {
 }
 
 pub fn sanitize_settings(mut settings: Settings) -> Settings {
+    settings.sourcing.alibaba_ak = settings.sourcing.alibaba_ak.trim().to_owned();
     crate::media_runtime::migration::retire_servers(&mut settings);
     // RapidOCR 档位归一:非法值回落到各自默认(截图=standard,文档处理=high)。
     if settings.screenshot_translation.rapid_ocr_tier != "standard"

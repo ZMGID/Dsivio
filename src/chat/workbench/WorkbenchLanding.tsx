@@ -4,7 +4,7 @@ import { listWorkbenchFeatures, type WorkbenchFeature } from './workbenchFeature
 import { WorkbenchCard } from './WorkbenchPage'
 import { WORKBENCH_NAV, workbenchHash, type WorkbenchPageId } from './workbenchPages'
 
-const QUICK_PAGES: readonly WorkbenchPageId[] = ['shops', 'ranks', 'main', 'shorts']
+const QUICK_PAGES: readonly WorkbenchPageId[] = ['shops', 'main', 'shorts']
 
 function openPage(page: WorkbenchPageId) {
   setHash(workbenchHash(page))

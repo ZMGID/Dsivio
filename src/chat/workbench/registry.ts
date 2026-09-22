@@ -52,7 +52,6 @@ export const WORKBENCH_FEATURES = [
   { id: 'check', group: 'commerce', label: (t) => t.workbenchNavCheck, icon: ShieldCheck, load: () => import('./commerce/ListingCheckPage').then((m) => m.ListingCheckPage) },
   { id: 'workflows', group: 'commerce', label: (t) => t.workbenchNavWorkflows, icon: Workflow, load: () => import('./workflow/WorkflowPage').then((m) => m.WorkflowPage) },
   // 智能选品
-  { id: 'ranks', group: 'sourcing', label: (t) => t.workbenchNavRanks, icon: Video, load: () => import('./sourcing/VideoRankPage').then((m) => m.VideoRankPage) },
   { id: 'match', group: 'sourcing', label: (t) => t.workbenchNavMatch, icon: ScanSearch, load: () => import('./sourcing/LookalikePage').then((m) => m.LookalikePage) },
   { id: 'picks', group: 'sourcing', label: (t) => t.workbenchNavPicks, icon: Bookmark, load: () => import('./sourcing/PickLibraryPage').then((m) => m.PickLibraryPage) },
   // 图文创作

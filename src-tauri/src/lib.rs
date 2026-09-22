@@ -38,6 +38,7 @@ pub mod sck;
 pub mod screenshot;
 pub mod self_config;
 pub mod settings;
+pub mod sourcing;
 pub mod shortcuts;
 pub mod skills;
 pub mod state;
@@ -47,6 +48,7 @@ pub mod usage;
 pub mod utils;
 pub(crate) mod media_runtime;
 pub mod media_generation;
+pub mod generation_workflow;
 pub mod comfyui;
 pub mod web_search;
 #[cfg(any(test, target_os = "macos"))]
@@ -487,6 +489,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            sourcing::sourcing_search,
+            sourcing::sourcing_history,
+            sourcing::sourcing_get_search,
+            sourcing::sourcing_delete_search,
+            sourcing::sourcing_list_picks,
+            sourcing::sourcing_save_pick,
+            sourcing::sourcing_delete_pick,
             market::market_command,
             studio::studio_draft,
             studio::library::studio_task_library,
@@ -495,6 +504,10 @@ pub fn run() {
             media_runtime::migration::legacy_video_outputs,
             comfyui::validate_comfy_workflow,
             comfyui::test_comfy_connection,
+            generation_workflow::start_workflow_run,
+            generation_workflow::list_workflow_runs,
+            generation_workflow::cancel_workflow_run,
+            generation_workflow::resume_workflow_run,
             media_generation::start_media_generation,
             media_generation::get_media_task,
             media_generation::list_media_tasks,

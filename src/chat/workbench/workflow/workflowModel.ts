@@ -1,3 +1,5 @@
+import type { WorkflowStatus } from '../../../generated/generationWorkflow'
+import type { WorkflowConfig } from './workflowConfig'
 export type WorkflowPortKind = 'image' | 'text' | 'video' | 'mesh'
 
 export type WorkflowNodeKind =
@@ -30,6 +32,9 @@ export type WorkflowNodeKind =
 export interface WorkflowPort {
   id: string
   kind: WorkflowPortKind
+  label: string
+  many?: boolean
+  required?: boolean
 }
 
 export interface WorkflowNode {
@@ -37,6 +42,7 @@ export interface WorkflowNode {
   kind: WorkflowNodeKind
   title: string
   position: { x: number; y: number }
+  config?: WorkflowConfig
   note?: string
 }
 
@@ -68,3 +74,5 @@ export function blankWorkflow(name: string): GenerationWorkflow {
     updatedAt: now,
   }
 }
+
+export const runStatus: Record<WorkflowStatus, string> = { pending: '等待', running: '运行中', succeeded: '已完成', failed: '失败', cancelled: '已停止', interrupted: '已中断' }

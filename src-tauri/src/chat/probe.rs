@@ -40,6 +40,15 @@ pub(crate) struct ProbeRequest {
     /// Writes models-result.json instead of creating a chat turn.
     #[serde(default)]
     pub(crate) probe_models: bool,
+    /// Local-only sourcing CRUD smoke test, no paid searches.
+    #[serde(default)]
+    pub(crate) sourcing_probe: bool,
+    /// Explicit opt-in live sourcing verification; paths only, never credentials in logs.
+    #[serde(default)]
+    pub(crate) sourcing_live: Option<crate::sourcing::LiveProbe>,
+    /// Workbench smoke test through the real desktop commands; local text nodes only.
+    #[serde(default)]
+    pub(crate) workflow_probe: Option<crate::generation_workflow::types::GenerationWorkflow>,
     pub(crate) prompt: String,
     #[serde(default)]
     pub(crate) provider: Option<String>,
@@ -263,6 +272,24 @@ pub async fn run_probe_watcher(app: AppHandle) {
             }
         };
 
+        if req.sourcing_probe || req.sourcing_live.is_some() {
+            let result = if let Some(input) = req.sourcing_live {
+                crate::sourcing::probe_live_sourcing(&app, input).await
+            } else {
+                crate::sourcing::probe_local_sourcing(&app).await
+            };
+            if let Ok(json) = serde_json::to_string_pretty(&serde_json::json!({"requestId": req.id, "result": result})) {
+                let _ = crate::chat::storage::atomic_write(&dir.join("sourcing-result.json"), &json, "sourcing probe");
+            }
+            continue;
+        }
+        if let Some(workflow) = req.workflow_probe {
+            let result = crate::generation_workflow::probe_local_workflow(&app, workflow).await;
+            if let Ok(json) = serde_json::to_string_pretty(&serde_json::json!({"requestId": req.id, "result": result})) {
+                let _ = crate::chat::storage::atomic_write(&dir.join("workflow-result.json"), &json, "workflow probe");
+            }
+            continue;
+        }
         if req.probe_models {
             continue;
         }

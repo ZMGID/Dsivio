@@ -8,11 +8,12 @@ import { readImages } from '../localMedia'
 import { MediaTaskList } from '../MediaTaskList'
 import { useMediaGeneration, workbenchOrigin } from '../useMediaGeneration'
 import { WorkbenchMediaModelSelect } from '../WorkbenchMediaModelSelect'
-import { ImageCountField, ImagePlatformLine, ImageSizeFields, ImageStudio } from './ImageStudio'
+import { ImageCountField, ImageSizeFields } from './ImageStudio'
+import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
+import './mainImagePage.css'
 import { useLocalImages } from './useLocalImages'
 import {
   IMAGE_STYLES,
-  sizeForImageRatio,
   type ImageCount,
   type ImageRatioId,
   type ImageStyleId,
@@ -37,7 +38,6 @@ export function MainImagePage() {
   const [count, setCount] = useState<ImageCount>(4)
   const [notice, setNotice] = useState('')
   const generation = useMediaGeneration({ origin: ORIGIN })
-  const styleMeta = IMAGE_STYLES.find((item) => item.id === style) ?? IMAGE_STYLES[0]
 
   return (
     <WorkbenchMediaModelSelect
@@ -71,74 +71,77 @@ export function MainImagePage() {
           })
         }
         return (
-          <ImageStudio
-            crumbCurrent={t.workbenchMainCrumb}
-            title={t.workbenchMainTitle}
-            capsules={(
-              <>
-                <span className="workbench-capsule">{t[styleMeta.label]}</span>
-                <span className="workbench-capsule">{count} {t.workbenchImageSheets}</span>
-                <span className="workbench-capsule">{sizeForImageRatio(ratio)}</span>
-              </>
-            )}
-            modelControl={modelControl}
-            configTitle={t.workbenchImageConfig}
-            configHint={t.workbenchMainHint}
-            config={(
-              <fieldset disabled={generation.busy} className="contents">
-                <CopyUploadField
-                  label={t.workbenchImageProduct}
-                  required
-                  max={MAX_REFERENCES}
-                  files={files}
-                  onChange={setFiles}
-                  onNotice={setNotice}
-                />
-                <CopyUploadField
-                  label={t.workbenchImageRole}
-                  optional
-                  hint=""
-                  max={3}
-                  files={roles}
-                  onChange={setRoles}
-                  onNotice={setNotice}
-                />
-                <label className="workbench-field">
-                  <span>{t.workbenchMainBrief}</span>
-                  <TextArea value={brief} onChange={setBrief} rows={4} placeholder={t.workbenchMainBriefHint} />
-                </label>
-                <ImagePlatformLine />
-                <p className="workbench-page-sub">{t.workbenchMainPlatformHint}</p>
-                <div className="workbench-field">
-                  <span>{t.workbenchMainStyle}</span>
-                  <div className="workbench-chip-row">
-                    {IMAGE_STYLES.map((item) => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        className={`workbench-chip${style === item.id ? ' is-active' : ''}`}
-                        onClick={() => setStyle(item.id)}
-                      >
-                        {t[item.label]}
-                      </button>
-                    ))}
+          <WorkbenchPage crumb={t.workbenchGroupImage} crumbCurrent={t.workbenchMainCrumb} title={t.workbenchMainTitle}>
+            <div className="main-image-config">
+              <WorkbenchCard title={t.workbenchCopyAssets}>
+                <fieldset disabled={generation.busy} className="main-image-fields">
+                  <CopyUploadField
+                    label={t.workbenchImageProduct}
+                    required
+                    max={MAX_REFERENCES}
+                    files={files}
+                    onChange={setFiles}
+                    onNotice={setNotice}
+                  />
+                  <details className="main-image-role">
+                    <summary>{t.workbenchImageRole} · {t.workbenchCopyOptional}{roles.length > 0 ? ` (${roles.length})` : ''}</summary>
+                    <CopyUploadField
+                      label={t.workbenchImageRole}
+                      optional
+                      hint=""
+                      max={3}
+                      files={roles}
+                      onChange={setRoles}
+                      onNotice={setNotice}
+                    />
+                  </details>
+                  <label className="workbench-field">
+                    <span>{t.workbenchMainBrief}</span>
+                    <TextArea value={brief} onChange={setBrief} rows={4} placeholder={t.workbenchMainBriefHint} />
+                  </label>
+                </fieldset>
+              </WorkbenchCard>
+              <WorkbenchCard title={t.workbenchPostsSettings}>
+                {modelControl}
+                <fieldset disabled={generation.busy} className="main-image-fields">
+                  <div className="workbench-field">
+                    <span>{t.workbenchMainStyle}</span>
+                    <div className="workbench-chip-row">
+                      {IMAGE_STYLES.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className={`workbench-chip${style === item.id ? ' is-active' : ''}`}
+                          aria-pressed={style === item.id}
+                          onClick={() => setStyle(item.id)}
+                        >
+                          {t[item.label]}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-                <ImageSizeFields ratio={ratio} onRatio={setRatio} />
-                <ImageCountField count={count} onCount={setCount} />
-              </fieldset>
-            )}
-            resultTitle={t.workbenchImageResult}
-            resultExtra={<Button size="sm" disabled={generation.loading || generation.busy} onClick={generation.refresh}>{t.workbenchRefresh}</Button>}
-            results={generation.tasks.length > 0 || generation.loading ? <MediaTaskList bare generation={generation} alt={t.workbenchMainTitle} /> : undefined}
-            emptyIcon={<Image size={22} />}
-            emptyTitle={t.workbenchMainEmpty}
-            emptyHint={t.workbenchMainEmptyHint}
-            notice={notice || generation.error}
-            cta={generation.busy ? t.workbenchMainSubmitting : t.workbenchMainGenerate}
-            ctaDisabled={generation.busy}
-            onGenerate={() => void generate()}
-          />
+                  <div className="main-image-sizing">
+                    <ImageSizeFields ratio={ratio} onRatio={setRatio} />
+                    <ImageCountField count={count} onCount={setCount} />
+                  </div>
+                  <p className="workbench-page-sub workbench-page-sub--flush">{t.workbenchImagePlatform}：{t.workbenchImagePlatTb} · {t.workbenchImageZh}</p>
+                </fieldset>
+                <WorkbenchCta>
+                  {notice || generation.error ? <p className="workbench-inline-note" role="alert">{notice || generation.error}</p> : null}
+                  <Button variant="primary" disabled={generation.busy} onClick={() => void generate()}>
+                    {generation.busy ? t.workbenchMainSubmitting : t.workbenchMainGenerate}
+                  </Button>
+                </WorkbenchCta>
+              </WorkbenchCard>
+            </div>
+            <div className="main-image-results">
+              <WorkbenchCard title={t.workbenchImageResult} extra={<Button size="sm" disabled={generation.loading || generation.busy} onClick={generation.refresh}>{t.workbenchRefresh}</Button>}>
+                {generation.tasks.length > 0 || generation.loading
+                  ? <MediaTaskList bare generation={generation} alt={t.workbenchMainTitle} />
+                  : <WorkbenchEmpty icon={<Image size={22} />} title={t.workbenchMainEmpty}>{t.workbenchMainEmptyHint}</WorkbenchEmpty>}
+              </WorkbenchCard>
+            </div>
+          </WorkbenchPage>
         )
       }}
     />

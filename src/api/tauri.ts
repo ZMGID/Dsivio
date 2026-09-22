@@ -1,3 +1,5 @@
+import type { SourcingConfig, LookalikeRequest, SourcingSearch, SourcingSearchSummary, PickFilter, PickPage, SavePickRequest, PickItem } from '../generated/sourcing'
+import type { GenerationWorkflow, WorkflowRun } from '../generated/generationWorkflow'
 import type { AiTaskRequest, AiTaskResult } from '../generated/aiTask'
 import type { MediaRequest, MediaTask, MediaTaskFilter } from '../generated/mediaGeneration'
 import type { ComfyConfig, ComfyWorkflow, ComfyConnection } from '../generated/comfyui'
@@ -1164,6 +1166,7 @@ export type Settings = {
   chatModel: string
   defaultModels: DefaultModelsConfig
   workbenchMedia: WorkbenchMediaConfig
+  sourcing?: SourcingConfig
   /** Canonical backend responses always contain chat settings after migration. */
   chat: ChatConfig
   /** Canonical backend responses always contain chat memory settings after migration. */
@@ -1768,6 +1771,17 @@ function chatSubagentControl(conversationId: string, args: SubAgentControlReques
 }
 
 export const api = {
+  sourcingSearch: (request: LookalikeRequest) => invoke<SourcingSearch>('sourcing_search', { request }),
+  sourcingHistory: () => invoke<SourcingSearchSummary[]>('sourcing_history'),
+  sourcingGetSearch: (id: string) => invoke<SourcingSearch>('sourcing_get_search', { id }),
+  sourcingDeleteSearch: (id: string) => invoke<void>('sourcing_delete_search', { id }),
+  sourcingListPicks: (filter: PickFilter) => invoke<PickPage>('sourcing_list_picks', { filter }),
+  sourcingSavePick: (request: SavePickRequest) => invoke<PickItem>('sourcing_save_pick', { request }),
+  sourcingDeletePick: (id: string, revision: number) => invoke<void>('sourcing_delete_pick', { id, revision }),
+  startWorkflowRun: (workflow: GenerationWorkflow) => invoke<WorkflowRun>('start_workflow_run', { workflow }),
+  listWorkflowRuns: (workflowId: string) => invoke<WorkflowRun[]>('list_workflow_runs', { workflowId }),
+  resumeWorkflowRun: (id: string) => invoke<WorkflowRun>('resume_workflow_run', { id }),
+  cancelWorkflowRun: (id: string) => invoke<void>('cancel_workflow_run', { id }),
   validateComfyWorkflow: (workflow: ComfyWorkflow) => invoke<void>('validate_comfy_workflow', { workflow }),
   testComfyConnection: (baseUrl: string, workflow: ComfyWorkflow | null = null) => invoke<ComfyConnection>('test_comfy_connection', { baseUrl, workflow }),
   startMediaGeneration: (request: MediaRequest) => invoke<MediaTask>('start_media_generation', { request }),

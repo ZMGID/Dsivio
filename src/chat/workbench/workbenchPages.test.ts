@@ -24,7 +24,7 @@ describe('workbenchPages', () => {
     expect(workbenchPageFromPath('chat/workbench/chatgpt')).toBe('home')
     expect(isWorkbenchSubpage('shops')).toBe(true)
     expect(isWorkbenchSubpage('chatgpt')).toBe(false)
-    expect(workbenchPageFromPath('chat/workbench/ranks')).toBe('ranks')
+    expect(workbenchPageFromPath('chat/workbench/ranks')).toBe('home')
     expect(workbenchPageFromPath('chat/workbench/match')).toBe('match')
     expect(workbenchPageFromPath('chat/workbench/picks')).toBe('picks')
     expect(workbenchPageFromPath('chat/workbench/posts')).toBe('posts')

@@ -1,3 +1,4 @@
+import { parseConfig } from './workflowConfig'
 import { blankWorkflow, type GenerationWorkflow, type WorkflowEdge, type WorkflowNode, type WorkflowNodeKind } from './workflowModel'
 
 const KEY = 'kivio.workbench.workflows'
@@ -21,7 +22,10 @@ function parseNode(value: unknown): WorkflowNode | null {
   if (typeof value.kind !== 'string' || !KINDS.has(value.kind as WorkflowNodeKind)) return null
   if (typeof value.title !== 'string') return null
   if (!isRecord(value.position) || typeof value.position.x !== 'number' || typeof value.position.y !== 'number') return null
+  const config = parseConfig(value.kind as WorkflowNodeKind, value.config)
+  if (!config || !Number.isFinite(value.position.x) || !Number.isFinite(value.position.y)) return null
   const node: WorkflowNode = {
+    config,
     id: value.id,
     kind: value.kind as WorkflowNodeKind,
     title: value.title,
@@ -48,6 +52,7 @@ export function parseWorkflow(value: unknown): GenerationWorkflow | null {
   if (!Array.isArray(value.nodes) || !Array.isArray(value.edges)) return null
   const nodes = value.nodes.map(parseNode).filter((item): item is WorkflowNode => item !== null)
   const edges = value.edges.map(parseEdge).filter((item): item is WorkflowEdge => item !== null)
+  if (nodes.length !== value.nodes.length || edges.length !== value.edges.length || new Set(nodes.map(n => n.id)).size !== nodes.length || new Set(edges.map(e => e.id)).size !== edges.length) return null
   const createdAt = typeof value.createdAt === 'string' ? value.createdAt : new Date().toISOString()
   const updatedAt = typeof value.updatedAt === 'string' ? value.updatedAt : createdAt
   return { id: value.id, name: value.name, nodes, edges, createdAt, updatedAt }
@@ -74,7 +79,9 @@ function readAll(): GenerationWorkflow[] {
 }
 
 function writeAll(items: GenerationWorkflow[]): void {
-  storage()?.setItem(KEY, JSON.stringify(items))
+  const target = storage()
+  if (!target) throw new Error('本机存储不可用，草稿未保存')
+  target.setItem(KEY, JSON.stringify(items))
 }
 
 export const workflowStore = {

@@ -15,3 +15,10 @@ describe('workflowStore', () => {
     expect(parseWorkflow({ id: 'auto', name: 'n', enabled: true, nodes: [{ type: 'trigger.manual' }] })).toBe(null)
   })
 })
+
+it('reads old input drafts with defaults and preserves stored replica configurations after reopening', () => {
+  const flow = blankWorkflow('legacy')
+  flow.nodes = [{ id: 'legacy-prompt', kind: 'prompt.input', title: 'prompt', position: { x: 0, y: 0 } }]
+  localStorage.setItem('kivio.workbench.workflows', JSON.stringify([flow]))
+  expect(workflowStore.get(flow.id)?.nodes[0].config).toEqual({ type: 'prompt', text: '' })
+})
