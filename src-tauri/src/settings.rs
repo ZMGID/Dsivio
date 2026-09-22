@@ -2181,7 +2181,7 @@ fn mirror_explicit_chat_default_for_persistence(settings: &mut Settings) {
 }
 
 pub fn sanitize_settings(mut settings: Settings) -> Settings {
-    crate::video_studio::migration::retire_servers(&mut settings);
+    crate::media_runtime::migration::retire_servers(&mut settings);
     // RapidOCR 档位归一:非法值回落到各自默认(截图=standard,文档处理=high)。
     if settings.screenshot_translation.rapid_ocr_tier != "standard"
         && settings.screenshot_translation.rapid_ocr_tier != "high"
@@ -2498,7 +2498,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
     video.model = video.model.trim().to_string();
     if !settings.providers.iter().any(|p| p.id == video.provider_id && p.enabled
         && p.enabled_models.contains(&video.model)
-        && crate::video_studio::providers::is_video_model(p, &video.model))
+        && crate::media_generation::video_providers::is_video_model(p, &video.model))
     {
         *video = DefaultModelSelection::default();
     }

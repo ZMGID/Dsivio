@@ -54,6 +54,20 @@ pub(crate) fn content_part(path: &Path, remaining: &mut usize) -> Result<Value, 
     )
 }
 
+/// Browser-selected Workbench files use the same bounded video part as local files.
+pub(crate) fn data_content_part(url: &str, remaining: &mut usize) -> Result<Value, String> {
+    let (header, encoded) = url.split_once(',').ok_or("无效的视频编码")?;
+    let mime = header.strip_prefix("data:").and_then(|v| v.strip_suffix(";base64")).ok_or("无效的视频类型")?;
+    if !matches!(mime, "video/mp4" | "video/mpeg" | "video/mov" | "video/quicktime" | "video/avi" | "video/x-flv" | "video/webm" | "video/wmv" | "video/3gpp") {
+        return Err("不支持的视频格式".into());
+    }
+    if encoded.len() > (*remaining + 2) / 3 * 4 { return Err("视频不能超过 14 MiB，请先裁剪".into()); }
+    let bytes = STANDARD.decode(encoded).map_err(|_| "无效的视频编码")?;
+    if bytes.is_empty() || bytes.len() > *remaining { return Err("视频为空或过大".into()); }
+    *remaining -= bytes.len();
+    Ok(json!({"type":"video_url", "video_url":{"url":url}}))
+}
+
 pub(crate) fn validate_request(
     provider: &crate::settings::ModelProvider,
     request: &super::model::GenerateRequest,
@@ -118,6 +132,14 @@ pub(crate) fn validate_body(body: &Value) -> Result<(), super::model::ModelError
 mod tests {
     use super::*;
 
+    #[test]
+    fn data_videos_share_the_context_budget_and_reject_nonvideo_inputs() {
+        let mut remaining=4;
+        assert!(data_content_part("data:video/mp4;base64,YWJj", &mut remaining).is_ok());
+        assert_eq!(remaining,1);
+        assert!(data_content_part("data:video/mp4;base64,YWJj", &mut remaining).is_err());
+        assert!(data_content_part("data:image/png;base64,YQ==", &mut remaining).is_err());
+    }
     #[test]
     fn video_model_gate_depends_on_capability_not_provider_or_auth() {
         for format in [

@@ -48,6 +48,23 @@ pub struct ComfyInput {
     pub input: String,
     pub label: String,
     pub kind: ComfyInputKind,
+    /// Optional mapping from the common generation request; old node-key inputs still work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<ComfyInputSource>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ComfyInputSource {
+    Prompt,
+    Image { index: u32 },
+    /// Named common options such as duration, firstFrame, size or referenceImages[index].
+    Parameter {
+        name: String,
+        #[serde(default)]
+        #[ts(optional)]
+        index: Option<u32>,
+    },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +98,8 @@ pub struct ComfyTask {
     /// Who asked for this run (e.g. `workbench/main`); lets each Workbench page list its own history.
     #[serde(default)]
     pub origin: Option<String>,
+    #[serde(default)]
+    pub prompt: String,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -138,6 +157,18 @@ pub fn validate_workflow(workflow: &ComfyWorkflow) -> Result<(), String> {
     }
     let mut seen = HashSet::new();
     for binding in &workflow.inputs {
+        if let Some(ComfyInputSource::Parameter { name, .. }) = &binding.source {
+            if name.trim().is_empty() || name.contains(':') {
+                return Err("通用参数名不能为空或包含节点分隔符".into());
+            }
+        }
+        if matches!(&binding.source, Some(ComfyInputSource::Prompt))
+            && binding.kind != ComfyInputKind::Text
+            || matches!(&binding.source, Some(ComfyInputSource::Image { .. }))
+                && binding.kind != ComfyInputKind::Image
+        {
+            return Err("通用输入 source 与工作流输入类型不匹配".into());
+        }
         if binding.label.trim().is_empty() || !seen.insert((&binding.node_id, &binding.input)) {
             return Err("输入名称为空或重复绑定".into());
         }
@@ -292,8 +323,19 @@ pub(crate) fn list_comfy_tasks(
     tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(tasks)
 }
-fn prepare(workflow: &ComfyWorkflow, values: &BTreeMap<String, Value>) -> Result<Value, String> {
+pub(crate) fn prepare(
+    workflow: &ComfyWorkflow,
+    values: &BTreeMap<String, Value>,
+) -> Result<Value, String> {
     validate_workflow(workflow)?;
+    let keys: HashSet<_> = workflow
+        .inputs
+        .iter()
+        .map(|b| format!("{}:{}", b.node_id, b.input))
+        .collect();
+    if let Some(key) = values.keys().find(|k| !keys.contains(*k)) {
+        return Err(format!("工作流未声明输入：{key}"));
+    }
     let mut graph = workflow.graph.clone();
     for binding in &workflow.inputs {
         let key = format!("{}:{}", binding.node_id, binding.input);
@@ -325,10 +367,12 @@ fn task_lock(id: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
 }
 pub(crate) async fn submit_to_store(
     root: &Path,
+    id: String,
     provider: ModelProvider,
     workflow: ComfyWorkflow,
     values: BTreeMap<String, Value>,
     origin: Option<String>,
+    prompt: String,
 ) -> Result<ComfyTask, String> {
     let mut graph = prepare(&workflow, &values)?;
     let submit_url = endpoint(&provider.base_url, "prompt")?;
@@ -384,7 +428,7 @@ pub(crate) async fn submit_to_store(
         }
     }
     let mut task = ComfyTask {
-        id: uuid::Uuid::new_v4().to_string(),
+        id,
         provider_id: provider.id,
         workflow_id: workflow.id,
         workflow_name: workflow.name,
@@ -397,6 +441,7 @@ pub(crate) async fn submit_to_store(
         outputs: vec![],
         created_at: chrono::Utc::now().to_rfc3339(),
         origin,
+        prompt,
     };
     save(root, &task)?; // Persist before POST. Never replay a submission after an uncertain response.
     let result = client()?.post(submit_url).json(&json!({"prompt": graph, "client_id": task.id, "extra_data": {"dsivio_task_id":task.id}})).send().await;
@@ -544,7 +589,7 @@ pub(crate) async fn refresh_at(root: &Path, id: &str) -> Result<ComfyTask, Strin
                 .append_pair("subfolder", &output.subfolder)
                 .append_pair("type", &output.folder_type);
             let download: Result<String, String> = async {
-                let mut response = client()?
+                let response = client()?
                     .get(url)
                     .timeout(Duration::from_secs(180))
                     .send()
@@ -552,33 +597,17 @@ pub(crate) async fn refresh_at(root: &Path, id: &str) -> Result<ComfyTask, Strin
                     .map_err(|e| e.without_url().to_string())?
                     .error_for_status()
                     .map_err(|e| e.without_url().to_string())?;
-                if response
-                    .content_length()
-                    .is_some_and(|n| n > 512 * 1024 * 1024)
-                {
-                    return Err("文件超过 512 MB，请在 ComfyUI 中下载".into());
-                }
-                let ext = output.filename.rsplit('.').next().unwrap_or("bin");
-                let path = task_dir(root, &task.id)?.join(format!("output-{index}.{ext}"));
-                let temporary = path.with_extension("part");
-                use tokio::io::AsyncWriteExt;
-                let mut file = tokio::fs::File::create(&temporary)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let mut size = 0;
-                while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
-                    size += chunk.len();
-                    if size > 512 * 1024 * 1024 {
-                        return Err("文件超过 512 MB".into());
-                    }
-                    file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-                }
-                file.sync_all().await.map_err(|e| e.to_string())?;
-                drop(file);
-                tokio::fs::rename(&temporary, &path)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok(path.to_string_lossy().into_owned())
+                let path = task_dir(root, &task.id)?.join(format!("output-{index}"));
+                let kind = if task.kind == ComfyMediaKind::Image {
+                    crate::media_generation::MediaKind::Image
+                } else {
+                    crate::media_generation::MediaKind::Video
+                };
+                Ok(
+                    crate::media_generation::artifacts::save_response(response, &path, &kind)
+                        .await?
+                        .path,
+                )
             }
             .await;
             match download {
@@ -675,6 +704,15 @@ mod tests {
         assert!(validate_workflow(&invalid).is_err());
     }
     #[test]
+    fn unbound_inputs_are_rejected_instead_of_silently_ignored() {
+        assert!(prepare(
+            &workflow(),
+            &BTreeMap::from([("typo:text".into(), json!("ignored"))])
+        )
+        .is_err());
+    }
+
+    #[test]
     fn canonical_settings_preserve_workflows_and_keep_them_out_of_chat() {
         let mut settings = crate::settings::Settings::default();
         settings.providers = vec![provider("http://127.0.0.1:8188")];
@@ -711,15 +749,17 @@ mod tests {
             (200, br#"{"prompt_id":"remote-1"}"#.to_vec()),
             (200, serde_json::to_vec(&history).unwrap()),
             (503, b"{}".to_vec()),
-            (200, b"image-bytes".to_vec()),
+            (200, b"\x89PNG\r\n\x1a\nimage-bytes".to_vec()),
         ]);
         let root = tempfile::tempdir().unwrap();
         let task = submit_to_store(
             root.path(),
+            uuid::Uuid::new_v4().to_string(),
             provider(&base),
             workflow(),
             BTreeMap::from([("1:text".into(), json!("new product"))]),
             None,
+            String::new(),
         )
         .await
         .unwrap();
@@ -736,7 +776,7 @@ mod tests {
         assert_eq!(complete.status, ComfyTaskStatus::Succeeded);
         assert_eq!(
             std::fs::read(complete.outputs[0].local_path.as_ref().unwrap()).unwrap(),
-            b"image-bytes"
+            b"\x89PNG\r\n\x1a\nimage-bytes"
         );
         let requests = server.join().unwrap();
         assert_eq!(
@@ -777,7 +817,7 @@ mod tests {
     async fn server_error_leaves_an_uncertain_receipt_and_is_never_replayed() {
         let (base, server) = server(vec![(502, b"{}".to_vec())]);
         let root = tempfile::tempdir().unwrap();
-        let task = submit_to_store(root.path(), provider(&base), workflow(), BTreeMap::new(), None)
+        let task = submit_to_store(root.path(), uuid::Uuid::new_v4().to_string(), provider(&base), workflow(), BTreeMap::new(), None, String::new())
             .await
             .unwrap();
         assert_eq!(task.status, ComfyTaskStatus::Uncertain);
@@ -803,10 +843,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         submit_to_store(
             root.path(),
+            uuid::Uuid::new_v4().to_string(),
             provider(&base),
             flow,
             BTreeMap::from([("1:text".into(), json!("data:image/png;base64,aW1hZ2U="))]),
             None,
+            String::new(),
         )
         .await
         .unwrap();

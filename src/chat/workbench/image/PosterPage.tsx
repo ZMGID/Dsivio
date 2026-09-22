@@ -1,3 +1,7 @@
+import { MediaTaskList } from '../MediaTaskList'
+import { useMediaGeneration, workbenchOrigin } from '../useMediaGeneration'
+import { WorkbenchMediaModelSelect } from '../WorkbenchMediaModelSelect'
+import { readImages } from '../localMedia'
 import { useState } from 'react'
 import { PanelsTopLeft } from 'lucide-react'
 import { useT } from '../../../components/i18n'
@@ -8,9 +12,10 @@ import { useLocalImages } from './useLocalImages'
 import { IMAGE_COVERS, sizeForImageRatio, type ImageCoverId, type ImageRatioId } from './imageCatalog'
 
 /**
- * 海报封面：需求描述 + 封面类型。开源版还没接出图。
+ * 海报封面：需求描述 + 封面类型。生成与历史使用统一媒体任务。
  */
 export function PosterPage() {
+  const generation = useMediaGeneration({ origin: workbenchOrigin('poster') })
   const t = useT()
   const [refs, setRefs] = useLocalImages()
   const [brief, setBrief] = useState('')
@@ -21,7 +26,21 @@ export function PosterPage() {
   const size = sizeForImageRatio(ratio)
 
   return (
-    <ImageStudio
+    <WorkbenchMediaModelSelect kind="imageModels" render={(modelControl, provider, model) => {
+      const generate = async () => {
+          if (generation.busy) return
+          if (!brief.trim()) { setNotice(t.workbenchPosterNeedBrief); return }
+          if (!provider || !model) { setNotice(t.workbenchMainNeedModel); return }
+          if (refs.length > 4) { setNotice(t.workbenchImageTooManyRefs); return }
+          setNotice('')
+          await generation.submit(async () => ({ providerId: provider.id, model, kind: 'image',
+            prompt: `Create a ${t[coverMeta.label]} poster. ${brief}. Preserve all visible product facts. Only include requested text.`, images: await readImages(refs),
+            options: { aspect_ratio: ratio, size: '2K', n: 1 }, origin: workbenchOrigin('poster') }))
+      }
+      return <ImageStudio
+      modelControl={modelControl}
+      results={generation.tasks.length || generation.loading ? <MediaTaskList bare generation={generation} alt={t.workbenchImageResult} /> : undefined}
+      ctaDisabled={generation.busy}
       crumbCurrent={t.workbenchPosterCrumb}
       title={t.workbenchPosterTitle}
       capsules={(
@@ -76,9 +95,10 @@ export function PosterPage() {
       emptyIcon={<PanelsTopLeft size={22} />}
       emptyTitle={t.workbenchPosterEmpty}
       emptyHint={t.workbenchPosterEmptyHint}
-      notice={notice}
+      notice={notice || generation.error}
       cta={t.workbenchPosterGenerate}
-      onGenerate={() => setNotice(brief.trim() ? t.workbenchImageSoon : t.workbenchPosterNeedBrief)}
+      onGenerate={() => void generate()}
     />
+    }} />
   )
 }

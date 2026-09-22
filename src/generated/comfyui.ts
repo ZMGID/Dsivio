@@ -5,8 +5,14 @@ export type ComfyWorkflow = { id: string, name: string, kind: ComfyMediaKind, gr
 
 export type ComfyMediaKind = "image" | "video";
 
-export type ComfyInput = { nodeId: string, input: string, label: string, kind: ComfyInputKind, };
+export type ComfyInput = { nodeId: string, input: string, label: string, kind: ComfyInputKind,
+/**
+ * Optional mapping from the common generation request; old node-key inputs still work.
+ */
+source?: ComfyInputSource, };
 
 export type ComfyInputKind = "text" | "number" | "image";
+
+export type ComfyInputSource = { "type": "prompt" } | { "type": "image", index: number, } | { "type": "parameter", name: string, index?: number, };
 
 export type ComfyConnection = { devices: Array<string>, missingNodes: Array<string>, };

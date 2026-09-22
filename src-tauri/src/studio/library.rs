@@ -69,7 +69,7 @@ fn task_file_action_at(
     uuid::Uuid::parse_str(id).map_err(|_| "无效任务编号")?;
     let _guard = LIBRARY_LOCK.lock().map_err(|_| "任务管理暂不可用")?;
     // Use the writers' locks before reading status, and hold them through cleanup.
-    let _image_guard = crate::image_studio::lock()?;
+    let _image_guard = crate::workbench::image_projects::lock()?;
     let _draft_guard = super::DRAFT_LOCK.lock().map_err(|_| "草稿管理暂不可用")?;
     let directory = root.join(format!("{domain}-studio"));
     let path = directory.join("tasks").join(format!("{id}.json"));

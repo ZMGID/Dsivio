@@ -1,3 +1,7 @@
+import { MediaTaskList } from '../MediaTaskList'
+import { useMediaGeneration, workbenchOrigin } from '../useMediaGeneration'
+import { WorkbenchMediaModelSelect } from '../WorkbenchMediaModelSelect'
+import { readImages } from '../localMedia'
 import { useState } from 'react'
 import { Shuffle } from 'lucide-react'
 import { useT } from '../../../components/i18n'
@@ -6,24 +10,32 @@ import { ImageStudio } from './ImageStudio'
 import { useLocalImages } from './useLocalImages'
 
 /**
- * 万物迁移：产品图进参考图场景。开源版还没接出图。
+ * 万物迁移：产品图进参考图场景。生成与历史使用统一媒体任务。
  */
 export function MigratePage() {
+  const generation = useMediaGeneration({ origin: workbenchOrigin('migrate') })
   const t = useT()
   const [products, setProducts] = useLocalImages()
   const [refs, setRefs] = useLocalImages()
   const [notice, setNotice] = useState('')
 
-  const generate = () => {
-    if (products.length === 0 || refs.length === 0) {
-      setNotice(t.workbenchImageNeedBoth)
-      return
-    }
-    setNotice(t.workbenchImageSoon)
-  }
 
   return (
-    <ImageStudio
+    <WorkbenchMediaModelSelect kind="imageModels" render={(modelControl, provider, model) => {
+      const generate = async () => {
+          if (generation.busy) return
+          if (!products.length || !refs.length) { setNotice(t.workbenchImageNeedBoth); return }
+          if (!provider || !model) { setNotice(t.workbenchMainNeedModel); return }
+          if ([...products, ...refs].length > 4) { setNotice(t.workbenchImageTooManyRefs); return }
+          setNotice('')
+          await generation.submit(async () => ({ providerId: provider.id, model, kind: 'image',
+            prompt: `Move the product in the first ${products.length} images into the scene of the final reference image. Preserve product identity and match scene lighting and perspective.`, images: await readImages([...products, ...refs]),
+            options: { aspect_ratio: '1:1', size: '2K', n: 1 }, origin: workbenchOrigin('migrate') }))
+      }
+      return <ImageStudio
+      modelControl={modelControl}
+      results={generation.tasks.length || generation.loading ? <MediaTaskList bare generation={generation} alt={t.workbenchImageResult} /> : undefined}
+      ctaDisabled={generation.busy}
       crumbCurrent={t.workbenchMigrateCrumb}
       title={t.workbenchMigrateTitle}
       capsules={(
@@ -62,9 +74,10 @@ export function MigratePage() {
       emptyIcon={<Shuffle size={22} />}
       emptyTitle={t.workbenchMigrateEmpty}
       emptyHint={t.workbenchMigrateEmptyHint}
-      notice={notice}
+      notice={notice || generation.error}
       cta={t.workbenchMigrateGenerate.replace('{n}', String(products.length))}
-      onGenerate={generate}
+      onGenerate={() => void generate()}
     />
+    }} />
   )
 }

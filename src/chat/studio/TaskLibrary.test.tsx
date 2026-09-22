@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { TaskLibrary } from './TaskLibrary'
 import { selectLibraryTasks, type LibraryTask } from './taskLibraryModel'
 import { videoLibraryTask, imageLibraryTask } from './taskAdapters'
-import { newVideoBrief } from '../videos/types'
-import { emptyBrief } from '../images/types'
+import { newVideoBrief } from '../workbench/video/projects/types'
+import { emptyBrief } from '../workbench/image/projects/types'
 
 const tasks: LibraryTask[] = Array.from({ length: 1000 }, (_, i) => ({
   id: `task-${i}`, name: `作品 ${i}`, description: i === 500 ? '夏季新品蓝色背包' : '商品展示',

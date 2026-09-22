@@ -426,7 +426,7 @@ describe('Sidebar extension navigation', () => {
     />
   }
 
-  it.each(['应用市场', '图片', '视频', '作品'])('keeps extensions collapsed when selecting %s', async (label) => {
+  it.each(['应用市场', '作品'])('keeps extensions collapsed when selecting %s', async (label) => {
     const user = userEvent.setup()
     render(<Navigation />)
     await user.click(screen.getByRole('button', { name: new RegExp(`^${label}$`) }))

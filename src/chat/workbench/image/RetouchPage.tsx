@@ -1,3 +1,7 @@
+import { MediaTaskList } from '../MediaTaskList'
+import { useMediaGeneration, workbenchOrigin } from '../useMediaGeneration'
+import { WorkbenchMediaModelSelect } from '../WorkbenchMediaModelSelect'
+import { readImages } from '../localMedia'
 import { useState } from 'react'
 import { Sparkles } from 'lucide-react'
 import { useT } from '../../../components/i18n'
@@ -7,9 +11,10 @@ import { useLocalImages } from './useLocalImages'
 import { IMAGE_RETOUCH, sizeForImageRatio, type ImageRatioId, type ImageRetouchId } from './imageCatalog'
 
 /**
- * 产品精修：一张参考图 + 模板。开源版还没接出图。
+ * 产品精修：一张参考图 + 模板。生成与历史使用统一媒体任务。
  */
 export function RetouchPage() {
+  const generation = useMediaGeneration({ origin: workbenchOrigin('retouch') })
   const t = useT()
   const [files, setFiles] = useLocalImages()
   const [template, setTemplate] = useState<ImageRetouchId>('white')
@@ -18,7 +23,21 @@ export function RetouchPage() {
   const templateMeta = IMAGE_RETOUCH.find((item) => item.id === template) ?? IMAGE_RETOUCH[0]
 
   return (
-    <ImageStudio
+    <WorkbenchMediaModelSelect kind="imageModels" render={(modelControl, provider, model) => {
+      const generate = async () => {
+          if (generation.busy) return
+          if (!files.length) { setNotice(t.workbenchImageNeedProduct); return }
+          if (!provider || !model) { setNotice(t.workbenchMainNeedModel); return }
+          if (files.length > 4) { setNotice(t.workbenchImageTooManyRefs); return }
+          setNotice('')
+          await generation.submit(async () => ({ providerId: provider.id, model, kind: 'image',
+            prompt: `Retouch the supplied product image: ${t[templateMeta.name]}. ${t[templateMeta.desc]}. Preserve the product geometry, branding and materials.`, images: await readImages(files),
+            options: { aspect_ratio: ratio, size: '2K', n: 1 }, origin: workbenchOrigin('retouch') }))
+      }
+      return <ImageStudio
+      modelControl={modelControl}
+      results={generation.tasks.length || generation.loading ? <MediaTaskList bare generation={generation} alt={t.workbenchImageResult} /> : undefined}
+      ctaDisabled={generation.busy}
       crumbCurrent={t.workbenchRetouchCrumb}
       title={t.workbenchRetouchTitle}
       capsules={(
@@ -64,9 +83,10 @@ export function RetouchPage() {
       emptyIcon={<Sparkles size={22} />}
       emptyTitle={t.workbenchRetouchEmpty}
       emptyHint={t.workbenchRetouchEmptyHint}
-      notice={notice}
+      notice={notice || generation.error}
       cta={t.workbenchRetouchGenerate}
-      onGenerate={() => setNotice(files.length === 0 ? t.workbenchImageNeedProduct : t.workbenchImageSoon)}
+      onGenerate={() => void generate()}
     />
+    }} />
   )
 }

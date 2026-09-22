@@ -34,7 +34,7 @@ src/chat/workbench/
 
 - 后端 `media_generation.rs` 已是统一任务模型（云端图片 / 云端视频协议 / 本地 ComfyUI 同一个 `MediaTask`，落盘 `media-tasks/<id>/task.json`，进程重启可恢复）。本次给 `MediaRequest` / `MediaTask` 加了 `origin`（谁发起的，如 `workbench/main`、`chat`）和 `prompt`，`list_media_tasks` 改为按 `MediaTaskFilter { providerId?, model?, origin? }` 过滤。ComfyUI 任务同样带 `origin`。旧记录缺这两个字段时按默认值读取，永远不会匹配到某个 `origin`。
 - 前端 `useMediaGeneration(filter)` 是唯一流程负责人：列表、运行中轮询（2.5s）、提交去重、作用域切换后丢弃迟到结果、恢复查询。它从原 `MediaGenerationRunner` 里抽出——那是唯一一处已经把这套规则写对了的地方，Runner 现在只是它的一个消费者。
-- 工作台页面用 `useMediaGeneration({ origin: workbenchOrigin('main') })`：**历史属于页面，不属于模型**。用户换模型不会让上一批结果消失；聊天里的图片/视频工作室仍按 provider+model 列，两者都是同一个 hook 的不同过滤条件。
+- 工作台页面用 `useMediaGeneration({ origin: workbenchOrigin('main') })`：**历史属于页面，不属于模型**。用户换模型不会让上一批结果消失；通用媒体表单也可按 provider+model 筛选。原图片、视频工作室仍有独立执行链，按下述迁移决定逐项退出，不能视为已经全部共用此 hook。
 - 模型选择仍是 `WorkbenchMediaModelSelect`（读 `settings.workbenchMedia` 模型池，本机记住上次选择）；后端 `start_media_generation` 只接受模型池里的模型。
 
 第一个按此接通的页面是「主图生成」（`image/MainImagePage.tsx`）：表单 → `buildMainImagePrompt()`（该页唯一决定提示词形状的地方）→ `generation.submit({ ..., origin })` → `MediaTaskList` 展示。后续图片/视频页照这个形状接，不再各写一份提交与轮询。
@@ -52,5 +52,11 @@ src/chat/workbench/
 - 新功能不要再碰 `chatRoutes.ts`、`WorkbenchHome.tsx`、`WorkbenchSidebar.tsx`；如果发现必须改，说明那不是「加一个功能」，先回来改这份 ADR。
 - 功能 `id` 就是用户书签和 `chat_remember_last_route` 里保存的路由后缀，改名视为破坏性变更。
 - 生图/视频页接后端时，从 `useMediaGeneration` + `MediaTaskList` 起步；只有当某页确实需要不同的提交规则（比如多步：先让 agent 写提示词再出图）时，才在该页加一个流程函数，并且仍然通过 `generation.submit` 落盘。
-- Agent 参与工作台（帮写提示词、图文创作）目前没有独立于对话记录的一次性调用入口——`run_agent_loop` 只经 `chat_send_message`、自动化 `action.agent` 或子代理触发。这是下一步要在 `chat/agent` 侧补的 Interface，不在工作台目录里造第二条 agent 调用路径。
+- 工作台的 AI 调用走 `run_ai_task`（见 [ADR 0008](0008-workbench-ai-calls-go-through-one-headless-entry.md)）：同一个无会话入口，`mode` 区分一步和多步。页面不自己 `invoke`，走 `useAiTask`。
 - `Chat.tsx` 本次未改动，仍只有路由判定一行和中心区渲染分支（ADR 0006 的约束继续有效）。
+
+## 2026-09-22：原工作室按功能迁入，旧执行后端退出
+
+- 原图片、视频功能逐项拆入 Workbench，保留具体功能入口；图片模板与视频模板分别归内容管理，不整块嵌入旧工作室。任务、去向与验收统一维护在 [开发清单](../workbench-tasks.md)。
+- 媒体执行统一用 `media_generation`；分析、规划与改写用已有 AI 入口并按真实视频输入需求补齐。旧图片引擎、旧视频 worker 和重复配置/提交/查询链在相应功能迁移后删除，不再新增调用方。
+- 业务规则、模板和已有产物保留；仍被共用生成或视频分析依赖的协议、工具与兼容读取按实际归属保留。迁移不要求创建通用工作台后端框架，也不要求先搬迁用户文件目录。

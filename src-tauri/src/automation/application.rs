@@ -4,21 +4,15 @@
 //! only). External CLI needs a `conv_` session, so it uses an archived
 //! `conv_auto_{id}` conversation that stays off the default sidebar.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
-use std::sync::Mutex;
-use std::time::Duration;
 
-use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
+use crate::chat::agent::headless_host::{is_headless_forbidden_tool, HeadlessAgentHost, HeadlessToolExecutor};
 use crate::chat::agent::prepare::{available_builtin_tool_names, build_chat_system_prompt};
-use crate::chat::agent::{
-    run_agent_loop, AgentHost, AgentHostFuture, AgentRunConfig, ToolExecutionContext, ToolExecutor,
-    ToolExecutorFuture,
-};
-use crate::chat::ask_user::{AskUserPromptPayload, AskUserResponseResult};
-use crate::chat::types::{AgentRuntimeKind, ChatMessageSegment, ToolCallRecord, WebSearchMode};
+use crate::chat::agent::{run_agent_loop, AgentRunConfig};
+use crate::chat::types::{AgentRuntimeKind, WebSearchMode};
 use crate::mcp::ChatToolDefinition;
 use crate::skills;
 use crate::state::AppState;
@@ -168,139 +162,6 @@ pub(crate) async fn run_captured_command(
 ) -> Result<crate::native_tools::CapturedCommand, String> {
     let state = app.state::<AppState>();
     crate::native_tools::run_captured_command(command, cwd, timeout_ms, Some(&*state)).await
-}
-
-struct WorkflowAgentHost {
-    app: AppHandle,
-    text: Mutex<String>,
-}
-
-impl AgentHost for WorkflowAgentHost {
-    fn emit_stream_delta(
-        &self,
-        _conversation_id: &str,
-        _run_id: &str,
-        _message_id: &str,
-        delta: &str,
-        _reasoning_delta: Option<&str>,
-        _segment: Option<&ChatMessageSegment>,
-    ) {
-        if !delta.is_empty() {
-            if let Ok(mut guard) = self.text.lock() {
-                guard.push_str(delta);
-            }
-        }
-    }
-
-    fn emit_tool_record(
-        &self,
-        _conversation_id: &str,
-        _run_id: &str,
-        _message_id: &str,
-        _record: &ToolCallRecord,
-    ) {
-    }
-
-    fn request_tool_approval<'a>(
-        &'a self,
-        _ctx: &'a ToolExecutionContext<'a>,
-        _record: &'a ToolCallRecord,
-    ) -> AgentHostFuture<'a, bool> {
-        Box::pin(async { true })
-    }
-
-    fn request_session_consent<'a>(
-        &'a self,
-        _ctx: &'a ToolExecutionContext<'a>,
-    ) -> AgentHostFuture<'a, bool> {
-        Box::pin(async { true })
-    }
-
-    fn request_user_response<'a>(
-        &'a self,
-        _ctx: &'a ToolExecutionContext<'a>,
-        _record: &'a ToolCallRecord,
-        _prompt: AskUserPromptPayload,
-    ) -> AgentHostFuture<'a, AskUserResponseResult> {
-        Box::pin(async {
-            AskUserResponseResult {
-                phase: "cancelled".to_string(),
-                answers: HashMap::new(),
-            }
-        })
-    }
-
-    fn is_generation_active(&self, conversation_id: &str, generation: u64) -> bool {
-        self.app
-            .state::<AppState>()
-            .chat_runtime()
-            .is_generation_active(conversation_id, generation)
-    }
-
-    fn wait_for_generation_inactive<'a>(
-        &'a self,
-        conversation_id: &'a str,
-        generation: u64,
-    ) -> AgentHostFuture<'a, ()> {
-        Box::pin(async move {
-            loop {
-                if !self.is_generation_active(conversation_id, generation) {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-    }
-}
-
-struct WorkflowToolExecutor {
-    app: AppHandle,
-}
-
-impl ToolExecutor for WorkflowToolExecutor {
-    fn prepare_result<'a>(
-        &'a self,
-        ctx: &ToolExecutionContext<'_>,
-        tool: &ChatToolDefinition,
-        arguments: &Value,
-        output: crate::mcp::types::McpToolCallResult,
-    ) -> ToolExecutorFuture<'a> {
-        crate::chat::artifacts::prepare_output(
-            &self.app,
-            ctx.tool_conversation_id,
-            ctx.message_id,
-            tool,
-            arguments,
-            output,
-        )
-    }
-    fn call<'a>(
-        &'a self,
-        ctx: &'a ToolExecutionContext<'a>,
-        tool: &'a ChatToolDefinition,
-        arguments: Value,
-        skill_cache: Option<&'a mut skills::SkillRunCache>,
-    ) -> ToolExecutorFuture<'a> {
-        Box::pin(async move {
-            let native_ctx = crate::mcp::registry::NativeToolContext {
-                conversation_id: ctx.tool_conversation_id.to_string(),
-                message_id: ctx.message_id.to_string(),
-                tool_call_id: Some(ctx.tool_call_id.to_string()),
-                run_id: ctx.run_id.to_string(),
-                generation: ctx.generation,
-                depth: ctx.depth,
-            };
-            crate::mcp::registry::call_tool(
-                &self.app,
-                &self.app.state::<AppState>(),
-                tool,
-                arguments,
-                skill_cache,
-                Some(native_ctx),
-            )
-            .await
-        })
-    }
 }
 
 pub(crate) async fn run_agent_node(
@@ -500,11 +361,8 @@ async fn run_builtin_agent_node(
         serde_json::json!({ "role": "user", "content": prompt }),
     ];
 
-    let host = WorkflowAgentHost {
-        app: app.clone(),
-        text: Mutex::new(String::new()),
-    };
-    let executor = WorkflowToolExecutor { app: app.clone() };
+    let host = HeadlessAgentHost::silent(app.clone());
+    let executor = HeadlessToolExecutor { app: app.clone() };
     let retry_attempts = if settings.retry_enabled {
         settings.retry_attempts as usize
     } else {
@@ -548,7 +406,7 @@ async fn run_builtin_agent_node(
     match outcome {
         Ok(result) => {
             let text = if result.content.trim().is_empty() {
-                host.text.lock().ok().map(|g| g.clone()).unwrap_or_default()
+                host.collected_text()
             } else {
                 result.content
             };
@@ -584,7 +442,7 @@ fn apply_agent_tool_whitelist(
     // slot can load bodies and the model can still `read` / search. `toolIds`
     // only opts in write/side-effect tools. Memory never mounts.
     tools.retain(|tool| {
-        if is_workflow_forbidden_tool(tool) {
+        if is_headless_forbidden_tool(tool) {
             return false;
         }
         if is_always_on_automation_tool(tool) {
@@ -599,26 +457,12 @@ fn apply_agent_tool_whitelist(
     Ok(())
 }
 
-fn is_memory_tool(tool: &ChatToolDefinition) -> bool {
-    tool.name.starts_with("memory_") || tool.id.contains("memory_")
-}
-
 fn is_skill_activate_tool(tool: &ChatToolDefinition) -> bool {
     tool.source == "skill" || tool.name == "skill"
 }
 
-fn is_automation_control_tool(tool: &ChatToolDefinition) -> bool {
-    tool.name.starts_with("automation_") || tool.id.contains("automation_")
-}
-
-fn is_workflow_forbidden_tool(tool: &ChatToolDefinition) -> bool {
-    is_memory_tool(tool)
-        || is_automation_control_tool(tool)
-        || crate::chat::sub_agent::is_sub_agent_tool_name(&tool.name)
-}
-
 fn is_always_on_automation_tool(tool: &ChatToolDefinition) -> bool {
-    !is_workflow_forbidden_tool(tool) && (is_skill_activate_tool(tool) || tool.is_read_only_tool())
+    !is_headless_forbidden_tool(tool) && (is_skill_activate_tool(tool) || tool.is_read_only_tool())
 }
 
 fn ensure_skill_activate_tool(tools: &mut Vec<ChatToolDefinition>) {
@@ -629,7 +473,7 @@ fn ensure_skill_activate_tool(tools: &mut Vec<ChatToolDefinition>) {
 }
 
 fn strip_workflow_forbidden_tools(tools: &mut Vec<ChatToolDefinition>) {
-    tools.retain(|tool| !is_workflow_forbidden_tool(tool));
+    tools.retain(|tool| !is_headless_forbidden_tool(tool));
 }
 
 fn extra_skill_bodies(
@@ -671,6 +515,7 @@ fn extra_skill_bodies(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
 
     #[derive(Default)]
     struct FakeChatCancelPort {

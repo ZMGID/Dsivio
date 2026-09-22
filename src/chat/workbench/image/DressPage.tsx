@@ -1,3 +1,7 @@
+import { MediaTaskList } from '../MediaTaskList'
+import { useMediaGeneration, workbenchOrigin } from '../useMediaGeneration'
+import { WorkbenchMediaModelSelect } from '../WorkbenchMediaModelSelect'
+import { readImages } from '../localMedia'
 import { useState } from 'react'
 import { Shirt } from 'lucide-react'
 import { useT } from '../../../components/i18n'
@@ -26,6 +30,7 @@ function DressTabs({ tab, onTab }: { tab: DressTab; onTab: (tab: DressTab) => vo
  * 一键换装：产品图 + 人物/场景参考。姿势裂变只留入口，不编造表单。
  */
 export function DressPage() {
+  const generation = useMediaGeneration({ origin: workbenchOrigin('dress') })
   const t = useT()
   const [product, setProduct] = useLocalImages()
   const [refs, setRefs] = useLocalImages()
@@ -55,7 +60,21 @@ export function DressPage() {
   }
 
   return (
-    <ImageStudio
+    <WorkbenchMediaModelSelect kind="imageModels" render={(modelControl, provider, model) => {
+      const generate = async () => {
+          if (generation.busy) return
+          if (!product.length || !refs.length) { setNotice(t.workbenchImageNeedBoth); return }
+          if (!provider || !model) { setNotice(t.workbenchMainNeedModel); return }
+          if ([...product, ...refs].length > 4) { setNotice(t.workbenchImageTooManyRefs); return }
+          setNotice('')
+          await generation.submit(async () => ({ providerId: provider.id, model, kind: 'image',
+            prompt: 'Dress the person in the reference images with the garment in the first product image. Preserve garment construction, pattern, color and the person identity.', images: await readImages([...product, ...refs]),
+            options: { aspect_ratio: '1:1', size: '2K', n: 1 }, origin: workbenchOrigin('dress') }))
+      }
+      return <ImageStudio
+      modelControl={modelControl}
+      results={generation.tasks.length || generation.loading ? <MediaTaskList bare generation={generation} alt={t.workbenchImageResult} /> : undefined}
+      ctaDisabled={generation.busy}
       crumbCurrent={t.workbenchDressCrumb}
       title={t.workbenchDressTitle}
       capsules={(
@@ -95,15 +114,10 @@ export function DressPage() {
       emptyIcon={<Shirt size={22} />}
       emptyTitle={t.workbenchDressEmpty}
       emptyHint={t.workbenchDressEmptyHint}
-      notice={notice}
+      notice={notice || generation.error}
       cta={t.workbenchDressGenerate.replace('{n}', String(refs.length))}
-      onGenerate={() => {
-        if (product.length === 0 || refs.length === 0) {
-          setNotice(t.workbenchImageNeedBoth)
-          return
-        }
-        setNotice(t.workbenchImageSoon)
-      }}
+      onGenerate={() => void generate()}
     />
+    }} />
   )
 }

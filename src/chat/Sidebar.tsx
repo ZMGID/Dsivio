@@ -2,8 +2,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { save } from '@tauri-apps/plugin-dialog'
 import {
-  Image,
-  Video,
   Store,
   ChevronRight,
   Folder,
@@ -1224,8 +1222,6 @@ export const Sidebar = memo(function Sidebar({
           onClick={() => onOpenExtensionsItem('artifacts')}
           active={extensionsActive === 'artifacts'}
         />
-        <NavRow icon={<Image size={17} />} label={t.chatNavImages} onClick={() => onOpenExtensionsItem('images')} active={extensionsActive === 'images'} />
-        <NavRow icon={<Video size={17} />} label={t.chatNavVideos} onClick={() => onOpenExtensionsItem('videos')} active={extensionsActive === 'videos'} />
         <NavRow icon={<Store size={17} />} label={t.chatNavMarket} onClick={() => onOpenExtensionsItem('market')} active={extensionsActive === 'market'} />
         <ExtensionsNav
           activeItem={extensionSubItems.some((item) => item.id === extensionsActive) ? extensionsActive : null}

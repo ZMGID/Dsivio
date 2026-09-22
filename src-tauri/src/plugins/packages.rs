@@ -70,6 +70,37 @@ impl Drop for TestPackagesRoot {
         TEST_PACKAGES_ROOT.with(|slot| slot.replace(self.0.take()));
     }
 }
+/// App-owned package content updates independently of user data and enabled state.
+pub fn ensure_builtin(id: &str, source: &Path) -> Result<Resolved, String> {
+    let dir = package_dir(id)?;
+    fs::create_dir_all(dir.join("data")).map_err(|e| e.to_string())?;
+    let previous = load(id).ok();
+    // Retired chat/page bridge files must not survive an in-place app upgrade.
+    if id == crate::media_runtime::PACKAGE_ID {
+        for retired in ["STUDIO.md", "scripts/studio.py", "scripts/model_catalog.py"] {
+            let path = dir.join("content").join(retired);
+            if path.exists() {
+                fs::remove_file(path).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    copy_tree(source, &dir.join("content"), &mut (100 * 1024 * 1024), 0)?;
+    let package = Package {
+        id: id.into(),
+        name: "dsvideo".into(),
+        description: "内置视频 Skill 与 MCP 插件".into(),
+        version: None,
+        format: "codex".into(),
+        source: "builtin:dsvideo".into(),
+        revision: None,
+        enabled: previous.map(|p| p.package.enabled).unwrap_or(true),
+        components: BTreeMap::new(),
+        diagnostics: vec![],
+    };
+    let resolved = resolve(&dir.join("content"), package, &dir.join("data"))?;
+    write_json(&dir.join("record.json"), &resolved.package)?;
+    Ok(resolved)
+}
 fn package_dir(id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "Invalid package id")?;
     Ok(packages_root()?.join(id))
@@ -355,6 +386,9 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
         }
     }
     let mut env: BTreeMap<String, String> = std::env::vars().collect();
+    if package.id == crate::media_runtime::PACKAGE_ID && package.source == "builtin:dsvideo" {
+        env.extend(crate::media_runtime::runtime::environment()?);
+    }
     // Normalize only host-injected paths, before expansion into command/args/env.
     // Keep canonical paths for containment checks and leave arbitrary values intact.
     let cli_root = crate::utils::strip_windows_verbatim_prefix(root.to_path_buf());
@@ -474,7 +508,7 @@ fn expand_json(value: &Value, env: &BTreeMap<String, String>) -> Value {
         _ => value.clone(),
     }
 }
-fn load(id: &str) -> Result<Resolved, String> {
+pub(crate) fn load(id: &str) -> Result<Resolved, String> {
     let dir = package_dir(id)?;
     let package: Package =
         serde_json::from_value(read_json(&dir.join("record.json"))?).map_err(|e| e.to_string())?;
@@ -510,7 +544,7 @@ pub fn skill_available(skill_id: &str) -> bool {
     }
 }
 pub fn owner_enabled(id: &str) -> bool {
-    if id == crate::video_studio::migration::RETIRED_PACKAGE { return false; }
+    if id == crate::media_runtime::migration::RETIRED_PACKAGE { return false; }
     package_dir(id)
         .ok()
         .and_then(|dir| read_json(&dir.join("record.json")).ok())
@@ -524,7 +558,7 @@ fn list() -> Result<Vec<Package>, String> {
     let mut out = Vec::new();
     for entry in fs::read_dir(root).map_err(|e| e.to_string())?.flatten() {
         let id = entry.file_name().to_string_lossy().into_owned();
-        if id == crate::video_studio::migration::RETIRED_PACKAGE || uuid::Uuid::parse_str(&id).is_err() {
+        if id == crate::media_runtime::migration::RETIRED_PACKAGE || uuid::Uuid::parse_str(&id).is_err() {
             continue;
         }
         match load(&id) {

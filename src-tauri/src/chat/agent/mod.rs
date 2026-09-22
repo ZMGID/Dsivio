@@ -4,6 +4,7 @@ pub mod execute;
 pub(crate) mod file_ledger;
 pub mod filter;
 pub(crate) mod finalize;
+pub(crate) mod headless_host;
 pub mod host;
 pub mod loop_;
 pub(crate) mod planning;

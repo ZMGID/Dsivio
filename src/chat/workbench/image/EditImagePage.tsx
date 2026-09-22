@@ -1,3 +1,7 @@
+import { MediaTaskList } from '../MediaTaskList'
+import { useMediaGeneration, workbenchOrigin } from '../useMediaGeneration'
+import { WorkbenchMediaModelSelect } from '../WorkbenchMediaModelSelect'
+import { readImages } from '../localMedia'
 import { useState } from 'react'
 import { Pencil } from 'lucide-react'
 import { useT } from '../../../components/i18n'
@@ -15,6 +19,7 @@ type EditMode = 'fast' | 'rich'
  * 图片编辑：上传 + 指令。框选改图还没接，多图只改上传张数。
  */
 export function EditImagePage() {
+  const generation = useMediaGeneration({ origin: workbenchOrigin('edit') })
   const t = useT()
   const [files, setFiles] = useLocalImages()
   const [brief, setBrief] = useState('')
@@ -23,20 +28,24 @@ export function EditImagePage() {
   const [ratio, setRatio] = useState<ImageRatioId>('1:1')
   const [notice, setNotice] = useState('')
 
-  const generate = () => {
-    if (files.length === 0) {
-      setNotice(t.workbenchImageNeedProduct)
-      return
-    }
-    if (!brief.trim()) {
-      setNotice(t.workbenchEditNeedBrief)
-      return
-    }
-    setNotice(t.workbenchImageSoon)
-  }
 
   return (
-    <ImageStudio
+    <WorkbenchMediaModelSelect kind="imageModels" render={(modelControl, provider, model) => {
+      const generate = async () => {
+          if (generation.busy) return
+          if (!files.length) { setNotice(t.workbenchImageNeedProduct); return }
+          if (!brief.trim()) { setNotice(t.workbenchEditNeedBrief); return }
+          if (!provider || !model) { setNotice(t.workbenchMainNeedModel); return }
+          if (files.length > 4) { setNotice(t.workbenchImageTooManyRefs); return }
+          setNotice('')
+          await generation.submit(async () => ({ providerId: provider.id, model, kind: 'image',
+            prompt: `Edit the supplied image(s) according to this instruction: ${brief}. Preserve everything not explicitly requested to change.`, images: await readImages(files),
+            options: { aspect_ratio: ratio, size: '2K', n: 1 }, origin: workbenchOrigin('edit') }))
+      }
+      return <ImageStudio
+      modelControl={modelControl}
+      results={generation.tasks.length || generation.loading ? <MediaTaskList bare generation={generation} alt={t.workbenchImageResult} /> : undefined}
+      ctaDisabled={generation.busy}
       crumbCurrent={t.workbenchEditCrumb}
       title={t.workbenchEditTitle}
       capsules={(
@@ -105,9 +114,10 @@ export function EditImagePage() {
       emptyIcon={<Pencil size={22} />}
       emptyTitle={t.workbenchEditEmpty}
       emptyHint={t.workbenchEditEmptyHint}
-      notice={notice}
+      notice={notice || generation.error}
       cta={t.workbenchEditGenerate}
-      onGenerate={generate}
+      onGenerate={() => void generate()}
     />
+    }} />
   )
 }

@@ -1,5 +1,5 @@
-import { FEATURES, latestResults, type ImageTask } from '../images/types'
-import { videoTaskStatus, type VideoTask } from '../videos/types'
+import { FEATURES, latestResults, type ImageTask } from '../workbench/image/projects/types'
+import { videoTaskStatus, type VideoTask } from '../workbench/video/projects/types'
 import type { LibraryTask, TaskGroup } from './taskLibraryModel'
 
 export function imageLibraryTask(task: ImageTask): LibraryTask {
@@ -22,7 +22,7 @@ export function videoLibraryTask(task: VideoTask): LibraryTask {
   const group: TaskGroup = needsAttention ? 'attention'
     : ['running', 'submitting'].includes(task.status) ? 'running'
     : task.status === 'succeeded' || (analysis && !!task.script) ? 'ready' : 'draft'
-  const route = ({ grok: 'Grok', minimax: 'MiniMax', comfy: 'ComfyUI', '': '未选路线' })[task.brief.route]
+  const route = ({ native: '视频模型', grok: 'Grok', minimax: 'MiniMax', comfy: 'ComfyUI', '': '未选路线' })[task.brief.route]
   return {
     id: task.id, name: task.brief.name || '未命名视频任务', description: task.brief.request || task.brief.source,
     kind: analysis ? 'analysis' : task.brief.route || 'creation', kindLabel: analysis ? '视频拆解 / 参考' : `${route} 视频`,

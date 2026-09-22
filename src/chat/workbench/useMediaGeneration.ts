@@ -19,7 +19,7 @@ export interface MediaGeneration {
   error: string
   setError: (message: string) => void
   /** 提交一次生成。失败时写入 `error` 并返回 undefined；作用域切换后迟到的结果被丢弃。 */
-  submit: (request: MediaRequest) => Promise<MediaTask | undefined>
+  submit: (request: MediaRequest | (() => Promise<MediaRequest>)) => Promise<MediaTask | undefined>
   /** 对已保存的任务继续查询／下载，不会重新提交。 */
   resume: (id: string) => Promise<void>
   refresh: () => void
@@ -80,14 +80,16 @@ export function useMediaGeneration(filter: Partial<MediaTaskFilter> | null): Med
     if (mounted.current) setBusy(value)
   }, [])
 
-  const submit = useCallback(async (request: MediaRequest) => {
+  const submit = useCallback(async (request: MediaRequest | (() => Promise<MediaRequest>)) => {
     if (pending.current) return undefined
     const submittedScope = currentScope.current
     pending.current = true
     setBusy(true)
     setError('')
     try {
-      const task = await api.startMediaGeneration(request)
+      const prepared = typeof request === 'function' ? await request() : request
+      if (!mounted.current || currentScope.current !== submittedScope) return undefined
+      const task = await api.startMediaGeneration(prepared)
       if (!mounted.current || currentScope.current !== submittedScope) return undefined
       setTasks((current) => [task, ...current.filter((item) => item.id !== task.id)])
       setReload((value) => value + 1)

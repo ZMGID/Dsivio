@@ -299,3 +299,10 @@ describe('useChatRouting center openers', () => {
     expect(window.location.hash).toBe('#chat/workbench/shops')
   })
 })
+
+it.each([['#chat/images', '#chat/workbench/free-image'], ['#chat/videos', '#chat/workbench/shorts']])('redirects the retired %s studio to its Workbench feature', (oldRoute, destination) => {
+ const { onViewChange, onLoadConversation } = setup(oldRoute)
+ expect(window.location.hash).toBe(destination)
+ expect(onViewChange).toHaveBeenCalledWith('workbench')
+ expect(onLoadConversation).not.toHaveBeenCalled()
+})

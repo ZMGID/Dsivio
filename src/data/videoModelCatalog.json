@@ -458,7 +458,8 @@
       "protocol": "xai_video",
       "modes": [
         "text",
-        "image"
+        "image",
+        "reference"
       ],
       "durations": [
         1,
@@ -497,7 +498,13 @@
         "ratio": "16:9"
       },
       "audioToggle": true,
-      "notes": "此入口提供文生视频和单张首帧；参考生视频、编辑、延长请使用对应专用接口。"
+      "notes": "此入口提供文生视频和单张首帧；参考生视频、编辑、延长请使用对应专用接口。",
+      "referenceLimits": {
+        "images": 7,
+        "videos": 0,
+        "audios": 0,
+        "audioOnly": false
+      }
     },
     {
       "id": "grok-imagine-video",
@@ -505,7 +512,8 @@
       "protocol": "xai_video",
       "modes": [
         "text",
-        "image"
+        "image",
+        "reference"
       ],
       "durations": [
         1,
@@ -543,7 +551,13 @@
         "ratio": "16:9"
       },
       "audioToggle": false,
-      "notes": "此入口提供文生视频和单张首帧；参考生视频、编辑、延长请使用对应专用接口。"
+      "notes": "此入口提供文生视频和单张首帧；参考生视频、编辑、延长请使用对应专用接口。",
+      "referenceLimits": {
+        "images": 7,
+        "videos": 0,
+        "audios": 0,
+        "audioOnly": false
+      }
     },
     {
       "id": "veo-3.1-generate-preview",

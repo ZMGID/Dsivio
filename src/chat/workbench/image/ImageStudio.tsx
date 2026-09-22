@@ -115,7 +115,7 @@ export function ImageStudio({
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={configTitle} hint={configHint}>
           {modelControl}
-          {config}
+          <fieldset className="contents" disabled={ctaDisabled}>{config}</fieldset>
           <WorkbenchCta notice={notice}>
             {footer ?? (cta && onGenerate ? <Button variant="primary" disabled={ctaDisabled} onClick={onGenerate}>{cta}</Button> : null)}
           </WorkbenchCta>

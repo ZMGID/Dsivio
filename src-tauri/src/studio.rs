@@ -1,4 +1,5 @@
 //! Page drafts and library organization; chat shares templates only.
+pub(crate) mod wait;
 use serde_json::{json, Value};
 use std::sync::Mutex;
 pub mod library;
@@ -26,7 +27,7 @@ fn draft_at(
 ) -> Result<Value, String> {
     if !matches!(
         (domain, entry),
-        ("image", "main") | ("video", "creation" | "analysis" | "remake")
+        ("image", "main" | "gen" | "replace" | "smart" | "design" | "client" | "workflow") | ("video", "creation" | "analysis" | "remake")
     ) {
         return Err("未知草稿入口".into());
     }
@@ -54,10 +55,10 @@ fn draft_at(
 
 fn validate_draft(domain: &str, value: &Value) -> Result<(), String> {
     if domain == "image" {
-        let _: crate::image_studio::types::Brief = field(value, "brief")?;
+        let _: crate::workbench::image_projects::types::Brief = field(value, "brief")?;
         let _: Option<String> = field(value, "taskId")?;
         let _: Option<u64> = field(value, "revision")?;
-        let _: Option<Vec<crate::image_studio::types::ImagePlan>> = field(value, "plans")?;
+        let _: Option<Vec<crate::workbench::image_projects::types::ImagePlan>> = field(value, "plans")?;
     } else {
         let brief = &value["brief"];
         for key in [

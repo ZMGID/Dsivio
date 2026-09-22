@@ -122,8 +122,8 @@ export function useChatRouting({
         return
       }
       if (isChatWorkbenchPath(path)) { onLeaveConversation(); onViewChange('workbench'); return }
-      if (isChatImagesPath(path)) { onLeaveConversation(); onViewChange('images'); return }
-      if (isChatVideosPath(path)) { onLeaveConversation(); onViewChange('videos'); return }
+      if (isChatImagesPath(path)) { window.location.hash = '#chat/workbench/free-image'; onLeaveConversation(); onViewChange('workbench'); return }
+      if (isChatVideosPath(path)) { window.location.hash = '#chat/workbench/shorts'; onLeaveConversation(); onViewChange('workbench'); return }
       if (isChatMarketPath(path)) { onLeaveConversation(); onViewChange('market'); return }
       if (isChatArtifactsPath(path)) {
         onLeaveConversation()

@@ -67,6 +67,11 @@ export const WORKBENCH_FEATURES = [
   { id: 'dress', group: 'image', label: (t) => t.workbenchNavDress, icon: Shirt, load: () => import('./image/DressPage').then((m) => m.DressPage) },
   { id: 'clone', group: 'image', label: (t) => t.workbenchNavClone, icon: Copy, load: () => import('./image/CloneImagePage').then((m) => m.CloneImagePage) },
   { id: 'edit', group: 'image', label: (t) => t.workbenchNavEdit, icon: Pencil, load: () => import('./image/EditImagePage').then((m) => m.EditImagePage) },
+  { id: 'free-image', group: 'image', label: (t) => t.workbenchNavFreeImage, icon: Images, load: () => import('./image/FreeImagePage').then(m => m.FreeImagePage) },
+  { id: 'template-set', group: 'image', label: (t) => t.workbenchNavTemplateSet, icon: Images, load: () => import('./image/TemplateSetPage').then(m => m.TemplateSetPage) },
+  { id: 'set-design', group: 'image', label: (t) => t.workbenchNavSetDesign, icon: Images, load: () => import('./image/SetDesignPage').then(m => m.SetDesignPage) },
+  { id: 'batch-set', group: 'image', label: (t) => t.workbenchNavBatchSet, icon: Images, load: () => import('./image/BatchSetPage').then(m => m.BatchSetPage) },
+  { id: 'template-builder', group: 'content', label: (t) => t.workbenchNavTemplateBuilder, icon: Images, load: () => import('./image/TemplateBuilderPage').then(m => m.TemplateBuilderPage) },
   // 视频创作
   { id: 'shorts', group: 'video', label: (t) => t.workbenchNavShorts, icon: Video, load: () => import('./video/ShortsPage').then((m) => m.ShortsPage) },
   { id: 'avatar', group: 'video', label: (t) => t.workbenchNavAvatar, icon: UserRound, load: () => import('./video/AvatarPage').then((m) => m.AvatarPage) },
@@ -74,12 +79,15 @@ export const WORKBENCH_FEATURES = [
   { id: 'vclone', group: 'video', label: (t) => t.workbenchNavVclone, icon: Copy, load: () => import('./video/VideoClonePage').then((m) => m.VideoClonePage) },
   { id: 'vedit', group: 'video', label: (t) => t.workbenchNavVedit, icon: Film, load: () => import('./video/VideoEditPage').then((m) => m.VideoEditPage) },
   { id: 'subs', group: 'video', label: (t) => t.workbenchNavSubs, icon: Captions, load: () => import('./video/SubtitlePage').then((m) => m.SubtitlePage) },
+  { id: 'video-analysis', group: 'video', label: (t) => t.workbenchNavVideoAnalysis, icon: ScanSearch, load: () => import('./video/VideoAnalysisPage').then(m => m.VideoAnalysisPage) },
   // 视频发布
   { id: 'publish', group: 'publish', label: (t) => t.workbenchNavPublish, icon: Send, load: () => import('./publish/PublishPage').then((m) => m.PublishPage) },
   { id: 'vaccts', group: 'publish', label: (t) => t.workbenchNavVaccts, icon: KeyRound, load: () => import('./publish/AccountsPage').then((m) => m.AccountsPage) },
   { id: 'plogs', group: 'publish', label: (t) => t.workbenchNavPlogs, icon: ClipboardList, load: () => import('./publish/PublishLogsPage').then((m) => m.PublishLogsPage) },
   { id: 'pdata', group: 'publish', label: (t) => t.workbenchNavPdata, icon: BarChart3, load: () => import('./publish/PublishDataPage').then((m) => m.PublishDataPage) },
   // 内容管理
+  { id: 'image-templates', group: 'content', label: (t) => t.workbenchNavImageTemplates, icon: Images, load: () => import('./content/ImageTemplatesPage').then((m) => m.ImageTemplatesPage) },
+  { id: 'video-templates', group: 'content', label: (t) => t.workbenchNavVideoTemplates, icon: Film, load: () => import('./content/VideoTemplatesPage').then((m) => m.VideoTemplatesPage) },
   { id: 'roles', group: 'content', label: (t) => t.workbenchNavRoles, icon: Users, load: () => import('./content/RolesPage').then((m) => m.RolesPage) },
   { id: 'assets', group: 'content', label: (t) => t.workbenchNavAssets, icon: Images, load: () => import('./content/AssetLibraryPage').then((m) => m.AssetLibraryPage) },
   // 统计管理

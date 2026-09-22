@@ -1,3 +1,4 @@
+import type { AiTaskRequest, AiTaskResult } from '../generated/aiTask'
 import type { MediaRequest, MediaTask, MediaTaskFilter } from '../generated/mediaGeneration'
 import type { ComfyConfig, ComfyWorkflow, ComfyConnection } from '../generated/comfyui'
 import type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
@@ -7,8 +8,10 @@ import type { VideoProtocol } from '../generated/videoGeneration'
 // Tauri 前端与 Rust 后端的桥接模块
 // 所有 invoke 调用和事件监听都集中在这里，作为前后端的统一接口层
 
+import type { VideoTemplate as ContentVideoTemplate } from '../generated/contentTemplates'
+import type { VideoBootstrap, VideoTask, VideoTemplate } from './workbenchVideoContracts'
 import type { TaskOrganizations, TaskOrganizationPatch } from './studioContracts'
-import type { ImageAction, ImageBootstrap, ImageBrief, ImageConfig, ImagePlan, ImageProduct, ImageTask, ImageTemplate } from './imageStudioContracts'
+import type { ImageAction, ImageBootstrap, ImageBrief, ImageConfig, ImagePlan, ImageProduct, ImageTask, ImageTemplate } from './workbenchImageContracts'
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
@@ -1768,6 +1771,8 @@ export const api = {
   validateComfyWorkflow: (workflow: ComfyWorkflow) => invoke<void>('validate_comfy_workflow', { workflow }),
   testComfyConnection: (baseUrl: string, workflow: ComfyWorkflow | null = null) => invoke<ComfyConnection>('test_comfy_connection', { baseUrl, workflow }),
   startMediaGeneration: (request: MediaRequest) => invoke<MediaTask>('start_media_generation', { request }),
+  runAiTask: (request: AiTaskRequest) => invoke<AiTaskResult>('run_ai_task', { request }),
+  cancelAiTask: (taskId: string) => invoke<void>('cancel_ai_task', { taskId }),
   listMediaTasks: (filter: Partial<MediaTaskFilter>) => invoke<MediaTask[]>('list_media_tasks', { filter: { providerId: null, model: null, origin: null, ...filter } }),
   getMediaTask: (id: string, resume = false) => invoke<MediaTask>('get_media_task', { id, resume }),
   previewVideoModelRequest: (input: { model: string; protocol: VideoProtocol; baseUrl: string }) =>
@@ -1780,20 +1785,35 @@ export const api = {
   studioTaskLibrary: (domain: 'image' | 'video', ids?: string[], patch?: TaskOrganizationPatch) =>
     invoke<TaskOrganizations>('studio_task_library', { domain, ids: ids ?? null, patch: patch ?? null }),
   legacyVideoOutputs: () => invoke<import('../generated/mediaGeneration').MediaOutput[]>('legacy_video_outputs'),
-  imageStudioBootstrap: () => invoke<ImageBootstrap>('image_studio_bootstrap'),
-  imageStudioGet: (id: string) => invoke<ImageTask>('image_studio_get', { id }),
-  imageStudioSave: (brief: ImageBrief, id?: string, revision?: number) => invoke<ImageTask>('image_studio_save', { id: id ?? null, revision: revision ?? null, brief }),
-  imageStudioSavePlans: (id: string, revision: number, plans: ImagePlan[]) => invoke<ImageTask>('image_studio_save_plans', { id, revision, plans }),
-  imageStudioImport: (paths: string[], asProducts: boolean) => invoke<ImageProduct[]>('image_studio_import', { paths, asProducts }),
-  imageStudioConfig: (config: ImageConfig) => invoke<void>('image_studio_config', { config }),
-  imageStudioPreview: (path: string, original = false) => invoke<string>('image_studio_preview', { path, original }),
-  imageStudioAction: (id: string, revision: number, action: ImageAction) => invoke<ImageTask>('image_studio_action', { id, revision, action }),
-  imageStudioTemplateImport: (path: string) => invoke<ImageTemplate>('image_studio_template_import', { path }),
-  imageStudioTemplateSave: (template: ImageTemplate) => invoke<ImageTemplate>('image_studio_template_save', { template }),
-  imageStudioTemplateExport: (id: string, destination: string) => invoke<string>('image_studio_template_export', { id, destination }),
-  imageStudioFreeze: (id: string, productId: string, name: string) => invoke<ImageTemplate>('image_studio_freeze', { id, productId, name }),
-  imageStudioExport: (id: string, destination: string, width: number, height: number, maxKb: number) => invoke<string>('image_studio_export', { id, destination, width, height, maxKb }),
-  imageStudioOpen: (path?: string) => invoke<void>('image_studio_open', { path: path ?? null }),
+  workbenchVideoBootstrap: () => invoke<VideoBootstrap>('workbench_video', { action: 'bootstrap', input: {} }),
+  workbenchVideoTask: (action: string, input: Record<string, unknown>) => invoke<VideoTask>('workbench_video', { action, input }),
+  workbenchVideoTemplate: (action: 'template_save' | 'template_import', input: Record<string, unknown>) => invoke<VideoTemplate>('workbench_video', { action, input }),
+  workbenchVideoOpen: (id?: string, mode: 'open' | 'reveal' = 'open') =>
+    invoke<void>('workbench_video', { action: 'open', input: { id, mode } }),
+  workbenchVideoPreview: (id: string) => invoke<string>('workbench_video', { action: 'preview', input: { id } }),
+  workbenchVideoPoster: (id: string) => invoke<string>('workbench_video', { action: 'poster', input: { id } }),
+  workbenchVideoImage: (path: string) => invoke<string>('workbench_video', { action: 'image_preview', input: { path } }),
+  workbenchImageBootstrap: () => invoke<ImageBootstrap>('workbench_image_bootstrap'),
+  workbenchImageGet: (id: string) => invoke<ImageTask>('workbench_image_get', { id }),
+  workbenchImageSave: (brief: ImageBrief, id?: string, revision?: number, config?: ImageConfig) => invoke<ImageTask>('workbench_image_save', { id: id ?? null, revision: revision ?? null, brief, config }),
+  workbenchImageSavePlans: (id: string, revision: number, plans: ImagePlan[]) => invoke<ImageTask>('workbench_image_save_plans', { id, revision, plans }),
+  workbenchImageImport: (paths: string[], asProducts: boolean) => invoke<ImageProduct[]>('workbench_image_import', { paths, asProducts }),
+  workbenchImagePreview: (path: string, original = false) => invoke<string>('workbench_image_preview', { path, original }),
+  workbenchImageAction: (id: string, revision: number, action: ImageAction, config?: ImageConfig) => invoke<ImageTask>('workbench_image_action', { id, revision, action, config }),
+  imageTemplatesList: () => invoke<ImageTemplate[]>('image_templates_list'),
+  imageTemplateGet: (id: string) => invoke<ImageTemplate>('image_template_get', { id }),
+  imageTemplateImport: (path: string) => invoke<ImageTemplate>('image_template_import', { path }),
+  imageTemplateSave: (template: ImageTemplate) => invoke<ImageTemplate>('image_template_save', { template }),
+  imageTemplateExport: (id: string, destination: string) => invoke<string>('image_template_export', { id, destination }),
+  imageTemplatePreview: (id: string, reference: string) => invoke<string>('image_template_preview', { id, reference }),
+  videoTemplatesList: () => invoke<ContentVideoTemplate[]>('video_templates_list'),
+  videoTemplateGet: (id: string) => invoke<ContentVideoTemplate>('video_template_get', { id }),
+  videoTemplateImport: (path: string) => invoke<ContentVideoTemplate>('video_template_import', { path }),
+  videoTemplateSave: (template: ContentVideoTemplate) => invoke<ContentVideoTemplate>('video_template_save', { template }),
+  videoTemplateExport: (id: string, destination: string) => invoke<string>('video_template_export', { id, destination }),
+  workbenchImageFreeze: (id: string, productId: string, name: string) => invoke<ImageTemplate>('workbench_image_freeze', { id, productId, name }),
+  workbenchImageExport: (id: string, destination: string, width: number, height: number, maxKb: number) => invoke<string>('workbench_image_export', { id, destination, width, height, maxKb }),
+  workbenchImageOpen: (path?: string) => invoke<void>('workbench_image_open', { path: path ?? null }),
   chatSubagentControl,
   /** 一次状态扫描可选附带行数统计，供同工作目录的 Git 徽标共享。 */
   async dockGitSnapshot(workdir: string, includeDiffStat = false): Promise<GitSnapshot> {

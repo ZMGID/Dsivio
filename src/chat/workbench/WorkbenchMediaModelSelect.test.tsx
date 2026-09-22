@@ -70,3 +70,15 @@ it('keeps page settings available when loading the model pool fails', async () =
   await userEvent.type(screen.getByRole('textbox'), '可继续填写')
   expect(screen.getByRole('textbox')).toHaveValue('可继续填写')
 })
+
+it('keeps a controlled workflow selection isolated from the saved page choice', async () => {
+  const settings = makeSettings({ providers: [makeProvider({ enabledModels: ['gpt-image-1'], modelOverrides: { 'gpt-image-1': { capabilities: { imageGeneration: true } } } })], workbenchMedia: { imageModels: [{ providerId: 'p1', model: 'gpt-image-1' }], videoModels: [] } })
+  vi.mocked(getSettingsCached).mockResolvedValue(settings)
+  localStorage.setItem('dsivio.workbench.media-choice.imageModels', 'existing-page-choice')
+  const change = vi.fn()
+  render(<WorkbenchMediaModelSelect kind="imageModels" value="" onChange={change} render={control => control} />)
+  await userEvent.click(await screen.findByRole('button', { name: '图片模型' }))
+  await userEvent.click(screen.getByRole('option', { name: 'OpenAI / gpt-image-1' }))
+  expect(change).toHaveBeenCalledWith('p1', 'gpt-image-1', settings.providers[0])
+  expect(localStorage.getItem('dsivio.workbench.media-choice.imageModels')).toBe('existing-page-choice')
+})

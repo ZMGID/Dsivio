@@ -14,6 +14,8 @@ describe('workbench registry', () => {
     expect(isWorkbenchSubpage('home')).toBe(false)
     expect(isWorkbenchSubpage('chatgpt')).toBe(false)
     expect(workbenchFeature('main').group).toBe('image')
+    expect(workbenchFeature('image-templates').group).toBe('content')
+    expect(workbenchFeature('video-templates').group).toBe('content')
   })
 
   it('loads every registered page component', async () => {

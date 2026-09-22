@@ -11,7 +11,8 @@ mod computer_control;
 pub mod connectors;
 pub mod dock;
 pub mod fonts;
-pub mod image_studio;
+pub mod workbench;
+pub mod content_templates;
 pub mod lens;
 pub mod lens_commands;
 #[cfg(any(target_os = "macos", test))]
@@ -44,7 +45,7 @@ pub mod studio;
 pub mod updates;
 pub mod usage;
 pub mod utils;
-pub mod video_studio;
+pub(crate) mod media_runtime;
 pub mod media_generation;
 pub mod comfyui;
 pub mod web_search;
@@ -251,7 +252,8 @@ pub fn run() {
             _ => {}
         })
         .setup(|app| {
-            if let Err(error) = image_studio::initialize_skill_workspace(app.handle()) { eprintln!("Image initialization failed: {error}"); }
+            if let Err(error) = media_runtime::initialize(app.handle()) { eprintln!("Video initialization failed: {error}"); }
+            if let Err(error) = workbench::image_projects::initialize_skill_workspace(app.handle()) { eprintln!("Image initialization failed: {error}"); }
             let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
 
             // Windows：退出后台执行速度节流（EcoQoS）。无可见窗口时进程会被 Win11 当后台空闲
@@ -279,7 +281,7 @@ pub fn run() {
             chat::gc::sweep_conversation_side_artifacts(app.handle());
 
             let mut settings = load_settings(&app.handle());
-            if let Err(error) = video_studio::migration::migrate(app.handle(), &mut settings) { eprintln!("Video settings migration failed: {error}"); }
+            if let Err(error) = media_runtime::migration::migrate(app.handle(), &mut settings) { eprintln!("Video settings migration failed: {error}"); }
             // 非破坏性初始化：保留用户助手，成功持久化后标记已完成。
             if !settings.builtin_assistants_seeded_v1 {
                 let now = chrono::Local::now().timestamp();
@@ -489,26 +491,34 @@ pub fn run() {
             studio::studio_draft,
             studio::library::studio_task_library,
             studio::library::studio_task_file_action,
-            video_studio::migration::legacy_video_outputs,
+            workbench::video_projects::workbench_video,
+            media_runtime::migration::legacy_video_outputs,
             comfyui::validate_comfy_workflow,
             comfyui::test_comfy_connection,
             media_generation::start_media_generation,
             media_generation::get_media_task,
             media_generation::list_media_tasks,
-            image_studio::image_studio_bootstrap,
-            image_studio::image_studio_get,
-            image_studio::image_studio_save,
-            image_studio::image_studio_save_plans,
-            image_studio::image_studio_import,
-            image_studio::image_studio_config,
-            image_studio::image_studio_preview,
-            image_studio::image_studio_action,
-            image_studio::image_studio_template_import,
-            image_studio::image_studio_template_save,
-            image_studio::image_studio_template_export,
-            image_studio::image_studio_freeze,
-            image_studio::image_studio_export,
-            image_studio::image_studio_open,
+            workbench::image_projects::workbench_image_bootstrap,
+            workbench::image_projects::workbench_image_get,
+            workbench::image_projects::workbench_image_save,
+            workbench::image_projects::workbench_image_save_plans,
+            workbench::image_projects::workbench_image_import,
+            workbench::image_projects::workbench_image_preview,
+            workbench::image_projects::workbench_image_action,
+            content_templates::image_templates_list,
+            content_templates::image_template_get,
+            content_templates::image_template_save,
+            content_templates::image_template_import,
+            content_templates::image_template_export,
+            content_templates::image_template_preview,
+            content_templates::video_templates_list,
+            content_templates::video_template_get,
+            content_templates::video_template_save,
+            content_templates::video_template_import,
+            content_templates::video_template_export,
+            workbench::image_projects::workbench_image_freeze,
+            workbench::image_projects::workbench_image_export,
+            workbench::image_projects::workbench_image_open,
             provider_oauth::provider_oauth_start,
             provider_oauth::provider_oauth_poll,
             provider_oauth::provider_oauth_cancel,
@@ -539,7 +549,7 @@ pub fn run() {
             lens_commands::explain_read_image,
             lens_commands::lens_read_freeze_frame,
             lens_commands::lens_read_image,
-            video_studio::providers::preview_video_model_request,
+            media_generation::video_providers::preview_video_model_request,
             commands::fetch_models,
             commands::test_provider_connection,
             commands::test_web_search,
@@ -657,6 +667,8 @@ pub fn run() {
             chat::commands::mutations::chat_update_conversation,
             chat::commands::title::chat_regenerate_title,
             chat::commands::prompt_optimize::chat_optimize_prompt,
+            chat::ai_task::run_ai_task,
+            chat::ai_task::cancel_ai_task,
             chat::commands::mutations::chat_bulk_update_conversations,
             chat::commands::mutations::chat_bulk_delete_conversations,
             chat::commands::reasoning::chat_reasoning_efforts_for_model,

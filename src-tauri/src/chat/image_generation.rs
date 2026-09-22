@@ -112,6 +112,17 @@ pub(crate) async fn generate_shared(
     Ok(crate::media_generation::tool_result(crate::media_generation::wait(app,&task.id,285).await?))
 }
 
+pub(crate) fn validate_generation(
+    provider: &ModelProvider,
+    model: &str,
+    arguments: &Value,
+    image_count: usize,
+) -> Result<(), String> {
+    parse_request(arguments)?;
+    reject_excess_reference_images(provider, model, image_count)?;
+    validate_provider(provider)
+}
+
 pub(crate) async fn generate_image_with_provider(
     state: &AppState,
     provider: &ModelProvider,
@@ -1592,8 +1603,17 @@ pub(crate) fn load_input_images_from_paths(paths: &[PathBuf]) -> Result<Vec<Inpu
 fn max_reference_images(provider: &ModelProvider, model: &str) -> usize {
     if uses_xai_images_api(provider, model) {
         XAI_MAX_EDIT_IMAGES
+    } else if uses_gpt_image_api_model(model) {
+        16
     } else {
-        MAX_INPUT_IMAGES
+        let model = model.to_ascii_lowercase();
+        if model.contains("gemini-3") || model.contains("nano-banana-pro") || model.contains("nano-banana-2") {
+            14
+        } else if model.contains("gemini-2.5-flash-image") || model == "nano-banana" {
+            3
+        } else {
+            MAX_INPUT_IMAGES
+        }
     }
 }
 
@@ -2787,6 +2807,16 @@ mod tests {
     }
 
     #[test]
+    fn reference_limits_follow_the_selected_image_model() {
+        let provider = gemini_provider();
+        for (model, cap) in [("gpt-image-1", 16), ("gpt-image-1.5", 16), ("gemini-3.1-flash-image", 14), ("gemini-3-pro-image-preview", 14), ("nano-banana-pro", 14), ("gemini-2.5-flash-image", 3), ("unknown-image", 4)] {
+            assert_eq!(max_reference_images(&provider, model), cap, "{model}");
+            assert!(reject_excess_reference_images(&provider, model, cap).is_ok(), "{model}");
+            assert!(reject_excess_reference_images(&provider, model, cap + 1).is_err(), "{model}");
+        }
+    }
+
+    #[test]
     fn xai_reference_image_cap_is_three_and_does_not_silently_drop() {
         let xai = ModelProvider {
             id: "xai".to_string(),
@@ -2806,7 +2836,7 @@ mod tests {
         assert_eq!(max_reference_images(&xai, "grok-imagine-image"), 3);
         assert_eq!(
             max_reference_images(&gemini_provider(), "gemini-3.1-flash-image"),
-            4
+            14
         );
         let err = reject_excess_reference_images(&xai, "grok-imagine-image", 4)
             .expect_err("xAI must refuse a 4th reference");
@@ -2817,7 +2847,7 @@ mod tests {
             reject_excess_reference_images(&gemini_provider(), "gemini-3.1-flash-image", 4).is_ok()
         );
         assert!(
-            reject_excess_reference_images(&gemini_provider(), "gemini-3.1-flash-image", 5)
+            reject_excess_reference_images(&gemini_provider(), "gemini-3.1-flash-image", 15)
                 .is_err()
         );
 

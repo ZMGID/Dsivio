@@ -37,6 +37,15 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup uv for bundled plugin dependencies
+        uses: astral-sh/setup-uv@v6
+
+      - name: Prepare bundled plugin dependencies
+        run: npm run build:video-runtime
+
+      - name: Verify bundled plugin dependencies
+        run: npm run verify:video-runtime
+
       - name: Check application icons
         run: npm run icons:check
 

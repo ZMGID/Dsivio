@@ -1,5 +1,6 @@
 // Chat 模块：AI 客户端核心功能
 pub mod agent;
+pub mod ai_task;
 pub(crate) mod artifacts;
 pub mod ask_user;
 pub mod attachments;

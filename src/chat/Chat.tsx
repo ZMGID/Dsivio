@@ -190,8 +190,6 @@ const KnowledgeCenter = lazy(() => import('./KnowledgeCenter').then((module) => 
 const NotesCenter = lazy(() => import('./NotesCenter').then((module) => ({
   default: module.NotesCenter,
 })))
-const ImageStudio = lazy(() => import('./images/ImageStudio'))
-const VideoStudio = lazy(() => import('./videos/VideoStudio'))
 import { StudioPage } from './StudioPage'
 import { MarketPage } from './market/MarketPage'
 import { marketApi } from './market/api'
@@ -349,8 +347,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (isChatKnowledgeCenterPath(path)) return 'knowledge'
     if (isChatNotesPath(path)) return 'notes'
     if (isChatWorkbenchPath(path)) return 'workbench'
-    if (isChatImagesPath(path)) return 'images'
-    if (isChatVideosPath(path)) return 'videos'
+    if (isChatImagesPath(path)) return 'workbench'
+    if (isChatVideosPath(path)) return 'workbench'
     if (isChatMarketPath(path)) return 'market'
     if (isChatArtifactsPath(path)) return 'artifacts'
     if (isChatAutomationsPath(path)) return 'automations'
@@ -2874,26 +2872,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
               <WorkbenchHome />
             </Suspense>
           </div>
-        ) : chatView === 'videos' ? (
-          <StudioPage
-            key="center"
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={handleTitlebarToggleSidebar}
-            onNewConversation={handleTitlebarNewConversation}
-          >
-            <Suspense fallback={null}><VideoStudio /></Suspense>
-          </StudioPage>
         ) : chatView === 'market' ? (
           <StudioPage sidebarCollapsed={sidebarCollapsed} onToggleSidebar={handleTitlebarToggleSidebar} onNewConversation={handleTitlebarNewConversation}><MarketPage lang={uiLang} onUninstall={handleMarketUninstall} onInstall={handleMarketInstall} onUse={handleMarketUse} /></StudioPage>
-        ) : chatView === 'images' ? (
-          <StudioPage
-            key="center"
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={handleTitlebarToggleSidebar}
-            onNewConversation={handleTitlebarNewConversation}
-          >
-            <Suspense fallback={null}><ImageStudio /></Suspense>
-          </StudioPage>
         ) : chatView === 'notes' ? (
           <div key="center" className={centerPageClass}>
             {centerPageTopStrip}
