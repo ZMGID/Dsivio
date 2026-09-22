@@ -1,6 +1,6 @@
 import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore, type ReactNode, type SetStateAction } from 'react'
 import {
-  X, RefreshCw, Monitor,
+  X, RefreshCw, Monitor, Images,
   Download, Upload, ArrowLeft,
 } from 'lucide-react'
 import { open, save } from '@tauri-apps/plugin-dialog'
@@ -41,6 +41,7 @@ import { UsageStatsPanel } from './UsageStatsPanel'
 import { RequestDebugPanel } from './RequestDebugPanel'
 import { HotkeysTab } from './tabs/HotkeysTab'
 import { LensTab } from './tabs/LensTab'
+import { MediaCreationTab } from './tabs/MediaCreationTab'
 import { MixerTab } from './tabs/MixerTab'
 import { TranslateTab } from './tabs/TranslateTab'
 import { MemoryTab } from './tabs/MemoryTab'
@@ -71,7 +72,7 @@ import {
 import { ConnectorsPanel } from './ConnectorsPanel'
 import { WebSearchPanel } from './WebSearchPanel'
 
-export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'media' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
 
 type SettingsData = SettingsType
 // UI 字号：以 px 展示、以整体缩放（zoom）实现。CSS 全是 px 硬编码，做不了真正的 rem 基准字号，
@@ -817,6 +818,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'chat' as const, label: t.tabChatClient, icon: ChatIcon },
     { id: 'memory' as const, label: t.tabMemory, icon: MemoryIcon },
     { id: 'mixer' as const, label: t.tabMixer, icon: MixerIcon },
+    { id: 'media' as const, label: lang === 'zh' ? '媒体创作' : 'Media creation', icon: Images },
     { id: 'computerControl' as const, label: lang === 'zh' ? '电脑操控' : 'Computer control', icon: Monitor },
     { id: 'hooks' as const, label: t.tabHooks, icon: HooksIcon },
     { id: 'plugins' as const, label: t.tabPlugins, icon: PluginsIcon },
@@ -854,6 +856,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       subtitle: lang === 'zh'
         ? 'L1 注入；L2 按需读取。'
         : 'L1 injected; L2 read on demand.',
+    },
+    media: {
+      title: lang === 'zh' ? '媒体创作' : 'Media creation',
+      subtitle: lang === 'zh' ? '选择 Workbench 可使用的图片和视频模型，可多选。' : 'Choose the image and video models available in Workbench. Select as many as you need.',
     },
     mixer: {
       title: t.tabMixer,
@@ -1175,6 +1181,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             )}
 
             {/* ===== 混音器标签页 ===== */}
+            {activeTab === 'media' && <MediaCreationTab settings={settings} lang={lang} onUpdatePool={(kind, models) => setSettings(prev => prev ? { ...prev, workbenchMedia: { ...prev.workbenchMedia, [kind]: models } } : prev)} />}
             {activeTab === 'mixer' && (
               <MixerTab
                 settings={settings}
@@ -1407,6 +1414,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             apiFormat={p.apiFormat}
             request={p.request}
             models={p.enabledModels}
+            modelOverrides={p.modelOverrides}
             lang={lang}
             onClose={providerModals.closeTest}
           />

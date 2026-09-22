@@ -40,7 +40,7 @@ export function CloneImagePage() {
   }
 
   return (
-    <WorkbenchPage
+    <WorkbenchPage mediaPool="imageModels"
       fill
       crumb={t.workbenchGroupImage}
       crumbCurrent={t.workbenchCloneCrumb}

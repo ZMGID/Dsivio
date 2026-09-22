@@ -23,6 +23,16 @@ const labels: ProviderModelsPickerLabels = {
 }
 
 describe('ProviderModelsPicker', () => {
+  it('显示视频官方目录但不调用聊天模型列表或自动启用模型', async () => {
+    const onFetch = vi.fn(), onAdd = vi.fn()
+    render(<ProviderModelsPicker provider={makeProvider({ baseUrl: 'https://api.minimax.cn', availableModels: [], enabledModels: [] })} lang="zh" labels={labels} fetching={false} onClose={() => {}} onFetch={onFetch} onAdd={onAdd} onAddAll={() => {}} onRemove={() => {}} />)
+    expect(screen.getByText('MiniMax-H3')).toBeInTheDocument()
+    expect(onFetch).not.toHaveBeenCalled()
+    expect(onAdd).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: '添加 MiniMax-H3' }))
+    expect(onAdd).toHaveBeenCalledWith('MiniMax-H3')
+  })
+
   it('shows and searches Kimi names while adding the original OAuth ID', async () => {
     const onAdd = vi.fn()
     const user = userEvent.setup()

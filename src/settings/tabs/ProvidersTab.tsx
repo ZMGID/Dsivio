@@ -275,10 +275,10 @@ export function ProvidersTab({
                 <div className="kv-provider-header-toolbar">
                   <span className="kv-row-label">{t.providerName}</span>
                   <div className="kv-provider-header-actions">
-                    <span className={`kv-tag ${!isProviderEnabled(selectedProvider) ? 'warn' : configured ? 'ok' : 'warn'}`}>
+                    <span className={`kv-tag ${!isProviderEnabled(selectedProvider) ? 'warn' : selectedProvider.request.comfy ? '' : configured ? 'ok' : 'warn'}`}>
                       {!isProviderEnabled(selectedProvider)
                         ? (lang === 'zh' ? '已禁用' : 'Disabled')
-                        : configured ? t.connectionOk : t.permissionMissing}
+                        : selectedProvider.request.comfy ? (lang === 'zh' ? '本地工作流' : 'Local workflows') : configured ? t.connectionOk : t.permissionMissing}
                     </span>
                     <IconButton
                       variant="danger"

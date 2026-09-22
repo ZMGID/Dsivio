@@ -1,12 +1,14 @@
+import { VIDEO_PROVIDER_PRESETS } from '../data/videoModels'
 import type { ProviderApiFormat } from '../api/tauri'
 
-// Presets only prefill provider metadata. Models are fetched from the provider API
-// and explicitly enabled by the user.
+// Presets prefill connection metadata. Official video suggestions are supplied by
+// the shared catalog; all models still require explicit user enablement.
 
 export type ProviderPreset = {
+  comfy?: boolean
   oauth?: 'codex' | 'kimi' | 'antigravity'
   name: string
-  /** OpenAI-compatible base URL, usually including /v1. */
+  /** Native API base URL, including its version prefix when required. */
   baseUrl: string
   /** 申请 API Key 的页面（在 API 密钥区显示「获取 API Key」引导链接）。本地/无需 key 的可省略。 */
   apiKeyUrl?: string
@@ -16,8 +18,12 @@ export type ProviderPreset = {
   sponsored?: boolean
 }
 
-/** 顺序：赞助中转 → 国内 Coding / Token 套餐 → 一线实验室 → 云厂商/聚合 → 本地 → 少用的。 */
+/** 媒体预设统一来自目录；随后保留聊天、套餐与本地供应商。 */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
+  { name: 'ComfyUI 本地', baseUrl: 'http://127.0.0.1:8188', comfy: true },
+  ...VIDEO_PROVIDER_PRESETS.map(p => ({
+    name: p.name, baseUrl: p.baseUrl, apiKeyUrl: p.apiKeyUrl, apiFormat: p.apiFormat as ProviderApiFormat,
+  })),
   { name: 'Codex OAuth', baseUrl: 'https://chatgpt.com/backend-api/codex', apiFormat: 'openai_responses', oauth: 'codex' },
   { name: 'Kimi OAuth', baseUrl: 'https://api.kimi.com/coding/v1', oauth: 'kimi' },
   { name: 'Antigravity OAuth', baseUrl: 'https://daily-cloudcode-pa.googleapis.com', apiFormat: 'gemini', oauth: 'antigravity' },
@@ -70,12 +76,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     apiFormat: 'anthropic_messages',
   },
   {
-    name: 'Gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-    apiKeyUrl: 'https://aistudio.google.com/apikey',
-    apiFormat: 'gemini',
-  },
-  {
     name: 'Moonshot',
     baseUrl: 'https://api.moonshot.cn/v1',
     apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys',
@@ -91,11 +91,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     apiKeyUrl: 'https://bailian.console.aliyun.com/?tab=model#/api-key',
   },
   {
-    name: 'Doubao',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    apiKeyUrl: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
-  },
-  {
     name: 'SiliconFlow',
     baseUrl: 'https://api.siliconflow.cn/v1',
     apiKeyUrl: 'https://cloud.siliconflow.cn/account/ak',
@@ -104,12 +99,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: 'OpenRouter',
     baseUrl: 'https://openrouter.ai/api/v1',
     apiKeyUrl: 'https://openrouter.ai/keys',
-  },
-  {
-    name: 'Grok',
-    baseUrl: 'https://api.x.ai/v1',
-    apiKeyUrl: 'https://console.x.ai/',
-    apiFormat: 'xai_responses',
   },
   {
     name: 'Groq',

@@ -1,3 +1,4 @@
+import { isVideoGenerationModel } from '../../data/videoModels'
 import { Toggle, SettingRow, SettingsGroup } from '../components'
 import { Button } from '../../components/Button'
 import { ModelPairSelect } from '../ModelPairSelect'
@@ -37,6 +38,36 @@ export function MixerTab({
 }: MixerTabProps) {
   return (
     <>
+      <SettingsGroup title={lang === 'zh' ? '对话生成' : 'Chat generation'}>
+        <SettingRow
+          label={t.defaultImageGenerationModel}
+          description={t.defaultImageGenerationModelHint}
+        >
+          <ModelPairSelect
+            providerId={settings.defaultModels.imageGeneration.providerId || ''}
+            model={settings.defaultModels.imageGeneration.model || ''}
+            providers={settings.providers}
+            inheritLabel={t.mixerNoImageGenerationModel}
+            filterModel={(provider, model) =>
+              resolveModelInfo(model, provider.modelOverrides, provider).capabilities?.imageGeneration === true
+            }
+            onChange={(providerId, model) => {
+              onUpdateDefaultModel('imageGeneration', providerId, model)
+            }}
+          />
+        </SettingRow>
+        <SettingRow label={lang === 'zh' ? '对话视频生成模型' : 'Chat video generation model'} description={lang === 'zh' ? '独立保存对话视频模型；对话视频工具尚未接入。' : 'A separate chat video assignment; the chat video tool is not connected yet.'}>
+          <ModelPairSelect
+            ariaLabel={lang === 'zh' ? '对话视频生成模型' : 'Chat video generation model'}
+            providerId={settings.defaultModels.videoGeneration?.providerId || ''}
+            model={settings.defaultModels.videoGeneration?.model || ''}
+            providers={settings.providers}
+            inheritLabel={lang === 'zh' ? '未配置' : 'Not configured'}
+            filterModel={(provider, model) => isVideoGenerationModel(model, provider)}
+            onChange={(providerId, model) => onUpdateDefaultModel('videoGeneration', providerId, model)}
+          />
+        </SettingRow>
+      </SettingsGroup>
       <SettingsGroup title={t.mixerSection}>
         <div className="mb-3 flex items-start justify-between gap-3">
           {t.mixerSectionHint ? (
@@ -51,6 +82,7 @@ export function MixerTab({
               onUpdateDefaultModel('titleSummary', '', '')
               onUpdateDefaultModel('compression', '', '')
               onUpdateDefaultModel('imageGeneration', '', '')
+              onUpdateDefaultModel('videoGeneration', '', '')
               onUpdateDefaultModel('promptOptimize', '', '')
             }}
             data-tauri-drag-region="false"
@@ -117,23 +149,6 @@ export function MixerTab({
             inheritLabel={t.mixerAutoModel}
             onChange={(providerId, model) => {
               onUpdateDefaultModel('compression', providerId, model)
-            }}
-          />
-        </SettingRow>
-        <SettingRow
-          label={t.defaultImageGenerationModel}
-          description={t.defaultImageGenerationModelHint}
-        >
-          <ModelPairSelect
-            providerId={settings.defaultModels.imageGeneration.providerId || ''}
-            model={settings.defaultModels.imageGeneration.model || ''}
-            providers={settings.providers}
-            inheritLabel={t.mixerNoImageGenerationModel}
-            filterModel={(provider, model) =>
-              resolveModelInfo(model, provider.modelOverrides, provider).capabilities?.imageGeneration === true
-            }
-            onChange={(providerId, model) => {
-              onUpdateDefaultModel('imageGeneration', providerId, model)
             }}
           />
         </SettingRow>

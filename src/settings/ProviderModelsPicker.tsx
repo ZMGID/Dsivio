@@ -1,3 +1,4 @@
+import { suggestedVideoModels, videoProvider } from '../data/videoModels'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Minus, Plus, RefreshCw, Search, X } from 'lucide-react'
@@ -70,7 +71,7 @@ export function ProviderModelsPicker({
 
   // 每次打开都拉一次：缓存列表可能已经过期，不能只在 availableModels 为空时才请求。
   useEffect(() => {
-    onFetch()
+    if (!videoProvider(provider.baseUrl)?.catalogOnly) onFetch()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在挂载时刷新；手动刷新走按钮。
   }, [])
 
@@ -83,8 +84,8 @@ export function ProviderModelsPicker({
   // （上次只刷新了 availableModels，enabledModels 并进去后下线项仍会残留）。
   // 本次弹窗里手动添加的 ID 记在 extraModels，否则加完立刻从列表里消失。
   const allModels = useMemo(
-    () => uniqSortedModels([...provider.availableModels, ...extraModels]),
-    [provider.availableModels, extraModels],
+    () => uniqSortedModels([...provider.availableModels, ...suggestedVideoModels(provider.baseUrl), ...extraModels]),
+    [provider.availableModels, provider.baseUrl, extraModels],
   )
 
   const filteredModels = useMemo(() => {
@@ -170,6 +171,10 @@ export function ProviderModelsPicker({
             <Plus size={14} strokeWidth={2.25} />
           </IconButton>
         </div>
+
+        {suggestedVideoModels(provider.baseUrl).length > 0 && (
+          <p className="kv-row-desc px-4">{lang === 'zh' ? '含官方视频模型目录；可添加不代表账号已开通，实际权限以供应商为准。' : 'Includes official video models. Availability depends on your provider account.'}</p>
+        )}
 
         {manualOpen && (
           <div className="kv-model-picker-manual">

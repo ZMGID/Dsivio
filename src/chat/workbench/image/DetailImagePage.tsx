@@ -29,7 +29,7 @@ export function DetailImagePage() {
   }
 
   return (
-    <WorkbenchPage
+    <WorkbenchPage mediaPool="imageModels"
       fill
       crumb={t.workbenchGroupImage}
       crumbCurrent={t.workbenchDetailCrumb}

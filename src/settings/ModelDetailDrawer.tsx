@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
+import { VideoModelFields } from './VideoModelFields'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { ArrowLeft, RotateCcw } from 'lucide-react'
 import type { ModelInfo, ModelProvider } from '../api/tauri'
 import { resolveModelInfo, matchModel, providerModelDatabaseId } from '../data/modelMatching'
@@ -33,6 +34,12 @@ export function ModelDetailDrawer({
   onSave,
   onReset,
 }: ModelDetailDrawerProps) {
+  const drawerRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    drawerRef.current?.querySelector<HTMLElement>('button')?.focus()
+    return () => { if (previous?.isConnected) previous.focus() }
+  }, [])
   const resolved = resolveModelInfo(modelName, overrides, provider)
   const dbDefaults = matchModel(providerModelDatabaseId(modelName, provider))
   const hasOverride = !!overrides?.[modelName]
@@ -143,7 +150,7 @@ export function ModelDetailDrawer({
   })()
 
   const handleSave = useCallback(() => {
-    if (temperatureInvalid || extraBodyInvalid) return
+    if ((!form.capabilities?.videoGeneration && (temperatureInvalid || extraBodyInvalid)) || (form.capabilities?.videoGeneration && !form.videoProtocol)) return
     onSave(modelName, {
       ...form,
       advertisedVideoInput: overrides?.[modelName]?.advertisedVideoInput,
@@ -163,6 +170,7 @@ export function ModelDetailDrawer({
     }
   }, [modelName, onReset, dbDefaults])
 
+  const videoProtocolMissing = form.capabilities?.videoGeneration === true && !form.videoProtocol
   const isDirty = !deepEqual(form, resolved)
 
   const t = {
@@ -213,7 +221,18 @@ export function ModelDetailDrawer({
       data-tauri-drag-region="false"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="kv-drawer" data-tauri-drag-region="false" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={drawerRef} className="kv-drawer" role="dialog" aria-modal="true" aria-label={t.title} data-tauri-drag-region="false" onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={event => {
+          if (drawerRef.current?.querySelector('[aria-expanded="true"]')) return
+          if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() }
+          if (event.key === 'Tab') {
+            const elements = Array.from(drawerRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex="0"]') || [])
+            const first = elements[0], last = elements[elements.length - 1]
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+          }
+        }}>
+
         <div className="kv-drawer-header">
           <IconButton
             size="xs"
@@ -244,6 +263,7 @@ export function ModelDetailDrawer({
             />
           </div>
 
+          {!form.capabilities?.videoGeneration && <>
           <div className="kv-drawer-row">
             <div className="kv-drawer-section flex-1">
               <label className="kv-drawer-label">{t.contextWindow}</label>
@@ -282,9 +302,12 @@ export function ModelDetailDrawer({
             </p>
           </div>
 
+          </>}
           <div className="kv-drawer-section">
             <label className="kv-drawer-label">{t.capabilities}</label>
             <div className="kv-drawer-toggles">
+              <CapabilityToggle label={lang === 'zh' ? '视频生成' : 'Video Generation'} checked={form.capabilities?.videoGeneration ?? false} onChange={v => updateCapability('videoGeneration', v)} />
+              {!form.capabilities?.videoGeneration && <>
               <CapabilityToggle label={t.vision} checked={form.capabilities?.vision ?? false} onChange={(v) => updateCapability('vision', v)} />
               <CapabilityToggle label={t.videoInput} checked={form.capabilities?.videoInput ?? false} onChange={(v) => updateCapability('videoInput', v)} />
               <CapabilityToggle label={t.functionCalling} checked={form.capabilities?.functionCalling ?? false} onChange={(v) => updateCapability('functionCalling', v)} />
@@ -292,10 +315,11 @@ export function ModelDetailDrawer({
               <CapabilityToggle label={t.streaming} checked={form.capabilities?.streaming ?? false} onChange={(v) => updateCapability('streaming', v)} />
               <CapabilityToggle label={t.webSearch} checked={form.capabilities?.webSearch ?? false} onChange={(v) => updateCapability('webSearch', v)} />
               <CapabilityToggle label={t.imageGeneration} checked={form.capabilities?.imageGeneration ?? false} onChange={(v) => updateCapability('imageGeneration', v)} />
+              </>}
             </div>
           </div>
 
-          <div className="kv-drawer-section">
+          {!form.capabilities?.videoGeneration && <div className="kv-drawer-section">
             <label className="kv-drawer-label">{t.efforts}</label>
             <div className="kv-drawer-toggles">
               <div className="kv-drawer-toggle-row">
@@ -336,8 +360,10 @@ export function ModelDetailDrawer({
                   ? t.effortsEmptyHint
                   : t.effortsHint}
             </p>
-          </div>
+          </div>}
 
+          {form.capabilities?.videoGeneration && <VideoModelFields key={`${modelName}:${provider?.baseUrl}:${form.videoProtocol}`} model={modelName} protocol={form.videoProtocol} baseUrl={provider?.baseUrl} lang={lang} onChange={value => updateField('videoProtocol', value)} />}
+          {!form.capabilities?.videoGeneration && <>
           <div className="kv-drawer-section">
             <label className="kv-drawer-label">{t.pricing}</label>
             <div className="kv-drawer-row">
@@ -386,6 +412,7 @@ export function ModelDetailDrawer({
               {extraBodyInvalid ? t.extraBodyInvalid : t.extraBodyHint}
             </p>
           </div>
+          </>}
         </div>
 
         <div className="kv-drawer-footer">
@@ -403,7 +430,7 @@ export function ModelDetailDrawer({
           <Button
             variant="primary"
             onClick={handleSave}
-            disabled={!isDirty || temperatureInvalid || extraBodyInvalid}
+            disabled={!isDirty || (!form.capabilities?.videoGeneration && (temperatureInvalid || extraBodyInvalid)) || videoProtocolMissing}
             data-tauri-drag-region="false"
           >
             {t.save}

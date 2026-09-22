@@ -170,6 +170,9 @@ pub struct ProviderCustomHeader {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ProviderRequestConfig {
+    /// Self-hosted workflow transport; these entries are Workbench-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comfy: Option<crate::comfyui::ComfyConfig>,
     /// OAuth metadata only; secrets live in the operating system credential store.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<crate::provider_oauth::OAuthConfig>,
@@ -194,6 +197,7 @@ pub struct ProviderRequestConfig {
 impl Default for ProviderRequestConfig {
     fn default() -> Self {
         Self {
+            comfy: None,
             oauth: None,
             custom_headers: Vec::new(),
             use_system_proxy: true,
@@ -404,6 +408,9 @@ pub struct ModelInfo {
     /// vLLM / SGLang 的 `chat_template_kwargs`、GLM 的 thinking 开关等。仅用于 model_overrides。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<serde_json::Value>,
+    /// Native video protocol, independent of the provider chat protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_protocol: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -416,6 +423,7 @@ pub struct ModelCapabilities {
     pub streaming: Option<bool>,
     pub web_search: Option<bool>,
     pub image_generation: Option<bool>,
+    pub video_generation: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1072,7 +1080,7 @@ impl Default for ChatMemoryConfig {
 /**
  * 可选模型选择：provider_id 为空表示未单独设置。
  */
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DefaultModelSelection {
     #[serde(default)]
@@ -1087,6 +1095,28 @@ impl Default for DefaultModelSelection {
             provider_id: String::new(),
             model: String::new(),
         }
+    }
+}
+
+/// Workbench model membership. Independent from conversational default assignments.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkbenchMediaConfig {
+    pub image_models: Vec<DefaultModelSelection>,
+    pub video_models: Vec<DefaultModelSelection>,
+}
+
+fn sanitize_workbench_media(config: &mut WorkbenchMediaConfig, providers: &[ModelProvider]) {
+    for pool in [&mut config.image_models, &mut config.video_models] {
+        let mut seen = std::collections::HashSet::new();
+        pool.retain_mut(|entry| {
+            entry.provider_id = entry.provider_id.trim().to_owned();
+            entry.model = entry.model.trim().to_owned();
+            // Keep membership when a provider is temporarily disabled. Deleted entries cannot be used.
+            !entry.provider_id.is_empty() && !entry.model.is_empty()
+                && providers.iter().any(|p| p.id == entry.provider_id && p.enabled_models.contains(&entry.model))
+                && seen.insert((entry.provider_id.clone(), entry.model.clone()))
+        });
     }
 }
 
@@ -1152,6 +1182,8 @@ pub struct DefaultModelsConfig {
     #[serde(default)]
     pub image_generation: DefaultModelSelection,
     #[serde(default)]
+    pub video_generation: DefaultModelSelection,
+    #[serde(default)]
     pub prompt_optimize: DefaultModelSelection,
     #[serde(default)]
     pub advisor: DefaultModelSelection,
@@ -1166,6 +1198,7 @@ impl Default for DefaultModelsConfig {
             title_summary: DefaultModelSelection::default(),
             compression: DefaultModelSelection::default(),
             image_generation: DefaultModelSelection::default(),
+            video_generation: DefaultModelSelection::default(),
             prompt_optimize: DefaultModelSelection::default(),
             advisor: DefaultModelSelection::default(),
         }
@@ -1763,6 +1796,8 @@ pub struct Settings {
     #[serde(default)]
     pub default_models: DefaultModelsConfig,
     #[serde(default)]
+    pub workbench_media: WorkbenchMediaConfig,
+    #[serde(default)]
     pub translator_prompt: Option<String>,
     #[serde(default)]
     pub providers: Vec<ModelProvider>,
@@ -1973,6 +2008,7 @@ impl Default for Settings {
             chat_provider_id: String::new(),
             chat_model: String::new(),
             default_models: DefaultModelsConfig::default(),
+            workbench_media: WorkbenchMediaConfig::default(),
             translator_prompt: None,
             providers: vec![],
             capability_config_text: String::new(),
@@ -2116,7 +2152,7 @@ fn sanitize_default_model_selection(
 
     let Some(provider) = providers
         .iter()
-        .find(|p| p.id == selection.provider_id && p.enabled)
+        .find(|p| p.id == selection.provider_id && p.enabled && p.request.comfy.is_none())
     else {
         selection.provider_id.clear();
         selection.model.clear();
@@ -2214,6 +2250,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
 
     // 1b. 单 key → 多 key 迁移（v2.3.1 → v2.4 升级路径）
     for provider in &mut settings.providers {
+        crate::comfyui::normalize_provider(provider);
         provider.api_format = provider.api_format_kind().as_str().to_string();
         if let Some(legacy) = provider.api_key_legacy.take() {
             let trimmed = legacy.trim().to_string();
@@ -2295,7 +2332,7 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         settings
             .providers
             .retain(|provider| provider.base_url != LEGACY_APPLE_INTELLIGENCE_BASE_URL);
-        let fallback = settings.providers.iter().find(|p| p.enabled).map(|p| {
+        let fallback = settings.providers.iter().find(|p| p.enabled && p.request.comfy.is_none()).map(|p| {
             (
                 p.id.clone(),
                 p.enabled_models.first().cloned().unwrap_or_default(),
@@ -2357,9 +2394,9 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
         }
     }
 
-    let provider_exists = |id: &str| settings.providers.iter().any(|p| p.id == id);
-    let provider_selectable = |id: &str| settings.providers.iter().any(|p| p.id == id && p.enabled);
-    let first_selectable_provider = || settings.providers.iter().find(|p| p.enabled);
+    let provider_exists = |id: &str| settings.providers.iter().any(|p| p.id == id && p.request.comfy.is_none());
+    let provider_selectable = |id: &str| settings.providers.iter().any(|p| p.id == id && p.enabled && p.request.comfy.is_none());
+    let first_selectable_provider = || settings.providers.iter().find(|p| p.enabled && p.request.comfy.is_none());
 
     // 2. 为空字段设置默认值
     if settings.translator_provider_id.is_empty() {
@@ -2450,6 +2487,19 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             &settings.providers,
         );
         sanitize_default_model_selection(&mut settings.default_models.advisor, &settings.providers);
+    }
+
+    sanitize_workbench_media(&mut settings.workbench_media, &settings.providers);
+
+    // Video selection is explicit: never repair it to the first (possibly chat) model.
+    let video = &mut settings.default_models.video_generation;
+    video.provider_id = video.provider_id.trim().to_string();
+    video.model = video.model.trim().to_string();
+    if !settings.providers.iter().any(|p| p.id == video.provider_id && p.enabled
+        && p.enabled_models.contains(&video.model)
+        && crate::video_studio::providers::is_video_model(p, &video.model))
+    {
+        *video = DefaultModelSelection::default();
     }
 
     // 3. 确保当前使用的模型确实在该 provider 的 enabled_models 中。
@@ -2960,7 +3010,7 @@ fn onboarding_status_is_set(raw: &str) -> bool {
 }
 
 fn provider_has_usable_config(provider: &ModelProvider) -> bool {
-    provider.enabled && provider.has_credentials() && !provider.enabled_models.is_empty()
+    provider.enabled && provider.request.comfy.is_none() && provider.has_credentials() && !provider.enabled_models.is_empty()
 }
 
 fn settings_has_usable_provider_config(settings: &Settings) -> bool {
@@ -4807,6 +4857,53 @@ mod tests {
             s.image_generation_model(),
             Some(("image".to_string(), "image-model".to_string()))
         );
+    }
+
+    #[test]
+    fn workbench_media_pools_roundtrip_without_mutating_chat_defaults() {
+        let mut settings = Settings::default();
+        settings.providers.push(serde_json::from_value(serde_json::json!({
+            "id":"p", "name":"Pool", "baseUrl":"https://example.com", "enabled":true,
+            "enabledModels":["image-a","image-b","MiniMax-H3"], "apiKeys":[]
+        })).unwrap());
+        settings.default_models.image_generation = DefaultModelSelection { provider_id:"p".into(), model:"image-a".into() };
+        settings.workbench_media = serde_json::from_value(serde_json::json!({
+            "imageModels":[{"providerId":"p","model":"image-a"},{"providerId":" p ","model":"image-b "},{"providerId":"p","model":"image-a"},{"providerId":"deleted","model":"gone"}],
+            "videoModels":[{"providerId":"p","model":"MiniMax-H3"}]
+        })).unwrap();
+        let normalized = sanitize_settings(settings);
+        assert_eq!(normalized.workbench_media.image_models.len(), 2);
+        assert_eq!(normalized.workbench_media.image_models[1].model, "image-b");
+        assert_eq!(normalized.workbench_media.video_models.len(), 1);
+        assert_eq!(normalized.default_models.image_generation.model, "image-a");
+        let value = serde_json::to_value(&normalized).unwrap();
+        let mut restored: Settings = serde_json::from_value(value).unwrap();
+        restored.providers[0].enabled = false;
+        restored.providers[0].enabled_models.retain(|m|m != "image-a");
+        let cleaned = sanitize_settings(restored);
+        assert_eq!(cleaned.workbench_media.image_models.len(), 1);
+        assert_eq!(cleaned.workbench_media.image_models[0].model, "image-b");
+        assert!(Settings::default().workbench_media.image_models.is_empty());
+        assert!(Settings::default().workbench_media.video_models.is_empty());
+    }
+
+    #[test]
+    fn video_selection_roundtrips_and_never_falls_back_to_chat() {
+        let old: DefaultModelsConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(old.video_generation.model.is_empty());
+        let mut settings = Settings::default();
+        settings.providers.push(serde_json::from_value(serde_json::json!({
+            "id":"video", "name":"Video", "baseUrl":"https://api.minimax.cn",
+            "apiKeys":[], "enabled":true, "enabledModels":["MiniMax-H3","chat-model"]
+        })).unwrap());
+        settings.default_models.video_generation = DefaultModelSelection { provider_id:"video".into(), model:"MiniMax-H3".into() };
+        let encoded = serde_json::to_value(sanitize_settings(settings)).unwrap();
+        let mut restored = sanitize_settings(serde_json::from_value(encoded).unwrap());
+        assert_eq!(restored.default_models.video_generation.model, "MiniMax-H3");
+        restored.providers[0].enabled_models = vec!["chat-model".into()];
+        let removed = sanitize_settings(restored);
+        assert!(removed.default_models.video_generation.model.is_empty());
+        assert!(removed.default_models.video_generation.provider_id.is_empty());
     }
 
     #[test]

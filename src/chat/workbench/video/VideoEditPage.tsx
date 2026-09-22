@@ -36,7 +36,7 @@ export function VideoEditPage() {
   }
 
   return (
-    <WorkbenchPage
+    <WorkbenchPage mediaPool="videoModels"
       fill
       crumb={t.workbenchGroupVideo}
       crumbCurrent={t.workbenchVeditCrumb}

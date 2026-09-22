@@ -45,6 +45,7 @@ pub mod updates;
 pub mod usage;
 pub mod utils;
 pub mod video_studio;
+pub mod comfyui;
 pub mod web_search;
 #[cfg(any(test, target_os = "macos"))]
 pub(crate) mod window_focus;
@@ -489,6 +490,11 @@ pub fn run() {
             studio::library::studio_task_library,
             studio::library::studio_task_file_action,
             video_studio::video_studio,
+            comfyui::validate_comfy_workflow,
+            comfyui::test_comfy_connection,
+            comfyui::submit_comfy_workflow,
+            comfyui::list_comfy_tasks,
+            comfyui::refresh_comfy_task,
             image_studio::image_studio_bootstrap,
             image_studio::image_studio_get,
             image_studio::image_studio_save,
@@ -533,6 +539,9 @@ pub fn run() {
             lens_commands::explain_read_image,
             lens_commands::lens_read_freeze_frame,
             lens_commands::lens_read_image,
+            video_studio::providers::preview_video_model_request,
+            video_studio::providers::submit_video_model_request,
+            video_studio::providers::query_video_model_request,
             commands::fetch_models,
             commands::test_provider_connection,
             commands::test_web_search,

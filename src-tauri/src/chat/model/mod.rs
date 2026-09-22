@@ -52,6 +52,7 @@ pub(crate) async fn generate_with_chat_provider(
     retry_attempts: usize,
     request: GenerateRequest,
 ) -> Result<GenerateOutput, ModelError> {
+    if provider.request.comfy.is_some() { return Err(ModelError::new("ComfyUI 工作流仅供 Workbench 使用，不能作为对话模型")); }
     crate::chat::video::validate_request(provider, &request)?;
     let resolved = crate::provider_oauth::resolve_provider(state, provider)
         .await
@@ -105,6 +106,7 @@ pub(crate) async fn stream_with_chat_provider(
     request: GenerateRequest,
     sink: &mut (dyn StreamSink + Send),
 ) -> Result<GenerateOutput, ModelError> {
+    if provider.request.comfy.is_some() { return Err(ModelError::new("ComfyUI 工作流仅供 Workbench 使用，不能作为对话模型")); }
     crate::chat::video::validate_request(provider, &request)?;
     let resolved = crate::provider_oauth::resolve_provider(state, provider)
         .await

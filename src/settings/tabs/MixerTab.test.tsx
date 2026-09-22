@@ -31,6 +31,14 @@ function renderTab(overrides: Record<string, unknown> = {}) {
 }
 
 describe('MixerTab', () => {
+  it('只把视频生成模型列入媒体槽位并保存到独立配置', async () => {
+    const props = renderTab({ providers: [makeProvider({ enabledModels: ['gpt-4o', 'MiniMax-H3'] })] })
+    await userEvent.click(screen.getByRole('button', { name: '对话视频生成模型' }))
+    expect(screen.queryByRole('option', { name: /gpt-4o/ })).toBeNull()
+    await userEvent.click(screen.getByRole('option', { name: /MiniMax-H3/ }))
+    expect(props.onUpdateDefaultModel).toHaveBeenCalledWith('videoGeneration', 'p1', 'MiniMax-H3')
+  })
+
   it('可以关闭视频分析，且不清空已选模型', async () => {
     const props = renderTab()
     expect(screen.queryByText('启用视频分析')).toBeNull()
@@ -78,7 +86,7 @@ describe('MixerTab', () => {
     const props = renderTab()
     await userEvent.click(screen.getByRole('button', { name: t.mixerResetAuto }))
     const keys = props.onUpdateDefaultModel.mock.calls.map((c) => c[0])
-    expect(keys).toEqual(['vision', 'videoAnalysis', 'titleSummary', 'compression', 'imageGeneration', 'promptOptimize'])
+    expect(keys).toEqual(['vision', 'videoAnalysis', 'titleSummary', 'compression', 'imageGeneration', 'videoGeneration', 'promptOptimize'])
     // advisor 有独立开关，不该被批量重置清掉
     expect(keys).not.toContain('advisor')
   })
@@ -115,6 +123,7 @@ describe('MixerTab', () => {
         titleSummary: { providerId: '', model: '' },
         compression: { providerId: '', model: '' },
         imageGeneration: { providerId: '', model: '' },
+      videoGeneration: { providerId: '', model: '' },
         promptOptimize: { providerId: '', model: '' },
         advisor: { providerId: 'p1', model: 'gpt-4o' },
       },

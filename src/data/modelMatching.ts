@@ -1,3 +1,4 @@
+import { videoModelInfo } from './videoModels'
 import modelDatabase from './modelDatabase.json'
 import type { ModelInfo, ModelProvider } from '../api/tauri'
 
@@ -69,6 +70,8 @@ const normalizedEntries = dbKeys.map((orig) => {
  */
 export function matchModel(modelName: string): ModelInfo | null {
   if (!modelName.trim()) return null
+  const video = videoModelInfo(modelName)
+  if (video) return video
 
   const exact = matchModelExact(modelName)
   if (exact) return exact
@@ -128,6 +131,8 @@ export function matchModel(modelName: string): ModelInfo | null {
  */
 export function matchModelExact(modelName: string): ModelInfo | null {
   if (!modelName.trim()) return null
+  const video = videoModelInfo(modelName)
+  if (video) return video
   const name = modelName.toLowerCase().trim()
   const stripped = name.includes('/') ? name.split('/').pop()! : name
   if (db[name]) return toModelInfo(db[name])
@@ -171,6 +176,7 @@ export function resolveModelInfo(
 
   return {
     displayName: override.displayName ?? defaults.displayName,
+    videoProtocol: override.videoProtocol ?? defaults.videoProtocol,
     contextWindow: override.contextWindow ?? defaults.contextWindow,
     maxOutput: override.maxOutput ?? defaults.maxOutput,
     temperature: override.omitTemperature
@@ -185,6 +191,7 @@ export function resolveModelInfo(
       webSearch: override.capabilities?.webSearch ?? defaults.capabilities?.webSearch,
       imageGeneration: override.capabilities?.imageGeneration ?? defaults.capabilities?.imageGeneration,
       videoInput: override.capabilities?.videoInput ?? defaults.capabilities?.videoInput,
+      videoGeneration: override.capabilities?.videoGeneration ?? defaults.capabilities?.videoGeneration,
       embedding: override.capabilities?.embedding ?? defaults.capabilities?.embedding,
     },
     dimensions: override.dimensions ?? defaults.dimensions,

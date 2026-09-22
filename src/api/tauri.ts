@@ -1,3 +1,8 @@
+import type { ComfyConfig, ComfyWorkflow, ComfyConnection, ComfyTask } from '../generated/comfyui'
+import type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
+export type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
+import type { VideoGenerationInput, VideoGenerationResult, VideoRequestPreview } from '../generated/videoGeneration'
+import type { VideoProtocol } from '../generated/videoGeneration'
 // Tauri 前端与 Rust 后端的桥接模块
 // 所有 invoke 调用和事件监听都集中在这里，作为前后端的统一接口层
 
@@ -892,6 +897,8 @@ export type ModelInfo = {
   displayName?: string
   /** Latest upstream capability, separate from the user's explicit override. */
   advertisedVideoInput?: boolean
+  /** Native video protocol; independent of the provider chat protocol. */
+  videoProtocol?: VideoProtocol
   contextWindow?: number
   maxOutput?: number
   /** 模型级采样温度；未设置时请求不发送 temperature。 */
@@ -906,6 +913,7 @@ export type ModelInfo = {
     streaming?: boolean
     webSearch?: boolean
     imageGeneration?: boolean
+    videoGeneration?: boolean
     embedding?: boolean
   }
   /** 嵌入模型的向量维度（默认/原生）。 */
@@ -954,6 +962,7 @@ export function providerHasCredentials(provider: ModelProvider): boolean {
 }
 
 export type ProviderRequestConfig = {
+  comfy?: ComfyConfig | null
   oauth?: ProviderOAuthConfig | null
   /** 附加到该供应商所有请求上的自定义头。同名时覆盖 CLI 身份预设。 */
   customHeaders: { key: string; value: string }[]
@@ -1007,11 +1016,6 @@ export type ProviderConnectionInput = {
   request?: ProviderRequestConfig
 }
 
-export type DefaultModelSelection = {
-  providerId: string
-  model: string
-}
-
 export type DefaultModelsConfig = {
   chat: DefaultModelSelection
   vision: DefaultModelSelection
@@ -1019,6 +1023,7 @@ export type DefaultModelsConfig = {
   titleSummary: DefaultModelSelection
   compression: DefaultModelSelection
   imageGeneration: DefaultModelSelection
+  videoGeneration: DefaultModelSelection
   promptOptimize: DefaultModelSelection
   advisor: DefaultModelSelection
 }
@@ -1155,6 +1160,7 @@ export type Settings = {
   chatProviderId: string
   chatModel: string
   defaultModels: DefaultModelsConfig
+  workbenchMedia: WorkbenchMediaConfig
   /** Canonical backend responses always contain chat settings after migration. */
   chat: ChatConfig
   /** Canonical backend responses always contain chat memory settings after migration. */
@@ -1759,6 +1765,17 @@ function chatSubagentControl(conversationId: string, args: SubAgentControlReques
 }
 
 export const api = {
+  validateComfyWorkflow: (workflow: ComfyWorkflow) => invoke<void>('validate_comfy_workflow', { workflow }),
+  testComfyConnection: (baseUrl: string, workflow: ComfyWorkflow | null = null) => invoke<ComfyConnection>('test_comfy_connection', { baseUrl, workflow }),
+  submitComfyWorkflow: (providerId: string, workflowId: string, values: Record<string, unknown>) => invoke<ComfyTask>('submit_comfy_workflow', { providerId, workflowId, values }),
+  listComfyTasks: (providerId: string, workflowId: string) => invoke<ComfyTask[]>('list_comfy_tasks', { providerId, workflowId }),
+  refreshComfyTask: (id: string) => invoke<ComfyTask>('refresh_comfy_task', { id }),
+  previewVideoModelRequest: (input: { model: string; protocol: VideoProtocol; baseUrl: string }) =>
+    invoke<VideoRequestPreview>('preview_video_model_request', input),
+  submitVideoModelRequest: (providerId: string, model: string, input: VideoGenerationInput) =>
+    invoke<VideoGenerationResult>('submit_video_model_request', { providerId, model, input }),
+  queryVideoModelRequest: (receipt: { providerId: string; model: string; protocol: VideoProtocol; baseUrl: string; remoteId: string }) =>
+    invoke<VideoGenerationResult>('query_video_model_request', receipt),
   chatArtifactsList: () => invoke<ArtifactLibraryPage>('chat_artifacts_list'),
   chatArtifactAction: (id: string, action: 'preview' | 'open' | 'reveal' | 'export' | 'delete' | 'rename', destination?: string, name?: string) =>
     invoke<string | null>('chat_artifact_action', { id, action, destination, name }),

@@ -1,5 +1,7 @@
 //! Video page runtime, independent of the bundled chat plugin.
 pub(crate) mod config;
+pub(crate) mod providers;
+pub use providers::{RequestPreview, VideoInput, VideoResult};
 mod planning;
 use crate::{
     image_studio::{agent, types::StudioConfig},

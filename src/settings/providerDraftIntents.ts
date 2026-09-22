@@ -1,3 +1,4 @@
+import { removeMediaPoolEntries } from '../data/mediaModelPools'
 import type { ModelInfo, ModelProvider, Settings } from '../api/tauri'
 import type { ProviderPreset } from './providerPresets'
 import { createProviderRequestDraft } from './public/providerDraft'
@@ -20,6 +21,7 @@ function clearDefaultModelProvider(
   providerId: string,
 ): Settings['defaultModels'] {
   return {
+    videoGeneration: defaultModels.videoGeneration?.providerId === providerId ? { providerId: '', model: '' } : (defaultModels.videoGeneration ?? { providerId: '', model: '' }),
     chat: defaultModels.chat.providerId === providerId ? { providerId: '', model: '' } : defaultModels.chat,
     vision: defaultModels.vision.providerId === providerId ? { providerId: '', model: '' } : defaultModels.vision,
     videoAnalysis: defaultModels.videoAnalysis.providerId === providerId ? { providerId: '', model: '' } : defaultModels.videoAnalysis,
@@ -37,6 +39,8 @@ function resolveDefaultModelsAfterModelRemoval(
   resolveAfterRemoval: (currentModel: string) => string,
 ): Settings['defaultModels'] {
   return {
+    videoGeneration: defaultModels.videoGeneration?.providerId === providerId && resolveAfterRemoval(defaultModels.videoGeneration.model) !== defaultModels.videoGeneration.model
+      ? { providerId: '', model: '' } : (defaultModels.videoGeneration ?? { providerId: '', model: '' }),
     chat: defaultModels.chat.providerId === providerId ? { ...defaultModels.chat, model: resolveAfterRemoval(defaultModels.chat.model) } : defaultModels.chat,
     vision: defaultModels.vision.providerId === providerId ? { ...defaultModels.vision, model: resolveAfterRemoval(defaultModels.vision.model) } : defaultModels.vision,
     videoAnalysis: defaultModels.videoAnalysis.providerId === providerId ? { ...defaultModels.videoAnalysis, model: resolveAfterRemoval(defaultModels.videoAnalysis.model) } : defaultModels.videoAnalysis,
@@ -57,9 +61,10 @@ function updateProvider(settings: Settings, id: string, updates: Partial<ModelPr
 }
 
 function resolveProvider(providers: ModelProvider[], providerId: string): ModelProvider | undefined {
-  const matched = providers.find((provider) => provider.id === providerId)
+  const chatProviders = providers.filter(provider => !provider.request?.comfy)
+  const matched = chatProviders.find((provider) => provider.id === providerId)
   if (matched && isProviderEnabled(matched)) return matched
-  return providers.find(isProviderEnabled) ?? providers[0]
+  return chatProviders.find(isProviderEnabled) ?? chatProviders[0]
 }
 
 function resolveModel(provider: ModelProvider | undefined, currentModel: string): string {
@@ -99,7 +104,7 @@ export function applyProviderDraftIntent(settings: Settings, intent: ProviderDra
         enabledModels: [],
         enabled: true,
         apiFormat: preset?.apiFormat ?? 'openai_chat',
-        request: createProviderRequestDraft(preset?.oauth),
+        request: { ...createProviderRequestDraft(preset?.oauth), ...(preset?.comfy ? { comfy: { workflows: [] }, useSystemProxy: false } : {}) },
       }
       return { ...settings, providers: [...settings.providers, provider] }
     }
@@ -121,6 +126,7 @@ export function applyProviderDraftIntent(settings: Settings, intent: ProviderDra
         ...settings,
         providers,
         providerIcons,
+        workbenchMedia: removeMediaPoolEntries(settings.workbenchMedia, intent.id),
         translatorProviderId: translatorProvider?.id ?? '',
         translatorModel: resolveModel(translatorProvider, settings.translatorModel),
         defaultModels,
@@ -177,6 +183,7 @@ export function applyProviderDraftIntent(settings: Settings, intent: ProviderDra
         ...settings,
         providers: settings.providers.map((item) => item.id === intent.id
           ? { ...item, enabledModels: nextEnabledModels } : item),
+        workbenchMedia: removeMediaPoolEntries(settings.workbenchMedia, intent.id, intent.model),
         translatorModel: settings.translatorProviderId === intent.id
           ? resolveAfterRemoval(settings.translatorModel) : settings.translatorModel,
         defaultModels,

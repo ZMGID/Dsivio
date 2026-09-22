@@ -62,6 +62,7 @@ export function makeSettings(overrides: Partial<SettingsData> = {}): SettingsDat
     retryEnabled: true,
     retryAttempts: 3,
     providers: [],
+    workbenchMedia: { imageModels: [], videoModels: [] },
     defaultModels: {
       chat: { providerId: '', model: '' },
       vision: { providerId: '', model: '' },
@@ -69,6 +70,7 @@ export function makeSettings(overrides: Partial<SettingsData> = {}): SettingsDat
       titleSummary: { providerId: '', model: '' },
       compression: { providerId: '', model: '' },
       imageGeneration: { providerId: '', model: '' },
+      videoGeneration: { providerId: '', model: '' },
       promptOptimize: { providerId: '', model: '' },
       advisor: { providerId: '', model: '' },
     },

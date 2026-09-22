@@ -1,8 +1,9 @@
+import { isVideoGenerationModel } from '../data/videoModels'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, RefreshCw, Check } from 'lucide-react'
 import { api } from '../api/tauri'
-import type { ProviderRequestConfig } from '../api/tauri'
+import type { ProviderRequestConfig, ModelInfo } from '../api/tauri'
 import { ModelIcon } from '../components/ModelIcon'
 import { Button, IconButton } from '../components/Button'
 import { MODEL_TEST_CONCURRENCY, runPool } from '../components/providerModelTestPool'
@@ -23,6 +24,7 @@ export function ProviderModelTestModal({
   apiFormat,
   request,
   models,
+  modelOverrides,
   lang,
   onClose,
 }: {
@@ -34,10 +36,12 @@ export function ProviderModelTestModal({
   /** 编辑中的请求配置：测试必须和真实聊天带一样的头，否则「测试通过、聊天 403」。 */
   request?: ProviderRequestConfig
   models: string[]
+  modelOverrides?: Record<string, ModelInfo>
   lang: Lang
   onClose: () => void
 }) {
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(models))
+  const testableModels = models.filter(model => !isVideoGenerationModel(model, { modelOverrides }))
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(testableModels))
   const [results, setResults] = useState<Record<string, Result>>({})
   const [running, setRunning] = useState(false)
   const runIdRef = useRef(0)
@@ -60,7 +64,7 @@ export function ProviderModelTestModal({
       lang === 'zh' ? `${done}/${total}` : `${done}/${total}`,
   }
 
-  const allChecked = models.length > 0 && selected.size === models.length
+  const allChecked = testableModels.length > 0 && selected.size === testableModels.length
   const toggle = (m: string) =>
     setSelected((prev) => {
       const next = new Set(prev)
@@ -68,14 +72,14 @@ export function ProviderModelTestModal({
       else next.add(m)
       return next
     })
-  const toggleAll = () => setSelected(allChecked ? new Set() : new Set(models))
+  const toggleAll = () => setSelected(allChecked ? new Set() : new Set(testableModels))
 
   const finishedCount = Object.values(results).filter(
     (r) => r.status === 'ok' || r.status === 'fail',
   ).length
 
   const runTests = async () => {
-    const targets = models.filter((m) => selected.has(m))
+    const targets = testableModels.filter((m) => selected.has(m))
     if (targets.length === 0 || running) return
     const runId = ++runIdRef.current
     setRunning(true)
@@ -138,6 +142,7 @@ export function ProviderModelTestModal({
           </IconButton>
         </div>
 
+        {testableModels.length !== models.length && <p className="kv-row-desc">{lang === 'zh' ? '视频生成模型不发送聊天测试请求。请在模型详情预览原生请求，实际生成需在视频任务中验证。' : 'Video models are excluded from chat tests. Preview native requests in model details; verify generation in a video task.'}</p>}
         {models.length === 0 ? (
           <p className="kv-mtest-empty">{t.empty}</p>
         ) : (
@@ -157,6 +162,7 @@ export function ProviderModelTestModal({
             <ul className="kv-mtest-list custom-scrollbar">
               {models.map((model) => {
                 const res = results[model]
+                const video = isVideoGenerationModel(model, { modelOverrides })
                 return (
                   <li key={model} className="kv-mtest-item">
                     <div className="kv-mtest-row">
@@ -165,11 +171,12 @@ export function ProviderModelTestModal({
                         className="kv-mtest-check"
                         checked={selected.has(model)}
                         onChange={() => toggle(model)}
-                        disabled={running}
+                        disabled={running || video}
                       />
                       <ModelIcon model={model} size={16} />
                       <span className="kv-mtest-name" title={model}>{model}</span>
                       <span className={statusClass(res?.status)}>
+                        {video && (lang === 'zh' ? '视频模型' : 'Video model')}
                         {res?.status === 'testing' && (
                           <RefreshCw size={12} className="animate-spin" />
                         )}

@@ -99,7 +99,7 @@ export function ImageStudio({
 }) {
   const t = useT()
   return (
-    <WorkbenchPage fill crumb={t.workbenchGroupImage} crumbCurrent={crumbCurrent} title={title} actions={capsules}>
+    <WorkbenchPage mediaPool="imageModels" fill crumb={t.workbenchGroupImage} crumbCurrent={crumbCurrent} title={title} actions={capsules}>
       {tabs}
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={configTitle} hint={configHint}>

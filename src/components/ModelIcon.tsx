@@ -27,6 +27,7 @@ import Stepfun from '@lobehub/icons/es/Stepfun/components/Color'
 import OpenRouter from '@lobehub/icons/es/OpenRouter/components/Mono'
 import SiliconCloud from '@lobehub/icons/es/SiliconCloud/components/Color'
 import Ollama from '@lobehub/icons/es/Ollama/components/Mono'
+import ComfyUI from '@lobehub/icons/es/ComfyUI/components/Mono'
 import Google from '@lobehub/icons/es/Google/components/Color'
 import Nvidia from '@lobehub/icons/es/Nvidia/components/Color'
 import Groq from '@lobehub/icons/es/Groq/components/Mono'
@@ -213,6 +214,7 @@ export const PROVIDER_BRANDS: Record<string, Glyph> = {
   OpenRouter: G(OpenRouter),
   SiliconCloud: G(SiliconCloud),
   Ollama: G(Ollama),
+  ComfyUI: G(ComfyUI),
   Nvidia: G(Nvidia),
   Groq: G(Groq),
   Together: G(Together),
@@ -286,6 +288,7 @@ export const PROVIDER_PICKER_KEYS: string[] = [
   'Azure',
   'Nvidia',
   'Ollama',
+  'ComfyUI',
   'LmStudio',
   'Vllm',
   'Xinference',
@@ -313,6 +316,7 @@ const PROVIDER_ICON_MAP: Array<[RegExp, string]> = [
   [/xiaomi|xiaomimimo|mimo\.mi|token-plan/, 'XiaomiMiMo'],
   [/siliconflow|siliconcloud|硅基/, 'SiliconCloud'],
   [/ollama/, 'Ollama'],
+  [/comfyui|\bcomfy\b/, 'ComfyUI'],
   [/bigmodel|zhipu|glm|智谱/, 'Zhipu'],
   [/deepseek/, 'DeepSeek'],
   [/kimi/, 'Kimi'],

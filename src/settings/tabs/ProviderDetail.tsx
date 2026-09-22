@@ -1,3 +1,4 @@
+import { ComfyProviderPanel } from '../ComfyProviderPanel'
 import { useEffect, useState } from 'react'
 import {
   Plus, Minus, Trash2, RefreshCw, Eye, EyeOff, Wrench, Brain,
@@ -47,6 +48,8 @@ export function ProviderDetail({
   const [showRequestPage, setShowRequestPage] = useState(false)
   // 切换供应商时退回一级页：否则会停在二级页上、悄悄改到另一个供应商的头。
   useEffect(() => setShowRequestPage(false), [provider.id])
+
+  if (provider.request.comfy) return <ComfyProviderPanel key={provider.id} provider={provider} lang={lang} onUpdateProvider={onUpdateProvider} />
 
   if (showRequestPage) {
     return (
@@ -295,6 +298,7 @@ export function ProviderDetail({
                       <Brain size={11} strokeWidth={2} />
                     </span>
                   )}
+                  {caps?.videoGeneration && <span className="kv-tag" title={lang === 'zh' ? '视频生成' : 'Video generation'}><Video size={12} />{lang === 'zh' ? '视频生成' : 'Video generation'}</span>}
                   {caps?.imageGeneration && (
                     <span className="kv-badge-mini kv-badge-mini--image" title={lang === 'zh' ? '生图' : 'Image generation'}>
                       <ImageIcon size={11} strokeWidth={2} />

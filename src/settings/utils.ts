@@ -1,3 +1,4 @@
+import { isVideoGenerationModel } from '../data/videoModels'
 import { type ModelProvider } from '../api/tauri'
 import { i18n, type Lang } from '../components/i18n'
 
@@ -131,10 +132,10 @@ export const buildModelPairOptions = (
   filterModel?: (provider: ModelProvider, model: string) => boolean,
 ): SelectOption[] =>
   providers
-    .filter(provider => isProviderEnabled(provider))
+    .filter(provider => isProviderEnabled(provider) && !provider.request?.comfy)
     .flatMap(provider =>
       provider.enabledModels
-        .filter(model => !filterModel || filterModel(provider, model))
+        .filter(model => filterModel ? filterModel(provider, model) : !isVideoGenerationModel(model, provider))
         .map(model => ({
           value: modelPairValue(provider.id, model),
           label: `${provider.name} - ${model}`,

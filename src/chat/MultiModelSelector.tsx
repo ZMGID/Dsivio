@@ -1,3 +1,4 @@
+import { isVideoGenerationModel } from '../data/videoModels'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Layers } from 'lucide-react'
 import { type ModelProvider } from '../api/tauri'
@@ -56,14 +57,14 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up' }: MultiMode
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
-  const activeProviders = useMemo(() => providers.filter(isProviderEnabled), [providers])
+  const activeProviders = useMemo(() => providers.filter(provider => isProviderEnabled(provider) && !provider.request?.comfy), [providers])
   // 只显示有可选模型的服务商，避免没配置模型的服务商变成空的分组标题。
   const visibleProviders = useMemo(
     () =>
       activeProviders
         .map((provider) => ({
           provider,
-          models: provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels,
+          models: (provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels).filter(model => !isVideoGenerationModel(model, provider)),
         }))
         .filter((entry) => entry.models.length > 0),
     [activeProviders],

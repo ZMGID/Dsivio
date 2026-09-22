@@ -11,7 +11,8 @@
   },
   "app": {
     "windows": [],
-    "macOSPrivateApi": true
+    "macOSPrivateApi": true,
+    "security": { "assetProtocol": { "enable": true, "scope": ["$APPDATA/comfy-tasks/**"] } }
   },
   "bundle": {
     "active": true,

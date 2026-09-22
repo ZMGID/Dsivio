@@ -69,7 +69,7 @@ export function VideoStudio({
 }) {
   const t = useT()
   return (
-    <WorkbenchPage fill crumb={t.workbenchGroupVideo} crumbCurrent={crumbCurrent} title={title} actions={capsules}>
+    <WorkbenchPage mediaPool="videoModels" fill crumb={t.workbenchGroupVideo} crumbCurrent={crumbCurrent} title={title} actions={capsules}>
       <div className="workbench-video-body">
         <div className="workbench-split workbench-split--even">
           <WorkbenchCard title={settingsTitle} hint={settingsHint}>

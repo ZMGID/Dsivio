@@ -1,3 +1,4 @@
+import { suggestedVideoModels, videoProvider } from '../data/videoModels'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ModelProvider } from '../api/tauri'
 import { applyModelCatalog } from '../data/modelCatalog'
@@ -38,7 +39,9 @@ export function useProviderCatalogController(port: ProviderCatalogPort) {
     setError('')
     const identity = connectionIdentity(provider)
     try {
-      const catalog = await portRef.current.fetch(providerId, {
+      const catalog = videoProvider(provider.baseUrl)?.catalogOnly
+        ? { models: suggestedVideoModels(provider.baseUrl), capabilities: {} }
+        : await portRef.current.fetch(providerId, {
         id: provider.id,
         baseUrl: provider.baseUrl,
         apiKeys: provider.apiKeys,

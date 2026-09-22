@@ -1055,6 +1055,10 @@ pub(crate) async fn test_provider_connection(
     }
 
     let model = provider.as_ref().and_then(|p| p.model.clone());
+    if model.as_deref().is_some_and(|model| crate::video_studio::providers::is_video_model(&oauth_provider, model)) {
+        return Ok(serde_json::json!({"success":false,"error":"视频生成模型不支持聊天测试；请在模型详情预览原生请求，并在视频任务中验证生成"}));
+    }
+
     // 协议优先取前端传入（未保存的编辑中配置），缺省回退 settings 里已保存的。
     let api_format = resolve_api_format(&settings, &provider_id, provider.as_ref());
     let request_override = provider.as_ref().and_then(|p| p.request.clone());

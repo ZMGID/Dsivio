@@ -1,3 +1,5 @@
+import { WorkbenchMediaModelSelect } from './WorkbenchMediaModelSelect'
+import type { MediaPoolKind } from '../../data/mediaModelPools'
 import type { ReactNode } from 'react'
 
 /** 工作台中心页外框：面包屑 + 蓝标题 + 可选说明。页面自己管卡片。 */
@@ -7,6 +9,7 @@ export function WorkbenchPage({
   title,
   subtitle,
   actions,
+  mediaPool,
   fill,
   children,
 }: {
@@ -15,6 +18,7 @@ export function WorkbenchPage({
   title: string
   subtitle?: string
   actions?: ReactNode
+  mediaPool?: MediaPoolKind
   fill?: boolean
   children: ReactNode
 }) {
@@ -35,7 +39,7 @@ export function WorkbenchPage({
           </div>
           {actions ? <div className="workbench-page-actions">{actions}</div> : null}
         </header>
-        {children}
+        {mediaPool ? <WorkbenchMediaModelSelect key={mediaPool} kind={mediaPool}>{children}</WorkbenchMediaModelSelect> : children}
       </div>
     </div>
   )
