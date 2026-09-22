@@ -14,7 +14,7 @@ const configured = () => makeSettings({
   providers: [makeProvider({ enabledModels: ['grok-imagine-video'] })],
   workbenchMedia: { imageModels: [], videoModels: [{ providerId: 'p1', model: 'grok-imagine-video' }] },
 })
-const task: MediaTask = { id: 'video-1', providerId: 'p1', model: 'grok-imagine-video', kind: 'video', status: 'succeeded', createdAt: '2026-09-22T01:00:00Z', remoteId: 'remote-1', canResume: false, error: null, outputs: [{ path: '/tmp/video.mp4', mime: 'video/mp4' }] }
+const task: MediaTask = { id: 'video-1', providerId: 'p1', model: 'grok-imagine-video', kind: 'video', status: 'succeeded', createdAt: '2026-09-22T01:00:00Z', remoteId: 'remote-1', canResume: false, error: null, outputs: [{ path: '/tmp/video.mp4', mime: 'video/mp4' }], origin: null, prompt: '' }
 beforeEach(() => {
   vi.restoreAllMocks(); localStorage.clear()
   URL.revokeObjectURL = vi.fn()
@@ -56,7 +56,7 @@ it('submits once through the shared API and shows playable results without a pla
   await waitFor(() => expect(button).toBeEnabled())
   await userEvent.dblClick(button)
   expect(api.startMediaGeneration).toHaveBeenCalledTimes(1)
-  expect(api.startMediaGeneration).toHaveBeenCalledWith({ providerId: 'p1', model: 'grok-imagine-video', kind: 'video', prompt: '商品展示', images: [], options: {} })
+  expect(api.startMediaGeneration).toHaveBeenCalledWith({ providerId: 'p1', model: 'grok-imagine-video', kind: 'video', prompt: '商品展示', images: [], options: {}, origin: null })
   vi.mocked(api.listMediaTasks).mockResolvedValue([task])
   await act(async () => finish(task))
   await waitFor(() => expect(screen.getByRole('tab', { name: '2 生成与成片' })).toHaveAttribute('aria-selected', 'true'))

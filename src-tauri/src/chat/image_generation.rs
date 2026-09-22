@@ -107,7 +107,7 @@ pub(crate) async fn generate_shared(
     options.remove("paths"); options.remove("artifact_ids");
     let task=crate::media_generation::start(app,crate::media_generation::MediaRequest{
         provider_id:provider.id.clone(),model:model.into(),kind:crate::media_generation::MediaKind::Image,
-        prompt, images:images.iter().map(data_url_for_input).collect(), options,
+        prompt, images:images.iter().map(data_url_for_input).collect(), options, origin:Some("chat".into()),
     }).await?;
     Ok(crate::media_generation::tool_result(crate::media_generation::wait(app,&task.id,285).await?))
 }

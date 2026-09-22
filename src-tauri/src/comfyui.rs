@@ -78,6 +78,9 @@ pub struct ComfyTask {
     pub error: Option<String>,
     pub outputs: Vec<ComfyArtifact>,
     pub created_at: String,
+    /// Who asked for this run (e.g. `workbench/main`); lets each Workbench page list its own history.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -270,14 +273,13 @@ pub(crate) fn read_task(root: &Path, id: &str) -> Result<ComfyTask, String> {
     .map_err(|e| e.to_string())
 }
 pub(crate) fn list_comfy_tasks(
-    provider_id: String,
-    workflow_id: String,
+    keep: impl Fn(&ComfyTask) -> bool,
 ) -> Result<Vec<ComfyTask>, String> {
     let mut tasks = vec![];
     if let Ok(dirs) = std::fs::read_dir(root()?) {
         for dir in dirs.flatten() {
             if let Ok(mut task) = read_task(&root()?, &dir.file_name().to_string_lossy()) {
-                if task.provider_id != provider_id || task.workflow_id != workflow_id {
+                if !keep(&task) {
                     continue;
                 }
                 if task.status == ComfyTaskStatus::Submitting {
@@ -326,6 +328,7 @@ pub(crate) async fn submit_to_store(
     provider: ModelProvider,
     workflow: ComfyWorkflow,
     values: BTreeMap<String, Value>,
+    origin: Option<String>,
 ) -> Result<ComfyTask, String> {
     let mut graph = prepare(&workflow, &values)?;
     let submit_url = endpoint(&provider.base_url, "prompt")?;
@@ -393,6 +396,7 @@ pub(crate) async fn submit_to_store(
         error: None,
         outputs: vec![],
         created_at: chrono::Utc::now().to_rfc3339(),
+        origin,
     };
     save(root, &task)?; // Persist before POST. Never replay a submission after an uncertain response.
     let result = client()?.post(submit_url).json(&json!({"prompt": graph, "client_id": task.id, "extra_data": {"dsivio_task_id":task.id}})).send().await;
@@ -715,6 +719,7 @@ mod tests {
             provider(&base),
             workflow(),
             BTreeMap::from([("1:text".into(), json!("new product"))]),
+            None,
         )
         .await
         .unwrap();
@@ -772,7 +777,7 @@ mod tests {
     async fn server_error_leaves_an_uncertain_receipt_and_is_never_replayed() {
         let (base, server) = server(vec![(502, b"{}".to_vec())]);
         let root = tempfile::tempdir().unwrap();
-        let task = submit_to_store(root.path(), provider(&base), workflow(), BTreeMap::new())
+        let task = submit_to_store(root.path(), provider(&base), workflow(), BTreeMap::new(), None)
             .await
             .unwrap();
         assert_eq!(task.status, ComfyTaskStatus::Uncertain);
@@ -801,6 +806,7 @@ mod tests {
             provider(&base),
             flow,
             BTreeMap::from([("1:text".into(), json!("data:image/png;base64,aW1hZ2U="))]),
+            None,
         )
         .await
         .unwrap();

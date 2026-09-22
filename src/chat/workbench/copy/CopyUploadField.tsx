@@ -2,15 +2,10 @@ import { useRef } from 'react'
 import { Plus, X } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
+import type { LocalImage } from '../localMedia'
 
 const DEFAULT_MAX = 7
 const MAX_BYTES = 10 * 1024 * 1024
-
-export type LocalImage = { id: string; name: string; url: string }
-
-export function revokeImages(items: LocalImage[]): void {
-  for (const item of items) URL.revokeObjectURL(item.url)
-}
 
 /**
  * 图文页共用的商品图上传：本机选图，默认最多 7 张。

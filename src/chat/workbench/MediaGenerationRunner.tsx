@@ -1,25 +1,16 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { convertFileSrc } from '@tauri-apps/api/core'
-import { api, type ModelProvider } from '../../api/tauri'
+import { useEffect, useState, type ReactNode } from 'react'
+import type { ModelProvider } from '../../api/tauri'
 import { Button } from '../../components/Button'
 import { useLang } from '../../components/i18n'
 import type { MediaKind, MediaTask } from '../../generated/mediaGeneration'
 import { videoModel } from '../../data/videoModels'
 import { FieldBlock, Input, Select, TextArea } from '../../settings/public/controls'
-import { CopyUploadField, type LocalImage } from './copy/CopyUploadField'
+import { CopyUploadField } from './copy/CopyUploadField'
 import { RequirementComposer } from '../images/RequirementComposer'
-import { revokeImages } from './copy/CopyUploadField'
 import { useLocalImages } from './image/useLocalImages'
-
-const dataUrl = (blob: Blob) => new Promise<string>((resolve, reject) => {
-  const reader = new FileReader()
-  reader.onload = () => resolve(String(reader.result))
-  reader.onerror = () => reject(new Error('读取图片失败'))
-  reader.readAsDataURL(blob)
-})
-async function readImages(images: LocalImage[]) {
-  return Promise.all(images.map(async image => dataUrl(await (await fetch(image.url)).blob())))
-}
+import { dataUrl, readImages, revokeImages, type LocalImage } from './localMedia'
+import { MediaTaskList } from './MediaTaskList'
+import { useMediaGeneration } from './useMediaGeneration'
 
 export interface MediaGenerationView {
   prompt: ReactNode
@@ -42,11 +33,16 @@ export interface MediaImageFieldProps {
   onBusyChange?: (busy: boolean) => void
 }
 
-/** Both cloud and local models use the same generation API and saved task list. */
-export function MediaGenerationRunner({ provider, model, kind, render, renderImages, onSubmitted }: {
+/**
+ * 通用生成表单：按模型能力渲染提示词／素材／参数，提交走 `useMediaGeneration`。
+ * 云端模型和本地 ComfyUI 工作流共用同一条提交与记录链路。
+ */
+export function MediaGenerationRunner({ provider, model, kind, origin, render, renderImages, onSubmitted }: {
   provider?: ModelProvider
   model: string
   kind: MediaKind
+  /** 记在任务上的来源；不传则按 provider+model 列历史。 */
+  origin?: string
   render?: (view: MediaGenerationView) => ReactNode
   renderImages?: (props: MediaImageFieldProps) => ReactNode
   onSubmitted?: () => void
@@ -60,44 +56,17 @@ export function MediaGenerationRunner({ provider, model, kind, render, renderIma
   const [images, setImages] = useLocalImages()
   const [lastFrame, setLastFrame] = useLocalImages()
   const [mode, setMode] = useState(profile?.modes.includes('text') ? 'text' : profile?.modes[0] || 'text')
-  const [tasks, setTasks] = useState<MediaTask[]>([])
-  const [busy, setBusy] = useState(false)
-  const pending = useRef(false)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [reload, setReload] = useState(0)
-  const mounted = useRef(true)
   const choice = `${provider?.id || ''}:${model}`
-  const currentChoice = useRef(choice)
-  currentChoice.current = choice
+  const generation = useMediaGeneration(provider ? (origin ? { origin } : { providerId: provider.id, model }) : null)
+  const { tasks, busy, loading, error, setError } = generation
   useEffect(() => {
     setValues({}); setFiles({})
     const next = kind === 'video' ? videoModel(model) : undefined
     setMode(next?.modes.includes('text') ? 'text' : next?.modes[0] || 'text')
   }, [choice, kind, model])
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
-  useEffect(() => {
-    if (!provider) { setTasks([]); setLoading(false); return }
-    const providerId = provider.id
-    let active = true
-    let timer: ReturnType<typeof setTimeout> | undefined
-    async function poll() {
-      try {
-        const loaded = await api.listMediaTasks(providerId, model)
-        if (!active) return
-        setTasks(loaded)
-        if (loaded.some(task => task.status === 'running')) timer = setTimeout(() => void poll(), 2500)
-      } catch (failure) { if (active) setError(String(failure)) }
-      finally { if (active) setLoading(false) }
-    }
-    setLoading(true); setError(''); void poll()
-    return () => { active = false; if (timer) clearTimeout(timer) }
-  }, [provider, model, reload])
 
   async function submit() {
-    if (pending.current || !provider) return
-    const submittedChoice = choice
-    pending.current = true; setBusy(true); setError('')
+    if (busy || !provider) return
     try {
       const options: Record<string, unknown> = {}
       let references: string[] = []
@@ -131,18 +100,14 @@ export function MediaGenerationRunner({ provider, model, kind, render, renderIma
           for (const key of ['referenceVideos', 'referenceAudios']) if (values[key]?.trim()) options[key] = values[key].split('\n').map(v => v.trim()).filter(Boolean)
         }
       }
-      const task = await api.startMediaGeneration({ providerId: provider.id, model, kind, prompt, images: references, options })
-      if (!mounted.current || currentChoice.current !== submittedChoice) return
-      setTasks(current => [task, ...current.filter(item => item.id !== task.id)])
-      setReload(value => value + 1)
-      onSubmitted?.()
-    } catch (failure) { if (mounted.current && currentChoice.current === submittedChoice) setError(String(failure)) }
-    finally { pending.current = false; if (mounted.current) setBusy(false) }
+      const task = await generation.submit({ providerId: provider.id, model, kind, prompt, images: references, options, origin: origin ?? null })
+      if (task) onSubmitted?.()
+    } catch (failure) { setError(String(failure)) }
   }
   const pick = (key: string, label: string, choices: (string | number)[]) => <FieldBlock key={key} label={label}><Select className="w-full" ariaLabel={label} value={values[key] || ''} disabled={busy} options={[{ value: '', label: zh ? '模型默认值' : 'Model default' }, ...choices.map(value => ({ value: String(value), label: String(value) }))]} onChange={value => setValues(v => ({ ...v, [key]: value }))} /></FieldBlock>
   const modeNames: Record<string, string> = zh ? { text: '文字生成', image: '首帧图片', frames: '首尾帧', reference: '参考素材' } : { text: 'Text', image: 'First frame', frames: 'First and last frames', reference: 'References' }
   const ImageField = renderImages || CopyUploadField
-  const imageBusy = (value: boolean) => { pending.current = value; if (mounted.current) setBusy(value) }
+  const imageBusy = generation.hold
   const promptField = workflow ? <>{workflow.inputs.map(binding => {
           const key = `${binding.nodeId}:${binding.input}`
           const original = String(workflow.graph[binding.nodeId]?.inputs[binding.input] ?? '')
@@ -150,10 +115,10 @@ export function MediaGenerationRunner({ provider, model, kind, render, renderIma
             {binding.kind === 'image' ? <>
               <Input aria-label={binding.label} type="file" accept="image/png,image/jpeg,image/webp" value="" onChange={() => {}} disabled={busy} onInput={event => {
                 const file = event.currentTarget.files?.[0]
-                if (!file || pending.current) return
+                if (!file || busy) return
                 if (file.size > 30 * 1024 * 1024) { setError(zh ? '参考图不能超过 30 MB' : 'Reference images must be under 30 MB'); return }
-                pending.current = true; setBusy(true)
-                void dataUrl(file).then(data => { if (mounted.current) { setValues(v => ({ ...v, [key]: data })); setFiles(v => ({ ...v, [key]: file.name })) } }).catch(failure => { if (mounted.current) setError(String(failure)) }).finally(() => { pending.current = false; if (mounted.current) setBusy(false) })
+                generation.hold(true)
+                void dataUrl(file).then(data => { setValues(v => ({ ...v, [key]: data })); setFiles(v => ({ ...v, [key]: file.name })) }).catch(failure => setError(String(failure))).finally(() => generation.hold(false))
               }} />
               <p className="workbench-page-sub [overflow-wrap:anywhere]">{files[key] || original}</p>
             </> : binding.kind === 'number' ? <Input aria-label={binding.label} type="number" value={values[key] ?? original} onChange={value => setValues(v => ({ ...v, [key]: value }))} /> :
@@ -172,21 +137,9 @@ export function MediaGenerationRunner({ provider, model, kind, render, renderIma
           </div>
           {profile && 'audioToggle' in profile && profile.audioToggle && <FieldBlock label={zh ? '生成声音' : 'Generate audio'}><Select className="w-full" ariaLabel={zh ? '生成声音' : 'Generate audio'} value={values.audio || ''} options={[{ value: '', label: zh ? '模型默认值' : 'Model default' }, { value: 'true', label: zh ? '开启' : 'On' }, { value: 'false', label: zh ? '关闭' : 'Off' }]} onChange={value => setValues(v => ({ ...v, audio: value }))} /></FieldBlock>}</>
   const action = <Button variant="primary" disabled={!provider || busy || loading || (!workflow && !prompt.trim())} onClick={() => void submit()}>{busy ? (zh ? '正在提交…' : 'Submitting…') : (zh ? '开始生成' : 'Generate')}</Button>
-  const results = <section className={render ? "vs-panel" : "workbench-card-block"}>
-      <div className="flex min-w-0 items-center justify-between gap-4"><h2 className="workbench-card-block-title">{zh ? '生成记录' : 'Generations'}</h2><Button size="sm" disabled={loading || busy} onClick={() => setReload(value => value + 1)}>{zh ? '刷新' : 'Refresh'}</Button></div>
-      {!tasks.length && <p className="workbench-page-sub">{loading ? (zh ? '正在加载…' : 'Loading…') : (zh ? '还没有生成记录。' : 'No generations yet.')}</p>}
-      <ul className="divide-y divide-border">{tasks.map(task => <li key={task.id} className="flex min-w-0 flex-col gap-3 py-4">
-        <div className="flex min-w-0 flex-wrap justify-between gap-2"><span className="kv-row-label">{new Date(task.createdAt).toLocaleString()}</span><span className="kv-row-label" role="status">{task.status === 'running' ? (zh ? '生成中' : 'Generating') : task.status === 'succeeded' ? (zh ? '完成' : 'Completed') : (zh ? '失败' : 'Failed')}</span></div>
-        {task.error && <p className="kv-row-desc [overflow-wrap:anywhere]" role="alert">{task.error}</p>}
-        {task.canResume && <Button size="sm" className="self-start" onClick={() => void api.getMediaTask(task.id, true).then(() => setReload(value => value + 1)).catch(failure => setError(String(failure)))}>{zh ? '恢复查询／下载' : 'Resume query / download'}</Button>}
-        <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">{task.outputs.map(output => <div key={output.path} className="min-w-0">
-          {output.mime.startsWith('image/') ? <img className="h-auto max-w-full rounded-lg" src={convertFileSrc(output.path)} alt={workflow?.name || model} loading="lazy" /> : <video className="h-auto max-w-full rounded-lg" src={convertFileSrc(output.path)} controls preload="metadata" />}
-          <Button size="sm" className="mt-2" onClick={() => void api.openLocalFile(output.path).catch(failure => setError(String(failure)))}>{zh ? '打开文件' : 'Open file'}</Button>
-        </div>)}</div>
-      </li>)}</ul>
-    </section>
+  const results = <MediaTaskList generation={generation} alt={workflow?.name || model} className={render ? 'vs-panel' : 'workbench-card-block'} />
   const reset = () => {
-    if (pending.current) return
+    if (busy) return
     revokeImages(images); revokeImages(lastFrame)
     setPrompt(''); setValues({}); setFiles({}); setImages([]); setLastFrame([]); setError('')
   }

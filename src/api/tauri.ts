@@ -1,4 +1,4 @@
-import type { MediaRequest, MediaTask } from '../generated/mediaGeneration'
+import type { MediaRequest, MediaTask, MediaTaskFilter } from '../generated/mediaGeneration'
 import type { ComfyConfig, ComfyWorkflow, ComfyConnection } from '../generated/comfyui'
 import type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
 export type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
@@ -1768,7 +1768,7 @@ export const api = {
   validateComfyWorkflow: (workflow: ComfyWorkflow) => invoke<void>('validate_comfy_workflow', { workflow }),
   testComfyConnection: (baseUrl: string, workflow: ComfyWorkflow | null = null) => invoke<ComfyConnection>('test_comfy_connection', { baseUrl, workflow }),
   startMediaGeneration: (request: MediaRequest) => invoke<MediaTask>('start_media_generation', { request }),
-  listMediaTasks: (providerId: string, model: string) => invoke<MediaTask[]>('list_media_tasks', { providerId, model }),
+  listMediaTasks: (filter: Partial<MediaTaskFilter>) => invoke<MediaTask[]>('list_media_tasks', { filter: { providerId: null, model: null, origin: null, ...filter } }),
   getMediaTask: (id: string, resume = false) => invoke<MediaTask>('get_media_task', { id, resume }),
   previewVideoModelRequest: (input: { model: string; protocol: VideoProtocol; baseUrl: string }) =>
     invoke<VideoRequestPreview>('preview_video_model_request', input),

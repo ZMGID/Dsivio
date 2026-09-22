@@ -59,23 +59,31 @@ export function ImageCountField({
   )
 }
 
-/** 左配置 + 右预览。详情页向导和复刻两段式自己排。 */
+/**
+ * 左配置 + 右预览。详情页向导和复刻两段式自己排。
+ *
+ * 已接通生成的页面自己持有模型选择（`modelControl`）和结果区（`results`），
+ * 此时外框不再挂通用模型池控件；还没接通的页面沿用 `mediaPool` 默认行为。
+ */
 export function ImageStudio({
   crumbCurrent,
   title,
   capsules,
   tabs,
+  modelControl,
   configTitle,
   configHint,
   config,
   resultTitle,
   resultHint,
   resultExtra,
+  results,
   emptyIcon,
   emptyTitle,
   emptyHint,
   notice,
   cta,
+  ctaDisabled,
   onGenerate,
   footer,
 }: {
@@ -83,33 +91,37 @@ export function ImageStudio({
   title: string
   capsules?: ReactNode
   tabs?: ReactNode
+  modelControl?: ReactNode
   configTitle: string
   configHint?: string
   config: ReactNode
   resultTitle: string
   resultHint?: string
   resultExtra?: ReactNode
+  results?: ReactNode
   emptyIcon?: ReactNode
   emptyTitle: string
   emptyHint: string
   notice: string
   cta?: string
+  ctaDisabled?: boolean
   onGenerate?: () => void
   footer?: ReactNode
 }) {
   const t = useT()
   return (
-    <WorkbenchPage mediaPool="imageModels" fill crumb={t.workbenchGroupImage} crumbCurrent={crumbCurrent} title={title} actions={capsules}>
+    <WorkbenchPage mediaPool={modelControl ? undefined : 'imageModels'} fill crumb={t.workbenchGroupImage} crumbCurrent={crumbCurrent} title={title} actions={capsules}>
       {tabs}
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={configTitle} hint={configHint}>
+          {modelControl}
           {config}
           <WorkbenchCta notice={notice}>
-            {footer ?? (cta && onGenerate ? <Button variant="primary" onClick={onGenerate}>{cta}</Button> : null)}
+            {footer ?? (cta && onGenerate ? <Button variant="primary" disabled={ctaDisabled} onClick={onGenerate}>{cta}</Button> : null)}
           </WorkbenchCta>
         </WorkbenchCard>
         <WorkbenchCard fill title={resultTitle} hint={resultHint} extra={resultExtra}>
-          <WorkbenchEmpty icon={emptyIcon} title={emptyTitle}>{emptyHint}</WorkbenchEmpty>
+          {results ?? <WorkbenchEmpty icon={emptyIcon} title={emptyTitle}>{emptyHint}</WorkbenchEmpty>}
         </WorkbenchCard>
       </div>
     </WorkbenchPage>

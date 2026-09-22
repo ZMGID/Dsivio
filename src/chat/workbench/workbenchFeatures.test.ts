@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterWorkbenchFeatures, type WorkbenchFeature } from './WorkbenchFeatureSearch'
+import { filterWorkbenchFeatures, type WorkbenchFeature } from './workbenchFeatures'
 
 const features: WorkbenchFeature[] = [
   { page: 'home', label: '首页', group: '' },

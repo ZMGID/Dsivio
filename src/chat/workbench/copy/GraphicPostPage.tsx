@@ -4,7 +4,8 @@ import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { Select, TextArea } from '../../../settings/public/controls'
 import { WorkbenchCard, WorkbenchCta, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
-import { CopyUploadField, revokeImages, type LocalImage } from './CopyUploadField'
+import { CopyUploadField } from './CopyUploadField'
+import { revokeImages, type LocalImage } from '../localMedia'
 import {
   POST_RATIOS,
   POST_TEMPLATES,

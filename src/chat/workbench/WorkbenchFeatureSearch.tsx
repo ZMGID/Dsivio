@@ -1,41 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Search } from 'lucide-react'
-import { useT, type I18n } from '../../components/i18n'
+import { useT } from '../../components/i18n'
 import { HighlightText } from '../searchHighlight'
-import { WORKBENCH_NAV, workbenchNavItem, type WorkbenchPageId } from './workbenchPages'
-
-export interface WorkbenchFeature {
-  page: WorkbenchPageId
-  label: string
-  group: string
-}
-
-export function listWorkbenchFeatures(t: I18n): WorkbenchFeature[] {
-  const home: WorkbenchFeature = {
-    page: WORKBENCH_NAV.home.page,
-    label: WORKBENCH_NAV.home.label(t),
-    group: '',
-  }
-  const rest = WORKBENCH_NAV.groups.flatMap((group) => {
-    const groupLabel = group.label(t)
-    return group.entries.map((entry) => ({
-      page: entry.page,
-      label: entry.label(t),
-      group: groupLabel,
-    }))
-  })
-  return [home, ...rest]
-}
-
-export function filterWorkbenchFeatures(features: WorkbenchFeature[], query: string): WorkbenchFeature[] {
-  const needle = query.trim().toLowerCase()
-  if (!needle) return features
-  return features.filter((item) => (
-    item.label.toLowerCase().includes(needle)
-    || item.group.toLowerCase().includes(needle)
-  ))
-}
+import { workbenchNavItem, type WorkbenchPageId } from './workbenchPages'
+import { filterWorkbenchFeatures, listWorkbenchFeatures } from './workbenchFeatures'
 
 export function WorkbenchFeatureSearch({
   activePage,

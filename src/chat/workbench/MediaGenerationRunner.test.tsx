@@ -9,7 +9,7 @@ import { MediaGenerationRunner } from './MediaGenerationRunner'
 
 const workflow: ComfyWorkflow = { id: 'wf', name: '商品图', kind: 'image', graph: { '1': { class_type: 'CLIPTextEncode', inputs: { text: 'original', seed: 10 } } }, inputs: [{ nodeId: '1', input: 'text', kind: 'text', label: '提示词' }, { nodeId: '1', input: 'seed', kind: 'number', label: '种子' }], outputNodes: ['1'] }
 const provider = makeProvider({ request: { comfy: { workflows: [workflow] } } })
-const task: MediaTask = { id: 'task', providerId: provider.id, model: 'wf', kind: 'image', remoteId: 'remote-task', status: 'succeeded', error: null, outputs: [], createdAt: new Date().toISOString(), canResume: false }
+const task: MediaTask = { id: 'task', providerId: provider.id, model: 'wf', kind: 'image', remoteId: 'remote-task', status: 'succeeded', error: null, outputs: [], createdAt: new Date().toISOString(), canResume: false, origin: null, prompt: '' }
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.spyOn(api, 'listMediaTasks').mockResolvedValue([])
@@ -24,7 +24,7 @@ describe('Workbench ComfyUI execution', () => {
     await userEvent.clear(screen.getByLabelText('种子')); await userEvent.type(screen.getByLabelText('种子'), '42')
     vi.mocked(api.listMediaTasks).mockResolvedValue([task])
     await userEvent.click(screen.getByRole('button', { name: '开始生成' }))
-    expect(api.startMediaGeneration).toHaveBeenCalledWith({providerId:provider.id,model:'wf',kind:'image',prompt:'',images:[],options:{ '1:text': 'new product', '1:seed': 42 }})
+    expect(api.startMediaGeneration).toHaveBeenCalledWith({providerId:provider.id,model:'wf',kind:'image',prompt:'',images:[],options:{ '1:text': 'new product', '1:seed': 42 },origin:null})
     expect(await screen.findByText('完成')).toBeInTheDocument()
     view.unmount()
     render(<MediaGenerationRunner provider={provider} model="wf" kind="image" />)
@@ -61,7 +61,7 @@ it('uses the same generation command for cloud video and restores query failures
   expect(api.startMediaGeneration).not.toHaveBeenCalled()
   await userEvent.type(screen.getByLabelText('提示词'), '商品展示')
   await userEvent.click(screen.getByRole('button', { name: '开始生成' }))
-  expect(api.startMediaGeneration).toHaveBeenCalledWith({ providerId: cloud.id, model: 'MiniMax-H3', kind: 'video', prompt: '商品展示', images: [], options: {} })
+  expect(api.startMediaGeneration).toHaveBeenCalledWith({ providerId: cloud.id, model: 'MiniMax-H3', kind: 'video', prompt: '商品展示', images: [], options: {}, origin: null })
   expect(screen.queryByText('剧本确认')).toBeNull()
 })
 

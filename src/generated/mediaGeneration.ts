@@ -5,6 +5,16 @@ export type MediaStatus = "running" | "succeeded" | "failed";
 
 export type MediaOutput = { path: string, mime: string, };
 
-export type MediaTask = { id: string, providerId: string, model: string, kind: MediaKind, status: MediaStatus, createdAt: string, error: string | null, remoteId: string | null, outputs: Array<MediaOutput>, canResume: boolean, };
+export type MediaTask = { id: string, providerId: string, model: string, kind: MediaKind, status: MediaStatus, createdAt: string, error: string | null, remoteId: string | null, outputs: Array<MediaOutput>, canResume: boolean, 
+/**
+ * Who asked for this run, e.g. `workbench/main` or `chat`. Workbench pages list by it.
+ */
+origin: string | null, 
+/**
+ * The prompt as submitted; kept so a history row can say what it was for.
+ */
+prompt: string, };
 
-export type MediaRequest = { providerId: string, model: string, kind: MediaKind, prompt: string, images: Array<string>, options: Record<string, unknown>, };
+export type MediaRequest = { providerId: string, model: string, kind: MediaKind, prompt: string, images: Array<string>, options: Record<string, unknown>, origin: string | null, };
+
+export type MediaTaskFilter = { providerId: string | null, model: string | null, origin: string | null, };

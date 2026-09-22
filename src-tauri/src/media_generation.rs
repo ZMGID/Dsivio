@@ -44,6 +44,12 @@ pub struct MediaTask {
     pub remote_id: Option<String>,
     pub outputs: Vec<MediaOutput>,
     pub can_resume: bool,
+    /// Who asked for this run, e.g. `workbench/main` or `chat`. Workbench pages list by it.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// The prompt as submitted; kept so a history row can say what it was for.
+    #[serde(default)]
+    pub prompt: String,
 }
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -57,6 +63,26 @@ pub struct MediaRequest {
     #[serde(default)]
     #[ts(type = "Record<string, unknown>")]
     pub options: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub origin: Option<String>,
+}
+/// Which saved tasks to list. Empty filter lists everything.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MediaTaskFilter {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
+}
+impl MediaTaskFilter {
+    fn matches(&self, task: &MediaTask) -> bool {
+        self.provider_id.as_ref().is_none_or(|p| *p == task.provider_id)
+            && self.model.as_ref().is_none_or(|m| *m == task.model)
+            && self.origin.as_ref().is_none_or(|o| task.origin.as_ref() == Some(o))
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -157,6 +183,8 @@ fn from_comfy(task: comfyui::ComfyTask) -> MediaTask {
             })
             .collect(),
         can_resume: task.status == S::DownloadPending,
+        origin: task.origin,
+        prompt: String::new(),
     }
 }
 
@@ -261,6 +289,7 @@ pub(crate) fn import_legacy_at(
                     error: Some("历史任务已保留，可按原编号继续查询；不会重新提交".into()),
                     outputs,
                     created_at,
+                    origin: None,
                 },
             )?;
             continue;
@@ -306,6 +335,8 @@ pub(crate) fn import_legacy_at(
                     remote_id,
                     outputs,
                     can_resume,
+                    origin: None,
+                    prompt: String::new(),
                 },
                 base_url: if base.is_empty() {
                     provider.base_url.clone()
@@ -357,7 +388,14 @@ pub(crate) async fn start(app: &AppHandle, request: MediaRequest) -> Result<Medi
             return Err("工作流媒体类型不匹配".into());
         }
         let task = from_comfy(
-            comfyui::submit_to_store(&comfyui::root()?, p, flow, request.options).await?,
+            comfyui::submit_to_store(
+                &comfyui::root()?,
+                p,
+                flow,
+                request.options,
+                request.origin,
+            )
+            .await?,
         );
         if task.status == MediaStatus::Running {
             run_background(app.clone(), task.id.clone(), None);
@@ -395,6 +433,8 @@ pub(crate) async fn start(app: &AppHandle, request: MediaRequest) -> Result<Medi
             remote_id: None,
             outputs: vec![],
             can_resume: false,
+            origin: request.origin.clone(),
+            prompt: request.prompt.clone(),
         },
         base_url: p.base_url,
         protocol,
@@ -740,23 +780,23 @@ pub fn get_media_task(
     Ok(saved.task)
 }
 #[tauri::command]
-pub fn list_media_tasks(
-    app: AppHandle,
-    provider_id: String,
-    model: String,
-) -> Result<Vec<MediaTask>, String> {
+pub fn list_media_tasks(app: AppHandle, filter: MediaTaskFilter) -> Result<Vec<MediaTask>, String> {
     let mut tasks = Vec::new();
     if let Ok(entries) = std::fs::read_dir(root()?) {
         for entry in entries.flatten() {
             let id = entry.file_name().to_string_lossy().into_owned();
             if let Ok(saved) = read(&root()?, &id) {
-                if saved.task.provider_id == provider_id && saved.task.model == model {
+                if filter.matches(&saved.task) {
                     tasks.push(get_media_task(app.clone(), id, None)?);
                 }
             }
         }
     }
-    for task in comfyui::list_comfy_tasks(provider_id, model)? {
+    for task in comfyui::list_comfy_tasks(|task| {
+        filter.provider_id.as_ref().is_none_or(|p| *p == task.provider_id)
+            && filter.model.as_ref().is_none_or(|m| *m == task.workflow_id)
+            && filter.origin.as_ref().is_none_or(|o| task.origin.as_ref() == Some(o))
+    })? {
         tasks.push(get_media_task(app.clone(), task.id, None)?);
     }
     tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -872,6 +912,7 @@ pub(crate) async fn tool_call(
             prompt,
             images: vec![],
             options,
+            origin: Some("chat".into()),
         },
     )
     .await?;
@@ -905,6 +946,8 @@ mod tests {
                 error: None,
                 outputs: vec![],
                 can_resume: false,
+                origin: None,
+                prompt: String::new(),
             },
             base_url: base.into(),
             protocol: if kind == MediaKind::Video {
@@ -923,6 +966,7 @@ mod tests {
             prompt: "a product on a desk".into(),
             images: vec![],
             options: BTreeMap::new(),
+            origin: None,
         };
         (settings, task, request)
     }
@@ -968,6 +1012,31 @@ mod tests {
             requests
         });
         (base, handle)
+    }
+    #[test]
+    fn filter_matches_by_origin_independently_of_model_and_round_trips_untagged_records() {
+        let (_, mut saved, _) = fixture("http://127.0.0.1:1", MediaKind::Image);
+        saved.task.origin = Some("workbench/main".into());
+        saved.task.prompt = "白底主图".into();
+        let by_origin = MediaTaskFilter {
+            origin: Some("workbench/main".into()),
+            ..Default::default()
+        };
+        assert!(by_origin.matches(&saved.task));
+        let other_model = MediaTaskFilter {
+            model: Some("other".into()),
+            ..Default::default()
+        };
+        assert!(!other_model.matches(&saved.task));
+        assert!(MediaTaskFilter::default().matches(&saved.task));
+        // Records written before `origin`/`prompt` existed still load and never match an origin filter.
+        let mut legacy = serde_json::to_value(&saved).unwrap();
+        legacy.as_object_mut().unwrap().remove("origin");
+        legacy.as_object_mut().unwrap().remove("prompt");
+        let legacy: StoredTask = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.task.origin, None);
+        assert_eq!(legacy.task.prompt, "");
+        assert!(!by_origin.matches(&legacy.task));
     }
     #[tokio::test]
     async fn cloud_receipt_survives_download_failure_and_reopening_without_another_post() {

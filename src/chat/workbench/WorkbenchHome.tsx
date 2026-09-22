@@ -1,112 +1,24 @@
-import { useEffect, useState } from 'react'
-import { ListingCheckPage } from './commerce/ListingCheckPage'
-import { ListingPage } from './commerce/ListingPage'
-import { ProductArchivePage } from './commerce/ProductArchivePage'
-import { ShopBindingPage } from './commerce/ShopBindingPage'
-import { ShopOverviewPage } from './commerce/ShopOverviewPage'
-import { GraphicPostPage } from './copy/GraphicPostPage'
-import { SeedArticlePage } from './copy/SeedArticlePage'
-import { CloneImagePage } from './image/CloneImagePage'
-import { DetailImagePage } from './image/DetailImagePage'
-import { DressPage } from './image/DressPage'
-import { EditImagePage } from './image/EditImagePage'
-import { MainImagePage } from './image/MainImagePage'
-import { MigratePage } from './image/MigratePage'
-import { PosterPage } from './image/PosterPage'
-import { RetouchPage } from './image/RetouchPage'
-import { AvatarPage } from './video/AvatarPage'
-import { DramaPage } from './video/DramaPage'
-import { ShortsPage } from './video/ShortsPage'
-import { SubtitlePage } from './video/SubtitlePage'
-import { VideoClonePage } from './video/VideoClonePage'
-import { VideoEditPage } from './video/VideoEditPage'
-import { AccountsPage } from './publish/AccountsPage'
-import { PublishDataPage } from './publish/PublishDataPage'
-import { PublishLogsPage } from './publish/PublishLogsPage'
-import { PublishPage } from './publish/PublishPage'
-import { AssetLibraryPage } from './content/AssetLibraryPage'
-import { RolesPage } from './content/RolesPage'
-import { UsagePage } from './stats/UsagePage'
-import { LookalikePage } from './sourcing/LookalikePage'
-import { PickLibraryPage } from './sourcing/PickLibraryPage'
-import { VideoRankPage } from './sourcing/VideoRankPage'
-import { WorkflowPage } from './workflow/WorkflowPage'
+import { Suspense, lazy, useEffect, useState, type LazyExoticComponent, type ComponentType } from 'react'
 import { WorkbenchLanding } from './WorkbenchLanding'
+import { workbenchFeature, type WorkbenchSubpageId } from './registry'
 import { workbenchPageFromHash, type WorkbenchPageId } from './workbenchPages'
 
-function renderPage(page: WorkbenchPageId) {
-  switch (page) {
-    case 'shops':
-      return <ShopBindingPage />
-    case 'overview':
-      return <ShopOverviewPage />
-    case 'products':
-      return <ProductArchivePage />
-    case 'listing':
-      return <ListingPage />
-    case 'check':
-      return <ListingCheckPage />
-    case 'workflows':
-      return <WorkflowPage />
-    case 'ranks':
-      return <VideoRankPage />
-    case 'match':
-      return <LookalikePage />
-    case 'picks':
-      return <PickLibraryPage />
-    case 'posts':
-      return <GraphicPostPage />
-    case 'articles':
-      return <SeedArticlePage />
-    case 'main':
-      return <MainImagePage />
-    case 'detail':
-      return <DetailImagePage />
-    case 'poster':
-      return <PosterPage />
-    case 'retouch':
-      return <RetouchPage />
-    case 'migrate':
-      return <MigratePage />
-    case 'dress':
-      return <DressPage />
-    case 'clone':
-      return <CloneImagePage />
-    case 'edit':
-      return <EditImagePage />
-    case 'shorts':
-      return <ShortsPage />
-    case 'avatar':
-      return <AvatarPage />
-    case 'drama':
-      return <DramaPage />
-    case 'vclone':
-      return <VideoClonePage />
-    case 'vedit':
-      return <VideoEditPage />
-    case 'subs':
-      return <SubtitlePage />
-    case 'publish':
-      return <PublishPage />
-    case 'vaccts':
-      return <AccountsPage />
-    case 'plogs':
-      return <PublishLogsPage />
-    case 'pdata':
-      return <PublishDataPage />
-    case 'roles':
-      return <RolesPage />
-    case 'assets':
-      return <AssetLibraryPage />
-    case 'usage':
-      return <UsagePage />
-    default:
-      return <WorkbenchLanding />
+/** 每个功能页只创建一次 lazy 组件，切页回来不重新下载。 */
+const lazyPages = new Map<WorkbenchSubpageId, LazyExoticComponent<ComponentType>>()
+
+function lazyPage(page: WorkbenchSubpageId): LazyExoticComponent<ComponentType> {
+  let component = lazyPages.get(page)
+  if (!component) {
+    const feature = workbenchFeature(page)
+    component = lazy(() => feature.load().then((Page) => ({ default: Page })))
+    lazyPages.set(page, component)
   }
+  return component
 }
 
 /**
- * 工作台中心区。chatView 只有 workbench 一种，具体哪一页读 hash 后缀。
+ * 工作台中心区。chatView 只有 workbench 一种，具体哪一页读 hash 后缀，
+ * 页面组件来自注册表 `registry.ts`，这里不枚举功能。
  */
 export function WorkbenchHome() {
   const [page, setPage] = useState<WorkbenchPageId>(workbenchPageFromHash)
@@ -117,5 +29,15 @@ export function WorkbenchHome() {
     return () => window.removeEventListener('hashchange', sync)
   }, [])
 
-  return <div className="flex min-h-0 min-w-0 flex-1 flex-col">{renderPage(page)}</div>
+  if (page === 'home') {
+    return <div className="flex min-h-0 min-w-0 flex-1 flex-col"><WorkbenchLanding /></div>
+  }
+  const Page = lazyPage(page)
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <Suspense fallback={null}>
+        <Page key={page} />
+      </Suspense>
+    </div>
+  )
 }

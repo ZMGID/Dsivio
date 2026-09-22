@@ -1,6 +1,6 @@
 import { useT } from '../../components/i18n'
 import { setHash } from '../chatRoutes'
-import { listWorkbenchFeatures, type WorkbenchFeature } from './WorkbenchFeatureSearch'
+import { listWorkbenchFeatures, type WorkbenchFeature } from './workbenchFeatures'
 import { WorkbenchCard } from './WorkbenchPage'
 import { WORKBENCH_NAV, workbenchHash, type WorkbenchPageId } from './workbenchPages'
 
