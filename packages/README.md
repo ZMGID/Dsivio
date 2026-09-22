@@ -1,4 +1,9 @@
-# 应用包
+# 旧应用包样例
+
+当前插件市场不再读取线上 `catalog.json`。内置插件及安装状态由
+`src-tauri/src/market.rs` 管理，各插件的 setup Skill 位于
+`src-tauri/resources/plugins/`。
+本目录保留旧包格式样例，供已有安装记录和测试使用。
 
 每个包放在自己的目录里，包含：
 
@@ -14,6 +19,6 @@
 
 两种包的安装和使用方式相同，只是来源不同。文档保持简短，密钥由 Agent 通过 kivio_inspect(topic="capabilities") 主动读取。
 
-包放在 GitHub，不进入软件安装包。catalog.json 保存正式发布目录。本机 DSIVIO_MARKET_DRAFT_DIR 可指向单个包或 packages 总目录。
+旧包格式曾通过 GitHub 目录发布；该入口目前不用于插件市场。
 
 详见 [包规范](../docs/agents/dsivio-package-format.md)。

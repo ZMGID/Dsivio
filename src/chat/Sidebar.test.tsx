@@ -426,7 +426,7 @@ describe('Sidebar extension navigation', () => {
     />
   }
 
-  it.each(['应用市场', '作品'])('keeps extensions collapsed when selecting %s', async (label) => {
+  it.each(['插件', '作品'])('keeps extensions collapsed when selecting %s', async (label) => {
     const user = userEvent.setup()
     render(<Navigation />)
     await user.click(screen.getByRole('button', { name: new RegExp(`^${label}$`) }))
@@ -447,7 +447,7 @@ describe('Sidebar extension navigation', () => {
     await user.click(toggle)
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     await user.click(toggle)
-    await user.click(screen.getByRole('button', { name: /^应用市场$/ }))
+    await user.click(screen.getByRole('button', { name: /^插件$/ }))
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
   })
 })

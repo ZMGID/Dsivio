@@ -9,6 +9,7 @@ let snapshot = EMPTY
 let loading = false
 let hasLoaded = false
 let bootstrap: Promise<void> | null = null
+let bootstrapped = false
 let remoteRequest: Promise<void> | null = null
 let localRequest: Promise<void> | null = null
 let localRevision = 0
@@ -57,6 +58,12 @@ export const marketApi = {
   async setEnabled(id: string, enabled: boolean) {
     await call<MarketLocal>('set_enabled', { id, enabled }); await this.refresh(false)
   },
+  async installBuiltIn(id: string) {
+    await call<MarketLocal>('install', { id }); await this.refresh(false)
+  },
+  async uninstallBuiltIn(id: string) {
+    await call<{ removed: boolean }>('uninstall', { id }); await this.refresh(false)
+  },
   async prepare(id: string): Promise<{ brief: string; local: MarketLocal }> {
     const result = await call<{ brief: string; local: MarketLocal }>('prepare', { id })
     await this.refresh(false); return result
@@ -66,6 +73,9 @@ export const marketApi = {
   },
   detail: (id: string, local = false) => call<{ example: MarketExample; assetBase: string }>('detail', { id, local }),
   prepareRemove: (id: string, conversationId: string) => call<{ brief: string }>('prepare_remove', { id, conversationId }),
+  async discard(id: string) {
+    await call('discard', { id }); await this.refresh(false)
+  },
 }
 let observerCount = 0
 let removeObservers: (() => void) | undefined
@@ -86,7 +96,8 @@ function observeMarket() {
 export function useMarket() {
   useSyncExternalStore(fn => { subscribers.add(fn); return () => { subscribers.delete(fn) } }, () => version)
   useEffect(() => {
-    if (!bootstrap) bootstrap = marketApi.refresh(false).then(() => marketApi.refresh(true))
+    if (!bootstrap) bootstrap = marketApi.refresh(false).then(() => marketApi.refresh(true)).finally(() => { bootstrapped = true })
+    else if (bootstrapped) void marketApi.refresh(false)
     return observeMarket()
   }, [])
   return { snapshot, loading, initialLoading: !hasLoaded }

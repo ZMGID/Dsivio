@@ -10,6 +10,10 @@ export type MarketManifest = {
   notices: string[]
   welcome: string
   inputHint: string
+  setupSkillId?: string
+  mainSkillId?: string
+  skillIds?: string[]
+  checkCommand?: string | null
   verification: { platform: string; dsivioVersion: string; verifiedAt: string; record: string }[]
 }
 export type MarketExample = {
@@ -19,6 +23,9 @@ export type MarketExample = {
 export type MarketSource =
   | { repository: string; revision: string; directory: string; kind?: never }
   | { kind: 'local-draft'; revision: string; directory: string; repository?: never }
+  | { kind: 'built-in' }
+const builtInMarketIds = new Set(['hypit', 'remotion-agent-skills', 'srt-whiteboard-animation', 'feishu-cli'])
+export const isBuiltInMarketId = (id: string) => builtInMarketIds.has(id)
 export type MarketEntry = { id: string; version: string; source: MarketSource; manifest?: MarketManifest; error?: string }
 export type MarketLocal = {
   id: string
@@ -30,6 +37,7 @@ export type MarketLocal = {
   skillId: string | null
   conversationId: string | null
   error: string | null
+  phase?: 'installing' | 'removing' | 'ready'
 }
 export type MarketSnapshot = {
   preview?: boolean
@@ -51,6 +59,8 @@ export function marketItems(snapshot: MarketSnapshot): MarketItem[] {
   return [...result.values()]
 }
 export function primaryAction(item: MarketItem): 'install' | 'repair' | 'continue' | 'enable-use' | 'use' | 'unavailable' {
+  if (item.local?.phase === 'removing') return 'unavailable'
+  if (item.local?.source?.kind === 'built-in' && item.local.status === 'failed') return 'repair'
   if (item.local?.source?.kind === 'local-draft' && item.entry?.source.kind === 'local-draft' && item.local.source.revision !== item.entry.source.revision) return 'repair'
   if (item.local?.status === 'ready') return item.local.enabled ? 'use' : 'enable-use'
   if (item.local) return 'continue'

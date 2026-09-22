@@ -30,6 +30,7 @@
       "resources/image-studio": "image-studio",
       "resources/video-studio": "video-studio",
       "resources/plugins/dsvideo-plugin": "plugins/dsvideo-plugin",
+      "resources/plugins/market-companions": "plugins/market-companions",
       "resources/video-runtime": "video-runtime"
     },
     "windows": {

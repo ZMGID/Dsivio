@@ -72,3 +72,22 @@ it('慢速远端响应不会覆盖期间已更新的本地加载状态', async (
   await act(async () => { finish(empty); await remote })
   expect(hook.result.current.snapshot.installed).toEqual(updated.installed)
 })
+
+it('从安装对话返回市场时重新读取本机安装状态', async () => {
+  const { useMarket } = await import('./api')
+  const first = renderHook(useMarket)
+  await waitFor(() => expect(first.result.current.loading).toBe(false))
+  first.unmount()
+  const installed = { ...empty, installed: [{ id: 'hypit', status: 'ready' }] } as MarketSnapshot
+  mocks.invoke.mockResolvedValue(installed)
+  const second = renderHook(useMarket)
+  await waitFor(() => expect(second.result.current.snapshot.installed).toEqual(installed.installed))
+  expect(mocks.invoke.mock.calls.map(c => c[1].request.action)).toEqual(['snapshot', 'refresh', 'snapshot'])
+})
+
+it('内置插件安装和卸载直接调用本地命令并刷新市场', async () => {
+  const { marketApi } = await import('./api')
+  await marketApi.installBuiltIn('hypit')
+  await marketApi.uninstallBuiltIn('hypit')
+  expect(mocks.invoke.mock.calls.map(call => call[1].request.action)).toEqual(['install', 'snapshot', 'uninstall', 'snapshot'])
+})

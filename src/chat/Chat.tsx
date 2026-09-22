@@ -193,7 +193,7 @@ const NotesCenter = lazy(() => import('./NotesCenter').then((module) => ({
 import { StudioPage } from './StudioPage'
 import { MarketPage } from './market/MarketPage'
 import { marketApi } from './market/api'
-import type { MarketLocal } from './market/types'
+import { isBuiltInMarketId, type MarketLocal } from './market/types'
 const ArtifactsCenter = lazy(() => import('./ArtifactsCenter').then((module) => ({ default: module.ArtifactsCenter })))
 const WorkbenchHome = lazy(() => import('./workbench/WorkbenchHome').then((module) => ({ default: module.WorkbenchHome })))
 
@@ -2454,12 +2454,17 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   }, [handleSendMessage, isCurrentConversationBusy])
 
   const handleMarketInstall = useCallback(async (id: string) => {
+    if (isBuiltInMarketId(id)) {
+      await marketApi.installBuiltIn(id)
+      await loadSkills()
+      return
+    }
     if (usesExternalRuntime || usesChatRuntime || draftAgentRuntime.kind !== 'builtin') throw new Error('请先切换到内置 Agent 模式，再安装应用。')
     if (!activeProviderId || !activeModel) throw new Error('请先配置对话模型，再安装应用。')
     if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再开始安装。')
     const startingHash = window.location.hash
     const prepared = await marketApi.prepare(id)
-    if (!prepared.brief.trim()) throw new Error('请先填写 INSTALL.md。')
+    if (!prepared.brief.trim()) throw new Error('安装说明为空。')
     let previous: Conversation | null = null
     if (prepared.local.conversationId) {
       previous = await chatApi.getConversation(prepared.local.conversationId)
@@ -2480,7 +2485,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     refreshSidebar()
     const accepted = await handleSendMessage(prepared.brief, [], { forceNewConversation: false, conversationOverride: conv })
     if (!accepted) throw new Error('安装消息未发送，请重试。')
-  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, isCurrentConversationBusy, selectedProject, applyConversation, syncConversationRoute, refreshSidebar, handleSendMessage])
+  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, isCurrentConversationBusy, selectedProject, applyConversation, syncConversationRoute, refreshSidebar, handleSendMessage, loadSkills])
 
   const handleMarketUse = useCallback(async (item: MarketLocal, newChat: boolean) => {
     if (usesExternalRuntime || usesChatRuntime || draftAgentRuntime.kind !== 'builtin') throw new Error('请先切换到内置 Agent 模式，再使用应用。')
@@ -2501,18 +2506,28 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, currentConversation, isCurrentConversationBusy, selectedProject, loadSkills, applyConversation, syncConversationRoute, refreshSidebar])
 
   const handleMarketUninstall = useCallback(async (id: string) => {
+    if (isBuiltInMarketId(id)) {
+      if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再卸载。')
+      await marketApi.uninstallBuiltIn(id)
+      await loadSkills()
+      return
+    }
     if (usesExternalRuntime || usesChatRuntime || draftAgentRuntime.kind !== 'builtin') throw new Error('请切换到内置 Agent 模式卸载应用。')
     if (!activeProviderId || !activeModel) throw new Error('请先配置对话模型。')
     if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再卸载。')
     let conv = await chatApi.createConversation(activeProviderId, activeModel, selectedProject?.name, selectedProject?.id ?? null)
     conv = await chatApi.updateConversation(conv.id, { title: '卸载应用' })
-    await marketApi.prepareRemove(id, conv.id)
+    const prepared = await marketApi.prepareRemove(id, conv.id)
     currentConversationIdRef.current = conv.id
     applyConversation(conv)
     setChatView('conversation')
     syncConversationRoute(conv.id)
     refreshSidebar()
-  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, isCurrentConversationBusy, selectedProject, applyConversation, syncConversationRoute, refreshSidebar])
+    if (prepared.brief.trim()) {
+      const accepted = await handleSendMessage(prepared.brief, [], { forceNewConversation: false, conversationOverride: conv })
+      if (!accepted) throw new Error('卸载消息未发送，请重试。')
+    }
+  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, isCurrentConversationBusy, selectedProject, applyConversation, syncConversationRoute, refreshSidebar, handleSendMessage, loadSkills])
 
   // 历史预置（Lens「在 AI 客户端继续」交接）：用最新 reactive 值（provider/model/project）创建带历史的新会话。
   // 同 handleSendMessageRef 思路用 ref 持有，保持 drainExternalSends 稳定身份。
