@@ -2,6 +2,7 @@ import { memo, useCallback, useState, Profiler, type ProfilerOnRenderCallback } 
 import { Sidebar, type SidebarProps } from './Sidebar'
 import { WorkbenchSidebar } from './workbench/WorkbenchSidebar'
 import { useConversationTransition } from './conversationTransitionStore'
+import { armProductModeEnter, productModeEnterDirection } from './ProductModeSwitcher'
 import { loadProductMode, saveProductMode, type ProductMode } from './productMode'
 
 export interface ChatSidebarPaneProps extends Omit<SidebarProps, 'productMode' | 'onSelectProductMode'> {
@@ -28,6 +29,7 @@ export const ChatSidebarPane = memo(function ChatSidebarPane({ onRender, ...prop
    * 它们已经处理过设置页退场，这里不需要再包一层。
    */
   const handleSelectProductMode = useCallback((next: ProductMode) => {
+    armProductModeEnter(productModeEnterDirection(next))
     setProductMode(next)
     saveProductMode(next)
     if (next === 'workbench') onOpenExtensionsItem('workbench')

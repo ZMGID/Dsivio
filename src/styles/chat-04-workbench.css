@@ -25,6 +25,29 @@
   color: var(--text);
 }
 
+/* 只动名字。侧栏和中心区照常换，不套整页过渡。backwards：播完卸掉 transform。 */
+.chat-product-mode-trigger.is-forward .chat-product-mode-name {
+  animation: chat-product-mode-in-up var(--kv-dur-fast) var(--kv-ease-standard) backwards;
+}
+
+.chat-product-mode-trigger.is-back .chat-product-mode-name {
+  animation: chat-product-mode-in-down var(--kv-dur-fast) var(--kv-ease-standard) backwards;
+}
+
+@keyframes chat-product-mode-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes chat-product-mode-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
 /* ── 工作台首页 ───────────────────────────────────────────────── */
 
 .workbench-home {

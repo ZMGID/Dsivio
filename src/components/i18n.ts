@@ -1115,9 +1115,9 @@ export const i18n = {
     chatNavExtensions: '扩展',
     chatNavImages: '图片',
     chatNavVideos: '视频',
-    chatNavMarket: '应用市场',
+    chatNavMarket: '插件',
     // ── 形态切换与工作台
-    productModeSwitch: '切换形态',
+    productModeSwitchTo: '切换到 {name}',
     productModeChatName: 'Dsivio',
     productModeWorkbenchName: 'Workbench',
     workbenchSearchFeatures: '搜索功能',
@@ -3809,9 +3809,9 @@ export const i18n = {
     chatNavExtensions: 'Extensions',
     chatNavImages: 'Images',
     chatNavVideos: 'Videos',
-    chatNavMarket: 'Marketplace',
+    chatNavMarket: 'Plugins',
     // ── Product mode switch and workbench
-    productModeSwitch: 'Switch mode',
+    productModeSwitchTo: 'Switch to {name}',
     productModeChatName: 'Dsivio',
     productModeWorkbenchName: 'Workbench',
     workbenchSearchFeatures: 'Search features',
