@@ -510,6 +510,9 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
   const inputIssue = videoInputIssue(brief, isAnalysis, view === 'remake', script) || (isAnalysis ? '' : (!brief.providerId || !brief.model ? '请选择工作台视频模型' : ''))
   const route = brief.route
   const resolutions = videoModel(brief.model || '')?.resolutions || videoResolutions(brief)
+  const pageEntry = view === 'tasks' ? entry : view
+  const featureTitle = pageEntry === 'creation' ? '短视频生成' : pageEntry === 'remake' ? '爆款视频复刻' : '视频拆解'
+  const featureAction = entry === 'creation' ? '创作' : entry === 'remake' ? '复刻' : '拆解'
 
   return (
     <div className={`kv image-studio video-studio${isAnalysis ? " vs-analysis" : ""}${view === "remake" ? " vs-remake" : ""}`}>
@@ -529,12 +532,16 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
       <div className="is-shell">
 
         <div className="studio-workspace">
-        <div className="workbench-page-head"><h2>{feature === 'creation' ? '短视频生成' : feature === 'remake' ? '爆款视频复刻' : '视频拆解'}</h2><div className="workbench-page-actions">
-          <Button variant="ghost" onClick={() => selectView(entry)}>创作</Button>
-          <Button variant="ghost" onClick={() => selectView('tasks')}>记录</Button>
-          <a href="#chat/workbench/video-templates">视频模板</a>
-        </div></div>
         <main className="is-main custom-scrollbar">
+          <header className="vs-heading">
+            <h2>{featureTitle}</h2>
+            <nav className="workbench-page-actions" aria-label={`${featureTitle}页面导航`}>
+              {view === 'tasks'
+                ? <Button variant="ghost" onClick={() => selectView(entry)}>返回{featureAction}</Button>
+                : <Button variant="ghost" onClick={() => selectView('tasks')}>记录</Button>}
+              {pageEntry !== 'analysis' && <a href="#chat/workbench/video-templates">视频模板</a>}
+            </nav>
+          </header>
           {view === 'tasks' ? (
             <>
             {progressError && <p role="status" className="tl-message">{progressError}</p>}
@@ -551,9 +558,6 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
             </>
           ) : (
             <>
-              <div className="vs-heading">
-                <h2>{view === 'remake' ? '参考仿拍' : isAnalysis ? '视频拆解' : '视频创作'}</h2>
-              </div>
               <div className="is-work-toolbar">
                 <div
                   className="is-stage-tabs"

@@ -13,17 +13,19 @@ export function UsagePage() {
       subtitle={t.workbenchUsageSubtitle}
     >
       <WorkbenchCard>
-        <table className="workbench-table">
-          <thead>
-            <tr>
-              <th>{t.workbenchPlogsColType}</th>
-              <th>{t.workbenchUsageColNote}</th>
-              <th>{t.workbenchUsageColTime}</th>
-              <th>{t.workbenchShopsColStatus}</th>
-            </tr>
-          </thead>
-        </table>
-        <WorkbenchEmpty>{t.workbenchUsageEmpty}</WorkbenchEmpty>
+        <div className="custom-scrollbar workbench-table-scroll">
+          <table className="workbench-table">
+            <thead>
+              <tr>
+                <th>{t.workbenchPlogsColType}</th>
+                <th>{t.workbenchUsageColNote}</th>
+                <th>{t.workbenchUsageColTime}</th>
+                <th>{t.workbenchShopsColStatus}</th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+        <WorkbenchEmpty compact>{t.workbenchUsageEmpty}</WorkbenchEmpty>
       </WorkbenchCard>
     </WorkbenchPage>
   )

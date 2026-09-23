@@ -28,19 +28,21 @@ export function AccountsPage() {
       </div>
       {notice ? <p className="workbench-inline-note">{notice}</p> : null}
       <WorkbenchCard title={t.workbenchVacctsList}>
-        <table className="workbench-table">
-          <thead>
-            <tr>
-              <th>{t.workbenchVacctsColPlatform}</th>
-              <th>{t.workbenchVacctsColAccount}</th>
-              <th>{t.workbenchShopsColStatus}</th>
-              <th>{t.workbenchVacctsColFans}</th>
-              <th>{t.workbenchVacctsColSync}</th>
-              <th>{t.workbenchColAction}</th>
-            </tr>
-          </thead>
-        </table>
-        <WorkbenchEmpty>{t.workbenchVacctsEmpty}</WorkbenchEmpty>
+        <div className="custom-scrollbar workbench-table-scroll">
+          <table className="workbench-table">
+            <thead>
+              <tr>
+                <th>{t.workbenchVacctsColPlatform}</th>
+                <th>{t.workbenchVacctsColAccount}</th>
+                <th>{t.workbenchShopsColStatus}</th>
+                <th>{t.workbenchVacctsColFans}</th>
+                <th>{t.workbenchVacctsColSync}</th>
+                <th>{t.workbenchColAction}</th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+        <WorkbenchEmpty compact>{t.workbenchVacctsEmpty}</WorkbenchEmpty>
       </WorkbenchCard>
     </WorkbenchPage>
   )

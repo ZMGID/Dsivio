@@ -50,6 +50,22 @@ it('exposes distinct creation, analysis and remake input flows', async () => {
  expect(screen.getByLabelText('商品图片投放区')).toBeVisible()
  expect(screen.queryByText('视频设置')).not.toBeInTheDocument()
 })
+it('shows one page heading below the titlebar for each video feature', () => {
+ const pages = [
+  [ShortsPage, '短视频生成', '创作'],
+  [VideoClonePage, '爆款视频复刻', '复刻'],
+  [VideoAnalysisPage, '视频拆解', '拆解'],
+ ] as const
+ for (const [Page, heading, action] of pages) {
+  const page = render(<Page />)
+  expect(screen.getAllByRole('heading', { name: heading })).toHaveLength(1)
+  expect(page.container.querySelector('.is-main > .vs-heading h2')).toHaveTextContent(heading)
+  expect(screen.queryByRole('button', { name: action })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '记录' }))
+  expect(screen.getByRole('button', { name: `返回${action}` })).toBeVisible()
+  page.unmount()
+ }
+})
 it('keeps materials editable before selecting a model and persists it across reopening', async () => {
  vi.mocked(open).mockResolvedValue(['/tmp/product.png'])
  const page = render(<ShortsPage />)

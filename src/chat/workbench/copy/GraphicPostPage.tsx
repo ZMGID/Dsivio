@@ -47,11 +47,11 @@ export function GraphicPostPage() {
       crumbCurrent={t.workbenchPostsCrumb}
       title={t.workbenchPostsTitle}
       actions={(
-        <div className="workbench-page-actions">
+        <>
           <span className="workbench-capsule">{t[templateMeta.name]}</span>
           <span className="workbench-capsule">{t.workbenchPostsCount}</span>
           <span className="workbench-capsule">{size}</span>
-        </div>
+        </>
       )}
     >
       <div className="workbench-split workbench-split--even">

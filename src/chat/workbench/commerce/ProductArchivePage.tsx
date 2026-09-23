@@ -29,7 +29,7 @@ export function ProductArchivePage() {
       title={t.workbenchNavProducts}
       subtitle={t.workbenchArchiveSubtitle}
       actions={(
-        <div className="workbench-page-actions">
+        <>
           <IconButton label={t.workbenchRefresh} size="sm" onClick={() => setNotice(t.workbenchActionSoon)}>
             <RefreshCw size={14} />
           </IconButton>
@@ -37,7 +37,7 @@ export function ProductArchivePage() {
             <Plus size={14} />
             {t.workbenchArchiveNew}
           </Button>
-        </div>
+        </>
       )}
     >
       {notice ? <p className="workbench-inline-note">{notice}</p> : null}
@@ -47,6 +47,7 @@ export function ProductArchivePage() {
             key={item.id}
             type="button"
             className={`workbench-stat${status === item.id ? ' is-active' : ''}`}
+            aria-pressed={status === item.id}
             onClick={() => setStatus(item.id)}
           >
             <span className="workbench-stat-value">0</span>
@@ -63,7 +64,7 @@ export function ProductArchivePage() {
             placeholder={t.workbenchArchiveSearch}
           />
         </div>
-        <WorkbenchEmpty>{t.workbenchArchiveEmpty}</WorkbenchEmpty>
+        <WorkbenchEmpty compact>{t.workbenchArchiveEmpty}</WorkbenchEmpty>
       </WorkbenchCard>
     </WorkbenchPage>
   )

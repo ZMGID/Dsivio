@@ -44,12 +44,12 @@ export function SeedArticlePage() {
       crumbCurrent={t.workbenchArticlesCrumb}
       title={t.workbenchArticlesTitle}
       actions={(
-        <div className="workbench-page-actions">
+        <>
           <span className="workbench-capsule">{t[platformMeta.name]}</span>
           <span className="workbench-capsule">{t[typeMeta.label]}</span>
           <span className="workbench-capsule">{t[lengthMeta.capsule]}</span>
           <span className="workbench-capsule">{t.workbenchArticleAudience}</span>
-        </div>
+        </>
       )}
     >
       <div className="workbench-split workbench-split--even">

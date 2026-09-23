@@ -18,20 +18,22 @@ export function PublishLogsPage() {
             </span>
           ))}
         </div>
-        <table className="workbench-table">
-          <thead>
-            <tr>
-              <th>{t.workbenchPlogsColCover}</th>
-              <th>{t.workbenchPublishHeadline}</th>
-              <th>{t.workbenchPlogsColType}</th>
-              <th>{t.workbenchVacctsColPlatform}</th>
-              <th>{t.workbenchShopsColStatus}</th>
-              <th>{t.workbenchPlogsColTime}</th>
-              <th>{t.workbenchColAction}</th>
-            </tr>
-          </thead>
-        </table>
-        <WorkbenchEmpty>{t.workbenchPlogsEmpty}</WorkbenchEmpty>
+        <div className="custom-scrollbar workbench-table-scroll">
+          <table className="workbench-table">
+            <thead>
+              <tr>
+                <th>{t.workbenchPlogsColCover}</th>
+                <th>{t.workbenchPublishHeadline}</th>
+                <th>{t.workbenchPlogsColType}</th>
+                <th>{t.workbenchVacctsColPlatform}</th>
+                <th>{t.workbenchShopsColStatus}</th>
+                <th>{t.workbenchPlogsColTime}</th>
+                <th>{t.workbenchColAction}</th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+        <WorkbenchEmpty compact>{t.workbenchPlogsEmpty}</WorkbenchEmpty>
       </WorkbenchCard>
     </WorkbenchPage>
   )
