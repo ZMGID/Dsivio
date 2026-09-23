@@ -47,21 +47,9 @@ export function inlineArtifactReferenceLinks(markdown: string): string {
   return result
 }
 
-// Virtualized history rows remount while scrolling. Retain only extracted IDs,
-// not syntax trees; bound both the number and total text size of cached inputs.
-const referenceCache = new Map<string, ReadonlySet<string>>()
-const MAX_REFERENCE_CACHE_CHARS = 512 * 1024
-let referenceCacheChars = 0
-
 /** Parse real Markdown links/images; examples in code must not hide deliveries. */
 export function referencedArtifactIds(markdown: string): Set<string> {
   if (!markdown.includes('artifact:')) return new Set()
-  const cached = referenceCache.get(markdown)
-  if (cached) {
-    referenceCache.delete(markdown)
-    referenceCache.set(markdown, cached)
-    return new Set(cached)
-  }
   const tree = parser.parse(markdown) as ReferenceNode
   const definitions = new Map<string, string>()
   const visit = (node: ReferenceNode, callback: (node: ReferenceNode) => void) => {
@@ -81,14 +69,5 @@ export function referencedArtifactIds(markdown: string): Set<string> {
     const id = url ? artifactReferenceId(url) : null
     if (id) ids.add(id)
   })
-  if (markdown.length <= MAX_REFERENCE_CACHE_CHARS) {
-    while (referenceCache.size >= 32 || referenceCacheChars + markdown.length > MAX_REFERENCE_CACHE_CHARS) {
-      const oldest = referenceCache.keys().next().value!
-      referenceCache.delete(oldest)
-      referenceCacheChars -= oldest.length
-    }
-    referenceCache.set(markdown, new Set(ids))
-    referenceCacheChars += markdown.length
-  }
   return ids
 }

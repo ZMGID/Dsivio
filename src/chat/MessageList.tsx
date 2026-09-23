@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { ChevronDown, RotateCw } from 'lucide-react'
 import {
   defaultRangeExtractor,
@@ -131,7 +132,7 @@ const NAVIGATOR_SETTLE_STABLE_FRAMES = 3
 // 跳转后 paint 前钉住：邻居重测 + 图片/异步块还会改 translateY。
 const NAVIGATOR_HOLD_MAX_FRAMES = 28
 const NAVIGATOR_HOLD_STABLE_FRAMES = 4
-// 显式导航时扩大目标附近的测量范围，普通滚动只保留紧邻行。
+// 与 virtualizer overscan 对齐，跳转后首屏邻居尽量已测过高。
 const NAVIGATOR_FORCE_MOUNT_RADIUS = 6
 // 收尾再锁几帧，挡住 force-mount 拆除后的迟到测高。
 const NAVIGATOR_UNLOCK_FRAMES = 10
@@ -918,6 +919,12 @@ function MessageListBase({
           if (logicalKey) estimateSizeRef.current.set(logicalKey, size)
           setCachedRowMeasurement(layoutKey, key, size)
         }
+        // ResizeObserver runs before paint. During a manual height animation,
+        // commit sibling positions now so they cannot lag behind by one frame.
+        // Ref measurements have no entry and must never flush inside React.
+        if (entry && previousSize !== size && element.querySelector('[data-chat-disclosure-animating]')) {
+          flushSync(() => instance.resizeItem(index, size))
+        }
         return size
       }
       return measured
@@ -937,9 +944,7 @@ function MessageListBase({
     }, [forceMountRenderIndex, itemCount, widthAnchorIndex]),
 
 
-    // A single agent answer may hold an entire video run. Six extra rows on
-    // each side mount most short-but-heavy conversations during every switch.
-    overscan: 1,
+    overscan: 6,
     // jsdom/test environments have no layout box before the first observer tick;
     // a conservative initial viewport keeps the first render useful while the
     // real browser immediately replaces it with the measured client rect.
