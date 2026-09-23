@@ -42,3 +42,5 @@ kivio-market-managed: true
 有具体任务和实际所需 scope 时，运行 `lark-cli auth check --scope <required-scopes> --json`，检查输出中的缺失范围；不能只看退出码。先看目标命令的 `--help`，再做一个与任务相关的最小只读请求。默认用户资源显式传 `--as user`，例如日历任务可用 `lark-cli calendar +agenda --as user --format json`。业务调用以退出码 0 且 JSON 的 `ok == true` 为成功；`auth status` 的诊断 JSON 按第 2 步字段判断。`--help`、`--dry-run` 和缓存状态都不能代替真实请求。
 
 分别报告 Dsivio 组件接入、实际 CLI 版本、profile 来源、有效身份、scope 检查和只读结果。市场“已安装”只表示组件就位；未完成真实请求时只报告“基础认证通过，业务未验证”。setup 不发送消息、不创建文档、不修改飞书数据。
+
+完整完成身份、所需权限和真实只读请求验证后，只把已安装的 `~/.kivio/skills/feishu-cli-setup/SKILL.md` 的 YAML `description` 行尾追加一次 ` [setup completed once]`；原有描述和其他内容不变。只要验证未完成，就不要标记。这个标记只表示曾跑通，不能代替当前 profile、scope 或业务请求的检查；用户要求重跑、身份变化或调用失败时仍可重跑，不重复追加标记。

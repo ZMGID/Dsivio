@@ -20,6 +20,7 @@ struct BuiltIn {
     summary: &'static str,
     welcome: &'static str,
     input_hint: &'static str,
+    start_prompt: &'static str,
     setup: &'static str,
     entry: Option<&'static str>,
     command: Option<&'static str>,
@@ -43,6 +44,7 @@ const BUILT_INS: &[BuiltIn] = &[
         summary: "参考视频制作、修改和批量生成视频。",
         welcome: "发来参考视频，或描述想做的视频。",
         input_hint: "参考这条视频，换成我的商品。",
+        start_prompt: "使用 Hypit，告诉我可以做什么。",
         setup: include_str!("../resources/plugins/hypit-setup/SKILL.md"),
         entry: None,
         command: Some("/hypit-market:check"),
@@ -59,6 +61,7 @@ const BUILT_INS: &[BuiltIn] = &[
         summary: "让 AI 编写、预览和渲染 Remotion 视频。",
         welcome: "描述想制作的视频，或发来商品素材。",
         input_hint: "用我的商品图片制作一条 15 秒宣传视频。",
+        start_prompt: "使用 Remotion Agent Skills，告诉我可以做什么。",
         setup: include_str!("../resources/plugins/remotion-agent-skills-setup/SKILL.md"),
         entry: None,
         command: Some("/remotion-market:check"),
@@ -75,6 +78,7 @@ const BUILT_INS: &[BuiltIn] = &[
         summary: "把 SRT 字幕制作成逐步绘制的白板手绘视频。",
         welcome: "发来 SRT 字幕，我会先按内容规划分镜。",
         input_hint: "把这份 SRT 字幕做成白板手绘动画。",
+        start_prompt: "使用 SRT 白板手绘动画，告诉我可以做什么。",
         setup: include_str!("../resources/plugins/srt-whiteboard-animation-setup/SKILL.md"),
         entry: None,
         command: Some("/srt-whiteboard-market:check"),
@@ -90,6 +94,7 @@ const BUILT_INS: &[BuiltIn] = &[
         summary: "在飞书中处理消息、文档、表格、日历和任务。",
         welcome: "告诉我你想在飞书里完成什么。首次使用时我会检查登录与权限。",
         input_hint: "帮我看看今天的飞书日程。",
+        start_prompt: "使用飞书 CLI，告诉我可以做什么。",
         setup: include_str!("../resources/plugins/feishu-cli-setup/SKILL.md"),
         entry: Some(include_str!("../resources/plugins/feishu-cli/SKILL.md")),
         command: None,
@@ -150,8 +155,6 @@ fn built_in_ready(item: &BuiltIn, state: &BuiltInState) -> bool {
 fn built_in_ready_at(item: &BuiltIn, state: &BuiltInState, root: &Path) -> bool {
     state.revision.as_deref() == Some(item.revision)
         && built_in_setup_installed_at(item, root)
-        && fs::read_to_string(root.join(built_in_setup_id(item)).join("SKILL.md"))
-            .is_ok_and(|content| content == item.setup)
         && item.entry.is_none_or(|entry| {
             let dir = root.join(item.skill_id);
             market_skill_installed_at(&dir)
@@ -182,6 +185,7 @@ fn install_market_skill(dir: &Path, content: &str) -> Result<(), String> {
 }
 
 fn install_built_in_setup(item: &BuiltIn) -> Result<(), String> {
+    if built_in_setup_installed(item) { return Ok(()); }
     install_market_skill(&built_in_setup_dir(item)?, item.setup)
 }
 
@@ -242,7 +246,8 @@ fn built_in_manifest(item: &BuiltIn) -> Value {
         "summary":item.summary,"categoryIds":[if item.id == "feishu-cli" { "productivity" } else { "videos" }],
         "icon":item.icon_path,
         "compatibility":{"minAppVersion":"1.0.1","platforms":["macos-arm64","macos-x64","windows-x64","linux-x64","linux-arm64"]},
-        "notices":[],"welcome":item.welcome,"inputHint":item.input_hint,"verification":[],
+        "notices":[],"welcome":item.welcome,"inputHint":item.input_hint,
+        "startPrompt":item.start_prompt,"verification":[],
         "setupSkillId":built_in_setup_id(item),"mainSkillId":item.skill_id,
         "skillIds":skill_ids,
         "checkCommand":item.command})
@@ -1459,6 +1464,7 @@ mod tests {
         assert_eq!(snapshot["entries"][2]["id"], "srt-whiteboard-animation");
         assert_eq!(snapshot["entries"][2]["manifest"]["icon"], "assets/srt-whiteboard-logo.svg");
         assert_eq!(snapshot["entries"][3]["id"], "feishu-cli");
+        assert_eq!(snapshot["entries"][3]["manifest"]["startPrompt"], "使用飞书 CLI，告诉我可以做什么。");
         assert_eq!(snapshot["entries"][3]["manifest"]["categoryIds"][0], "productivity");
         assert_eq!(snapshot["entries"][3]["manifest"]["skillIds"].as_array().unwrap().len(), 1);
         assert!(snapshot["entries"][3]["manifest"]["checkCommand"].is_null());
@@ -1500,6 +1506,8 @@ mod tests {
         let entry = dir.path().join(item.skill_id);
         fs::create_dir_all(&entry).unwrap();
         fs::write(entry.join("SKILL.md"), item.entry.unwrap()).unwrap();
+        assert!(built_in_ready_at(item, &state, dir.path()));
+        fs::write(setup.join("SKILL.md"), "---\nname: feishu-cli-setup\ndescription: setup completed once\nkivio-market-managed: true\n---\n").unwrap();
         assert!(built_in_ready_at(item, &state, dir.path()));
         fs::write(entry.join("SKILL.md"), "---\nkivio-market-managed: true\n---\n").unwrap();
         assert!(!built_in_ready_at(item, &state, dir.path()));

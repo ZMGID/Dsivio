@@ -193,7 +193,7 @@ const NotesCenter = lazy(() => import('./NotesCenter').then((module) => ({
 import { StudioPage } from './StudioPage'
 import { MarketPage } from './market/MarketPage'
 import { marketApi } from './market/api'
-import { isBuiltInMarketId, type MarketLocal } from './market/types'
+import { isBuiltInMarketId, marketUsePrompt, type MarketLocal } from './market/types'
 const ArtifactsCenter = lazy(() => import('./ArtifactsCenter').then((module) => ({ default: module.ArtifactsCenter })))
 const WorkbenchHome = lazy(() => import('./workbench/WorkbenchHome').then((module) => ({ default: module.WorkbenchHome })))
 
@@ -325,6 +325,7 @@ type SendMessageOptions = {
   planMessageId?: string
   forceNewConversation?: boolean
   conversationOverride?: Conversation | null
+  activeSkillId?: string
   /** 外部队列可记录已创建/已 patch 的会话，失败重试继续该会话。 */
   onPartialConversation?: (conversation: Conversation) => void
   /** 前置校验完成、消息正式进入本地发送流程；输入框可立即清空。 */
@@ -1740,7 +1741,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     attachments: PendingAttachment[] = [],
     options: SendMessageOptions = {},
   ) => {
-    const attachmentSkillId = resolveSendSkillId(
+    const attachmentSkillId = options.activeSkillId ?? resolveSendSkillId(
       attachments, enabledSkills, options.forceNewConversation ? null : effectiveSkillId, usesChatRuntime,
     )
     const result = await sendController.send({
@@ -1768,7 +1769,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         providerOAuthTypes,
       },
       attachmentSkillId,
-      disabledReason: sendDisabledReason,
+      disabledReason: options.activeSkillId ? '' : sendDisabledReason,
       planMessageId: options.planMessageId,
       onPartialConversation: options.onPartialConversation,
       onAccepted: options.onAccepted,
@@ -2480,20 +2481,23 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const handleMarketUse = useCallback(async (item: MarketLocal, newChat: boolean) => {
     if (usesExternalRuntime || usesChatRuntime || draftAgentRuntime.kind !== 'builtin') throw new Error('请先切换到内置 Agent 模式，再使用应用。')
     if (!item.skillId || item.status !== 'ready') throw new Error('应用尚未完成安装验收。')
+    if (!activeProviderId || !activeModel) throw new Error('请先配置对话模型，再使用应用。')
     if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再切换应用。')
     const startingHash = window.location.hash
     if (!item.enabled) await marketApi.setEnabled(item.id, true)
     await loadSkills()
+    if (window.location.hash !== startingHash) return
     let conv = !newChat && currentConversation ? currentConversation : await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined, selectedProject?.name, selectedProject?.id ?? null)
     conv = await chatApi.updateConversation(conv.id, { activeSkillId: item.skillId, assistantId: null, ...(newChat ? { title: item.manifest.name } : {}) })
-    if (window.location.hash === startingHash) {
-      currentConversationIdRef.current = conv.id
-      applyConversation(conv)
-      setChatView('conversation')
-      syncConversationRoute(conv.id)
-    }
+    if (window.location.hash !== startingHash) return
+    currentConversationIdRef.current = conv.id
+    applyConversation(conv)
+    setChatView('conversation')
+    syncConversationRoute(conv.id)
     refreshSidebar()
-  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, currentConversation, isCurrentConversationBusy, selectedProject, loadSkills, applyConversation, syncConversationRoute, refreshSidebar])
+    const accepted = await handleSendMessage(marketUsePrompt(item), [], { conversationOverride: conv, activeSkillId: item.skillId })
+    if (!accepted) throw new Error('启动消息未发送，请在对话中重试。')
+  }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, currentConversation, isCurrentConversationBusy, selectedProject, loadSkills, applyConversation, syncConversationRoute, refreshSidebar, handleSendMessage])
 
   const handleMarketUninstall = useCallback(async (id: string) => {
     if (isBuiltInMarketId(id)) {

@@ -10,6 +10,7 @@ export type MarketManifest = {
   notices: string[]
   welcome: string
   inputHint: string
+  startPrompt?: string
   setupSkillId?: string
   mainSkillId?: string
   skillIds?: string[]
@@ -65,4 +66,9 @@ export function primaryAction(item: MarketItem): 'install' | 'repair' | 'continu
   if (item.local?.status === 'ready') return item.local.enabled ? 'use' : 'enable-use'
   if (item.local) return 'continue'
   return item.manifest && !item.entry?.error ? 'install' : 'unavailable'
+}
+
+export function marketUsePrompt(local: MarketLocal): string {
+  return (local.source.kind === 'built-in' ? local.manifest.startPrompt?.trim() : '')
+    || '使用这个插件，告诉我可以做什么。'
 }

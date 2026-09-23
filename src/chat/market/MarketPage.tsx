@@ -23,7 +23,8 @@ function unfinishedInstall(item: MarketItem) {
   return Boolean(item.local && item.local.source?.kind !== 'built-in' && item.local.status !== 'ready' && !item.local.pluginId)
 }
 function statusLabel(item: MarketItem, lang: Lang) {
-  return marketText(lang, item.local?.phase === 'removing' ? '卸载待完成' : item.local?.status === 'ready' ? '已安装' : item.local?.status === 'failed' ? '需修复' : item.local ? '安装待完成' : '未安装', item.local?.phase === 'removing' ? 'Removal pending' : item.local?.status === 'ready' ? 'Installed' : item.local?.status === 'failed' ? 'Needs repair' : item.local ? 'Setup pending' : 'Not installed')
+  if (!item.local) return ''
+  return marketText(lang, item.local.phase === 'removing' ? '卸载待完成' : item.local.status === 'ready' ? '已安装' : item.local.status === 'failed' ? '需修复' : '安装待完成', item.local.phase === 'removing' ? 'Removal pending' : item.local.status === 'ready' ? 'Installed' : item.local.status === 'failed' ? 'Needs repair' : 'Setup pending')
 }
 export function PackageIcon({ categories, item }: { categories?: string[]; item?: MarketItem }) {
   const [src, setSrc] = useState('')
@@ -117,7 +118,7 @@ export function MarketPage({ lang, onInstall, onUse, onUninstall }: MarketAction
         {!chosen?.manifest ? <div className="market-empty">{loading ? marketText(lang, '正在读取应用…', 'Loading app…') : marketText(lang, '这个应用暂时无法查看', 'This app is unavailable')}</div> : <div className="market-detail">
           <header className="market-detail-heading"><PackageIcon item={chosen} categories={chosen.manifest.categoryIds} /><div><h1>{chosen.manifest.name}</h1><p>{chosen.manifest.summary}</p></div>{more(chosen)}</header>
           {chosen.entry?.source.kind === 'built-in' ? <>
-            <p className="market-status">{statusLabel(chosen, lang)}</p>
+            {chosen.local && <p className="market-status">{statusLabel(chosen, lang)}</p>}
             {chosen.manifest.setupSkillId && <section className="market-components"><h2>{marketText(lang, '技能', 'Skills')} {1 + (chosen.manifest.skillIds?.length ?? 1)}</h2>
               <div><strong>{chosen.manifest.setupSkillId}</strong><span>{marketText(lang, '检查 Dsivio 接入并补齐运行环境', 'Check Dsivio integration and fill missing dependencies')}</span></div>
               {(chosen.manifest.skillIds ?? [chosen.manifest.mainSkillId]).filter((skill): skill is string => Boolean(skill)).map(skill => <div key={skill}><strong>{skill}</strong><span>{marketText(lang, '安装后即可使用', 'Available after installation')}</span></div>)}
@@ -148,7 +149,7 @@ export function MarketPage({ lang, onInstall, onUse, onUninstall }: MarketAction
         {snapshot.error && <div role="status" className="market-notice">{snapshot.refreshedAt ? marketText(lang, '暂时无法刷新，已显示上次内容。', 'Refresh failed. Showing cached content.') : marketText(lang, '暂时无法读取市场。', 'The market could not be loaded.')}<details><summary>{marketText(lang, '查看原因', 'Details')}</summary>{snapshot.error}</details><Button size="sm" onClick={() => void marketApi.refresh()}>{marketText(lang, '重试', 'Retry')}</Button></div>}
         {initialLoading && !items.length ? <div className="market-rows" aria-busy="true">{[0, 1, 2, 3].map(i => <div className="market-skeleton" key={i} />)}</div> : !sections.length ? <div className="market-empty"><LayoutGrid size={28} /><h2>{marketText(lang, query.trim() ? '没有找到相关插件' : scope === 'personal' ? '还没有安装插件' : snapshot.error ? '市场暂不可用' : '暂无插件', query.trim() ? 'No matching plugins' : scope === 'personal' ? 'No plugins installed yet' : snapshot.error ? 'Market unavailable' : 'No plugins yet')}</h2><p>{marketText(lang, query.trim() ? '试试其他关键词。' : '团队发布后会显示在这里，无需更新软件。', query.trim() ? 'Try another search.' : 'Published plugins will appear here without an app update.')}</p>{query.trim() && <Button size="sm" onClick={() => setQuery('')}>{marketText(lang, '查看全部', 'Show all')}</Button>}</div> : sections.map(section => <section className="market-section" key={section.id}>
           <h2>{section.name}</h2>
-          {!collapsed[section.id] && <div className="market-rows">{section.items.map(item => <article className="market-row" key={item.id}><button type="button" className="market-row-info" onClick={() => openDetail(item.id)}><PackageIcon item={item} categories={item.manifest?.categoryIds} /><span className="min-w-0"><strong>{item.manifest?.name ?? item.id}</strong><span>{item.manifest?.summary ?? item.entry?.error}</span></span></button><span className="market-row-actions"><span className="market-status">{statusLabel(item, lang)}</span>{more(item)}{actionButton(item)}</span></article>)}</div>}
+          {!collapsed[section.id] && <div className="market-rows">{section.items.map(item => <article className="market-row" key={item.id}><button type="button" className="market-row-info" onClick={() => openDetail(item.id)}><PackageIcon item={item} categories={item.manifest?.categoryIds} /><span className="min-w-0"><strong>{item.manifest?.name ?? item.id}</strong><span>{item.manifest?.summary ?? item.entry?.error}</span></span></button><span className="market-row-actions">{item.local && <span className="market-status">{statusLabel(item, lang)}</span>}{more(item)}{actionButton(item)}</span></article>)}</div>}
           <button type="button" className="market-collapse" aria-expanded={!collapsed[section.id]} onClick={() => setCollapsed(current => ({ ...current, [section.id]: !current[section.id] }))}>{marketText(lang, collapsed[section.id] ? '展开' : '收起', collapsed[section.id] ? 'Expand' : 'Collapse')}</button>
         </section>)}
       </>}
