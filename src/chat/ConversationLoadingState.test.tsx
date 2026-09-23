@@ -14,26 +14,14 @@ describe('ConversationLoadingState', () => {
     vi.useRealTimers()
   })
 
-  it('shows the dot logo immediately when predicted heavy', () => {
-    const { container } = render(<ConversationLoadingState showAnimation />)
+  it('shows the dot logo on its first render', () => {
+    const { container } = render(<ConversationLoadingState />)
     expect(hasLogo(container)).toBe(true)
+    expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('falls back to the dot logo when a "small" conversation is still loading after the delay', () => {
-    const { container } = render(<ConversationLoadingState showAnimation={false} />)
-    expect(hasLogo(container)).toBe(false)
-    act(() => {
-      vi.advanceTimersByTime(149)
-    })
-    expect(hasLogo(container)).toBe(false)
-    act(() => {
-      vi.advanceTimersByTime(1)
-    })
-    expect(hasLogo(container)).toBe(true)
-  })
-
-  it('never shows the logo when the overlay unmounts before the delay elapses', () => {
-    const { container, unmount } = render(<ConversationLoadingState showAnimation={false} />)
+  it('removes the logo as soon as loading finishes', () => {
+    const { container, unmount } = render(<ConversationLoadingState />)
     unmount()
     act(() => {
       vi.advanceTimersByTime(300)

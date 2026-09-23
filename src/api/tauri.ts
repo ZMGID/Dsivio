@@ -1731,6 +1731,7 @@ type Unlisten = () => void
  * @returns 取消监听的函数
  */
 async function on<T>(event: string, handler: (payload: T) => void): Promise<Unlisten> {
+  if (!isTauriRuntime()) return () => {}
   const unlisten = await listen<T>(event, (event) => handler(event.payload))
   return () => {
     unlisten()

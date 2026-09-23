@@ -1,6 +1,6 @@
 import { refreshSubAgents } from './useSubAgents'
 import { SubAgentIndicator } from './SubAgentPanel'
-import { lazy, memo, Profiler, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ProfilerOnRenderCallback, type ReactNode, type Ref } from 'react'
+import { lazy, memo, Profiler, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ProfilerOnRenderCallback, type ReactNode, type Ref } from 'react'
 import { type ConversationSelectionScope, type ExtensionsNavItem } from './Sidebar'
 import { ChatSidebarPane } from './ChatSidebarPane'
 import { useChatRouting } from './hooks/useChatRouting'
@@ -864,7 +864,8 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const navigation = useMemo(() => createChatNavigationController({
     currentConversation: () => currentConversationRef.current,
     currentConversationId: () => currentConversationIdRef.current,
-    listPopouts: popoutOwner.list,
+    listPopouts: (refresh) => refresh
+      ? popoutOwner.refresh().then((change) => change.next) : popoutOwner.list(),
     readConversation: chatApi.getConversation,
     isConversationInFlight: (conversationId) => executionOwner.snapshot(conversationId).inFlight,
     prepareNewConversation: () => {
@@ -912,10 +913,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     },
     showConversation: (conversation, { renderRequestId, selection }) => {
       currentConversationIdRef.current = conversation.id
-      startTransition(() => {
-        applyConversation(conversation)
-        if (renderRequestId > 0) setConversationRenderRequestId(renderRequestId)
-      })
+      // Navigation must commit with its route and preview updates. Deferring
+      // only the view can leave the loading shell waiting on an unmounted list.
+      applyConversation(conversation)
+      if (renderRequestId > 0) setConversationRenderRequestId(renderRequestId)
       restoreStreamingPreview(conversation.id)
       if (selection) setStreamError('')
       else setStreamCoarse({ cancelling: false })
@@ -923,17 +924,9 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     resetConversation: () => {
       clearDisplayedConversation()
     },
-    discardConversation: (conversationId, error, selection) => {
+    reportLoadError: (_conversationId, error) => {
       console.error('Failed to load conversation:', error)
-      dropConversationLocally(conversationId)
-      if (
-        currentConversationIdRef.current === conversationId
-        || (!selection && currentConversationIdRef.current === null)
-      ) {
-        clearDisplayedConversation()
-      }
-      refreshSidebar()
-      setStreamError(error.message)
+      setStreamError(`对话加载失败，请重新点击侧栏中的对话重试：${error.message}`)
     },
   }), [
     activeAgentRuntime, activeModel, activeProviderId, applyConversation, clearDisplayedConversation,
@@ -1515,9 +1508,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   }, [navigation, refreshSidebar])
 
   const handleConversationFirstCommit = useCallback((conversationId: string, requestId: number) => {
-    window.requestAnimationFrame(() => {
-      completeConversationTransition(conversationId, requestId)
-    })
+    completeConversationTransition(conversationId, requestId)
   }, [])
 
   const handleNewConversation = useCallback(async () => {
@@ -1937,7 +1928,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       if (!cancelled) void drainExternalSends()
     }))
     // 2) 窗口获得焦点 —— 覆盖复用窗口被重新唤起、以及冷启动时就绪事件丢失的情况
-    register(
+    if (isTauriRuntime()) register(
       import('@tauri-apps/api/window')
         .then(({ getCurrentWindow }) =>
           getCurrentWindow().onFocusChanged(({ payload: focused }) => {
@@ -2237,7 +2228,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         return
       }
       void handleSelectConversation(id, {
-        messageCount: conversation?.message_count,
         focusMessageId: focusMessageId || undefined,
       })
     }, { restoreCurrentRoute: false })

@@ -32,6 +32,15 @@ describe('chat performance fixtures render through MessageList', () => {
       && sample.detail?.startsWith(`fixture-${id}:`))).toBe(true)
   })
 
+  it('opens code-heavy history without mounting distant offscreen answers', async () => {
+    const fixture = createChatPerformanceFixture('F2')
+    const { container } = render(<MessageList messages={fixture.messages} conversationId="bounded-heavy-opening" />)
+    await flush()
+    const answers = container.querySelectorAll('[data-chat-reading-row][data-message-id$="-assistant"]')
+    expect(answers.length).toBeGreaterThan(0)
+    expect(answers.length).toBeLessThanOrEqual(2)
+  })
+
   it('F4 injects the exact streaming fixture into the live row', async () => {
     const fixture = createChatPerformanceFixture('F4')
     render(<MessageList messages={fixture.messages} conversationId="fixture-F4" />)

@@ -65,18 +65,18 @@ describe('MessageList disclosure scroll anchoring', () => {
     expect(viewport.scrollTop).toBe(250)
   })
 
-  it('positions the next message in the same observer delivery as the animated height', async () => {
+  it('positions the next message after measuring the expanded natural height', async () => {
     const { container, button, index } = await mount()
     fireEvent.click(button)
     const row = button.closest<HTMLElement>('[data-chat-row-index]')!
-    row.querySelector('[data-chat-disclosure-body]')!.setAttribute('data-chat-disclosure-animating', 'true')
     const next = container.querySelector<HTMLElement>(`[data-chat-row-index="${index + 1}"]`)!
     const start = list.getVirtualItems().find(item => item.index === index + 1)!.start
     const entry = { target: row, borderBoxSize: [{ blockSize: 1400, inlineSize: 600 }] } as unknown as ResizeObserverEntry
     act(() => {
-      list.options.measureElement(row, entry, list)
-      // Assert inside the delivery, before act can flush a deferred render.
-      expect(next.style.transform).toBe(`translateY(${start + 400}px)`)
+      // TanStack applies the measured size after our measurement callback.
+      list.resizeItem(index, list.options.measureElement(row, entry, list))
     })
+    expect(next.style.transform).toBe(`translateY(${start + 400}px)`)
+    expect(row.querySelector('[data-chat-disclosure-animating]')).toBeNull()
   })
 })

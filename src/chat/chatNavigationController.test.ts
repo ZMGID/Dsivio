@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createChatNavigationController } from './chatNavigationController'
 import { getConversationTransitionSnapshot, invalidateConversationTransition } from './conversationTransitionStore'
 import type { Conversation } from './types'
@@ -29,6 +29,7 @@ function setup() {
   const reads = new Map<string, ReturnType<typeof deferred<Conversation>>>()
   const readStarted = deferred<string>()
   const ownership = deferred<ReadonlySet<string>>()
+  const listPopouts = vi.fn<(refresh?: boolean) => Promise<ReadonlySet<string>>>(() => ownership.promise)
   const shown: string[] = []
   const errors: string[] = []
   const occupyPopout = vi.fn()
@@ -44,7 +45,7 @@ function setup() {
   const controller = createChatNavigationController({
     currentConversation: () => current,
     currentConversationId: () => current?.id ?? null,
-    listPopouts: () => ownership.promise,
+    listPopouts,
     readConversation: (id) => {
       const pending = deferred<Conversation>()
       reads.set(id, pending)
@@ -67,10 +68,10 @@ function setup() {
       shown.push(value.id)
     },
     resetConversation: () => { current = null },
-    discardConversation: (_id, error) => { errors.push(error.message) },
+    reportLoadError: (_id, error) => { errors.push(error.message) },
   })
   return {
-    controller, ownership, reads, readStarted, shown, errors, occupyPopout,
+    controller, ownership, listPopouts, reads, readStarted, shown, errors, occupyPopout,
     prepareNewConversation, clearEmptyChat, requestClearChat, deleteConversation,
     cancelDeletedRun, finalizeDeletedChat, reportClearError,
     setCurrent: (value: Conversation | null) => { current = value },
@@ -82,6 +83,154 @@ describe('chat navigation controller', () => {
   beforeEach(() => {
     invalidateConversationTransition()
     window.location.hash = '#chat'
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it.each(['select', 'route', 'reload', 'already-open'] as const)(
+    'settles %s when the popout lookup rejects', async (entry) => {
+      const state = setup()
+      if (entry === 'reload' || entry === 'already-open') state.setCurrent(conversation('a'))
+      const pending = entry === 'route' ? state.controller.loadRouteConversation('a')
+        : entry === 'reload' ? state.controller.reloadConversation('a', { force: true })
+          : state.controller.selectConversation('a')
+      state.ownership.reject(new Error('window lookup failed'))
+      await expect(pending).resolves.toBeUndefined()
+      expect(getConversationTransitionSnapshot().loading).toBe(false)
+      expect(state.errors).toEqual(['window lookup failed'])
+      expect(state.reads.size).toBe(0)
+    },
+  )
+
+  it('stops waiting for a hung ownership lookup and ignores its late result', async () => {
+    vi.useFakeTimers()
+    const state = setup()
+    const pending = state.controller.selectConversation('a')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(getConversationTransitionSnapshot().loading).toBe(false)
+    await pending
+    expect(state.errors[0]).toContain('超时')
+    state.ownership.resolve(new Set())
+    await Promise.resolve()
+    expect(state.reads.size).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('starts a fresh ownership lookup when retrying a hung lookup', async () => {
+    vi.useFakeTimers()
+    const state = setup()
+    const first = state.controller.selectConversation('a')
+    await vi.advanceTimersByTimeAsync(10_000)
+    await first
+    state.listPopouts.mockResolvedValueOnce(new Set())
+    const retry = state.controller.selectConversation('a')
+    await state.readStarted.promise
+    expect(state.listPopouts).toHaveBeenLastCalledWith(true)
+    state.reads.get('a')!.resolve(conversation('a'))
+    await retry
+    state.ownership.resolve(new Set(['a']))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.shown).toEqual(['a'])
+    expect(state.occupyPopout).not.toHaveBeenCalled()
+    expect(getConversationTransitionSnapshot().loading).toBe(false)
+  })
+
+  it('bounds ownership and reading together, preserves the previous view, and allows retry', async () => {
+    vi.useFakeTimers()
+    const state = setup()
+    state.setCurrent(conversation('previous'))
+    window.location.hash = '#chat/previous'
+    const pending = state.controller.selectConversation('a')
+    await vi.advanceTimersByTimeAsync(6_000)
+    state.ownership.resolve(new Set())
+    await state.readStarted.promise
+    const oldRead = state.reads.get('a')!
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(getConversationTransitionSnapshot().loading).toBe(false)
+    await pending
+    expect(state.errors[0]).toContain('超时')
+    expect(state.shown).toEqual([])
+    expect(window.location.hash).toBe('#chat/previous')
+    expect(state.finalizeDeletedChat).not.toHaveBeenCalled()
+    expect(state.cancelDeletedRun).not.toHaveBeenCalled()
+
+    const retry = state.controller.selectConversation('a')
+    await vi.advanceTimersByTimeAsync(0)
+    state.reads.get('a')!.resolve(conversation('a'))
+    await retry
+    oldRead.resolve(conversation('old-a'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.shown).toEqual(['a'])
+    expect(window.location.hash).toBe('#chat/a')
+    expect(getConversationTransitionSnapshot().loading).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('does not let an old timeout cancel a newer conversation load', async () => {
+    vi.useFakeTimers()
+    const state = setup()
+    state.ownership.resolve(new Set())
+    const first = state.controller.selectConversation('a')
+    await state.readStarted.promise
+    await vi.advanceTimersByTimeAsync(5_000)
+    const second = state.controller.selectConversation('b')
+    await vi.advanceTimersByTimeAsync(5_000)
+    await first
+    expect(state.errors).toEqual([])
+    expect(getConversationTransitionSnapshot()).toMatchObject({ loading: true, targetConversationId: 'b' })
+    state.reads.get('b')!.resolve(conversation('b'))
+    await second
+    state.reads.get('a')!.reject(new Error('late read failure'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(state.shown).toEqual(['b'])
+    expect(state.errors).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('retries a failed refresh even when the conversation is already displayed', async () => {
+    const state = setup()
+    state.setCurrent(conversation('a'))
+    state.ownership.resolve(new Set())
+    const failed = state.controller.reloadConversation('a', { force: true })
+    await state.readStarted.promise
+    state.reads.get('a')!.reject(new Error('temporary read failure'))
+    await failed
+    expect(state.errors).toEqual(['temporary read failure'])
+    const oldRead = state.reads.get('a')
+    const retry = state.controller.selectConversation('a')
+    await vi.waitFor(() => expect(state.reads.get('a')).not.toBe(oldRead))
+    state.reads.get('a')!.resolve(conversation('a'))
+    await retry
+    expect(state.shown).toEqual(['a'])
+    expect(getConversationTransitionSnapshot().loading).toBe(false)
+  })
+
+  it('settles an empty conversation without waiting for animation frames', async () => {
+    const frame = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 1)
+    try {
+      const state = setup()
+      const loading = state.controller.loadRouteConversation('empty')
+      state.ownership.resolve(new Set())
+      await state.readStarted.promise
+      state.reads.get('empty')!.resolve(conversation('empty'))
+      await loading
+      expect(getConversationTransitionSnapshot().loading).toBe(false)
+      expect(frame).not.toHaveBeenCalled()
+    } finally {
+      frame.mockRestore()
+    }
+  })
+
+  it('settles selection of a conversation owned by a popout without reading it', async () => {
+    const state = setup()
+    const selecting = state.controller.selectConversation('a')
+    state.ownership.resolve(new Set(['a']))
+    await selecting
+    expect(state.occupyPopout).toHaveBeenCalledWith('a')
+    expect(state.reads.size).toBe(0)
+    expect(getConversationTransitionSnapshot().loading).toBe(false)
   })
 
   it('does not reopen a created conversation after New invalidates its pending creation', async () => {

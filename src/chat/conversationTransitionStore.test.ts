@@ -43,17 +43,11 @@ describe('conversationTransitionStore', () => {
     })
   })
 
-  it('only shows the loading shell for larger conversations', () => {
-    // threshold is exclusive: ≤12 messages skip the logo shell so small opens feel instant
-    beginConversationTransition('small', { messageCount: 12 })
-    expect(getConversationTransitionSnapshot().showLoading).toBe(false)
-
-    beginConversationTransition('large', { messageCount: 13 })
-    expect(getConversationTransitionSnapshot().showLoading).toBe(true)
-
-    // unknown size stays conservative
-    beginConversationTransition('unknown')
-    expect(getConversationTransitionSnapshot().showLoading).toBe(true)
+  it('starts loading feedback for every conversation', () => {
+    beginConversationTransition('conversation')
+    expect(getConversationTransitionSnapshot()).toMatchObject({
+      targetConversationId: 'conversation', loading: true,
+    })
   })
 
   it('invalidates a captured navigation lease without cancelling background work', async () => {

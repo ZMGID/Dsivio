@@ -203,7 +203,7 @@ describe('MessageList opening mask readiness', () => {
         <MessageList conversationId="slow-image" renderRequestId={transition.requestId}
           onInitialRender={completeConversationTransition}
           messages={[{ id: 'answer', role: 'assistant', content: 'History already loaded', timestamp: 1 }]} />
-        {transition.loading && <ConversationLoadingState showAnimation />}
+        {transition.loading && <ConversationLoadingState />}
       </>
     }
     beginConversationTransition('slow-image')

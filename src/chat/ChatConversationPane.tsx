@@ -276,7 +276,7 @@ export const ChatConversationPane = memo(function ChatConversationPane({
           </>
         )}
         {conversationLoading && (
-          <ConversationLoadingState showAnimation={transition.showLoading} />
+          <ConversationLoadingState />
         )}
       </div>
 

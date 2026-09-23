@@ -5,6 +5,9 @@ import './styles/app.css'
 import 'streamdown/styles.css'
 import { isTauriRuntime } from './api/tauri'
 import { startBackendSettingsSync } from './api/settingsCache'
+import { installTauriEventUnlistenGuard } from './api/tauriEventCompatibility'
+
+installTauriEventUnlistenGuard()
 
 if (isTauriRuntime()) {
   const backendSettingsSync = startBackendSettingsSync().catch((error) => {

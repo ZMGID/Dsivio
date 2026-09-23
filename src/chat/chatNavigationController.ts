@@ -17,7 +17,8 @@ import type { Conversation } from './types'
 interface NavigationPorts {
   currentConversation: () => Conversation | null
   currentConversationId: () => string | null
-  listPopouts: () => Promise<ReadonlySet<string>>
+  /** Retry bypasses an ownership lookup that may still be pending. */
+  listPopouts: (refresh?: boolean) => Promise<ReadonlySet<string>>
   readConversation: (conversationId: string) => Promise<Conversation>
   isConversationInFlight: (conversationId: string) => boolean
   prepareNewConversation: () => void
@@ -37,7 +38,8 @@ interface NavigationPorts {
     selection: boolean
   }) => void
   resetConversation: () => void
-  discardConversation: (conversationId: string, error: Error, selection: boolean) => void
+  /** Report a transient read failure without dropping history or background runs. */
+  reportLoadError: (conversationId: string, error: Error) => void
 }
 
 interface ReloadOptions {
@@ -48,14 +50,38 @@ interface ReloadOptions {
   canCommit?: () => boolean
 }
 
-function asError(value: unknown, fallback = '对话加载失败，已从列表移除'): Error {
+function asError(value: unknown, fallback = '对话加载失败'): Error {
   if (value instanceof Error) return value
   return new Error(typeof value === 'string' ? value : fallback)
+}
+
+// Ownership lookup and history read share one deadline. Race each await, rather
+// than a task with UI side effects, so late IPC results cannot resume a commit.
+const CONVERSATION_LOAD_TIMEOUT_MS = 10_000
+
+async function awaitConversationLoad<T>(pending: Promise<T>, deadline: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('对话加载超时')), Math.max(0, deadline - Date.now()))
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** Owns navigation commit rights. Backend runs are deliberately not cancelled
  * when a view changes: only an obsolete UI result loses its lease. */
 export function createChatNavigationController(ports: NavigationPorts) {
+  let failedConversationId: string | null = null
+  const reportLoadFailure = (conversationId: string, value: unknown) => {
+    failedConversationId = conversationId
+    ports.reportLoadError(conversationId, asError(value))
+  }
+
   const beginConversationCreation = () => {
     // A creation is a navigation intent even while its backend request is
     // pending. Revoking the previous generation also orders two creations
@@ -147,6 +173,7 @@ export function createChatNavigationController(ports: NavigationPorts) {
   }
 
   const reloadConversation = async (conversationId: string, options?: ReloadOptions) => {
+    const deadline = Date.now() + CONVERSATION_LOAD_TIMEOUT_MS
     const transitionRequestId = options?.transitionRequestId
     const navigationLease = captureConversationNavigation()
     const startingConversationId = ports.currentConversationId()
@@ -159,39 +186,38 @@ export function createChatNavigationController(ports: NavigationPorts) {
         && ports.currentConversationId() === conversationId
         && startingConversationId === conversationId
     }
-    const ownership = await awaitCurrentConversationNavigation(
-      options?.loadPoppedOut ? Promise.resolve(new Set<string>()) : ports.listPopouts(),
-      canCommitResult,
-    )
-    if (ownership.status === 'stale') return
-    if (ownership.value.has(conversationId)) {
-      ports.occupyPopout(conversationId)
-      if (transitionRequestId !== undefined) {
-        completeConversationTransition(conversationId, transitionRequestId)
-      }
-      return
-    }
-    if (ports.isConversationInFlight(conversationId) && !options?.force) return
     try {
-      const conversation = await ports.readConversation(conversationId)
+      const ownership = await awaitCurrentConversationNavigation(
+        awaitConversationLoad(options?.loadPoppedOut ? Promise.resolve(new Set<string>()) : ports.listPopouts(failedConversationId === conversationId), deadline),
+        canCommitResult,
+      )
+      if (ownership.status === 'stale') return
+      if (ownership.value.has(conversationId)) {
+        ports.occupyPopout(conversationId)
+        if (transitionRequestId !== undefined) {
+          completeConversationTransition(conversationId, transitionRequestId)
+        }
+        return
+      }
+      if (ports.isConversationInFlight(conversationId) && !options?.force) return
+      const conversation = await awaitConversationLoad(ports.readConversation(conversationId), deadline)
       const transition = getConversationTransitionSnapshot()
       if (!canCommitResult() || (transition.loading && transition.targetConversationId !== conversationId)) return
       const renderRequestId = transitionRequestId
         ?? (transition.loading && transition.targetConversationId === conversationId ? transition.requestId : 0)
+      failedConversationId = null
       ports.showConversation(conversation, { renderRequestId, selection: false })
       if (renderRequestId > 0 && conversation.messages.length === 0) {
-        window.requestAnimationFrame(() => completeConversationTransition(conversationId, renderRequestId))
+        completeConversationTransition(conversationId, renderRequestId)
       }
     } catch (value) {
       const transition = getConversationTransitionSnapshot()
       if (!canCommitResult() || (transition.loading && transition.targetConversationId !== conversationId)) return
-      ports.discardConversation(conversationId, asError(value), false)
-      forgetRememberedChatRoute()
-      syncConversationRoute(null)
       if (transitionRequestId !== undefined) cancelConversationTransition(transitionRequestId)
       else if (transition.loading && transition.targetConversationId === conversationId) {
         cancelConversationTransition(transition.requestId)
       }
+      reportLoadFailure(conversationId, value)
     }
   }
 
@@ -211,52 +237,41 @@ export function createChatNavigationController(ports: NavigationPorts) {
   }
 
   const selectConversation = async (conversationId: string, hint?: ConversationLoadHint) => {
-    const alreadyOpen = ports.currentConversationId() === conversationId
+    const deadline = Date.now() + CONVERSATION_LOAD_TIMEOUT_MS
+    const alreadyOpen = failedConversationId !== conversationId
+      && ports.currentConversationId() === conversationId
       && ports.currentConversation()?.id === conversationId
     if (alreadyOpen) {
       const inFlight = getConversationTransitionSnapshot()
       if (inFlight.loading && inFlight.targetConversationId !== conversationId) leaveConversation()
-      const navigationLease = captureConversationNavigation()
+    }
+    const requestId = alreadyOpen ? undefined : beginConversationTransition(conversationId)
+    const navigationLease = captureConversationNavigation()
+    const canCommit = () => isCurrentConversationNavigation(navigationLease)
+    try {
       const ownership = await awaitCurrentConversationNavigation(
-        ports.listPopouts(),
-        () => isCurrentConversationNavigation(navigationLease),
+        awaitConversationLoad(ports.listPopouts(failedConversationId === conversationId), deadline), canCommit,
       )
       if (ownership.status === 'stale') return
       if (ownership.value.has(conversationId)) {
         ports.focusPopout(conversationId)
         ports.occupyPopout(conversationId)
+        if (requestId !== undefined) completeConversationTransition(conversationId, requestId)
         return
       }
-      ports.prepareSelection(hint?.focusMessageId ?? null, false)
-      syncConversationRoute(conversationId)
-      return
-    }
-    const requestId = beginConversationTransition(conversationId, hint)
-    const ownership = await awaitCurrentConversationNavigation(
-      ports.listPopouts(),
-      () => isCurrentConversationTransition(requestId, conversationId),
-    )
-    if (ownership.status === 'stale') return
-    if (ownership.value.has(conversationId)) {
-      ports.focusPopout(conversationId)
-      ports.occupyPopout(conversationId)
-      return
-    }
-    ports.prepareSelection(hint?.focusMessageId ?? null, true)
-    try {
-      const conversation = await ports.readConversation(conversationId)
-      if (!isCurrentConversationTransition(requestId, conversationId)) return
-      ports.showConversation(conversation, { renderRequestId: requestId, selection: true })
-      if (conversation.messages.length === 0) {
-        window.requestAnimationFrame(() => completeConversationTransition(conversationId, requestId))
+      ports.prepareSelection(hint?.focusMessageId ?? null, !alreadyOpen)
+      if (requestId !== undefined) {
+        const conversation = await awaitConversationLoad(ports.readConversation(conversationId), deadline)
+        if (!canCommit()) return
+        failedConversationId = null
+        ports.showConversation(conversation, { renderRequestId: requestId, selection: true })
+        if (conversation.messages.length === 0) completeConversationTransition(conversationId, requestId)
       }
       syncConversationRoute(conversationId)
     } catch (value) {
-      if (!isCurrentConversationTransition(requestId, conversationId)) return
-      ports.discardConversation(conversationId, asError(value), true)
-      forgetRememberedChatRoute()
-      syncConversationRoute(null)
-      cancelConversationTransition(requestId)
+      if (!canCommit()) return
+      if (requestId !== undefined) cancelConversationTransition(requestId)
+      reportLoadFailure(conversationId, value)
     }
   }
 
