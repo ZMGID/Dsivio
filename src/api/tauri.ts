@@ -1746,7 +1746,9 @@ async function onChatProtocol(
 
 // ========== API 导出 ==========
 
-export type ShopPlatform = 'shopee' | 'shein' | 'tiktok' | 'mercadolibre'
+export type ShopPlatform =
+  | 'shopee' | 'shein' | 'tiktok' | 'mercadolibre'
+  | 'douyin' | 'kuaishou' | 'wechat' | 'taobao' | 'pinduoduo'
 export type ShopConnection = {
   id: string
   platform: ShopPlatform

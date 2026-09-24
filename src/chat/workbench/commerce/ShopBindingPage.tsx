@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react'
-import { Button } from '../../../components/Button'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { X } from 'lucide-react'
+import { Button, IconButton } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { Input, Select } from '../../../settings/public/controls'
 import { api, isTauriRuntime, type ShopAppConfig, type ShopConnection, type ShopPlatform } from '../../../api/tauri'
 import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
-import { SHOP_PLATFORMS, UPCOMING_DOMESTIC_SHOP_PLATFORMS } from './shopPlatforms'
+import { ALL_SHOP_PLATFORMS, DOMESTIC_SHOP_PLATFORMS, SHOP_PLATFORMS, isDirectBindPlatform } from './shopPlatforms'
 import { ShopPlatformLogo } from './ShopPlatformLogo'
 import './shopBinding.css'
 
@@ -13,9 +14,38 @@ const REGIONS = [
   { value: 'MX', label: 'México' }, { value: 'CL', label: 'Chile' },
   { value: 'CO', label: 'Colombia' }, { value: 'UY', label: 'Uruguay' },
 ]
+// 平台对开发者凭证的官方叫法，缺省回退 App ID / Key。
+const CREDENTIAL_LABELS: Partial<Record<ShopPlatform, readonly [string, string]>> = {
+  shopee: ['Partner ID', 'Partner Key'],
+  mercadolibre: ['Client ID', 'Client Secret'],
+  pinduoduo: ['Client ID', 'Client Secret'],
+  douyin: ['App Key', 'App Secret'],
+  kuaishou: ['App Key', 'App Secret'],
+  taobao: ['App Key', 'App Secret'],
+  wechat: ['小店 AppID', '小店 AppSecret'],
+}
 const emptyConfig = (platform: ShopPlatform): ShopAppConfig =>
   ({ platform, appId: '', appSecret: '', redirectUrl: '', authorizeUrl: '', region: 'MX', pkce: false })
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
+
+function ShopBindDialog({ title, busy, onClose, children }: {
+  title: string
+  busy: boolean
+  onClose: () => void
+  children: ReactNode
+}) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const trigger = document.activeElement
+    if (dialog.current && !dialog.current.open) dialog.current.showModal()
+    return () => { if (trigger instanceof HTMLElement && trigger.isConnected) trigger.focus() }
+  }, [])
+
+  return <dialog ref={dialog} className="kv-modal shop-bind-dialog custom-scrollbar" aria-label={title} aria-busy={busy}
+    onCancel={event => { event.preventDefault(); if (!busy) onClose() }}>
+    {children}
+  </dialog>
+}
 
 export function ShopBindingPage() {
   const t = useT()
@@ -47,16 +77,20 @@ export function ShopBindingPage() {
     setBusy(true); setNotice('')
     try {
       const result = await api.shopBegin(config)
-      setRequestId(result.requestId); setAuthUrl(result.url)
+      setRequestId(result.requestId)
+      // 微信小店无授权页：凭证即授权，直接完成绑定。
+      if (!result.url) { await complete(result.requestId); return }
+      setAuthUrl(result.url)
       await api.openExternal(result.url)
     } catch (error) { setNotice(errorText(error)) }
     finally { setBusy(false) }
   }
-  const complete = async () => {
-    if (!requestId || busy) return
+  const complete = async (requestToFinish?: string) => {
+    const requestIdToFinish = requestToFinish ?? requestId
+    if (!requestIdToFinish || busy) return
     setBusy(true); setNotice('')
     try {
-      const bound = await api.shopComplete(requestId, callbackUrl)
+      const bound = await api.shopComplete(requestIdToFinish, callbackUrl)
       setShops(previous => {
         const ids = new Set(bound.map(shop => shop.id))
         return [...bound, ...previous.filter(shop => !ids.has(shop.id))]
@@ -85,7 +119,7 @@ export function ShopBindingPage() {
   }
 
   const visible = shops.filter(shop => shop.platform === platform)
-  const name = SHOP_PLATFORMS.find(item => item.id === config?.platform)?.name ?? ''
+  const name = ALL_SHOP_PLATFORMS.find(item => item.id === config?.platform)?.name ?? ''
   const status = (shop: ShopConnection) => ({
     connected: t.workbenchShopsStatusConnected,
     disabled: t.workbenchShopsStatusDisabled,
@@ -100,31 +134,29 @@ export function ShopBindingPage() {
           {t.workbenchShopsOverseas}<span className="workbench-tab-count">{SHOP_PLATFORMS.length}</span>
         </button>
         <button type="button" className={`workbench-tab${catalogGroup === 'domestic' ? ' is-active' : ''}`} aria-pressed={catalogGroup === 'domestic'} onClick={() => setCatalogGroup('domestic')}>
-          {t.workbenchShopsDomestic}<span className="workbench-tab-count">{UPCOMING_DOMESTIC_SHOP_PLATFORMS.length}</span>
+          {t.workbenchShopsDomestic}<span className="workbench-tab-count">{DOMESTIC_SHOP_PLATFORMS.length}</span>
         </button>
       </div>
-      {catalogGroup === 'overseas' ? <div className="workbench-platform-grid shop-binding-platform-grid">{SHOP_PLATFORMS.map(item => <div key={item.id} className={`workbench-platform-card shop-binding-platform-card${config?.platform === item.id ? ' is-selected' : ''}`}>
-        <ShopPlatformLogo platform={item.id} />
-        <span className="workbench-platform-name">{item.name}</span>
-        <div className="shop-binding-platform-action"><Button onClick={() => start(item.id)}>{t.workbenchShopsBindNow}</Button></div>
-      </div>)}</div> : <>
-        <p className="workbench-page-sub shop-binding-catalog-hint">{t.workbenchShopsDomesticHint}</p>
-        <div className="shop-binding-platform-grid shop-binding-platform-grid--planned">{UPCOMING_DOMESTIC_SHOP_PLATFORMS.map(item => <div key={item.id} className="workbench-platform-card shop-binding-platform-card shop-binding-platform-card--planned">
-          <span className="shop-binding-planned-mark" aria-hidden="true">{item.mark}</span>
+      <div className="workbench-platform-grid shop-binding-platform-grid">
+        {(catalogGroup === 'overseas' ? SHOP_PLATFORMS : DOMESTIC_SHOP_PLATFORMS).map(item => <div key={item.id} className="workbench-platform-card shop-binding-platform-card">
+          <ShopPlatformLogo platform={item.id} />
           <span className="workbench-platform-name">{item.name}</span>
-          <span className="shop-binding-planned-status">{t.workbenchShopsPlanned}</span>
-        </div>)}</div>
-      </>}
-      {catalogGroup === 'overseas' && config && <div className="shop-bind-form">
-        <div className="shop-bind-form-head"><strong>{name}</strong><Button size="sm" onClick={() => setConfig(null)}>{t.workbenchShopsCancel}</Button></div>
+          <div className="shop-binding-platform-action"><Button onClick={() => start(item.id)}>{t.workbenchShopsBindNow}</Button></div>
+        </div>)}
+      </div>
+      {!config && notice && <p className="workbench-inline-note" role="alert">{notice}</p>}
+    </WorkbenchCard>
+    {config && <ShopBindDialog title={name} busy={busy} onClose={() => setConfig(null)}>
+      <div className="shop-bind-form">
+        <div className="shop-bind-form-head"><h2>{name}</h2><IconButton label={t.workbenchShopsClose} size="sm" disabled={busy} onClick={() => setConfig(null)}><X size={18} /></IconButton></div>
         {!requestId ? <>
-          <p className="workbench-page-sub">{t.workbenchShopsCredentialHint}</p>
-          <label>{config.platform === 'shopee' ? 'Partner ID' : config.platform === 'mercadolibre' ? 'Client ID' : 'App ID / Key'}
+          <p className="workbench-page-sub">{isDirectBindPlatform(config.platform) ? t.workbenchShopsDirectHint : t.workbenchShopsCredentialHint}</p>
+          <label>{CREDENTIAL_LABELS[config.platform]?.[0] ?? 'App ID / Key'}
             <Input value={config.appId} onChange={appId => setConfig({ ...config, appId })} autoComplete="off" mono /></label>
-          <label>{config.platform === 'shopee' ? 'Partner Key' : config.platform === 'mercadolibre' ? 'Client Secret' : 'App Secret'}
+          <label>{CREDENTIAL_LABELS[config.platform]?.[1] ?? 'App Secret'}
             <Input type="password" value={config.appSecret} onChange={appSecret => setConfig({ ...config, appSecret })} autoComplete="off" mono /></label>
-          <label>{t.workbenchShopsRedirectUrl}
-            <Input value={config.redirectUrl} onChange={redirectUrl => setConfig({ ...config, redirectUrl })} placeholder="https://example.com/callback" autoComplete="off" mono /></label>
+          {!isDirectBindPlatform(config.platform) && <label>{t.workbenchShopsRedirectUrl}
+            <Input value={config.redirectUrl} onChange={redirectUrl => setConfig({ ...config, redirectUrl })} placeholder="https://example.com/callback" autoComplete="off" mono /></label>}
           {config.platform === 'tiktok' && <label>{t.workbenchShopsTikTokAuthUrl}
             <Input value={config.authorizeUrl} onChange={authorizeUrl => setConfig({ ...config, authorizeUrl })} placeholder="https://services.tiktokshop.com/open/authorize?..." autoComplete="off" mono /></label>}
           {config.platform === 'mercadolibre' && <label>{t.workbenchShopsRegion}
@@ -132,23 +164,32 @@ export function ShopBindingPage() {
           {config.platform === 'mercadolibre' && <label>{t.workbenchShopsPkce}
             <Select value={config.pkce ? 'enabled' : 'disabled'} onChange={value => setConfig({ ...config, pkce: value === 'enabled' })}
               options={[{ value: 'disabled', label: t.workbenchShopsPkceDisabled }, { value: 'enabled', label: t.workbenchShopsPkceEnabled }]} /></label>}
-          <Button size="sm" variant="primary" disabled={busy || !config.appId.trim() || !config.appSecret.trim() || !config.redirectUrl.trim()} onClick={begin}>
-            {busy ? t.workbenchShopsWorking : t.workbenchShopsOpenAuthorization}</Button>
+          <div className="shop-bind-form-actions">
+            <Button size="sm" disabled={busy} onClick={() => setConfig(null)}>{t.workbenchShopsCancel}</Button>
+            <Button size="sm" variant="primary" disabled={busy || !config.appId.trim() || !config.appSecret.trim() || (!isDirectBindPlatform(config.platform) && !config.redirectUrl.trim())} onClick={begin}>
+              {busy ? t.workbenchShopsWorking : isDirectBindPlatform(config.platform) ? t.workbenchShopsFinishBinding : t.workbenchShopsOpenAuthorization}</Button>
+          </div>
         </> : <>
           <p className="workbench-page-sub">{t.workbenchShopsCallbackHint}</p>
           <Button size="sm" onClick={() => void api.openExternal(authUrl).catch(error => setNotice(errorText(error)))}>{t.workbenchShopsReopenAuthorization}</Button>
           <label>{t.workbenchShopsCallbackUrl}
             <Input value={callbackUrl} onChange={setCallbackUrl} placeholder={config.redirectUrl} autoComplete="off" mono /></label>
-          <Button size="sm" variant="primary" disabled={busy || !callbackUrl.trim()} onClick={complete}>
-            {busy ? t.workbenchShopsWorking : t.workbenchShopsFinishBinding}</Button>
+          <div className="shop-bind-form-actions">
+            <Button size="sm" disabled={busy} onClick={() => setConfig(null)}>{t.workbenchShopsCancel}</Button>
+            <Button size="sm" variant="primary" disabled={busy || !callbackUrl.trim()} onClick={() => complete()}>
+              {busy ? t.workbenchShopsWorking : t.workbenchShopsFinishBinding}</Button>
+          </div>
         </>}
-      </div>}
-      {notice && <p className="workbench-inline-note" role="alert">{notice}</p>}
-    </WorkbenchCard>
+        {notice && <p className="workbench-inline-note" role="alert">{notice}</p>}
+      </div>
+    </ShopBindDialog>}
     <WorkbenchCard title={t.workbenchShopsBoundTitle} extra={<span className="workbench-page-sub">{t.workbenchShopsBoundCount.replace('{n}', String(shops.length))}</span>}>
-      {shops.length > 0 && <div className="workbench-tabs">{SHOP_PLATFORMS.map(item => <button key={item.id} type="button" className={`workbench-tab${platform === item.id ? ' is-active' : ''}`} onClick={() => setPlatform(item.id)}>
-        {item.name}<span className="workbench-tab-count">{shops.filter(shop => shop.platform === item.id).length}</span>
-      </button>)}</div>}
+      {shops.length > 0 && <div className="workbench-tabs">{ALL_SHOP_PLATFORMS
+        // 平台多了以后只列出已有绑定店铺的平台。
+        .filter(item => shops.some(shop => shop.platform === item.id))
+        .map(item => <button key={item.id} type="button" className={`workbench-tab${platform === item.id ? ' is-active' : ''}`} onClick={() => setPlatform(item.id)}>
+          {item.name}<span className="workbench-tab-count">{shops.filter(shop => shop.platform === item.id).length}</span>
+        </button>)}</div>}
       {visible.length > 0 ? <div className="workbench-table-scroll custom-scrollbar"><table className="workbench-table">
         <thead><tr><th>{t.workbenchShopsColName}</th><th>{t.workbenchShopsColId}</th><th>{t.workbenchShopsColBoundAt}</th><th>{t.workbenchShopsColStatus}</th><th>{t.workbenchColAction}</th></tr></thead>
         <tbody>{visible.map(shop => <tr key={shop.id}>

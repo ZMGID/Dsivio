@@ -17,6 +17,13 @@ const TIKTOK_AUTH: &str = "https://auth.tiktok-shops.com";
 const TIKTOK_API: &str = "https://open-api.tiktokglobalshop.com";
 const MELI_API: &str = "https://api.mercadolibre.com";
 const SHEIN_API: &str = "https://openapi.sheincorp.com";
+const DOUDIAN_CONSOLE: &str = "https://op.jinritemai.com";
+const DOUDIAN_API: &str = "https://openapi-fxg.jinritemai.com";
+const KUAISHOU_API: &str = "https://openapi.kwaixiaodian.com";
+const WECHAT_API: &str = "https://api.weixin.qq.com";
+const TAOBAO_OAUTH: &str = "https://oauth.taobao.com";
+const PDD_AUTH: &str = "https://mms.pinduoduo.com";
+const PDD_API: &str = "https://open-api.pinduoduo.com";
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
@@ -109,13 +116,265 @@ fn required_https(url: &str) -> Result<Url, String> {
     Ok(parsed)
 }
 
+fn hmac_b64(key: &str, input: &str) -> Result<String, String> {
+    let mut mac = HmacSha256::new_from_slice(key.as_bytes()).map_err(|_| "签名密钥无效")?;
+    mac.update(input.as_bytes());
+    Ok(STANDARD.encode(mac.finalize().into_bytes()))
+}
+
+// 抖店签名串（不含首尾 app_secret），键值直接相连。
+fn doudian_sign_pattern(app_key: &str, method: &str, param_json: &str, timestamp: i64) -> String {
+    format!("app_key{app_key}method{method}param_json{param_json}timestamp{timestamp}v2")
+}
+
+fn doudian_ok(v: &Value) -> Result<(), String> {
+    // 抖店以 code==10000 表示成功，sub_msg 优先于 msg。
+    if v["code"].as_i64() != Some(10_000) {
+        return Err(format!(
+            "抖店：{}",
+            string(v, "sub_msg")
+                .or_else(|| string(v, "msg"))
+                .unwrap_or("平台接口返回失败")
+        ));
+    }
+    Ok(())
+}
+
+async fn doudian_call(
+    config: &AppConfig,
+    method: &str,
+    param: Value,
+) -> Result<Value, String> {
+    let timestamp = now();
+    let param_json = serde_json::to_string(&param).map_err(|_| "抖店请求参数编码失败")?;
+    let pattern = doudian_sign_pattern(&config.app_id, method, &param_json, timestamp);
+    let sign = hmac_hex(
+        &config.app_secret,
+        &format!("{}{pattern}{}", config.app_secret, config.app_secret),
+    )?;
+    let data = response(
+        client()?
+            .post(format!("{DOUDIAN_API}/{}", method.replace('.', "/")))
+            .query(&[
+                ("app_key", config.app_id.as_str()),
+                ("method", method),
+                ("timestamp", timestamp.to_string().as_str()),
+                ("v", "2"),
+                ("sign_method", "hmac-sha256"),
+                ("sign", sign.as_str()),
+            ])
+            .header("Content-Type", "application/json")
+            .body(param_json),
+        "抖店",
+    )
+    .await?;
+    doudian_ok(&data)?;
+    Ok(data["data"].clone())
+}
+
+fn kuaishou_ok(v: &Value) -> Result<(), String> {
+    if let Some(error) = string(v, "error") {
+        return Err(format!(
+            "快手小店：{}",
+            string(v, "error_description").unwrap_or(&error)
+        ));
+    }
+    let result = v.get("result");
+    if let Some(result) = result {
+        if result.as_i64() != Some(1) {
+            return Err(format!(
+                "快手小店：{}",
+                string(v, "error_msg").unwrap_or("平台接口返回失败")
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn kuaishou_api(
+    credential: &Credential,
+    method: &str,
+) -> Result<Value, String> {
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let mut pairs: Vec<(&str, String)> = vec![
+        ("method", method.to_owned()),
+        ("appkey", credential.config.app_id.clone()),
+        ("access_token", credential.access_token.clone()),
+        ("version", "1".to_owned()),
+        ("signMethod", "HMAC-SHA256".to_owned()),
+        ("timestamp", timestamp.to_string()),
+    ];
+    let mut sorted = pairs.clone();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let base = sorted
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    let sign = hmac_b64(
+        &credential.config.app_secret,
+        &format!("{base}&signSecret={}", credential.config.app_secret),
+    )?;
+    pairs.push(("sign", sign));
+    let data = response(
+        client()?
+            .post(format!("{KUAISHOU_API}/{}", method.replace('.', "/")))
+            .form(&pairs),
+        "快手小店",
+    )
+    .await?;
+    kuaishou_ok(&data)?;
+    Ok(data["data"].clone())
+}
+
+fn wechat_ok(v: &Value) -> Result<(), String> {
+    if v.get("errcode").and_then(Value::as_i64).is_some_and(|code| code != 0) {
+        return Err(format!(
+            "微信小店：{}",
+            string(v, "errmsg").unwrap_or("平台接口返回失败")
+        ));
+    }
+    Ok(())
+}
+
+async fn wechat_token(config: &AppConfig) -> Result<String, String> {
+    let data = response(
+        client()?
+            .post(format!("{WECHAT_API}/cgi-bin/stable_token"))
+            .json(&json!({
+                "grant_type": "client_credential",
+                "appid": config.app_id,
+                "secret": config.app_secret,
+                "force_refresh": false,
+            })),
+        "微信小店",
+    )
+    .await?;
+    wechat_ok(&data)?;
+    string(&data, "access_token")
+        .map(str::to_owned)
+        .ok_or_else(|| "微信小店未返回 access token".to_string())
+}
+
+async fn wechat_info(access_token: &str) -> Result<Value, String> {
+    let data = response(
+        client()?
+            .get(format!("{WECHAT_API}/channels/ec/basics/info/get"))
+            .query(&[("access_token", access_token)]),
+        "微信小店",
+    )
+    .await?;
+    wechat_ok(&data)?;
+    Ok(data["info"].clone())
+}
+
+async fn taobao_token(config: &AppConfig, grant: &str, code: &str) -> Result<Value, String> {
+    let mut form = vec![
+        ("grant_type", grant.to_owned()),
+        ("client_id", config.app_id.clone()),
+        ("client_secret", config.app_secret.clone()),
+        ("view", "web".to_owned()),
+    ];
+    if grant == "authorization_code" {
+        form.push(("code", code.to_owned()));
+        form.push(("redirect_uri", config.redirect_url.clone()));
+    } else {
+        form.push(("refresh_token", code.to_owned()));
+    }
+    response(
+        client()?.post(format!("{TAOBAO_OAUTH}/token")).form(&form),
+        "淘宝",
+    )
+    .await
+}
+
+fn pinduoduo_ok(v: &Value) -> Result<(), String> {
+    if let Some(message) = v
+        .get("error_response")
+        .and_then(|error| string(error, "error_msg").or_else(|| string(error, "error")))
+    {
+        return Err(format!("拼多多：{message}"));
+    }
+    if let Some(error) = string(v, "error") {
+        return Err(format!("拼多多：{error}"));
+    }
+    Ok(())
+}
+
+async fn pinduoduo_token(
+    config: &AppConfig,
+    grant: &str,
+    value: &str,
+) -> Result<Value, String> {
+    let value_key = if grant == "authorization_code" {
+        "code"
+    } else {
+        "refresh_token"
+    };
+    let data = response(
+        client()?
+            .post(format!("{PDD_API}/oauth/token"))
+            .json(&json!({
+                "grant_type": grant,
+                value_key: value,
+                "client_id": config.app_id,
+                "client_secret": config.app_secret,
+            })),
+        "拼多多",
+    )
+    .await?;
+    pinduoduo_ok(&data)?;
+    Ok(data)
+}
+
+async fn kuaishou_oauth_token(
+    config: &AppConfig,
+    grant: &str,
+    code: &str,
+) -> Result<Value, String> {
+    // 快手小店取 token 用 GET query + grant_type=code（与刷新的 POST form 不同）。
+    if grant == "authorization_code" {
+        let data = response(
+            client()?
+                .get(format!("{KUAISHOU_API}/oauth2/access_token"))
+                .query(&[
+                    ("app_id", config.app_id.as_str()),
+                    ("app_secret", config.app_secret.as_str()),
+                    ("grant_type", "code"),
+                    ("code", code),
+                ]),
+            "快手小店",
+        )
+        .await?;
+        kuaishou_ok(&data)?;
+        Ok(data)
+    } else {
+        let data = response(
+            client()?
+                .post(format!("{KUAISHOU_API}/oauth2/refresh_token"))
+                .form(&[
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", code),
+                    ("app_id", config.app_id.as_str()),
+                    ("app_secret", config.app_secret.as_str()),
+                ]),
+            "快手小店",
+        )
+        .await?;
+        kuaishou_ok(&data)?;
+        Ok(data)
+    }
+}
+
 pub(super) fn authorize_url(
     config: &AppConfig,
     state: &str,
     code_verifier: Option<&str>,
 ) -> Result<String, String> {
     let redirect = required_https(&config.redirect_url)?;
+    // 微信小店无网页授权页，由 shop_complete 直接用 AppID/Secret 完成绑定。
     let mut url = match config.platform {
+        Platform::Wechat => return Ok(String::new()),
         Platform::Shopee => {
             let path = "/api/v2/shop/auth_partner";
             let timestamp = now();
@@ -198,6 +457,43 @@ pub(super) fn authorize_url(
             }
             url
         }
+        Platform::Douyin => {
+            // 授权链接本身不含回调：回调地址在抖店开放平台应用后台登记；
+            // 用户登记的值仍需填入 redirect_url，用于校验粘贴回来的回调。
+            let mut url = Url::parse(&format!("{DOUDIAN_CONSOLE}/open/authorize")).unwrap();
+            url.query_pairs_mut()
+                .append_pair("app_key", &config.app_id)
+                .append_pair("state", state);
+            url
+        }
+        Platform::Kuaishou => {
+            let mut url = Url::parse(&format!("{KUAISHOU_API}/oauth2/authorize")).unwrap();
+            url.query_pairs_mut()
+                .append_pair("response_type", "code")
+                .append_pair("client_id", &config.app_id)
+                .append_pair("redirect_uri", redirect.as_str())
+                .append_pair("state", state);
+            url
+        }
+        Platform::Taobao => {
+            let mut url = Url::parse(&format!("{TAOBAO_OAUTH}/authorize")).unwrap();
+            url.query_pairs_mut()
+                .append_pair("response_type", "code")
+                .append_pair("client_id", &config.app_id)
+                .append_pair("redirect_uri", redirect.as_str())
+                .append_pair("state", state)
+                .append_pair("view", "web");
+            url
+        }
+        Platform::Pinduoduo => {
+            let mut url = Url::parse(&format!("{PDD_AUTH}/open.html")).unwrap();
+            url.query_pairs_mut()
+                .append_pair("response_type", "code")
+                .append_pair("client_id", &config.app_id)
+                .append_pair("redirect_uri", redirect.as_str())
+                .append_pair("state", state);
+            url
+        }
     };
     url.set_username("").map_err(|_| "授权链接无效")?;
     Ok(url.to_string())
@@ -208,6 +504,10 @@ pub(super) fn callback_params(
     callback: &str,
     expected_state: &str,
 ) -> Result<(String, Option<String>), String> {
+    // 微信小店不走网页授权，shop_complete 传入空回调。
+    if config.platform == Platform::Wechat {
+        return Ok((String::new(), None));
+    }
     let expected = required_https(&config.redirect_url)?;
     let received = Url::parse(callback.trim()).map_err(|_| "请粘贴授权完成后的完整回调地址")?;
     if received.scheme() != expected.scheme()
@@ -650,6 +950,127 @@ pub(super) async fn exchange(
                 credential,
             }])
         }
+        Platform::Douyin => {
+            let data = doudian_call(
+                &config,
+                "token.create",
+                json!({"code": code, "grant_type": "authorization_code"}),
+            )
+            .await?;
+            let credential = Credential {
+                access_token: string(&data, "access_token")
+                    .ok_or("抖店未返回 access token")?
+                    .into(),
+                refresh_token: string(&data, "refresh_token")
+                    .ok_or("抖店未返回 refresh token")?
+                    .into(),
+                expires_at: now() + data["expires_in"].as_i64().unwrap_or(604_800),
+                ..Credential::new(config)
+            };
+            let remote_id =
+                identifier(&data, "shop_id").ok_or("抖店未返回店铺 ID")?;
+            let name = string(&data, "shop_name").unwrap_or(&remote_id).to_owned();
+            Ok(vec![RemoteShop {
+                remote_id,
+                name,
+                region: None,
+                status: ShopStatus::Connected,
+                credential,
+            }])
+        }
+        Platform::Kuaishou => {
+            let data = kuaishou_oauth_token(&config, "authorization_code", code).await?;
+            let credential = Credential {
+                access_token: string(&data, "access_token")
+                    .ok_or("快手小店未返回 access token")?
+                    .into(),
+                refresh_token: string(&data, "refresh_token")
+                    .unwrap_or_default()
+                    .into(),
+                expires_at: now() + data["expires_in"].as_i64().unwrap_or(604_800),
+                ..Credential::new(config)
+            };
+            let seller = kuaishou_api(&credential, "open.user.seller.get").await?;
+            let remote_id = identifier(&seller, "sellerId")
+                .or_else(|| identifier(&seller, "seller_id"))
+                .ok_or("快手小店未返回卖家 ID")?;
+            let name = string(&seller, "name").unwrap_or(&remote_id).to_owned();
+            Ok(vec![RemoteShop {
+                remote_id,
+                name,
+                region: None,
+                status: ShopStatus::Connected,
+                credential,
+            }])
+        }
+        Platform::Wechat => {
+            let access_token = wechat_token(&config).await?;
+            let credential = Credential {
+                access_token: access_token.clone(),
+                expires_at: now() + 7_200,
+                ..Credential::new(config.clone())
+            };
+            let info = wechat_info(&access_token).await?;
+            let name = string(&info, "nickname")
+                .ok_or("微信小店未返回店铺名称")?
+                .to_owned();
+            Ok(vec![RemoteShop {
+                // 小店的 AppID 即店铺唯一标识。
+                remote_id: config.app_id,
+                name,
+                region: None,
+                status: ShopStatus::Connected,
+                credential,
+            }])
+        }
+        Platform::Taobao => {
+            let data = taobao_token(&config, "authorization_code", code).await?;
+            let credential = Credential {
+                access_token: string(&data, "access_token")
+                    .ok_or("淘宝未返回 access token")?
+                    .into(),
+                refresh_token: string(&data, "refresh_token")
+                    .unwrap_or_default()
+                    .into(),
+                expires_at: now() + data["expires_in"].as_i64().unwrap_or(86_400),
+                ..Credential::new(config)
+            };
+            let remote_id = identifier(&data, "taobao_user_id")
+                .ok_or("淘宝未返回卖家 ID")?;
+            let name = string(&data, "taobao_user_nick")
+                .unwrap_or(&remote_id)
+                .to_owned();
+            Ok(vec![RemoteShop {
+                remote_id,
+                name,
+                region: None,
+                status: ShopStatus::Connected,
+                credential,
+            }])
+        }
+        Platform::Pinduoduo => {
+            let data = pinduoduo_token(&config, "authorization_code", code).await?;
+            let credential = Credential {
+                access_token: string(&data, "access_token")
+                    .ok_or("拼多多未返回 access token")?
+                    .into(),
+                refresh_token: string(&data, "refresh_token")
+                    .unwrap_or_default()
+                    .into(),
+                expires_at: now() + data["expires_in"].as_i64().unwrap_or(86_400),
+                ..Credential::new(config)
+            };
+            let remote_id =
+                identifier(&data, "owner_id").ok_or("拼多多未返回商家 ID")?;
+            let name = string(&data, "owner_name").unwrap_or(&remote_id).to_owned();
+            Ok(vec![RemoteShop {
+                remote_id,
+                name,
+                region: None,
+                status: ShopStatus::Connected,
+                credential,
+            }])
+        }
     }
 }
 
@@ -704,6 +1125,26 @@ pub(super) async fn verify(
                 credential.expires_at = now() + data["expires_in"].as_i64().unwrap_or(21_600);
             }
             Platform::Shein => {}
+            // 抖店/淘宝/拼多多的身份校验本身就是刷新 token（响应自带卖家身份），
+            // 这里不提前刷新，避免一次校验轮换两次 refresh_token。
+            Platform::Douyin | Platform::Taobao | Platform::Pinduoduo => {}
+            Platform::Kuaishou => {
+                let data =
+                    kuaishou_oauth_token(&config, "refresh_token", &credential.refresh_token)
+                        .await?;
+                credential.access_token = string(&data, "access_token")
+                    .ok_or("快手小店刷新未返回 access token")?
+                    .into();
+                credential.refresh_token = string(&data, "refresh_token")
+                    .unwrap_or(&credential.refresh_token)
+                    .to_owned();
+                credential.expires_at = now() + data["expires_in"].as_i64().unwrap_or(604_800);
+            }
+            Platform::Wechat => {
+                // 无 refresh_token：直接用 AppID/Secret 重取 stable_token。
+                credential.access_token = wechat_token(&config).await?;
+                credential.expires_at = now() + 7_200;
+            }
         }
     }
     match config.platform {
@@ -730,6 +1171,85 @@ pub(super) async fn verify(
                 return Err("SHEIN 返回了另一家店铺".into());
             }
             Ok((name, region, status))
+        }
+        Platform::Douyin => {
+            // token.refresh 响应自带店铺身份，刷新成功即视为授权仍有效。
+            let data = doudian_call(
+                &credential.config,
+                "token.refresh",
+                json!({"grant_type": "refresh_token", "refresh_token": credential.refresh_token}),
+            )
+            .await?;
+            credential.access_token = string(&data, "access_token")
+                .ok_or("抖店未返回 access token")?
+                .into();
+            credential.refresh_token = string(&data, "refresh_token")
+                .unwrap_or(&credential.refresh_token)
+                .to_owned();
+            credential.expires_at = now() + data["expires_in"].as_i64().unwrap_or(604_800);
+            let id = identifier(&data, "shop_id").ok_or("抖店未返回店铺 ID")?;
+            if id != remote_id {
+                return Err("抖店返回了另一家店铺".into());
+            }
+            let name = string(&data, "shop_name").unwrap_or(remote_id).to_owned();
+            Ok((name, None, ShopStatus::Connected))
+        }
+        Platform::Kuaishou => {
+            let seller = kuaishou_api(credential, "open.user.seller.get").await?;
+            let id = identifier(&seller, "sellerId")
+                .or_else(|| identifier(&seller, "seller_id"))
+                .ok_or("快手小店未返回卖家 ID")?;
+            if id != remote_id {
+                return Err("快手小店返回了另一位卖家".into());
+            }
+            let name = string(&seller, "name").unwrap_or(remote_id).to_owned();
+            Ok((name, None, ShopStatus::Connected))
+        }
+        Platform::Wechat => {
+            let info = wechat_info(&credential.access_token).await?;
+            let name = string(&info, "nickname")
+                .ok_or("微信小店未返回店铺名称")?
+                .to_owned();
+            Ok((name, None, ShopStatus::Connected))
+        }
+        Platform::Taobao => {
+            let data =
+                taobao_token(&credential.config, "refresh_token", &credential.refresh_token)
+                    .await?;
+            credential.access_token = string(&data, "access_token")
+                .ok_or("淘宝未返回 access token")?
+                .into();
+            credential.refresh_token = string(&data, "refresh_token")
+                .unwrap_or(&credential.refresh_token)
+                .to_owned();
+            credential.expires_at = now() + data["expires_in"].as_i64().unwrap_or(86_400);
+            let id = identifier(&data, "taobao_user_id").ok_or("淘宝未返回卖家 ID")?;
+            if id != remote_id {
+                return Err("淘宝返回了另一位卖家".into());
+            }
+            let name = string(&data, "taobao_user_nick").unwrap_or(remote_id).to_owned();
+            Ok((name, None, ShopStatus::Connected))
+        }
+        Platform::Pinduoduo => {
+            let data = pinduoduo_token(
+                &credential.config,
+                "refresh_token",
+                &credential.refresh_token,
+            )
+            .await?;
+            credential.access_token = string(&data, "access_token")
+                .ok_or("拼多多未返回 access token")?
+                .into();
+            credential.refresh_token = string(&data, "refresh_token")
+                .unwrap_or(&credential.refresh_token)
+                .to_owned();
+            credential.expires_at = now() + data["expires_in"].as_i64().unwrap_or(86_400);
+            let id = identifier(&data, "owner_id").ok_or("拼多多未返回商家 ID")?;
+            if id != remote_id {
+                return Err("拼多多返回了另一位商家".into());
+            }
+            let name = string(&data, "owner_name").unwrap_or(remote_id).to_owned();
+            Ok((name, None, ShopStatus::Connected))
         }
     }
 }
@@ -844,5 +1364,108 @@ mod tests {
         assert!(url
             .query_pairs()
             .any(|(key, value)| key == "code_challenge_method" && value == "S256"));
+    }
+
+    fn domestic_config(platform: Platform) -> AppConfig {
+        AppConfig {
+            platform,
+            app_id: "app".into(),
+            app_secret: "secret".into(),
+            redirect_url: "https://example.com/callback".into(),
+            authorize_url: String::new(),
+            region: String::new(),
+            pkce: false,
+        }
+    }
+
+    #[test]
+    fn domestic_authorize_urls_use_official_endpoints() {
+        for (platform, host, path, id_key) in [
+            (Platform::Douyin, "op.jinritemai.com", "/open/authorize", "app_key"),
+            (Platform::Kuaishou, "openapi.kwaixiaodian.com", "/oauth2/authorize", "client_id"),
+            (Platform::Taobao, "oauth.taobao.com", "/authorize", "client_id"),
+            (Platform::Pinduoduo, "mms.pinduoduo.com", "/open.html", "client_id"),
+        ] {
+            let url =
+                Url::parse(&authorize_url(&domestic_config(platform), "st", None).unwrap())
+                    .unwrap();
+            assert_eq!(url.host_str(), Some(host), "{platform:?} host");
+            assert_eq!(url.path(), path, "{platform:?} path");
+            assert!(url
+                .query_pairs()
+                .any(|(key, value)| key == id_key && value == "app"), "{platform:?} id");
+            assert!(url
+                .query_pairs()
+                .any(|(key, value)| key == "state" && value == "st"), "{platform:?} state");
+            if platform != Platform::Douyin {
+                assert!(url.query_pairs().any(|(key, value)| key == "redirect_uri"
+                    && value == "https://example.com/callback"), "{platform:?} redirect");
+            }
+        }
+    }
+
+    #[test]
+    fn wechat_binding_has_no_authorize_page_or_callback() {
+        let config = domestic_config(Platform::Wechat);
+        assert_eq!(authorize_url(&config, "st", None).unwrap(), "");
+        let (code, shop_id) = callback_params(&config, "", "st").unwrap();
+        assert_eq!(code, "");
+        assert_eq!(shop_id, None);
+    }
+
+    #[test]
+    fn domestic_callbacks_require_matching_state() {
+        for platform in [Platform::Douyin, Platform::Kuaishou, Platform::Taobao, Platform::Pinduoduo] {
+            let config = domestic_config(platform);
+            assert!(
+                callback_params(&config, "https://example.com/callback?code=x&state=wrong", "s")
+                    .is_err(),
+                "{platform:?} rejects mismatched state"
+            );
+            assert_eq!(
+                callback_params(&config, "https://example.com/callback?code=x&state=s", "s")
+                    .unwrap()
+                    .0,
+                "x"
+            );
+        }
+    }
+
+    #[test]
+    fn doudian_sign_pattern_is_glued_key_values() {
+        assert_eq!(
+            doudian_sign_pattern("k", "token.create", r#"{"code":"c"}"#, 123),
+            r#"app_keykmethodtoken.createparam_json{"code":"c"}timestamp123v2"#
+        );
+    }
+
+    #[test]
+    fn doudian_ok_requires_code_10000() {
+        assert!(doudian_ok(&json!({"code": 10000})).is_ok());
+        assert!(doudian_ok(&json!({"code": 0})).is_err());
+        assert!(doudian_ok(&json!({"code": 30003, "sub_msg": "店铺授权已失效"})).is_err());
+    }
+
+    #[test]
+    fn kuaishou_ok_reads_error_and_result() {
+        assert!(kuaishou_ok(&json!({"result": 1, "data": {}})).is_ok());
+        assert!(kuaishou_ok(&json!({"result": 0, "error_msg": "bad token"})).is_err());
+        assert!(kuaishou_ok(&json!({"error": "invalid_grant", "error_description": "expired"}))
+            .is_err());
+    }
+
+    #[test]
+    fn pinduoduo_ok_reads_error_response() {
+        assert!(pinduoduo_ok(&json!({"access_token": "t"})).is_ok());
+        assert!(pinduoduo_ok(
+            &json!({"error_response": {"error_code": 10019, "error_msg": "secret error"}})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn wechat_ok_reads_errcode() {
+        assert!(wechat_ok(&json!({"access_token": "t"})).is_ok());
+        assert!(wechat_ok(&json!({"errcode": 40001, "errmsg": "invalid credential"})).is_err());
     }
 }

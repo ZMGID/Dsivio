@@ -4,7 +4,7 @@ import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { workbenchHash } from '../workbenchPages'
-import { SHOP_PLATFORMS } from './shopPlatforms'
+import { ALL_SHOP_PLATFORMS } from './shopPlatforms'
 import { ShopPlatformLogo } from './ShopPlatformLogo'
 
 type ListingTab = 'create' | 'running' | 'waiting' | 'done' | 'failed'
@@ -38,7 +38,7 @@ export function ListingPage() {
         extra={<Button size="sm" onClick={() => { window.location.hash = workbenchHash('shops') }}>{t.workbenchShopsBindTitle}</Button>}
       >
         <div className="workbench-platform-grid">
-          {SHOP_PLATFORMS.map((item) => (
+          {ALL_SHOP_PLATFORMS.map((item) => (
             <div key={item.id} className="workbench-platform-card workbench-platform-card--row">
               <ShopPlatformLogo platform={item.id} />
               <div className="min-w-0">

@@ -17,6 +17,11 @@ pub enum Platform {
     Shein,
     Tiktok,
     Mercadolibre,
+    Douyin,
+    Kuaishou,
+    Wechat,
+    Taobao,
+    Pinduoduo,
 }
 impl Platform {
     fn as_str(self) -> &'static str {
@@ -25,6 +30,11 @@ impl Platform {
             Self::Shein => "shein",
             Self::Tiktok => "tiktok",
             Self::Mercadolibre => "mercadolibre",
+            Self::Douyin => "douyin",
+            Self::Kuaishou => "kuaishou",
+            Self::Wechat => "wechat",
+            Self::Taobao => "taobao",
+            Self::Pinduoduo => "pinduoduo",
         }
     }
     fn parse(value: &str) -> Result<Self, String> {
@@ -33,6 +43,11 @@ impl Platform {
             "shein" => Ok(Self::Shein),
             "tiktok" => Ok(Self::Tiktok),
             "mercadolibre" => Ok(Self::Mercadolibre),
+            "douyin" => Ok(Self::Douyin),
+            "kuaishou" => Ok(Self::Kuaishou),
+            "wechat" => Ok(Self::Wechat),
+            "taobao" => Ok(Self::Taobao),
+            "pinduoduo" => Ok(Self::Pinduoduo),
             _ => Err("不支持的店铺平台".into()),
         }
     }

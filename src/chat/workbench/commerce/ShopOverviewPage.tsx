@@ -5,7 +5,7 @@ import { IconButton } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
 import { WorkbenchCard, WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import './shopOverview.css'
-import { SHOP_PLATFORMS } from './shopPlatforms'
+import { ALL_SHOP_PLATFORMS } from './shopPlatforms'
 
 type RangeId = 'today' | 'yesterday' | '7d' | '30d'
 
@@ -85,7 +85,7 @@ export function ShopOverviewPage() {
         extra={(
           <div className="workbench-tabs">
             <span className="workbench-tab is-active">{t.workbenchFilterAll}<span className="workbench-tab-count">{shops.length}</span></span>
-              {SHOP_PLATFORMS.map((item) => (
+              {ALL_SHOP_PLATFORMS.map((item) => (
                 <span className="workbench-tab" key={item.id}>{item.name}<span className="workbench-tab-count">{shops.filter(shop => shop.platform === item.id).length}</span></span>
               ))}
           </div>

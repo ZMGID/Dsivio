@@ -7,11 +7,20 @@ export const SHOP_PLATFORMS: readonly { id: ShopPlatform; name: string }[] = [
   { id: 'mercadolibre', name: '美客多 Mercado Libre' },
 ]
 
-// UI catalog only. A platform joins SHOP_PLATFORMS after its authorization backend is implemented.
-export const UPCOMING_DOMESTIC_SHOP_PLATFORMS = [
-  { id: 'douyin', name: '抖店', mark: '抖' },
-  { id: 'kuaishou', name: '快手小店', mark: '快' },
-  { id: 'wechat', name: '微信小店', mark: '微' },
-  { id: 'taobao', name: '淘宝', mark: '淘' },
-  { id: 'pinduoduo', name: '拼多多', mark: '拼' },
-] as const
+export const DOMESTIC_SHOP_PLATFORMS: readonly { id: ShopPlatform; name: string }[] = [
+  { id: 'douyin', name: '抖店' },
+  { id: 'kuaishou', name: '快手小店' },
+  { id: 'wechat', name: '微信小店' },
+  { id: 'taobao', name: '淘宝' },
+  { id: 'pinduoduo', name: '拼多多' },
+]
+
+export const ALL_SHOP_PLATFORMS: readonly { id: ShopPlatform; name: string }[] = [
+  ...SHOP_PLATFORMS,
+  ...DOMESTIC_SHOP_PLATFORMS,
+]
+
+// 微信小店没有网页授权页：填完小店 AppID/Secret 后直接完成绑定。
+export function isDirectBindPlatform(platform: ShopPlatform) {
+  return platform === 'wechat'
+}
