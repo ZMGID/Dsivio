@@ -1,0 +1,2006 @@
+{
+ "version": 1,
+ "generatedAt": "2026-09-25T06:29:20.466Z",
+ "commit": "fa587c9",
+ "stats": {
+  "sourceFiles": 1232,
+  "assigned": 832,
+  "infra": 32,
+  "excluded": 368,
+  "unassigned": 0
+ },
+ "caps": {
+  "chat-ui": {
+   "files": [
+    "src/chat/AddSelectionToChat.tsx",
+    "src/chat/AgentTodoIndicator.tsx",
+    "src/chat/ApprovalCard.tsx",
+    "src/chat/ArtifactsCenter.tsx",
+    "src/chat/AskUserBlock.tsx",
+    "src/chat/AssistantCenter.tsx",
+    "src/chat/AssistantMessageMeta.tsx",
+    "src/chat/AssistantPicker.tsx",
+    "src/chat/BackgroundJobsIndicator.tsx",
+    "src/chat/Chat.tsx",
+    "src/chat/ChatAttachments.tsx",
+    "src/chat/ChatConversationPane.tsx",
+    "src/chat/ChatDisclosureBody.tsx",
+    "src/chat/ChatDotGridBackground.tsx",
+    "src/chat/ChatErrorBoundary.tsx",
+    "src/chat/ChatHeadingOutline.tsx",
+    "src/chat/ChatHeavyIsland.tsx",
+    "src/chat/ChatImageContextMenu.tsx",
+    "src/chat/ChatImageViewer.tsx",
+    "src/chat/ChatInlineImage.tsx",
+    "src/chat/ChatMarkdown.tsx",
+    "src/chat/ChatMessageNavigator.tsx",
+    "src/chat/ChatRouteKeepAlive.tsx",
+    "src/chat/ChatSectionMenu.tsx",
+    "src/chat/ChatSidebarPane.tsx",
+    "src/chat/ChatTitlebar.tsx",
+    "src/chat/ChatTitlebarActions.tsx",
+    "src/chat/ChatWindowHost.tsx",
+    "src/chat/CliCommandReport.tsx",
+    "src/chat/CompactionDivider.tsx",
+    "src/chat/CompactionInProgress.tsx",
+    "src/chat/CompactionSummaryPanel.tsx",
+    "src/chat/ComposerAddMenu.tsx",
+    "src/chat/ContextClearDivider.tsx",
+    "src/chat/ContextIndicator.tsx",
+    "src/chat/ConversationContextMenu.tsx",
+    "src/chat/ConversationList.tsx",
+    "src/chat/ConversationLoadingState.tsx",
+    "src/chat/ConversationTitlebarControls.tsx",
+    "src/chat/DegradedAnswerCard.tsx",
+    "src/chat/GeneratedFileArtifacts.tsx",
+    "src/chat/GoalCard.tsx",
+    "src/chat/InputBar.tsx",
+    "src/chat/KivioBlob.tsx",
+    "src/chat/KnowledgeCenter.tsx",
+    "src/chat/MarkdownErrorBoundary.tsx",
+    "src/chat/McpCenter.tsx",
+    "src/chat/McpRegistryBrowser.tsx",
+    "src/chat/MessageBubble.tsx",
+    "src/chat/MessageContextMenu.tsx",
+    "src/chat/MessageGroup.tsx",
+    "src/chat/MessageList.tsx",
+    "src/chat/ModelSelector.tsx",
+    "src/chat/MultiModelSelector.tsx",
+    "src/chat/NotesCenter.tsx",
+    "src/chat/PastedTextEditorModal.tsx",
+    "src/chat/PendingInteractionSlot.tsx",
+    "src/chat/PermissionPicker.tsx",
+    "src/chat/PluginCenter.tsx",
+    "src/chat/PluginPackages.tsx",
+    "src/chat/ProductModeSwitcher.tsx",
+    "src/chat/ProjectContextMenu.tsx",
+    "src/chat/ProjectDialog.tsx",
+    "src/chat/QueuedMessages.tsx",
+    "src/chat/ReasoningBlock.tsx",
+    "src/chat/ReplyWithModelButton.tsx",
+    "src/chat/RetrievalTestPanel.tsx",
+    "src/chat/RuntimePicker.tsx",
+    "src/chat/SessionCenter.tsx",
+    "src/chat/SessionUsageStrip.tsx",
+    "src/chat/SetContextMenu.tsx",
+    "src/chat/SetDialog.tsx",
+    "src/chat/Sidebar.tsx",
+    "src/chat/SidebarAccountMenu.tsx",
+    "src/chat/SidebarBrandSearchButton.tsx",
+    "src/chat/SidebarNavRow.tsx",
+    "src/chat/SidebarShell.tsx",
+    "src/chat/SidebarUserFooter.tsx",
+    "src/chat/SkillCenter.tsx",
+    "src/chat/SkillStoreBrowser.tsx",
+    "src/chat/SourcesButton.tsx",
+    "src/chat/StreamDotLogo.tsx",
+    "src/chat/StreamStatusLine.tsx",
+    "src/chat/StudioPage.tsx",
+    "src/chat/SubAgentAvatar.tsx",
+    "src/chat/SubAgentConversation.tsx",
+    "src/chat/SubAgentElapsed.tsx",
+    "src/chat/SubAgentPanel.tsx",
+    "src/chat/SubAgentToolCard.tsx",
+    "src/chat/SwapTitle.tsx",
+    "src/chat/ThinkingLevelSelector.tsx",
+    "src/chat/ToolCallBlock.tsx",
+    "src/chat/ToolCallErrorBoundary.tsx",
+    "src/chat/TypewriterText.tsx",
+    "src/chat/UserAvatar.tsx",
+    "src/chat/WindowControls.tsx",
+    "src/chat/agentPlan.ts",
+    "src/chat/api.ts",
+    "src/chat/approvalPolicies.ts",
+    "src/chat/artifactPresentation.ts",
+    "src/chat/artifactReferences.ts",
+    "src/chat/artifacts.ts",
+    "src/chat/askUserTools.ts",
+    "src/chat/assistantIcons.tsx",
+    "src/chat/asyncQuestionsContext.ts",
+    "src/chat/attachmentPreview.ts",
+    "src/chat/attachmentType.ts",
+    "src/chat/backgroundTasks.ts",
+    "src/chat/blobQuips.ts",
+    "src/chat/browserRoute.ts",
+    "src/chat/chatExecutionOwner.ts",
+    "src/chat/chatNavigationController.ts",
+    "src/chat/chatPerformanceProbe.ts",
+    "src/chat/chatPopoutOwnershipOwner.ts",
+    "src/chat/chatRouteVisibility.ts",
+    "src/chat/chatRoutes.ts",
+    "src/chat/chatRunCommands.ts",
+    "src/chat/chatRunSettlement.ts",
+    "src/chat/chatSendController.ts",
+    "src/chat/chatSendReservations.ts",
+    "src/chat/chatStreamLifecycleOwner.ts",
+    "src/chat/chatWindowEffects.ts",
+    "src/chat/chatWindowGeometry.ts",
+    "src/chat/citationPopover.ts",
+    "src/chat/citations.ts",
+    "src/chat/cliCommandReportData.ts",
+    "src/chat/compactionBoundary.ts",
+    "src/chat/composerAddMenuContext.ts",
+    "src/chat/composerAutoHeight.ts",
+    "src/chat/composerDraft.ts",
+    "src/chat/composerInsert.ts",
+    "src/chat/composerPreferences.ts",
+    "src/chat/contextClearBoundary.ts",
+    "src/chat/contextPanel.ts",
+    "src/chat/conversationExport.ts",
+    "src/chat/conversationFields.ts",
+    "src/chat/conversationLocalState.ts",
+    "src/chat/conversationPins.ts",
+    "src/chat/conversationRuns.ts",
+    "src/chat/conversationTitle.ts",
+    "src/chat/conversationTransitionStore.ts",
+    "src/chat/emptyHero.ts",
+    "src/chat/externalModelEffort.ts",
+    "src/chat/fileChip.tsx",
+    "src/chat/fileLocation.ts",
+    "src/chat/goalPresentation.ts",
+    "src/chat/groupStreamingStore.ts",
+    "src/chat/hooks/useAssistantActions.ts",
+    "src/chat/hooks/useChatRouting.ts",
+    "src/chat/hooks/useChatToolIndicator.ts",
+    "src/chat/hooks/useChatWidthLayout.ts",
+    "src/chat/hooks/useComposerDraft.ts",
+    "src/chat/hooks/useConversationContext.ts",
+    "src/chat/hooks/useConversationMetaMutations.ts",
+    "src/chat/hooks/useExternalSendQueue.ts",
+    "src/chat/hooks/useLiveRowMeasurement.ts",
+    "src/chat/hooks/useMessageActions.ts",
+    "src/chat/hooks/useMessageQueue.ts",
+    "src/chat/hooks/useRightDock.ts",
+    "src/chat/hooks/useSettingsExit.ts",
+    "src/chat/hooks/useSidebarLayout.ts",
+    "src/chat/hooks/useStreamRenderFrame.ts",
+    "src/chat/hooks/useTauriEvent.ts",
+    "src/chat/idleTask.ts",
+    "src/chat/imageData.ts",
+    "src/chat/imageViewer.ts",
+    "src/chat/kivioBlobShapes.ts",
+    "src/chat/kivioBlobSim.ts",
+    "src/chat/knowledgeBase.ts",
+    "src/chat/knowledgeBaseHits.ts",
+    "src/chat/lastAgentRuntime.ts",
+    "src/chat/liveRowModel.ts",
+    "src/chat/markdownHeadingOutline.ts",
+    "src/chat/markdownStreaming.ts",
+    "src/chat/markdownUtils.ts",
+    "src/chat/market/MarketPage.tsx",
+    "src/chat/market/api.ts",
+    "src/chat/market/marketActions.ts",
+    "src/chat/market/types.ts",
+    "src/chat/mcpInstalledList.ts",
+    "src/chat/messageBody.ts",
+    "src/chat/messageFormat.ts",
+    "src/chat/messageGroups.ts",
+    "src/chat/messageListVirtualization.ts",
+    "src/chat/messageNavigationStore.ts",
+    "src/chat/messageNavigator.ts",
+    "src/chat/multiAnswerViewMode.ts",
+    "src/chat/notificationView.ts",
+    "src/chat/optimisticSidebar.ts",
+    "src/chat/optimisticUserPresentation.ts",
+    "src/chat/performanceFixtures.ts",
+    "src/chat/permissionModes.ts",
+    "src/chat/persistence.ts",
+    "src/chat/platform.ts",
+    "src/chat/popout/ChatPopout.tsx",
+    "src/chat/popout/PopoutOccupiedPlaceholder.tsx",
+    "src/chat/popout/PopoutTitlebar.tsx",
+    "src/chat/popout/conversationStub.ts",
+    "src/chat/popout/popoutRoutes.ts",
+    "src/chat/popout/usePopoutComposer.tsx",
+    "src/chat/popout/usePopoutSession.ts",
+    "src/chat/prepareConversationForSend.ts",
+    "src/chat/productMode.ts",
+    "src/chat/promptOptimize.ts",
+    "src/chat/public/markdown.ts",
+    "src/chat/public/pluginCenter.ts",
+    "src/chat/public/sessionCenter.ts",
+    "src/chat/routeCodec.ts",
+    "src/chat/runDisplayEvents.ts",
+    "src/chat/runInteractionInbox.ts",
+    "src/chat/scroll/scrollFollowCore.ts",
+    "src/chat/scroll/useScrollFollow.ts",
+    "src/chat/searchHighlight.tsx",
+    "src/chat/segments.ts",
+    "src/chat/sessionLibrary/format.ts",
+    "src/chat/settledMarkdownCache.ts",
+    "src/chat/skillSelection.ts",
+    "src/chat/slashCommands.ts",
+    "src/chat/streamApply.ts",
+    "src/chat/streamCancellation.ts",
+    "src/chat/streamPresentation.ts",
+    "src/chat/streamPreviewOwner.ts",
+    "src/chat/streamingStore.ts",
+    "src/chat/subAgentMessages.ts",
+    "src/chat/subAgentStatus.ts",
+    "src/chat/toolApproval.ts",
+    "src/chat/toolAvailability.ts",
+    "src/chat/toolResultPreview.ts",
+    "src/chat/toolStatus.ts",
+    "src/chat/useBackgroundTasks.ts",
+    "src/chat/useClampedMenuPosition.ts",
+    "src/chat/useCloseAnimation.ts",
+    "src/chat/useComposerContextMenu.tsx",
+    "src/chat/usePopoverMaxHeight.ts",
+    "src/chat/useSubAgents.ts",
+    "src/chat/utils.ts",
+    "src/chat/webSearchCitations.ts",
+    "src/chat/windowMaximizedContext.ts"
+   ]
+  },
+  "workbench-ui": {
+   "files": [
+    "src/chat/studio/ExecutionStatus.tsx",
+    "src/chat/studio/StudioToast.tsx",
+    "src/chat/studio/TaskDeleteDialog.tsx",
+    "src/chat/studio/TaskLibrary.tsx",
+    "src/chat/studio/taskAdapters.ts",
+    "src/chat/studio/taskLibraryModel.ts",
+    "src/chat/studio/useSharedDraft.ts",
+    "src/chat/studio/useStudioNavigation.ts",
+    "src/chat/studio/useTaskLibrary.ts",
+    "src/chat/workbench/MediaGenerationRunner.tsx",
+    "src/chat/workbench/MediaTaskList.tsx",
+    "src/chat/workbench/WorkbenchFeatureSearch.tsx",
+    "src/chat/workbench/WorkbenchHome.tsx",
+    "src/chat/workbench/WorkbenchLanding.tsx",
+    "src/chat/workbench/WorkbenchMediaModelSelect.tsx",
+    "src/chat/workbench/WorkbenchPage.tsx",
+    "src/chat/workbench/WorkbenchSidebar.tsx",
+    "src/chat/workbench/aiText.ts",
+    "src/chat/workbench/commerce/ListingCheckPage.tsx",
+    "src/chat/workbench/commerce/ListingPage.tsx",
+    "src/chat/workbench/commerce/ProductArchivePage.tsx",
+    "src/chat/workbench/commerce/ShopBindingPage.tsx",
+    "src/chat/workbench/commerce/ShopOverviewPage.tsx",
+    "src/chat/workbench/commerce/ShopPlatformLogo.tsx",
+    "src/chat/workbench/commerce/listingCheck.ts",
+    "src/chat/workbench/commerce/shopPlatforms.ts",
+    "src/chat/workbench/content/AssetLibraryPage.tsx",
+    "src/chat/workbench/content/ImageTemplatesPage.tsx",
+    "src/chat/workbench/content/RolesPage.tsx",
+    "src/chat/workbench/content/TemplateDialog.tsx",
+    "src/chat/workbench/content/VideoTemplatesPage.tsx",
+    "src/chat/workbench/content/contentCatalog.ts",
+    "src/chat/workbench/content/useTemplateLibrary.ts",
+    "src/chat/workbench/copy/CopyUploadField.tsx",
+    "src/chat/workbench/copy/GraphicPostPage.tsx",
+    "src/chat/workbench/copy/SeedArticlePage.tsx",
+    "src/chat/workbench/copy/copyCatalog.ts",
+    "src/chat/workbench/image/BatchSetPage.tsx",
+    "src/chat/workbench/image/CloneImagePage.tsx",
+    "src/chat/workbench/image/DetailImagePage.tsx",
+    "src/chat/workbench/image/DressPage.tsx",
+    "src/chat/workbench/image/EditImagePage.tsx",
+    "src/chat/workbench/image/FreeImagePage.tsx",
+    "src/chat/workbench/image/ImageStudio.tsx",
+    "src/chat/workbench/image/MainImagePage.tsx",
+    "src/chat/workbench/image/MigratePage.tsx",
+    "src/chat/workbench/image/PosterPage.tsx",
+    "src/chat/workbench/image/RetouchPage.tsx",
+    "src/chat/workbench/image/SetDesignPage.tsx",
+    "src/chat/workbench/image/TemplateBuilderPage.tsx",
+    "src/chat/workbench/image/TemplateSetPage.tsx",
+    "src/chat/workbench/image/imageCatalog.ts",
+    "src/chat/workbench/image/mainImagePrompt.ts",
+    "src/chat/workbench/image/projects/BatchSetForm.tsx",
+    "src/chat/workbench/image/projects/CloneImageForm.tsx",
+    "src/chat/workbench/image/projects/FreeImageForm.tsx",
+    "src/chat/workbench/image/projects/ImageFormFields.tsx",
+    "src/chat/workbench/image/projects/ImageOutputSelect.tsx",
+    "src/chat/workbench/image/projects/ImageProjectWorkspace.tsx",
+    "src/chat/workbench/image/projects/ImageWorkflow.tsx",
+    "src/chat/workbench/image/projects/RequirementComposer.tsx",
+    "src/chat/workbench/image/projects/SetDesignForm.tsx",
+    "src/chat/workbench/image/projects/StudioPanels.tsx",
+    "src/chat/workbench/image/projects/TaskPanel.tsx",
+    "src/chat/workbench/image/projects/TemplateSetForm.tsx",
+    "src/chat/workbench/image/projects/builtinTemplates.ts",
+    "src/chat/workbench/image/projects/draft.ts",
+    "src/chat/workbench/image/projects/imageOutput.ts",
+    "src/chat/workbench/image/projects/imageValidation.ts",
+    "src/chat/workbench/image/projects/studioDrop.ts",
+    "src/chat/workbench/image/projects/studioModels.ts",
+    "src/chat/workbench/image/projects/types.ts",
+    "src/chat/workbench/image/useLocalImages.ts",
+    "src/chat/workbench/localMedia.ts",
+    "src/chat/workbench/publish/AccountsPage.tsx",
+    "src/chat/workbench/publish/PublishDataPage.tsx",
+    "src/chat/workbench/publish/PublishLogsPage.tsx",
+    "src/chat/workbench/publish/PublishPage.tsx",
+    "src/chat/workbench/publish/publishCatalog.ts",
+    "src/chat/workbench/registry.ts",
+    "src/chat/workbench/sourcing/LookalikePage.tsx",
+    "src/chat/workbench/sourcing/PickLibraryPage.tsx",
+    "src/chat/workbench/sourcing/ProductCard.tsx",
+    "src/chat/workbench/sourcing/productDraft.ts",
+    "src/chat/workbench/sourcing/useSourcingSearch.ts",
+    "src/chat/workbench/stats/UsagePage.tsx",
+    "src/chat/workbench/useAiTask.ts",
+    "src/chat/workbench/useMediaGeneration.ts",
+    "src/chat/workbench/video/AvatarPage.tsx",
+    "src/chat/workbench/video/DramaPage.tsx",
+    "src/chat/workbench/video/ShortsPage.tsx",
+    "src/chat/workbench/video/SubtitlePage.tsx",
+    "src/chat/workbench/video/VideoAnalysisPage.tsx",
+    "src/chat/workbench/video/VideoClonePage.tsx",
+    "src/chat/workbench/video/VideoEditPage.tsx",
+    "src/chat/workbench/video/VideoStudio.tsx",
+    "src/chat/workbench/video/VideoUploadField.tsx",
+    "src/chat/workbench/video/projects/VideoAnalysisForm.tsx",
+    "src/chat/workbench/video/projects/VideoAssetImage.tsx",
+    "src/chat/workbench/video/projects/VideoCreationForm.tsx",
+    "src/chat/workbench/video/projects/VideoFormFields.tsx",
+    "src/chat/workbench/video/projects/VideoMediaOptions.tsx",
+    "src/chat/workbench/video/projects/VideoProjectWorkspace.tsx",
+    "src/chat/workbench/video/projects/VideoRemakeForm.tsx",
+    "src/chat/workbench/video/projects/VideoTaskPanel.tsx",
+    "src/chat/workbench/video/projects/types.ts",
+    "src/chat/workbench/video/projects/useVideoTaskProgress.ts",
+    "src/chat/workbench/video/projects/videoDrafts.ts",
+    "src/chat/workbench/video/projects/videoDrop.ts",
+    "src/chat/workbench/video/projects/videoValidation.ts",
+    "src/chat/workbench/video/useLocalVideo.ts",
+    "src/chat/workbench/video/videoCatalog.ts",
+    "src/chat/workbench/workbenchFeatures.ts",
+    "src/chat/workbench/workbenchPages.ts",
+    "src/chat/workbench/workflow/WorkflowAssets.tsx",
+    "src/chat/workbench/workflow/WorkflowCanvas.tsx",
+    "src/chat/workbench/workflow/WorkflowNodeCard.tsx",
+    "src/chat/workbench/workflow/WorkflowNodePanel.tsx",
+    "src/chat/workbench/workflow/WorkflowPage.tsx",
+    "src/chat/workbench/workflow/WorkflowRunPanel.tsx",
+    "src/chat/workbench/workflow/useWorkflowEditor.ts",
+    "src/chat/workbench/workflow/useWorkflowRun.ts",
+    "src/chat/workbench/workflow/workflowCatalog.ts",
+    "src/chat/workbench/workflow/workflowConfig.ts",
+    "src/chat/workbench/workflow/workflowGraph.ts",
+    "src/chat/workbench/workflow/workflowModel.ts",
+    "src/chat/workbench/workflow/workflowStore.ts",
+    "src/chat/workbench/workflow/workflowValidation.ts"
+   ]
+  },
+  "automation-ui": {
+   "files": [
+    "src/chat/automation/AddNodePicker.tsx",
+    "src/chat/automation/AgentInspector.tsx",
+    "src/chat/automation/AutomationCenter.tsx",
+    "src/chat/automation/AutomationEditor.tsx",
+    "src/chat/automation/AutomationList.tsx",
+    "src/chat/automation/NodeInspector.tsx",
+    "src/chat/automation/RunStatusCapsule.tsx",
+    "src/chat/automation/WorkflowWorkbench.tsx",
+    "src/chat/automation/agentModel.ts",
+    "src/chat/automation/agentTools.ts",
+    "src/chat/automation/api.ts",
+    "src/chat/automation/graph.ts",
+    "src/chat/automation/nodeCatalog.ts",
+    "src/chat/automation/nodeSemantics.ts",
+    "src/chat/automation/nodes/ActionEdge.tsx",
+    "src/chat/automation/nodes/FlowNode.tsx",
+    "src/chat/automation/nodes/chrome.ts",
+    "src/chat/automation/useAutomationRunState.ts",
+    "src/chat/automation/workflowData.ts"
+   ]
+  },
+  "dock-ui": {
+   "files": [
+    "src/chat/dock/BackgroundTasksPanel.tsx",
+    "src/chat/dock/ConfirmDialog.tsx",
+    "src/chat/dock/DiffView.tsx",
+    "src/chat/dock/DockContextMenu.tsx",
+    "src/chat/dock/FileTreePanel.tsx",
+    "src/chat/dock/FileViewer.tsx",
+    "src/chat/dock/GitDiffChip.tsx",
+    "src/chat/dock/GitHistory.tsx",
+    "src/chat/dock/GitPanel.tsx",
+    "src/chat/dock/GitStatusPill.tsx",
+    "src/chat/dock/RightDock.tsx",
+    "src/chat/dock/TerminalPanel.tsx",
+    "src/chat/dock/api.ts",
+    "src/chat/dock/diffParse.ts",
+    "src/chat/dock/dockPreview.ts",
+    "src/chat/dock/dockPreviewTarget.ts",
+    "src/chat/dock/fileTreeModel.ts",
+    "src/chat/dock/gitGraph.ts",
+    "src/chat/dock/gitReviewModel.ts",
+    "src/chat/dock/useFileTree.ts",
+    "src/chat/dock/useGitBadge.ts",
+    "src/chat/dock/useGitReview.ts",
+    "src/chat/dock/workspaceActivity.ts"
+   ]
+  },
+  "settings-ui": {
+   "files": [
+    "src/onboarding/OnboardingFormRow.tsx",
+    "src/onboarding/OnboardingShell.tsx",
+    "src/onboarding/OnboardingStepFrame.tsx",
+    "src/onboarding/ProviderSetupPanel.tsx",
+    "src/onboarding/public/shell.ts",
+    "src/onboarding/steps/DoneStep.tsx",
+    "src/onboarding/steps/HotkeyStep.tsx",
+    "src/onboarding/steps/ProviderStep.tsx",
+    "src/onboarding/steps/WebSearchStep.tsx",
+    "src/onboarding/steps/WelcomeStep.tsx",
+    "src/onboarding/types.ts",
+    "src/onboarding/validation.ts",
+    "src/settings/ComfyProviderPanel.tsx",
+    "src/settings/ConnectorBrandIcons.tsx",
+    "src/settings/ConnectorDetailModal.tsx",
+    "src/settings/ConnectorOAuth.tsx",
+    "src/settings/ConnectorsPanel.tsx",
+    "src/settings/DocumentProcessingPanel.tsx",
+    "src/settings/HookModal.tsx",
+    "src/settings/KnowledgeRagPanel.tsx",
+    "src/settings/ModelDetailDrawer.tsx",
+    "src/settings/ModelPairSelect.tsx",
+    "src/settings/NavIcons.tsx",
+    "src/settings/ProviderAccountIdentity.tsx",
+    "src/settings/ProviderModelTestModal.tsx",
+    "src/settings/ProviderModelsPicker.tsx",
+    "src/settings/ProviderOAuthPanel.tsx",
+    "src/settings/ProviderRequestPanel.tsx",
+    "src/settings/ProviderSortableList.tsx",
+    "src/settings/ProviderUsageCard.tsx",
+    "src/settings/RequestDebugPanel.tsx",
+    "src/settings/RetrievalPanel.tsx",
+    "src/settings/ScreenshotTranslationSettings.tsx",
+    "src/settings/SettingsEditorController.ts",
+    "src/settings/SettingsShell.tsx",
+    "src/settings/TextEditContextMenu.tsx",
+    "src/settings/UsageStatsPanel.tsx",
+    "src/settings/VideoModelFields.tsx",
+    "src/settings/WebSearchPanel.tsx",
+    "src/settings/WorkflowHooksPanel.tsx",
+    "src/settings/chatToolsShared.ts",
+    "src/settings/cliClaudePresets.ts",
+    "src/settings/cliGrokPresets.ts",
+    "src/settings/cliKimiPresets.ts",
+    "src/settings/components.tsx",
+    "src/settings/connectorCatalog.ts",
+    "src/settings/connectorToolToggle.ts",
+    "src/settings/dshPluginNames.ts",
+    "src/settings/hotkeyDefaults.ts",
+    "src/settings/mcpRegistry.ts",
+    "src/settings/memoryLayers.ts",
+    "src/settings/providerDraftIntents.ts",
+    "src/settings/providerPresets.ts",
+    "src/settings/providerRequest.ts",
+    "src/settings/public/connectors.ts",
+    "src/settings/public/controls.ts",
+    "src/settings/public/hotkeys.ts",
+    "src/settings/public/icons.ts",
+    "src/settings/public/knowledge.ts",
+    "src/settings/public/mcpRegistry.ts",
+    "src/settings/public/mcpTools.ts",
+    "src/settings/public/modelSelection.ts",
+    "src/settings/public/providerDraft.ts",
+    "src/settings/public/providers.ts",
+    "src/settings/public/shell.ts",
+    "src/settings/public/skills.ts",
+    "src/settings/public/textEditing.ts",
+    "src/settings/public/webSearch.ts",
+    "src/settings/rebaseSettingsDraft.ts",
+    "src/settings/replacePackProgress.ts",
+    "src/settings/skillMarket.ts",
+    "src/settings/tabs/AboutTab.tsx",
+    "src/settings/tabs/AvatarField.tsx",
+    "src/settings/tabs/ChatTab.tsx",
+    "src/settings/tabs/ChatToolsStatusGroup.tsx",
+    "src/settings/tabs/ComputerControlTab.tsx",
+    "src/settings/tabs/GeneralTab.tsx",
+    "src/settings/tabs/HooksTab.tsx",
+    "src/settings/tabs/HotkeysTab.tsx",
+    "src/settings/tabs/LensTab.tsx",
+    "src/settings/tabs/MediaCreationTab.tsx",
+    "src/settings/tabs/MemoryTab.tsx",
+    "src/settings/tabs/MixerTab.tsx",
+    "src/settings/tabs/ProviderDetail.tsx",
+    "src/settings/tabs/ProvidersTab.tsx",
+    "src/settings/tabs/TranslateTab.tsx",
+    "src/settings/uiFont.ts",
+    "src/settings/useConnectorOAuth.ts",
+    "src/settings/useProviderCatalogController.ts",
+    "src/settings/useProviderModalController.ts",
+    "src/settings/useSettingsBackupController.ts",
+    "src/settings/useSettingsHotkeyRecorder.ts",
+    "src/settings/useSettingsMemoryEditor.ts",
+    "src/settings/useSettingsOcrDownloads.ts",
+    "src/settings/useSettingsOnboardingController.ts",
+    "src/settings/useSettingsPermissions.ts",
+    "src/settings/useSettingsUpdateController.ts",
+    "src/settings/utils.ts",
+    "src/settings/webSearch.ts"
+   ]
+  },
+  "lens-ui": {
+   "files": [
+    "src/Lens.tsx",
+    "src/lens/AnnotateToolbar.tsx",
+    "src/lens/ArrowSvg.tsx",
+    "src/lens/MosaicPreview.tsx",
+    "src/lens/ReplaceTranslateOverlay.tsx",
+    "src/lens/ThinkingBlock.tsx",
+    "src/lens/WebSearchBlock.tsx",
+    "src/lens/annotation.ts",
+    "src/lens/history.ts",
+    "src/lens/layout.ts",
+    "src/lens/replaceTextLayout.ts",
+    "src/lens/replaceTextRendering.ts",
+    "src/lens/replaceVisualBenchmark.ts",
+    "src/lens/types.ts",
+    "src/lens/useDevicePixelRatio.ts",
+    "src/lens/useFreezeFramePreview.ts",
+    "src/lens/useImageObjectUrl.ts",
+    "src/lens/useLensAnnotationController.ts",
+    "src/lens/useLensBarMotionController.ts",
+    "src/lens/useLensContentController.ts",
+    "src/lens/useLensConversationController.ts",
+    "src/lens/useLensHistory.ts",
+    "src/lens/useLensSelectionController.ts",
+    "src/lens/useLensSessionCoordinator.ts",
+    "src/lens/useLensTranslationSession.ts"
+   ]
+  },
+  "tauri-api": {
+   "files": [
+    "src/api/automationContracts.ts",
+    "src/api/chatProtocol.ts",
+    "src/api/chatTools.ts",
+    "src/api/dockContracts.ts",
+    "src/api/goalContracts.ts",
+    "src/api/pluginPackages.ts",
+    "src/api/settingsCache.ts",
+    "src/api/studioContracts.ts",
+    "src/api/tauri.ts",
+    "src/api/tauriEventCompatibility.ts",
+    "src/api/updateAvailability.ts",
+    "src/api/windowFocus.ts",
+    "src/api/workbenchImageContracts.ts",
+    "src/api/workbenchVideoContracts.ts"
+   ]
+  },
+  "model-catalog": {
+   "files": [
+    "src/data/chatModelPreference.ts",
+    "src/data/mediaModelPools.ts",
+    "src/data/modelCatalog.ts",
+    "src/data/modelMatching.ts",
+    "src/data/videoModels.ts"
+   ]
+  },
+  "chat-core": {
+   "files": [
+    "src-tauri/src/agents/mod.rs",
+    "src-tauri/src/agents/parse.rs",
+    "src-tauri/src/agents/types.rs",
+    "src-tauri/src/chat/agent/compaction.rs",
+    "src-tauri/src/chat/agent/context_estimate.rs",
+    "src-tauri/src/chat/agent/execute.rs",
+    "src-tauri/src/chat/agent/file_ledger.rs",
+    "src-tauri/src/chat/agent/filter.rs",
+    "src-tauri/src/chat/agent/finalize.rs",
+    "src-tauri/src/chat/agent/headless_host.rs",
+    "src-tauri/src/chat/agent/host.rs",
+    "src-tauri/src/chat/agent/loop_.rs",
+    "src-tauri/src/chat/agent/mod.rs",
+    "src-tauri/src/chat/agent/planning.rs",
+    "src-tauri/src/chat/agent/prepare.rs",
+    "src-tauri/src/chat/agent/provider_runtime.rs",
+    "src-tauri/src/chat/agent/recovery.rs",
+    "src-tauri/src/chat/agent/rounds.rs",
+    "src-tauri/src/chat/agent/steering.rs",
+    "src-tauri/src/chat/agent/stop.rs",
+    "src-tauri/src/chat/agent/stream.rs",
+    "src-tauri/src/chat/agent/synthesis.rs",
+    "src-tauri/src/chat/agent/types.rs",
+    "src-tauri/src/chat/ai_task.rs",
+    "src-tauri/src/chat/artifacts.rs",
+    "src-tauri/src/chat/ask_user.rs",
+    "src-tauri/src/chat/ask_user/value_schema.rs",
+    "src-tauri/src/chat/attachments.rs",
+    "src-tauri/src/chat/commands.rs",
+    "src-tauri/src/chat/commands/agent_host.rs",
+    "src-tauri/src/chat/commands/attachments.rs",
+    "src-tauri/src/chat/commands/catalog.rs",
+    "src-tauri/src/chat/commands/context.rs",
+    "src-tauri/src/chat/commands/direct_image.rs",
+    "src-tauri/src/chat/commands/fan_out.rs",
+    "src-tauri/src/chat/commands/interaction.rs",
+    "src-tauri/src/chat/commands/messages.rs",
+    "src-tauri/src/chat/commands/mutations.rs",
+    "src-tauri/src/chat/commands/probe_runtime.rs",
+    "src-tauri/src/chat/commands/prompt_optimize.rs",
+    "src-tauri/src/chat/commands/reasoning.rs",
+    "src-tauri/src/chat/commands/reply.rs",
+    "src-tauri/src/chat/commands/reply_runtime.rs",
+    "src-tauri/src/chat/commands/runtime.rs",
+    "src-tauri/src/chat/commands/sanitization.rs",
+    "src-tauri/src/chat/commands/send.rs",
+    "src-tauri/src/chat/commands/title.rs",
+    "src-tauri/src/chat/commands/tooling.rs",
+    "src-tauri/src/chat/commands/vision_compat.rs",
+    "src-tauri/src/chat/completion_notification.rs",
+    "src-tauri/src/chat/draft_journal.rs",
+    "src-tauri/src/chat/dsml_tools.rs",
+    "src-tauri/src/chat/export.rs",
+    "src-tauri/src/chat/external_send.rs",
+    "src-tauri/src/chat/gc.rs",
+    "src-tauri/src/chat/goal.rs",
+    "src-tauri/src/chat/goal/evidence.rs",
+    "src-tauri/src/chat/hooks.rs",
+    "src-tauri/src/chat/image_collage.rs",
+    "src-tauri/src/chat/image_generation.rs",
+    "src-tauri/src/chat/image_prep.rs",
+    "src-tauri/src/chat/interaction_state.rs",
+    "src-tauri/src/chat/knowledge_base/chunking.rs",
+    "src-tauri/src/chat/knowledge_base/commands.rs",
+    "src-tauri/src/chat/knowledge_base/embeddings.rs",
+    "src-tauri/src/chat/knowledge_base/ingest.rs",
+    "src-tauri/src/chat/knowledge_base/mod.rs",
+    "src-tauri/src/chat/knowledge_base/parse.rs",
+    "src-tauri/src/chat/knowledge_base/process.rs",
+    "src-tauri/src/chat/knowledge_base/rerank.rs",
+    "src-tauri/src/chat/knowledge_base/retrieval.rs",
+    "src-tauri/src/chat/knowledge_base/store.rs",
+    "src-tauri/src/chat/mcp_image_feedback.rs",
+    "src-tauri/src/chat/memory.rs",
+    "src-tauri/src/chat/mod.rs",
+    "src-tauri/src/chat/notification_viewing.rs",
+    "src-tauri/src/chat/plan.rs",
+    "src-tauri/src/chat/plan_document.rs",
+    "src-tauri/src/chat/popout.rs",
+    "src-tauri/src/chat/probe.rs",
+    "src-tauri/src/chat/protocol.rs",
+    "src-tauri/src/chat/repository.rs",
+    "src-tauri/src/chat/request_debug.rs",
+    "src-tauri/src/chat/route_contract.rs",
+    "src-tauri/src/chat/runtime_state.rs",
+    "src-tauri/src/chat/storage.rs",
+    "src-tauri/src/chat/storage/assistants.rs",
+    "src-tauri/src/chat/storage/conversations.rs",
+    "src-tauri/src/chat/storage/index.rs",
+    "src-tauri/src/chat/storage/migration.rs",
+    "src-tauri/src/chat/storage/projects.rs",
+    "src-tauri/src/chat/storage/search.rs",
+    "src-tauri/src/chat/storage/sets.rs",
+    "src-tauri/src/chat/sub_agent.rs",
+    "src-tauri/src/chat/sub_agent/control.rs",
+    "src-tauri/src/chat/sub_agent/runtime.rs",
+    "src-tauri/src/chat/todo.rs",
+    "src-tauri/src/chat/types.rs",
+    "src-tauri/src/chat/video.rs",
+    "src-tauri/src/chat/video_analysis.rs",
+    "src-tauri/src/chat/vision.rs",
+    "src-tauri/src/chat/workflow_hooks.rs",
+    "src-tauri/src/notes.rs",
+    "src-tauri/src/prompts.rs"
+   ]
+  },
+  "workbench-core": {
+   "files": [
+    "src-tauri/src/comfyui.rs",
+    "src-tauri/src/content_templates/builtins.rs",
+    "src-tauri/src/content_templates/files.rs",
+    "src-tauri/src/content_templates/image.rs",
+    "src-tauri/src/content_templates/mod.rs",
+    "src-tauri/src/content_templates/video.rs",
+    "src-tauri/src/fonts.rs",
+    "src-tauri/src/generation_workflow/graph.rs",
+    "src-tauri/src/generation_workflow/mod.rs",
+    "src-tauri/src/generation_workflow/types.rs",
+    "src-tauri/src/media_generation.rs",
+    "src-tauri/src/media_generation/artifacts.rs",
+    "src-tauri/src/media_generation/image_gateway.rs",
+    "src-tauri/src/media_generation/video_providers.rs",
+    "src-tauri/src/media_runtime/config.rs",
+    "src-tauri/src/media_runtime/migration.rs",
+    "src-tauri/src/media_runtime/mod.rs",
+    "src-tauri/src/media_runtime/runtime.rs",
+    "src-tauri/src/sourcing/alibaba.rs",
+    "src-tauri/src/sourcing/mod.rs",
+    "src-tauri/src/sourcing/store.rs",
+    "src-tauri/src/sourcing/types.rs",
+    "src-tauri/src/studio.rs",
+    "src-tauri/src/studio/library.rs",
+    "src-tauri/src/studio/wait.rs",
+    "src-tauri/src/workbench/image_projects/agent.rs",
+    "src-tauri/src/workbench/image_projects/generation.rs",
+    "src-tauri/src/workbench/image_projects/imports.rs",
+    "src-tauri/src/workbench/image_projects/media.rs",
+    "src-tauri/src/workbench/image_projects/mod.rs",
+    "src-tauri/src/workbench/image_projects/output.rs",
+    "src-tauri/src/workbench/image_projects/preparation.rs",
+    "src-tauri/src/workbench/image_projects/storage.rs",
+    "src-tauri/src/workbench/image_projects/types.rs",
+    "src-tauri/src/workbench/image_projects/workflow.rs",
+    "src-tauri/src/workbench/mod.rs",
+    "src-tauri/src/workbench/shops/mod.rs",
+    "src-tauri/src/workbench/shops/providers.rs",
+    "src-tauri/src/workbench/shops/store.rs",
+    "src-tauri/src/workbench/video_projects/mod.rs",
+    "src-tauri/src/workbench/video_projects/planning.rs",
+    "src-tauri/src/workbench/video_projects/storage.rs"
+   ]
+  },
+  "automation-core": {
+   "files": [
+    "src-tauri/src/automation/application.rs",
+    "src-tauri/src/automation/commands.rs",
+    "src-tauri/src/automation/events.rs",
+    "src-tauri/src/automation/history.rs",
+    "src-tauri/src/automation/hotkeys.rs",
+    "src-tauri/src/automation/interpolate.rs",
+    "src-tauri/src/automation/mod.rs",
+    "src-tauri/src/automation/mutations.rs",
+    "src-tauri/src/automation/notify.rs",
+    "src-tauri/src/automation/notify_macos.rs",
+    "src-tauri/src/automation/runner.rs",
+    "src-tauri/src/automation/schedule.rs",
+    "src-tauri/src/automation/state.rs",
+    "src-tauri/src/automation/storage.rs",
+    "src-tauri/src/automation/tools.rs",
+    "src-tauri/src/automation/types.rs",
+    "src-tauri/src/automation/validate.rs",
+    "src-tauri/src/automation/workspace.rs"
+   ]
+  },
+  "dock-core": {
+   "files": [
+    "src-tauri/src/dock/fs.rs",
+    "src-tauri/src/dock/git.rs",
+    "src-tauri/src/dock/mod.rs",
+    "src-tauri/src/dock/terminal.rs",
+    "src-tauri/src/dock/watch.rs"
+   ]
+  },
+  "screen-core": {
+   "files": [
+    "src-tauri/src/capture_geometry.rs",
+    "src-tauri/src/lens.rs",
+    "src-tauri/src/lens_commands.rs",
+    "src-tauri/src/macos_ocr.rs",
+    "src-tauri/src/offline_models.rs",
+    "src-tauri/src/rapidocr.rs",
+    "src-tauri/src/replace_translation/layout.rs",
+    "src-tauri/src/replace_translation/mask.rs",
+    "src-tauri/src/replace_translation/mod.rs",
+    "src-tauri/src/replace_translation/visual_fixtures.rs",
+    "src-tauri/src/sck.rs",
+    "src-tauri/src/screenshot.rs",
+    "src-tauri/src/shortcuts.rs",
+    "src-tauri/src/windows_ocr.rs"
+   ]
+  },
+  "tools-core": {
+   "files": [
+    "src-tauri/src/computer_control.rs",
+    "src-tauri/src/connectors/github_device.rs",
+    "src-tauri/src/connectors/mod.rs",
+    "src-tauri/src/connectors/oauth.rs",
+    "src-tauri/src/connectors/obsidian.rs",
+    "src-tauri/src/market.rs",
+    "src-tauri/src/mcp/conn.rs",
+    "src-tauri/src/mcp/manager.rs",
+    "src-tauri/src/mcp/mod.rs",
+    "src-tauri/src/mcp/native_registry.rs",
+    "src-tauri/src/mcp/registry.rs",
+    "src-tauri/src/mcp/result.rs",
+    "src-tauri/src/mcp/state.rs",
+    "src-tauri/src/mcp/types.rs",
+    "src-tauri/src/native_tools/background_registry.rs",
+    "src-tauri/src/native_tools/fetch.rs",
+    "src-tauri/src/native_tools/files.rs",
+    "src-tauri/src/native_tools/mod.rs",
+    "src-tauri/src/native_tools/sandbox_exports.rs",
+    "src-tauri/src/native_tools/shell.rs",
+    "src-tauri/src/plugins/catalog.rs",
+    "src-tauri/src/plugins/install.rs",
+    "src-tauri/src/plugins/lifecycle.rs",
+    "src-tauri/src/plugins/mod.rs",
+    "src-tauri/src/plugins/packages.rs",
+    "src-tauri/src/plugins/preview.rs",
+    "src-tauri/src/plugins/state.rs",
+    "src-tauri/src/self_config/mod.rs",
+    "src-tauri/src/self_config/skill_install.rs",
+    "src-tauri/src/skills/catalog.rs",
+    "src-tauri/src/skills/discover.rs",
+    "src-tauri/src/skills/mod.rs",
+    "src-tauri/src/skills/parse.rs",
+    "src-tauri/src/skills/runtime.rs",
+    "src-tauri/src/skills/types.rs",
+    "src-tauri/src/web_search.rs",
+    "src-tauri/src/web_search/fetch.rs"
+   ]
+  },
+  "provider-core": {
+   "files": [
+    "src-tauri/src/api.rs",
+    "src-tauri/src/chat/model/anthropic.rs",
+    "src-tauri/src/chat/model/gemini.rs",
+    "src-tauri/src/chat/model/mod.rs",
+    "src-tauri/src/chat/model/openai.rs",
+    "src-tauri/src/chat/model/responses.rs",
+    "src-tauri/src/chat/model/types.rs",
+    "src-tauri/src/chat/model_metadata.rs",
+    "src-tauri/src/chat/provider_runtime.rs",
+    "src-tauri/src/opencode_free.rs",
+    "src-tauri/src/provider_oauth.rs",
+    "src-tauri/src/provider_oauth/account.rs",
+    "src-tauri/src/provider_oauth/antigravity.rs",
+    "src-tauri/src/provider_oauth/usage.rs",
+    "src-tauri/src/provider_request.rs",
+    "src-tauri/src/settings.rs",
+    "src-tauri/src/updates.rs",
+    "src-tauri/src/usage.rs"
+   ]
+  },
+  "window-core": {
+   "files": [
+    "src-tauri/src/app_data.rs",
+    "src-tauri/src/macos_hang_watchdog.rs",
+    "src-tauri/src/window_focus.rs",
+    "src-tauri/src/windows.rs"
+   ]
+  },
+  "builtin-resources": {
+   "files": [
+    "src-tauri/resources/dsh/kivio-dsh-bridge.mjs",
+    "src-tauri/resources/plugins/dsvideo-plugin/scripts/comfy_errors.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/scripts/dsvideo_config.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/scripts/mcp_comfy.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/scripts/mcp_video_analyzer.cjs",
+    "src-tauri/resources/plugins/dsvideo-plugin/scripts/runtime.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/skills/ecom-h3-video/scripts/fetch_saved_workflow.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/skills/ecom-h3-video/scripts/free_comfy_memory.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/skills/ecom-h3-video/scripts/prepare_workflow.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/skills/grok-video-api/scripts/grok_video.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/skills/minimax-h3-api/scripts/minimax_h3.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/tests/test_dsvideo_config.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/tests/test_fetch_saved_workflow.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/tests/test_free_comfy_memory.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/tests/test_grok_video.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/tests/test_minimax_h3.py",
+    "src-tauri/resources/plugins/dsvideo-plugin/tests/test_prepare_workflow.py",
+    "src-tauri/resources/skills/dsimage/scripts/core.py",
+    "src-tauri/resources/skills/dsimage/scripts/dsimage.py",
+    "src-tauri/resources/skills/dsimage/scripts/dsivio.py",
+    "src-tauri/resources/skills/dsimage/scripts/gen_image.py",
+    "src-tauri/resources/skills/dsimage/scripts/test_dsimage.py",
+    "src-tauri/resources/skills/dsimage/scripts/test_dsivio.py",
+    "src-tauri/resources/skills/dsimage/scripts/test_generation_recovery.py",
+    "src-tauri/resources/skills/skill-creator/eval-viewer/generate_review.py",
+    "src-tauri/resources/skills/skill-creator/scripts/__init__.py",
+    "src-tauri/resources/skills/skill-creator/scripts/aggregate_benchmark.py",
+    "src-tauri/resources/skills/skill-creator/scripts/generate_report.py",
+    "src-tauri/resources/skills/skill-creator/scripts/improve_description.py",
+    "src-tauri/resources/skills/skill-creator/scripts/package_skill.py",
+    "src-tauri/resources/skills/skill-creator/scripts/quick_validate.py",
+    "src-tauri/resources/skills/skill-creator/scripts/run_eval.py",
+    "src-tauri/resources/skills/skill-creator/scripts/run_loop.py",
+    "src-tauri/resources/skills/skill-creator/scripts/utils.py",
+    "src-tauri/resources/video-studio/scripts/comfy_errors.py",
+    "src-tauri/resources/video-studio/scripts/dsvideo_config.py",
+    "src-tauri/resources/video-studio/scripts/mcp_comfy.py",
+    "src-tauri/resources/video-studio/scripts/model_catalog.py",
+    "src-tauri/resources/video-studio/scripts/runtime.py"
+   ]
+  },
+  "llm-http": {
+   "files": []
+  },
+  "local-db": {
+   "files": []
+  }
+ },
+ "edges": [
+  {
+   "from": "automation-core",
+   "to": "chat-core",
+   "weight": 6,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/automation/application.rs → src-tauri/src/chat/agent/filter.rs",
+    "src-tauri/src/automation/application.rs → src-tauri/src/chat/agent/headless_host.rs",
+    "src-tauri/src/automation/application.rs → src-tauri/src/chat/agent/mod.rs",
+    "src-tauri/src/automation/application.rs → src-tauri/src/chat/agent/prepare.rs",
+    "src-tauri/src/automation/application.rs → src-tauri/src/chat/commands.rs"
+   ]
+  },
+  {
+   "from": "automation-core",
+   "to": "provider-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/automation/application.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/automation/runner.rs → src-tauri/src/settings.rs"
+   ]
+  },
+  {
+   "from": "automation-core",
+   "to": "screen-core",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/automation/mutations.rs → src-tauri/src/shortcuts.rs"
+   ]
+  },
+  {
+   "from": "automation-core",
+   "to": "tools-core",
+   "weight": 9,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/automation/application.rs → src-tauri/src/mcp/mod.rs",
+    "src-tauri/src/automation/application.rs → src-tauri/src/mcp/registry.rs",
+    "src-tauri/src/automation/application.rs → src-tauri/src/mcp/types.rs",
+    "src-tauri/src/automation/application.rs → src-tauri/src/native_tools/mod.rs",
+    "src-tauri/src/automation/application.rs → src-tauri/src/skills/mod.rs"
+   ]
+  },
+  {
+   "from": "automation-ui",
+   "to": "chat-ui",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/automation/AutomationCenter.tsx → src/chat/chatRoutes.ts"
+   ]
+  },
+  {
+   "from": "automation-ui",
+   "to": "settings-ui",
+   "weight": 6,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/automation/AgentInspector.tsx → src/settings/public/controls.ts",
+    "src/chat/automation/AgentInspector.tsx → src/settings/public/providers.ts",
+    "src/chat/automation/AutomationEditor.tsx → src/settings/public/controls.ts",
+    "src/chat/automation/AutomationList.tsx → src/settings/public/controls.ts",
+    "src/chat/automation/NodeInspector.tsx → src/settings/public/controls.ts"
+   ]
+  },
+  {
+   "from": "automation-ui",
+   "to": "tauri-api",
+   "weight": 23,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/automation/AgentInspector.tsx → src/api/automationContracts.ts",
+    "src/chat/automation/AgentInspector.tsx → src/api/settingsCache.ts",
+    "src/chat/automation/AgentInspector.tsx → src/api/tauri.ts",
+    "src/chat/automation/AutomationCenter.tsx → src/api/automationContracts.ts",
+    "src/chat/automation/AutomationCenter.tsx → src/api/tauri.ts"
+   ]
+  },
+  {
+   "from": "chat-core",
+   "to": "automation-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/chat/agent/execute.rs → src-tauri/src/automation/tools.rs",
+    "src-tauri/src/chat/completion_notification.rs → src-tauri/src/automation/notify.rs"
+   ]
+  },
+  {
+   "from": "chat-core",
+   "to": "dock-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/chat/artifacts.rs → src-tauri/src/dock/fs.rs",
+    "src-tauri/src/chat/commands/attachments.rs → src-tauri/src/dock/fs.rs"
+   ]
+  },
+  {
+   "from": "chat-core",
+   "to": "local-db",
+   "weight": 1,
+   "kinds": [
+    "external"
+   ],
+   "samples": [
+    "src-tauri/src/chat/knowledge_base/store.rs → rusqlite"
+   ]
+  },
+  {
+   "from": "chat-core",
+   "to": "provider-core",
+   "weight": 92,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/chat/agent/compaction.rs → src-tauri/src/chat/model/mod.rs",
+    "src-tauri/src/chat/agent/compaction.rs → src-tauri/src/chat/model_metadata.rs",
+    "src-tauri/src/chat/agent/compaction.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/chat/agent/context_estimate.rs → src-tauri/src/chat/model/mod.rs",
+    "src-tauri/src/chat/agent/execute.rs → src-tauri/src/chat/model/mod.rs"
+   ]
+  },
+  {
+   "from": "chat-core",
+   "to": "screen-core",
+   "weight": 11,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/chat/ai_task.rs → src-tauri/src/macos_ocr.rs",
+    "src-tauri/src/chat/ai_task.rs → src-tauri/src/offline_models.rs",
+    "src-tauri/src/chat/ai_task.rs → src-tauri/src/rapidocr.rs",
+    "src-tauri/src/chat/commands/prompt_optimize.rs → src-tauri/src/macos_ocr.rs",
+    "src-tauri/src/chat/commands/prompt_optimize.rs → src-tauri/src/offline_models.rs"
+   ]
+  },
+  {
+   "from": "chat-core",
+   "to": "tools-core",
+   "weight": 99,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/agents/mod.rs → src-tauri/src/plugins/packages.rs",
+    "src-tauri/src/agents/parse.rs → src-tauri/src/skills/mod.rs",
+    "src-tauri/src/agents/parse.rs → src-tauri/src/skills/parse.rs",
+    "src-tauri/src/chat/agent/execute.rs → src-tauri/src/mcp/mod.rs",
+    "src-tauri/src/chat/agent/execute.rs → src-tauri/src/mcp/types.rs"
+   ]
+  },
+  {
+   "from": "chat-core",
+   "to": "window-core",
+   "weight": 3,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/chat/agent/prepare.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/chat/plan_document.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/chat/popout.rs → src-tauri/src/windows.rs"
+   ]
+  },
+  {
+   "from": "chat-core",
+   "to": "workbench-core",
+   "weight": 4,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/chat/image_generation.rs → src-tauri/src/media_generation.rs",
+    "src-tauri/src/chat/probe.rs → src-tauri/src/generation_workflow/mod.rs",
+    "src-tauri/src/chat/probe.rs → src-tauri/src/generation_workflow/types.rs",
+    "src-tauri/src/chat/probe.rs → src-tauri/src/sourcing/mod.rs"
+   ]
+  },
+  {
+   "from": "chat-ui",
+   "to": "automation-ui",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/Chat.tsx → src/chat/automation/AutomationCenter.tsx"
+   ]
+  },
+  {
+   "from": "chat-ui",
+   "to": "chat-core",
+   "weight": 74,
+   "kinds": [
+    "event",
+    "tauri"
+   ],
+   "samples": [
+    "src/chat/GeneratedFileArtifacts.tsx → src-tauri/src/chat/commands/attachments.rs（chat_open_generated_artifact）",
+    "src/chat/MessageBubble.tsx → src-tauri/src/chat/commands/attachments.rs（chat_open_generated_artifact）",
+    "src/chat/api.ts → src-tauri/src/chat/commands/catalog.rs（chat_get_conversations）",
+    "src/chat/api.ts → src-tauri/src/chat/commands/catalog.rs（chat_search_conversations）",
+    "src/chat/api.ts → src-tauri/src/chat/commands/catalog.rs（chat_query_conversations）"
+   ]
+  },
+  {
+   "from": "chat-ui",
+   "to": "dock-ui",
+   "weight": 17,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/ArtifactsCenter.tsx → src/chat/dock/DockContextMenu.tsx",
+    "src/chat/Chat.tsx → src/chat/dock/RightDock.tsx",
+    "src/chat/Chat.tsx → src/chat/dock/dockPreview.ts",
+    "src/chat/InputBar.tsx → src/chat/dock/GitDiffChip.tsx",
+    "src/chat/InputBar.tsx → src/chat/dock/GitStatusPill.tsx"
+   ]
+  },
+  {
+   "from": "chat-ui",
+   "to": "model-catalog",
+   "weight": 5,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/Chat.tsx → src/data/chatModelPreference.ts",
+    "src/chat/KnowledgeCenter.tsx → src/data/modelMatching.ts",
+    "src/chat/ModelSelector.tsx → src/data/videoModels.ts",
+    "src/chat/MultiModelSelector.tsx → src/data/videoModels.ts",
+    "src/chat/hooks/useConversationMetaMutations.ts → src/data/chatModelPreference.ts"
+   ]
+  },
+  {
+   "from": "chat-ui",
+   "to": "settings-ui",
+   "weight": 33,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/ArtifactsCenter.tsx → src/settings/public/controls.ts",
+    "src/chat/ArtifactsCenter.tsx → src/settings/public/icons.ts",
+    "src/chat/AssistantCenter.tsx → src/settings/public/controls.ts",
+    "src/chat/AssistantCenter.tsx → src/settings/public/icons.ts",
+    "src/chat/AssistantCenter.tsx → src/settings/public/providers.ts"
+   ]
+  },
+  {
+   "from": "chat-ui",
+   "to": "tauri-api",
+   "weight": 78,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/ArtifactsCenter.tsx → src/api/tauri.ts",
+    "src/chat/AskUserBlock.tsx → src/api/tauri.ts",
+    "src/chat/AssistantCenter.tsx → src/api/settingsCache.ts",
+    "src/chat/AssistantCenter.tsx → src/api/tauri.ts",
+    "src/chat/AssistantPicker.tsx → src/api/tauri.ts"
+   ]
+  },
+  {
+   "from": "chat-ui",
+   "to": "tools-core",
+   "weight": 6,
+   "kinds": [
+    "event",
+    "tauri"
+   ],
+   "samples": [
+    "src/chat/market/api.ts → src-tauri/src/market.rs（market_command）",
+    "src/chat/market/api.ts → src-tauri/src/market.rs（kivio-configuration-changed）"
+   ]
+  },
+  {
+   "from": "chat-ui",
+   "to": "workbench-ui",
+   "weight": 3,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/Chat.tsx → src/chat/workbench/WorkbenchHome.tsx",
+    "src/chat/ChatSidebarPane.tsx → src/chat/workbench/WorkbenchSidebar.tsx",
+    "src/chat/chatRoutes.ts → src/chat/workbench/registry.ts"
+   ]
+  },
+  {
+   "from": "dock-core",
+   "to": "chat-core",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/dock/mod.rs → src-tauri/src/chat/storage.rs"
+   ]
+  },
+  {
+   "from": "dock-core",
+   "to": "provider-core",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/dock/mod.rs → src-tauri/src/settings.rs"
+   ]
+  },
+  {
+   "from": "dock-core",
+   "to": "tools-core",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/dock/mod.rs → src-tauri/src/native_tools/mod.rs"
+   ]
+  },
+  {
+   "from": "dock-ui",
+   "to": "chat-ui",
+   "weight": 9,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/dock/BackgroundTasksPanel.tsx → src/chat/backgroundTasks.ts",
+    "src/chat/dock/BackgroundTasksPanel.tsx → src/chat/useBackgroundTasks.ts",
+    "src/chat/dock/DockContextMenu.tsx → src/chat/useClampedMenuPosition.ts",
+    "src/chat/dock/FileTreePanel.tsx → src/chat/ChatMarkdown.tsx",
+    "src/chat/dock/FileViewer.tsx → src/chat/ChatMarkdown.tsx"
+   ]
+  },
+  {
+   "from": "dock-ui",
+   "to": "dock-core",
+   "weight": 33,
+   "kinds": [
+    "event",
+    "tauri"
+   ],
+   "samples": [
+    "src/chat/dock/api.ts → src-tauri/src/dock/mod.rs（dock_resolve_cwd）",
+    "src/chat/dock/api.ts → src-tauri/src/dock/fs.rs（dock_fs_list）",
+    "src/chat/dock/api.ts → src-tauri/src/dock/fs.rs（dock_fs_search）",
+    "src/chat/dock/api.ts → src-tauri/src/dock/fs.rs（dock_fs_create）",
+    "src/chat/dock/api.ts → src-tauri/src/dock/fs.rs（dock_fs_read）"
+   ]
+  },
+  {
+   "from": "dock-ui",
+   "to": "tauri-api",
+   "weight": 13,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/dock/BackgroundTasksPanel.tsx → src/api/tauri.ts",
+    "src/chat/dock/FileTreePanel.tsx → src/api/dockContracts.ts",
+    "src/chat/dock/GitHistory.tsx → src/api/dockContracts.ts",
+    "src/chat/dock/GitPanel.tsx → src/api/dockContracts.ts",
+    "src/chat/dock/api.ts → src/api/dockContracts.ts"
+   ]
+  },
+  {
+   "from": "lens-ui",
+   "to": "chat-ui",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/Lens.tsx → src/chat/ChatMarkdown.tsx"
+   ]
+  },
+  {
+   "from": "lens-ui",
+   "to": "settings-ui",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/Lens.tsx → src/settings/webSearch.ts"
+   ]
+  },
+  {
+   "from": "lens-ui",
+   "to": "tauri-api",
+   "weight": 14,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/Lens.tsx → src/api/settingsCache.ts",
+    "src/Lens.tsx → src/api/tauri.ts",
+    "src/Lens.tsx → src/api/windowFocus.ts",
+    "src/lens/ReplaceTranslateOverlay.tsx → src/api/tauri.ts",
+    "src/lens/WebSearchBlock.tsx → src/api/tauri.ts"
+   ]
+  },
+  {
+   "from": "model-catalog",
+   "to": "tauri-api",
+   "weight": 4,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/data/mediaModelPools.ts → src/api/tauri.ts",
+    "src/data/modelCatalog.ts → src/api/tauri.ts",
+    "src/data/modelMatching.ts → src/api/tauri.ts",
+    "src/data/videoModels.ts → src/api/tauri.ts"
+   ]
+  },
+  {
+   "from": "provider-core",
+   "to": "chat-core",
+   "weight": 17,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/api.rs → src-tauri/src/prompts.rs",
+    "src-tauri/src/chat/model/anthropic.rs → src-tauri/src/chat/request_debug.rs",
+    "src-tauri/src/chat/model/anthropic.rs → src-tauri/src/chat/video.rs",
+    "src-tauri/src/chat/model/gemini.rs → src-tauri/src/chat/request_debug.rs",
+    "src-tauri/src/chat/model/gemini.rs → src-tauri/src/chat/video.rs"
+   ]
+  },
+  {
+   "from": "provider-core",
+   "to": "llm-http",
+   "weight": 5,
+   "kinds": [
+    "external"
+   ],
+   "samples": [
+    "src-tauri/src/api.rs → reqwest",
+    "src-tauri/src/chat/model/anthropic.rs → reqwest",
+    "src-tauri/src/chat/model/gemini.rs → reqwest",
+    "src-tauri/src/chat/model/openai.rs → reqwest",
+    "src-tauri/src/chat/model/responses.rs → reqwest"
+   ]
+  },
+  {
+   "from": "provider-core",
+   "to": "screen-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/api.rs → src-tauri/src/lens.rs",
+    "src-tauri/src/api.rs → src-tauri/src/lens_commands.rs"
+   ]
+  },
+  {
+   "from": "provider-core",
+   "to": "tools-core",
+   "weight": 6,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/chat/model/gemini.rs → src-tauri/src/mcp/types.rs",
+    "src-tauri/src/chat/model/types.rs → src-tauri/src/mcp/mod.rs",
+    "src-tauri/src/chat/model/types.rs → src-tauri/src/mcp/types.rs",
+    "src-tauri/src/settings.rs → src-tauri/src/computer_control.rs",
+    "src-tauri/src/settings.rs → src-tauri/src/plugins/mod.rs"
+   ]
+  },
+  {
+   "from": "provider-core",
+   "to": "window-core",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/chat/model_metadata.rs → src-tauri/src/app_data.rs"
+   ]
+  },
+  {
+   "from": "provider-core",
+   "to": "workbench-core",
+   "weight": 4,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/settings.rs → src-tauri/src/comfyui.rs",
+    "src-tauri/src/settings.rs → src-tauri/src/media_generation/video_providers.rs",
+    "src-tauri/src/settings.rs → src-tauri/src/media_runtime/migration.rs",
+    "src-tauri/src/settings.rs → src-tauri/src/sourcing/types.rs"
+   ]
+  },
+  {
+   "from": "screen-core",
+   "to": "automation-core",
+   "weight": 1,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/shortcuts.rs → src-tauri/src/automation/mod.rs"
+   ]
+  },
+  {
+   "from": "screen-core",
+   "to": "chat-core",
+   "weight": 3,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/lens_commands.rs → src-tauri/src/chat/external_send.rs",
+    "src-tauri/src/lens_commands.rs → src-tauri/src/prompts.rs",
+    "src-tauri/src/shortcuts.rs → src-tauri/src/chat/popout.rs"
+   ]
+  },
+  {
+   "from": "screen-core",
+   "to": "llm-http",
+   "weight": 1,
+   "kinds": [
+    "external"
+   ],
+   "samples": [
+    "src-tauri/src/offline_models.rs → reqwest"
+   ]
+  },
+  {
+   "from": "screen-core",
+   "to": "provider-core",
+   "weight": 4,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/lens_commands.rs → src-tauri/src/api.rs",
+    "src-tauri/src/lens_commands.rs → src-tauri/src/chat/model/mod.rs",
+    "src-tauri/src/lens_commands.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/shortcuts.rs → src-tauri/src/settings.rs"
+   ]
+  },
+  {
+   "from": "screen-core",
+   "to": "tools-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/lens_commands.rs → src-tauri/src/web_search.rs",
+    "src-tauri/src/screenshot.rs → src-tauri/src/native_tools/mod.rs"
+   ]
+  },
+  {
+   "from": "screen-core",
+   "to": "window-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/lens_commands.rs → src-tauri/src/windows.rs",
+    "src-tauri/src/shortcuts.rs → src-tauri/src/windows.rs"
+   ]
+  },
+  {
+   "from": "settings-ui",
+   "to": "model-catalog",
+   "weight": 17,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/onboarding/ProviderSetupPanel.tsx → src/data/modelCatalog.ts",
+    "src/settings/ModelDetailDrawer.tsx → src/data/modelMatching.ts",
+    "src/settings/ProviderModelTestModal.tsx → src/data/videoModels.ts",
+    "src/settings/ProviderModelsPicker.tsx → src/data/modelMatching.ts",
+    "src/settings/ProviderModelsPicker.tsx → src/data/videoModels.ts"
+   ]
+  },
+  {
+   "from": "settings-ui",
+   "to": "tauri-api",
+   "weight": 68,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/onboarding/OnboardingShell.tsx → src/api/settingsCache.ts",
+    "src/onboarding/OnboardingShell.tsx → src/api/tauri.ts",
+    "src/onboarding/ProviderSetupPanel.tsx → src/api/tauri.ts",
+    "src/onboarding/steps/DoneStep.tsx → src/api/tauri.ts",
+    "src/onboarding/steps/HotkeyStep.tsx → src/api/tauri.ts"
+   ]
+  },
+  {
+   "from": "tauri-api",
+   "to": "automation-core",
+   "weight": 14,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/api/tauri.ts → src-tauri/src/automation/commands.rs（automation_list）",
+    "src/api/tauri.ts → src-tauri/src/automation/commands.rs（automation_get）",
+    "src/api/tauri.ts → src-tauri/src/automation/commands.rs（automation_save）",
+    "src/api/tauri.ts → src-tauri/src/automation/commands.rs（automation_delete）",
+    "src/api/tauri.ts → src-tauri/src/automation/commands.rs（automation_set_enabled）"
+   ]
+  },
+  {
+   "from": "tauri-api",
+   "to": "chat-core",
+   "weight": 41,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/api/chatProtocol.ts → src-tauri/src/chat/protocol.rs（chat_protocol_subscribe）",
+    "src/api/chatProtocol.ts → src-tauri/src/chat/protocol.rs（chat_sync_state）",
+    "src/api/tauri.ts → src-tauri/src/chat/sub_agent/control.rs（chat_subagent_control）",
+    "src/api/tauri.ts → src-tauri/src/chat/ai_task.rs（run_ai_task）",
+    "src/api/tauri.ts → src-tauri/src/chat/ai_task.rs（cancel_ai_task）"
+   ]
+  },
+  {
+   "from": "tauri-api",
+   "to": "dock-core",
+   "weight": 1,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/api/tauri.ts → src-tauri/src/dock/git.rs（dock_git_snapshot）"
+   ]
+  },
+  {
+   "from": "tauri-api",
+   "to": "provider-core",
+   "weight": 11,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/api/tauri.ts → src-tauri/src/provider_oauth.rs（provider_oauth_start）",
+    "src/api/tauri.ts → src-tauri/src/provider_oauth.rs（provider_oauth_poll）",
+    "src/api/tauri.ts → src-tauri/src/provider_oauth.rs（provider_oauth_cancel）",
+    "src/api/tauri.ts → src-tauri/src/provider_oauth/account.rs（provider_oauth_account）",
+    "src/api/tauri.ts → src-tauri/src/provider_oauth/usage.rs（provider_oauth_usage）"
+   ]
+  },
+  {
+   "from": "tauri-api",
+   "to": "screen-core",
+   "weight": 25,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/api/tauri.ts → src-tauri/src/lens_commands.rs（explain_read_image）",
+    "src/api/tauri.ts → src-tauri/src/lens_commands.rs（lens_list_windows）",
+    "src/api/tauri.ts → src-tauri/src/lens_commands.rs（lens_read_freeze_frame）",
+    "src/api/tauri.ts → src-tauri/src/lens_commands.rs（lens_read_image）",
+    "src/api/tauri.ts → src-tauri/src/lens_commands.rs（lens_capture_window）"
+   ]
+  },
+  {
+   "from": "tauri-api",
+   "to": "tools-core",
+   "weight": 32,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/api/pluginPackages.ts → src-tauri/src/plugins/packages.rs（plugin_packages_list）",
+    "src/api/pluginPackages.ts → src-tauri/src/plugins/packages.rs（plugin_packages_import）",
+    "src/api/pluginPackages.ts → src-tauri/src/plugins/packages.rs（plugin_packages_set_enabled）",
+    "src/api/pluginPackages.ts → src-tauri/src/plugins/packages.rs（plugin_packages_remove）",
+    "src/api/pluginPackages.ts → src-tauri/src/plugins/packages.rs（workflow_hooks_get）"
+   ]
+  },
+  {
+   "from": "tauri-api",
+   "to": "window-core",
+   "weight": 4,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/api/tauri.ts → src-tauri/src/windows.rs（chat_window_apply_mica）",
+    "src/api/tauri.ts → src-tauri/src/windows.rs（chat_window_set_opaque）",
+    "src/api/tauri.ts → src-tauri/src/windows.rs（chat_traffic_light_center_y）",
+    "src/api/tauri.ts → src-tauri/src/windows.rs（chat_remember_last_route）"
+   ]
+  },
+  {
+   "from": "tauri-api",
+   "to": "workbench-core",
+   "weight": 53,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/api/tauri.ts → src-tauri/src/workbench/shops/mod.rs（shop_begin）",
+    "src/api/tauri.ts → src-tauri/src/workbench/shops/mod.rs（shop_complete）",
+    "src/api/tauri.ts → src-tauri/src/workbench/shops/mod.rs（shop_list）",
+    "src/api/tauri.ts → src-tauri/src/workbench/shops/mod.rs（shop_check）",
+    "src/api/tauri.ts → src-tauri/src/workbench/shops/mod.rs（shop_unbind）"
+   ]
+  },
+  {
+   "from": "tools-core",
+   "to": "automation-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/mcp/native_registry.rs → src-tauri/src/automation/tools.rs",
+    "src-tauri/src/mcp/registry.rs → src-tauri/src/automation/mod.rs"
+   ]
+  },
+  {
+   "from": "tools-core",
+   "to": "chat-core",
+   "weight": 23,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/market.rs → src-tauri/src/chat/storage.rs",
+    "src-tauri/src/mcp/native_registry.rs → src-tauri/src/chat/agent/planning.rs",
+    "src-tauri/src/mcp/native_registry.rs → src-tauri/src/chat/agent/stop.rs",
+    "src-tauri/src/mcp/native_registry.rs → src-tauri/src/chat/artifacts.rs",
+    "src-tauri/src/mcp/native_registry.rs → src-tauri/src/chat/ask_user.rs"
+   ]
+  },
+  {
+   "from": "tools-core",
+   "to": "llm-http",
+   "weight": 3,
+   "kinds": [
+    "external"
+   ],
+   "samples": [
+    "src-tauri/src/mcp/conn.rs → reqwest",
+    "src-tauri/src/native_tools/fetch.rs → reqwest",
+    "src-tauri/src/web_search/fetch.rs → reqwest"
+   ]
+  },
+  {
+   "from": "tools-core",
+   "to": "provider-core",
+   "weight": 21,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/connectors/github_device.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/connectors/mod.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/connectors/oauth.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/mcp/conn.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/mcp/manager.rs → src-tauri/src/settings.rs"
+   ]
+  },
+  {
+   "from": "tools-core",
+   "to": "window-core",
+   "weight": 4,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/market.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/plugins/state.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/self_config/mod.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/skills/discover.rs → src-tauri/src/app_data.rs"
+   ]
+  },
+  {
+   "from": "tools-core",
+   "to": "workbench-core",
+   "weight": 5,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/market.rs → src-tauri/src/media_runtime/runtime.rs",
+    "src-tauri/src/mcp/registry.rs → src-tauri/src/media_generation.rs",
+    "src-tauri/src/plugins/packages.rs → src-tauri/src/media_runtime/migration.rs",
+    "src-tauri/src/plugins/packages.rs → src-tauri/src/media_runtime/mod.rs",
+    "src-tauri/src/plugins/packages.rs → src-tauri/src/media_runtime/runtime.rs"
+   ]
+  },
+  {
+   "from": "window-core",
+   "to": "chat-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/windows.rs → src-tauri/src/chat/route_contract.rs",
+    "src-tauri/src/windows.rs → src-tauri/src/chat/storage.rs"
+   ]
+  },
+  {
+   "from": "workbench-core",
+   "to": "chat-core",
+   "weight": 13,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/comfyui.rs → src-tauri/src/chat/storage.rs",
+    "src-tauri/src/generation_workflow/mod.rs → src-tauri/src/chat/ai_task.rs",
+    "src-tauri/src/generation_workflow/mod.rs → src-tauri/src/chat/attachments.rs",
+    "src-tauri/src/generation_workflow/mod.rs → src-tauri/src/chat/storage.rs",
+    "src-tauri/src/media_generation.rs → src-tauri/src/chat/image_generation.rs"
+   ]
+  },
+  {
+   "from": "workbench-core",
+   "to": "dock-core",
+   "weight": 3,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/studio/library.rs → src-tauri/src/dock/fs.rs",
+    "src-tauri/src/workbench/image_projects/mod.rs → src-tauri/src/dock/fs.rs",
+    "src-tauri/src/workbench/video_projects/mod.rs → src-tauri/src/dock/fs.rs"
+   ]
+  },
+  {
+   "from": "workbench-core",
+   "to": "llm-http",
+   "weight": 2,
+   "kinds": [
+    "external"
+   ],
+   "samples": [
+    "src-tauri/src/media_generation/image_gateway.rs → reqwest",
+    "src-tauri/src/sourcing/alibaba.rs → reqwest"
+   ]
+  },
+  {
+   "from": "workbench-core",
+   "to": "local-db",
+   "weight": 2,
+   "kinds": [
+    "external"
+   ],
+   "samples": [
+    "src-tauri/src/sourcing/store.rs → rusqlite",
+    "src-tauri/src/workbench/shops/store.rs → rusqlite"
+   ]
+  },
+  {
+   "from": "workbench-core",
+   "to": "provider-core",
+   "weight": 10,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/comfyui.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/media_generation.rs → src-tauri/src/chat/model_metadata.rs",
+    "src-tauri/src/media_generation.rs → src-tauri/src/settings.rs",
+    "src-tauri/src/media_generation/image_gateway.rs → src-tauri/src/provider_request.rs",
+    "src-tauri/src/media_generation/image_gateway.rs → src-tauri/src/settings.rs"
+   ]
+  },
+  {
+   "from": "workbench-core",
+   "to": "tools-core",
+   "weight": 2,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/media_generation.rs → src-tauri/src/mcp/types.rs",
+    "src-tauri/src/media_runtime/mod.rs → src-tauri/src/plugins/packages.rs"
+   ]
+  },
+  {
+   "from": "workbench-core",
+   "to": "window-core",
+   "weight": 13,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src-tauri/src/comfyui.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/content_templates/image.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/content_templates/video.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/generation_workflow/mod.rs → src-tauri/src/app_data.rs",
+    "src-tauri/src/media_generation.rs → src-tauri/src/app_data.rs"
+   ]
+  },
+  {
+   "from": "workbench-ui",
+   "to": "chat-core",
+   "weight": 1,
+   "kinds": [
+    "event"
+   ],
+   "samples": [
+    "src/chat/workbench/useAiTask.ts → src-tauri/src/chat/agent/headless_host.rs（ai-task-delta）"
+   ]
+  },
+  {
+   "from": "workbench-ui",
+   "to": "chat-ui",
+   "weight": 17,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/workbench/WorkbenchFeatureSearch.tsx → src/chat/searchHighlight.tsx",
+    "src/chat/workbench/WorkbenchLanding.tsx → src/chat/chatRoutes.ts",
+    "src/chat/workbench/WorkbenchSidebar.tsx → src/chat/ChatTitlebarActions.tsx",
+    "src/chat/workbench/WorkbenchSidebar.tsx → src/chat/ProductModeSwitcher.tsx",
+    "src/chat/workbench/WorkbenchSidebar.tsx → src/chat/Sidebar.tsx"
+   ]
+  },
+  {
+   "from": "workbench-ui",
+   "to": "model-catalog",
+   "weight": 15,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/workbench/MediaGenerationRunner.tsx → src/data/videoModels.ts",
+    "src/chat/workbench/WorkbenchMediaModelSelect.tsx → src/data/mediaModelPools.ts",
+    "src/chat/workbench/WorkbenchPage.tsx → src/data/mediaModelPools.ts",
+    "src/chat/workbench/image/projects/StudioPanels.tsx → src/data/mediaModelPools.ts",
+    "src/chat/workbench/image/projects/studioModels.ts → src/data/modelMatching.ts"
+   ]
+  },
+  {
+   "from": "workbench-ui",
+   "to": "settings-ui",
+   "weight": 27,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/workbench/MediaGenerationRunner.tsx → src/settings/public/controls.ts",
+    "src/chat/workbench/WorkbenchMediaModelSelect.tsx → src/settings/public/controls.ts",
+    "src/chat/workbench/commerce/ListingCheckPage.tsx → src/settings/public/controls.ts",
+    "src/chat/workbench/commerce/ShopBindingPage.tsx → src/settings/public/controls.ts",
+    "src/chat/workbench/content/ImageTemplatesPage.tsx → src/settings/public/controls.ts"
+   ]
+  },
+  {
+   "from": "workbench-ui",
+   "to": "tauri-api",
+   "weight": 40,
+   "kinds": [
+    "import"
+   ],
+   "samples": [
+    "src/chat/studio/taskLibraryModel.ts → src/api/studioContracts.ts",
+    "src/chat/studio/useTaskLibrary.ts → src/api/tauri.ts",
+    "src/chat/workbench/MediaGenerationRunner.tsx → src/api/tauri.ts",
+    "src/chat/workbench/MediaTaskList.tsx → src/api/tauri.ts",
+    "src/chat/workbench/WorkbenchMediaModelSelect.tsx → src/api/settingsCache.ts"
+   ]
+  },
+  {
+   "from": "workbench-ui",
+   "to": "workbench-core",
+   "weight": 3,
+   "kinds": [
+    "tauri"
+   ],
+   "samples": [
+    "src/chat/studio/useSharedDraft.ts → src-tauri/src/studio.rs（studio_draft）"
+   ]
+  }
+ ],
+ "issues": [
+  {
+   "id": "broken:tauri:chat_external_cli_pi_agent_dir",
+   "type": "broken",
+   "cap": "tauri-api",
+   "file": "src/api/tauri.ts",
+   "msg": "调用了不存在的Tauri 命令 chat_external_cli_pi_agent_dir"
+  },
+  {
+   "id": "broken:tauri:chat_stop_external_background_task",
+   "type": "broken",
+   "cap": "tauri-api",
+   "file": "src/api/tauri.ts",
+   "msg": "调用了不存在的Tauri 命令 chat_stop_external_background_task"
+  },
+  {
+   "id": "reverse:provider-core>chat-core",
+   "type": "reverse",
+   "cap": "provider-core",
+   "msg": "下层依赖了上层（src-tauri/src/api.rs → src-tauri/src/prompts.rs）"
+  },
+  {
+   "id": "reverse:provider-core>screen-core",
+   "type": "reverse",
+   "cap": "provider-core",
+   "msg": "下层依赖了上层（src-tauri/src/api.rs → src-tauri/src/lens.rs）"
+  },
+  {
+   "id": "reverse:provider-core>workbench-core",
+   "type": "reverse",
+   "cap": "provider-core",
+   "msg": "下层依赖了上层（src-tauri/src/settings.rs → src-tauri/src/comfyui.rs）"
+  },
+  {
+   "id": "reverse:tools-core>automation-core",
+   "type": "reverse",
+   "cap": "tools-core",
+   "msg": "下层依赖了上层（src-tauri/src/mcp/native_registry.rs → src-tauri/src/automation/tools.rs）"
+  },
+  {
+   "id": "reverse:tools-core>chat-core",
+   "type": "reverse",
+   "cap": "tools-core",
+   "msg": "下层依赖了上层（src-tauri/src/market.rs → src-tauri/src/chat/storage.rs）"
+  },
+  {
+   "id": "reverse:tools-core>workbench-core",
+   "type": "reverse",
+   "cap": "tools-core",
+   "msg": "下层依赖了上层（src-tauri/src/market.rs → src-tauri/src/media_runtime/runtime.rs）"
+  },
+  {
+   "id": "reverse:window-core>chat-core",
+   "type": "reverse",
+   "cap": "window-core",
+   "msg": "下层依赖了上层（src-tauri/src/windows.rs → src-tauri/src/chat/route_contract.rs）"
+  }
+ ],
+ "unassigned": [],
+ "changes": {
+  "first": true,
+  "newCaps": [],
+  "removedCaps": [],
+  "newEdges": [],
+  "removedEdges": [],
+  "newIssues": [],
+  "fixedIssues": []
+ }
+}
