@@ -11,16 +11,16 @@ import { Input, TextArea } from '../../../settings/public/controls'
 import { WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { useTemplateLibrary } from './useTemplateLibrary'
 
-function Example({ id, reference, name = reference, fallback }: { id: string; reference: string; name?: string; fallback?: ReactNode }) {
+function Example({ id, reference, name = reference, fallback, size = 720 }: { id: string; reference: string; name?: string; fallback?: ReactNode; size?: number }) {
   const [url, setUrl] = useState('')
   const [error, setError] = useState('')
   useEffect(() => {
     let alive = true
     setUrl(''); setError('')
-    void api.imageTemplatePreview(id, reference).then(value => { if (alive) setUrl(value) })
+    void api.imageTemplatePreview(id, reference, size).then(value => { if (alive) setUrl(value) })
       .catch(e => { if (alive) setError(String(e)) })
     return () => { alive = false }
-  }, [id, reference])
+  }, [id, reference, size])
   if (url) return <img src={url} alt={name} />
   return <>{fallback || <p role={error ? 'alert' : 'status'}>{error || '…'}</p>}</>
 }
@@ -95,6 +95,7 @@ export function ImageTemplatesPage() {
                           <Example
                             id={t.id} reference={slot.example}
                             name={en ? `${purpose} reference` : `${purpose}参考图`}
+                            size={240}
                             fallback={summary}
                           />
                         ) : (

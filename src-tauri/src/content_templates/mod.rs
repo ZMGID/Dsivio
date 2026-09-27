@@ -16,14 +16,19 @@ fn lock() -> Result<std::sync::MutexGuard<'static, ()>, String> {
         .lock()
         .map_err(|e| e.to_string())
 }
-#[tauri::command]
-pub fn image_templates_list() -> Result<Vec<Template>, String> {
+fn list_image_templates() -> Result<Vec<Template>, String> {
     let _guard = lock()?;
     image::templates()
 }
 #[tauri::command]
+pub async fn image_templates_list() -> Result<Vec<Template>, String> {
+    tauri::async_runtime::spawn_blocking(list_image_templates)
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
 pub fn image_template_get(id: String) -> Result<Template, String> {
-    image_templates_list()?
+    list_image_templates()?
         .into_iter()
         .find(|t| t.id == id)
         .ok_or("图片模板不存在".into())
@@ -52,34 +57,17 @@ pub async fn image_template_export(id: String, destination: String) -> Result<St
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn image_template_preview(id: String, reference: String) -> Result<String, String> {
-    use base64::Engine;
-    let template = image_template_get(id)?;
-    let base = image::root()?
-        .join(template.directory)
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let path = Path::new(&reference);
-    if path
-        .components()
-        .any(|c| !matches!(c, std::path::Component::Normal(_)))
-    {
-        return Err("素材路径必须在模板内".into());
-    }
-    let path = base.join(path).canonicalize().map_err(|e| e.to_string())?;
-    if !path.starts_with(base) {
-        return Err("素材路径超出模板目录".into());
-    }
-    let image =
-        files::decode(&std::fs::read(path).map_err(|e| e.to_string())?)?.thumbnail(720, 720);
-    let mut bytes = std::io::Cursor::new(Vec::new());
-    image
-        .write_to(&mut bytes, ::image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-    Ok(format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())
-    ))
+pub async fn image_template_preview(
+    id: String,
+    reference: String,
+    size: Option<u32>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = lock()?;
+        image::preview_at(&image::root()?, &id, &reference, size.unwrap_or(720))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub fn video_templates_list() -> Result<Vec<VideoTemplate>, String> {

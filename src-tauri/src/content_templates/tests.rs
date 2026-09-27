@@ -36,6 +36,9 @@ fn image_round_trip_preserves_identity_slots_and_all_reference_assets() {
     let exported = image::export_at(&root, &id, root.to_str().unwrap()).unwrap();
     let again = image::import_at(&root, &exported).unwrap();
     assert_eq!(again.data, saved.data);
+    assert!(image::preview_at(&root, &again.id, "example.png", 240)
+        .unwrap()
+        .starts_with("data:image/png;base64,"));
     for file in ["example.png", "assets/ref.png", "assets/kind.png"] {
         assert_eq!(
             fs::read(root.join(&again.directory).join(file)).unwrap(),
@@ -83,6 +86,28 @@ fn image_builtin_edits_always_create_user_copy_even_with_forged_flag() {
             .data,
         original
     );
+    fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn image_preview_skips_full_builtin_reinstall_and_sizes_card_thumbnails() {
+    use base64::Engine;
+    let root = temp();
+    image::list_at(&root).unwrap();
+    let other_asset = root.join("templates/builtin-womens-backpack-v1/h1.png");
+    fs::write(&other_asset, b"untouched by another template's preview").unwrap();
+
+    let thumbnail = image::preview_at(&root, "builtin-mens-backpack-v1", "h1.png", 240).unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(thumbnail.strip_prefix("data:image/png;base64,").unwrap())
+        .unwrap();
+    let picture = ::image::load_from_memory(&bytes).unwrap();
+    assert!(picture.width() <= 240 && picture.height() <= 240);
+    assert_eq!(
+        fs::read(&other_asset).unwrap(),
+        b"untouched by another template's preview"
+    );
+    assert!(image::preview_at(&root, "builtin-mens-backpack-v1", "../h1.png", 240).is_err());
+    assert!(image::preview_at(&root, "builtin-mens-backpack-v1", "h1.png", 4096).is_err());
     fs::remove_dir_all(root).unwrap();
 }
 #[test]
@@ -211,11 +236,25 @@ fn assert_video_edit_round_trip(
     for template in [&saved, &reread, &imported] {
         check(template);
         assert_eq!(template.kind, "reference");
-        for key in ["full_video_prompt", "prompt_pattern", "shot_breakdown", "source", "extra", "reference_template", "validated_from"] {
+        for key in [
+            "full_video_prompt",
+            "prompt_pattern",
+            "shot_breakdown",
+            "source",
+            "extra",
+            "reference_template",
+            "validated_from",
+        ] {
             assert_eq!(template.data[key], raw[key], "original field {key}");
         }
-        assert_eq!(video::for_studio(template.clone())["script"], template.script);
-        assert_eq!(video::for_studio(template.clone())["shots"], json!(template.shots));
+        assert_eq!(
+            video::for_studio(template.clone())["script"],
+            template.script
+        );
+        assert_eq!(
+            video::for_studio(template.clone())["shots"],
+            json!(template.shots)
+        );
     }
 }
 

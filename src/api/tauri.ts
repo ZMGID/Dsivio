@@ -1850,7 +1850,7 @@ export const api = {
   imageTemplateImport: (path: string) => invoke<ImageTemplate>('image_template_import', { path }),
   imageTemplateSave: (template: ImageTemplate) => invoke<ImageTemplate>('image_template_save', { template }),
   imageTemplateExport: (id: string, destination: string) => invoke<string>('image_template_export', { id, destination }),
-  imageTemplatePreview: (id: string, reference: string) => invoke<string>('image_template_preview', { id, reference }),
+  imageTemplatePreview: (id: string, reference: string, size = 720) => invoke<string>('image_template_preview', { id, reference, size }),
   videoTemplatesList: () => invoke<ContentVideoTemplate[]>('video_templates_list'),
   videoTemplateGet: (id: string) => invoke<ContentVideoTemplate>('video_template_get', { id }),
   videoTemplateImport: (path: string) => invoke<ContentVideoTemplate>('video_template_import', { path }),

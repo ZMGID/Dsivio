@@ -85,20 +85,12 @@ pub fn install_assets(id: &str, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn templates(root: &Path) -> Result<Vec<Template>, String> {
+pub fn catalog() -> Result<Vec<Template>, String> {
     CATALOG
         .iter()
         .map(|entry| {
             let directory = format!("templates/{}", entry.id);
-            let destination = root.join(&directory);
-            fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
-            install_assets(entry.id, &destination)?;
             let data = serde_json::from_str(entry.json).map_err(|e| e.to_string())?;
-            // Publish the standard dsimage format for the built-in Skill as well.
-            let file = destination.join("template.json");
-            if super::files::read::<serde_json::Value>(&file).ok().as_ref() != Some(&data) {
-                super::files::write(&file, &data)?;
-            }
             Ok(Template {
                 id: entry.id.into(),
                 directory,
@@ -107,4 +99,19 @@ pub fn templates(root: &Path) -> Result<Vec<Template>, String> {
             })
         })
         .collect()
+}
+
+pub fn templates(root: &Path) -> Result<Vec<Template>, String> {
+    let templates = catalog()?;
+    for template in &templates {
+        let destination = root.join(&template.directory);
+        fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
+        install_assets(&template.id, &destination)?;
+        // Publish the standard dsimage format for the built-in Skill as well.
+        let file = destination.join("template.json");
+        if super::files::read::<serde_json::Value>(&file).ok().as_ref() != Some(&template.data) {
+            super::files::write(&file, &template.data)?;
+        }
+    }
+    Ok(templates)
 }

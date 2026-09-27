@@ -28,6 +28,48 @@ pub fn templates() -> Result<Vec<Template>, String> {
     list_at(&root()?)
 }
 
+pub fn preview_at(base: &Path, id: &str, reference: &str, size: u32) -> Result<String, String> {
+    use base64::Engine;
+    if !(64..=720).contains(&size) {
+        return Err("预览尺寸无效".into());
+    }
+    let reference_path = Path::new(reference);
+    if reference_path
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err("素材路径必须在模板内".into());
+    }
+    let mut all = builtins::catalog()?;
+    fs::create_dir_all(base.join("templates")).map_err(|e| e.to_string())?;
+    scan_templates(base, &base.join("templates"), 0, &mut all)?;
+    let template = all
+        .into_iter()
+        .find(|template| template.id == id)
+        .ok_or("图片模板不存在")?;
+    let directory = base.join(&template.directory);
+    if template.builtin && !directory.join(reference_path).is_file() {
+        builtins::install_assets(id, &directory)?;
+    }
+    let directory = directory.canonicalize().map_err(|e| e.to_string())?;
+    let path = directory
+        .join(reference_path)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    if !path.starts_with(&directory) {
+        return Err("素材路径超出模板目录".into());
+    }
+    let image = decode(&fs::read(path).map_err(|e| e.to_string())?)?.thumbnail(size, size);
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, ::image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())
+    ))
+}
+
 pub fn list_at(base: &Path) -> Result<Vec<Template>, String> {
     fs::create_dir_all(base.join("templates")).map_err(|e| e.to_string())?;
     let mut all = builtins::templates(&base)?;
