@@ -7,7 +7,7 @@ import { Toggle } from '../components'
 import type { Lang } from '../../components/i18n'
 
 type NativeTool = 'cua' | 'playwright'
-type Tool = NativeTool | 'ego-lite' | 'officecli' | 'ziniao-cli'
+type Tool = NativeTool | 'ego-lite' | 'officecli'
 
 type ControlDetectionSnapshot = {
   versions: Partial<Record<NativeTool, string>>
@@ -23,7 +23,6 @@ let detectionInFlight: { key: string; promise: Promise<ControlDetectionSnapshot>
 const CONTROL_TOOLS = [
   { id: 'cua' as const, kind: 'native' as const, group: 'desktop' as const, name: 'Cua Driver', skill: 'cua-driver', icon: Monitor },
   { id: 'playwright' as const, kind: 'native' as const, group: 'browser' as const, name: 'Playwright CLI', skill: 'playwright-cli', icon: Globe2 },
-  { id: 'ziniao-cli' as const, kind: 'plugin' as const, group: 'browser' as const, name: '紫鸟 CLI', icon: Globe2 },
   { id: 'ego-lite' as const, kind: 'plugin' as const, group: 'browser' as const, name: 'ego lite', icon: Globe2 },
   { id: 'officecli' as const, kind: 'plugin' as const, group: 'document' as const, name: 'OfficeCLI', icon: FileSpreadsheet },
 ]
@@ -135,8 +134,7 @@ function detectControls(skillScanPaths: string[]): Promise<ControlDetectionSnaps
   return promise
 }
 
-export function ComputerControlTab({ lang, tools, onChange, onRequestAiInstall }: {
-  onRequestAiInstall?: (pluginId: string) => void | Promise<void>
+export function ComputerControlTab({ lang, tools, onChange }: {
   lang: Lang
   tools: ChatToolsConfig
   onChange: (updates: Partial<ChatToolsConfig>) => void
@@ -203,11 +201,6 @@ export function ComputerControlTab({ lang, tools, onChange, onRequestAiInstall }
     setInstalling(tool)
     setError('')
     try {
-      if (tool === 'ziniao-cli') {
-        if (!onRequestAiInstall) throw new Error('Open this page from chat to install Ziniao')
-        await onRequestAiInstall(tool)
-        return
-      }
       if (tool === 'ego-lite' || tool === 'officecli') {
         const result = await api.pluginsRunOfficialInstall(tool)
         if (!mounted.current) return
@@ -251,7 +244,7 @@ export function ComputerControlTab({ lang, tools, onChange, onRequestAiInstall }
     }
   }
 
-  const setPluginEnabled = async (id: 'ego-lite' | 'officecli' | 'ziniao-cli', enabled: boolean) => {
+  const setPluginEnabled = async (id: 'ego-lite' | 'officecli', enabled: boolean) => {
     setInstalling(id)
     setError('')
     try {
@@ -350,12 +343,11 @@ export function ComputerControlTab({ lang, tools, onChange, onRequestAiInstall }
                     ) : (
                       <Button
                         size="sm"
-                        disabled={installing !== null || (tool.id === 'ziniao-cli' ? !onRequestAiInstall : tool.kind === 'plugin' && plugin?.canInstall !== true)}
-                        title={tool.id === 'ziniao-cli' && !onRequestAiInstall ? (zh ? '请从聊天中的设置打开，以开始安装对话' : 'Open settings from chat to start installation') : undefined}
+                        disabled={installing !== null || (tool.kind === 'plugin' && plugin?.canInstall !== true)}
                         onClick={() => { void install(tool.id) }}
                       >
                         {installing === tool.id && <RefreshCw size={12} className="animate-spin" />}
-                        {installing === tool.id ? (zh ? '安装中…' : 'Installing…') : tool.id === 'ziniao-cli' ? (zh ? '让 AI 安装' : 'Install with AI') : (zh ? '安装' : 'Install')}
+                        {installing === tool.id ? (zh ? '安装中…' : 'Installing…') : (zh ? '安装' : 'Install')}
                       </Button>
                     )}
                   </div>

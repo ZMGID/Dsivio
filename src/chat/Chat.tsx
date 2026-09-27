@@ -250,7 +250,6 @@ function SettingsEnterPane({ exiting, className, children }: {
 
 /** 设置区的独立渲染边界。侧栏折叠、聊天流式状态变化不应重新执行设置页大树。 */
 const ChatSettingsPane = memo(function ChatSettingsPane({
-  onRequestAiInstall,
   settingsRef,
   exiting,
   className,
@@ -262,7 +261,6 @@ const ChatSettingsPane = memo(function ChatSettingsPane({
   renderSessionCenter,
   onRender,
 }: {
-  onRequestAiInstall: (id: string) => Promise<void>
   settingsRef: Ref<SettingsShellHandle>
   exiting: boolean
   className: string
@@ -283,7 +281,6 @@ const ChatSettingsPane = memo(function ChatSettingsPane({
       >
         <Profiler id="SettingsShell" onRender={onRender}>
           <SettingsShell
-            onRequestAiInstall={onRequestAiInstall}
             ref={settingsRef}
             variant="embedded"
             initialTab={initialTab}
@@ -2437,13 +2434,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     usesExternalRuntime,
   ])
 
-  const handlePluginInstall = useCallback(async (id: string) => {
-    if (isCurrentConversationBusy()) throw new Error('请等待当前回复结束后再安装。')
-    const brief = await api.pluginsInstallBrief(id)
-    const accepted = await handleSendMessage(brief.userMessage, [], { forceNewConversation: true })
-    if (!accepted) throw new Error('安装消息未发送，请重试。')
-  }, [handleSendMessage, isCurrentConversationBusy])
-
   const handleMarketInstall = useCallback(async (id: string) => {
     if (isBuiltInMarketId(id)) {
       await marketApi.installBuiltIn(id)
@@ -2484,7 +2474,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (!activeProviderId || !activeModel) throw new Error('请先配置对话模型，再使用应用。')
     if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再切换应用。')
     const startingHash = window.location.hash
-    if (!item.enabled) await marketApi.setEnabled(item.id, true)
+    if (!item.enabled || item.id === 'ziniao-cli') await marketApi.setEnabled(item.id, true)
     await loadSkills()
     if (window.location.hash !== startingHash) return
     let conv = !newChat && currentConversation ? currentConversation : await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined, selectedProject?.name, selectedProject?.id ?? null)
@@ -2803,7 +2793,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
           </div>
         ) : chatView === 'settings' ? (
           <ChatSettingsPane
-            onRequestAiInstall={handlePluginInstall}
             settingsRef={settingsRef}
             exiting={settingsExiting}
             className={`flex min-h-0 min-w-0 flex-1 flex-col${

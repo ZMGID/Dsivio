@@ -80,7 +80,6 @@ type SettingsData = SettingsType
 const UI_FONT_BASE_PX = 14
 
 export interface SettingsShellProps {
-  onRequestAiInstall?: (id: string) => Promise<void>
   variant: 'standalone' | 'embedded'
   onClose: () => void
   onSettingsChange: () => void
@@ -142,7 +141,7 @@ function resolveEffectiveChatMaxOutput(settings: SettingsData, fallbackTokens: n
  * 设置面板主组件（standalone / embedded 双宿主）
  */
 export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>(function SettingsShell(
-  { onRequestAiInstall, variant, onClose, onSettingsChange, onReady, reserveTrafficLightSpace = false, initialTab, hideNav = false, renderSessionCenter, renderPluginCenter, renderReleaseNotes },
+  { variant, onClose, onSettingsChange, onReady, reserveTrafficLightSpace = false, initialTab, hideNav = false, renderSessionCenter, renderPluginCenter, renderReleaseNotes },
   ref,
 ) {
   const onSettingsChangeRef = useRef(onSettingsChange)
@@ -1198,7 +1197,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
 
 
             {activeTab === 'computerControl' && (
-              <ComputerControlTab onRequestAiInstall={onRequestAiInstall} lang={lang} tools={settings.chatTools} onChange={updateChatTools} />
+              <ComputerControlTab lang={lang} tools={settings.chatTools} onChange={updateChatTools} />
             )}
 
             {/* ===== Hooks 标签页（对话生命周期） ===== */}

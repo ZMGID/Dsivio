@@ -297,7 +297,7 @@ const OFFICECLI_INSTALL_DOC: &str = r#"## 本插件补充（OfficeCLI）
 "#;
 
 /// 紫鸟官方 SETUP 原文。插件页「让 AI 代装」会把它直接作为用户消息发送。
-const ZINIAO_INSTALL_DOC: &str = include_str!("ziniao-setup.md");
+const ZINIAO_INSTALL_DOC: &str = include_str!("../../resources/plugins/ziniao-cli-setup/SKILL.md");
 
 #[cfg(test)]
 mod tests {

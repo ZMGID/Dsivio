@@ -43,7 +43,7 @@ export function PackageIcon({ categories, item }: { categories?: string[]; item?
   return <span className={iconClass}>{categories?.includes('videos') ? <Film size={20} /> : categories?.includes('images') ? <Image size={20} /> : <LayoutGrid size={20} />}</span>
 }
 export function LoadSwitch({ item, busy, onChange, lang }: { item: MarketItem; busy: boolean; onChange: () => void; lang: Lang }) {
-  if (item.local?.status !== 'ready' || item.local.source?.kind === 'built-in') return null
+  if (item.local?.status !== 'ready') return null
   const enabled = item.local.enabled
   return <span className="market-load"><span>{marketText(lang, enabled ? '已加载' : '未加载', enabled ? 'Loaded' : 'Not loaded')}</span><button className="market-switch" type="button" role="switch" aria-checked={enabled} aria-label={`${item.manifest?.name ?? item.id} ${marketText(lang, '加载', 'load')}`} disabled={busy} onClick={onChange}><span /></button></span>
 }
@@ -116,7 +116,7 @@ export function MarketPage({ lang, onInstall, onUse, onUninstall }: MarketAction
       {selected ? <>
         <Button variant="ghost" size="sm" onClick={() => { window.location.hash = '#chat/market' }}><ArrowLeft size={15} />{marketText(lang, '返回插件', 'Back to plugins')}</Button>
         {!chosen?.manifest ? <div className="market-empty">{loading ? marketText(lang, '正在读取应用…', 'Loading app…') : marketText(lang, '这个应用暂时无法查看', 'This app is unavailable')}</div> : <div className="market-detail">
-          <header className="market-detail-heading"><PackageIcon item={chosen} categories={chosen.manifest.categoryIds} /><div><h1>{chosen.manifest.name}</h1><p>{chosen.manifest.summary}</p></div>{more(chosen)}</header>
+          <header className="market-detail-heading"><PackageIcon item={chosen} categories={chosen.manifest.categoryIds} /><div><h1>{chosen.manifest.name}</h1><p>{chosen.manifest.summary}</p></div><span className="market-detail-actions"><LoadSwitch item={chosen} busy={busyIds.has(chosen.id)} onChange={() => toggle(chosen)} lang={lang} />{more(chosen)}</span></header>
           {chosen.entry?.source.kind === 'built-in' ? <>
             {chosen.local && <p className="market-status">{statusLabel(chosen, lang)}</p>}
             {chosen.manifest.setupSkillId && <section className="market-components"><h2>{marketText(lang, '技能', 'Skills')} {1 + (chosen.manifest.skillIds?.length ?? 1)}</h2>
@@ -155,7 +155,7 @@ export function MarketPage({ lang, onInstall, onUse, onUninstall }: MarketAction
       </>}
       {error && <p className="market-error" role="alert">{error}</p>}
     </div>
-    {selected && chosen?.manifest && <footer className="market-detail-footer"><LoadSwitch item={chosen} busy={busyIds.has(chosen.id)} onChange={() => toggle(chosen)} lang={lang} /><span className="market-primary">{actionButton(chosen, 'primary')}</span></footer>}
+    {selected && chosen?.manifest && <footer className="market-detail-footer"><span className="market-primary">{actionButton(chosen, 'primary')}</span></footer>}
 
   </section>
 }

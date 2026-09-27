@@ -50,6 +50,7 @@ describe('ComputerControlTab', () => {
     expect(screen.getAllByRole('button', { name: '安装' }).length).toBeGreaterThan(0)
     expect(screen.getByText('电脑操作')).toBeTruthy()
     expect(screen.getByText('浏览器操作')).toBeTruthy()
+    expect(screen.queryByText('紫鸟 CLI')).toBeNull()
     expect(screen.queryByText('0 Skill · 0 MCP')).toBeNull()
     expect(screen.queryByText(/已连接|可操作/)).toBeNull()
     expect(screen.queryByText(/CLI 已安装|检测详情/)).toBeNull()

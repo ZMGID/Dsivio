@@ -200,3 +200,20 @@ it('飞书 CLI 在效率办公分类只展示两个 Skill，不展示命令', as
   expect(screen.getByText('feishu-cli')).toBeTruthy()
   expect(screen.queryByText('命令')).toBeNull()
 })
+
+it('紫鸟 CLI 在插件市场提供安装入口和两个接入 Skill', async () => {
+  const base = (await import('../../../packages/srt-whiteboard-animation/market.json')).default.manifest
+  const manifest = { ...base, schemaVersion: 1 as const, id: 'ziniao-cli', name: '紫鸟 CLI', categoryIds: ['productivity'], setupSkillId: 'ziniao-cli-setup', mainSkillId: 'ziniao-cli', skillIds: ['ziniao-cli'], checkCommand: null }
+  state.snapshot.categories = [{ id: 'productivity', name: '效率办公' }]
+  state.snapshot.entries = [{ id: manifest.id, version: manifest.version, source: { kind: 'built-in' }, manifest }]
+  const onInstall = vi.fn().mockResolvedValue(undefined)
+  const view = render(<MarketPage lang="zh" onInstall={onInstall} onUse={vi.fn()} onUninstall={vi.fn()} />)
+  expect(screen.getByText('紫鸟 CLI')).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: '安装' }))
+  await waitFor(() => expect(onInstall).toHaveBeenCalledWith('ziniao-cli'))
+  view.unmount()
+  window.location.hash = '#chat/market/ziniao-cli'
+  show()
+  expect(screen.getByText('ziniao-cli-setup')).toBeTruthy()
+  expect(screen.getByText('ziniao-cli')).toBeTruthy()
+})

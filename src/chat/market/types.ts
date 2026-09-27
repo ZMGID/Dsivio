@@ -1,3 +1,5 @@
+import builtInCatalog from '../../../src-tauri/resources/plugins/catalog.json'
+
 export type MarketManifest = {
   schemaVersion: 1
   id: string
@@ -25,7 +27,7 @@ export type MarketSource =
   | { repository: string; revision: string; directory: string; kind?: never }
   | { kind: 'local-draft'; revision: string; directory: string; repository?: never }
   | { kind: 'built-in' }
-const builtInMarketIds = new Set(['hypit', 'remotion-agent-skills', 'srt-whiteboard-animation', 'feishu-cli'])
+const builtInMarketIds = new Set(builtInCatalog.plugins.map(plugin => plugin.id))
 export const isBuiltInMarketId = (id: string) => builtInMarketIds.has(id)
 export type MarketEntry = { id: string; version: string; source: MarketSource; manifest?: MarketManifest; error?: string }
 export type MarketLocal = {

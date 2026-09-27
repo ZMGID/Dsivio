@@ -1,8 +1,7 @@
 # 旧应用包样例
 
-当前插件市场不再读取线上 `catalog.json`。内置插件及安装状态由
-`src-tauri/src/market.rs` 管理，各插件的 setup Skill 位于
-`src-tauri/resources/plugins/`。
+当前插件市场读取 `src-tauri/resources/plugins/catalog.json`。
+新增插件改这份目录和旁边的说明文件，不要写进 Rust。安装时按目录里的仓库和提交下载。
 本目录保留旧包格式样例，供已有安装记录和测试使用。
 
 每个包放在自己的目录里，包含：

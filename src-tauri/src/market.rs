@@ -13,103 +13,129 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 const DEFAULT_CATALOG: &str =
     "https://raw.githubusercontent.com/ZMGID/Dsivio/main/packages/catalog.json";
+
+#[derive(Clone)]
 struct BuiltIn {
-    id: &'static str,
-    name: &'static str,
-    skill_id: &'static str,
-    summary: &'static str,
-    welcome: &'static str,
-    input_hint: &'static str,
-    start_prompt: &'static str,
-    setup: &'static str,
-    entry: Option<&'static str>,
-    command: Option<&'static str>,
-    icon: &'static str,
-    icon_path: &'static str,
-    required_files: &'static [&'static str],
-    repository: &'static str,
-    revision: &'static str,
-    skills: &'static [&'static str],
+    id: String,
+    name: String,
+    skill_id: String,
+    summary: String,
+    welcome: String,
+    input_hint: String,
+    start_prompt: String,
+    setup: String,
+    entry: Option<String>,
+    command: Option<String>,
+    icon: String,
+    icon_path: String,
+    required_files: Vec<String>,
+    repository: String,
+    revision: String,
+    skills: Vec<String>,
+    category_ids: Vec<String>,
+    unpack: String,
+    skip: Vec<String>,
+    preset_plugin_id: Option<String>,
 }
 
-const REMOTION_SKILLS: &[&str] = &[
-    "remotion-best-practices", "remotion-captions", "remotion-create", "remotion-docs",
-    "remotion-interactivity", "remotion-maps", "remotion-markup", "remotion-multimedia",
-    "remotion-render", "remotion-saas", "remotion-studio", "remotion-upgrade",
-];
+struct Catalog {
+    categories: Vec<(String, String)>,
+    plugins: Vec<BuiltIn>,
+}
 
-const BUILT_INS: &[BuiltIn] = &[
-    BuiltIn {
-        id: "hypit", name: "Hypit 视频制作", skill_id: "hypit",
-        summary: "参考视频制作、修改和批量生成视频。",
-        welcome: "发来参考视频，或描述想做的视频。",
-        input_hint: "参考这条视频，换成我的商品。",
-        start_prompt: "使用 Hypit，告诉我可以做什么。",
-        setup: include_str!("../resources/plugins/hypit-setup/SKILL.md"),
-        entry: None,
-        command: Some("/hypit-market:check"),
-        // Mark from https://github.com/hypit-ai/hypit/blob/main/docs/public/hypit-logo-dark.svg
-        icon: include_str!("../resources/plugins/hypit-logo.svg"),
-        icon_path: "assets/hypit-logo.svg",
-        required_files: &[],
-        repository: "hypit-ai/hypit",
-        revision: "9c9918d0cedf2f06574ab0d517b1b6b0afb56a66",
-        skills: &["hypit"],
-    },
-    BuiltIn {
-        id: "remotion-agent-skills", name: "Remotion Agent Skills", skill_id: "remotion-best-practices",
-        summary: "让 AI 编写、预览和渲染 Remotion 视频。",
-        welcome: "描述想制作的视频，或发来商品素材。",
-        input_hint: "用我的商品图片制作一条 15 秒宣传视频。",
-        start_prompt: "使用 Remotion Agent Skills，告诉我可以做什么。",
-        setup: include_str!("../resources/plugins/remotion-agent-skills-setup/SKILL.md"),
-        entry: None,
-        command: Some("/remotion-market:check"),
-        // Official mark: https://github.com/remotion-dev/brand/blob/main/logo.svg
-        icon: include_str!("../resources/plugins/remotion-logo.svg"),
-        icon_path: "assets/remotion-logo.svg",
-        required_files: &[],
-        repository: "remotion-dev/skills",
-        revision: "9682e994989f951c75912fbc49aa10332a512685",
-        skills: REMOTION_SKILLS,
-    },
-    BuiltIn {
-        id: "srt-whiteboard-animation", name: "SRT 白板手绘动画", skill_id: "srt-whiteboard-animation",
-        summary: "把 SRT 字幕制作成逐步绘制的白板手绘视频。",
-        welcome: "发来 SRT 字幕，我会先按内容规划分镜。",
-        input_hint: "把这份 SRT 字幕做成白板手绘动画。",
-        start_prompt: "使用 SRT 白板手绘动画，告诉我可以做什么。",
-        setup: include_str!("../resources/plugins/srt-whiteboard-animation-setup/SKILL.md"),
-        entry: None,
-        command: Some("/srt-whiteboard-market:check"),
-        icon: include_str!("../resources/plugins/srt-whiteboard-logo.svg"),
-        icon_path: "assets/srt-whiteboard-logo.svg",
-        required_files: &["scripts/prepare_env.py", "scripts/render_stream_whiteboard.py", "assets/preview.html"],
-        repository: "geeklee/srt-whiteboard-animation",
-        revision: "696a7243c0e6ffb6827676e539c2ca5ebae2bf6b",
-        skills: &["srt-whiteboard-animation"],
-    },
-    BuiltIn {
-        id: "feishu-cli", name: "飞书 CLI", skill_id: "feishu-cli",
-        summary: "在飞书中处理消息、文档、表格、日历和任务。",
-        welcome: "告诉我你想在飞书里完成什么。首次使用时我会检查登录与权限。",
-        input_hint: "帮我看看今天的飞书日程。",
-        start_prompt: "使用飞书 CLI，告诉我可以做什么。",
-        setup: include_str!("../resources/plugins/feishu-cli-setup/SKILL.md"),
-        entry: Some(include_str!("../resources/plugins/feishu-cli/SKILL.md")),
-        command: None,
-        // Source: DouyinFE Semi Design feishu_logo.svg (MIT); license ships in docs/licenses.
-        icon: include_str!("../resources/plugins/feishu-logo.svg"),
-        icon_path: "assets/feishu-logo.svg",
-        required_files: &[],
-        repository: "larksuite/cli",
-        revision: "ceace6d9349f827a5f5a646aac51e2c5ef428d48",
-        skills: &[],
-    },
-];
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogFile {
+    categories: Vec<CatalogCategory>,
+    plugins: Vec<CatalogPlugin>,
+}
 
-fn built_in(id: &str) -> Option<&'static BuiltIn> {
-    BUILT_INS.iter().find(|item| item.id == id)
+#[derive(Deserialize)]
+struct CatalogCategory {
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogPlugin {
+    id: String,
+    name: String,
+    skill_id: String,
+    summary: String,
+    welcome: String,
+    input_hint: String,
+    start_prompt: String,
+    setup: String,
+    #[serde(default)]
+    entry: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
+    icon: String,
+    icon_path: String,
+    #[serde(default)]
+    required_files: Vec<String>,
+    repository: String,
+    revision: String,
+    #[serde(default)]
+    skills: Vec<String>,
+    category_ids: Vec<String>,
+    #[serde(default = "default_unpack")]
+    unpack: String,
+    #[serde(default)]
+    skip: Vec<String>,
+    #[serde(default)]
+    preset_plugin_id: Option<String>,
+}
+
+fn default_unpack() -> String { "skills".into() }
+
+fn catalog_text(dir: &Path, relative: &str) -> Result<String, String> {
+    if relative.is_empty()
+        || relative.starts_with('/')
+        || relative.split(['/', '\\']).any(|part| part.is_empty() || part == "." || part == "..")
+    { return Err(format!("目录文件路径无效：{relative}")); }
+    fs::read_to_string(dir.join(relative)).map_err(|e| format!("无法读取 {relative}：{e}"))
+}
+
+fn load_catalog_from(dir: &Path) -> Result<Catalog, String> {
+    let file: CatalogFile = serde_json::from_str(&catalog_text(dir, "catalog.json")?).map_err(|e| format!("插件目录无效：{e}"))?;
+    let mut plugins = Vec::new();
+    for plugin in file.plugins {
+        if !id_ok(&plugin.id) || plugin.unpack != "skills" && plugin.unpack != "root"
+            || plugin.preset_plugin_id.as_deref().is_some_and(|id| id != plugin.id || crate::plugins::catalog_plugin(id).is_none()) {
+            return Err(format!("插件目录条目无效：{}", plugin.id));
+        }
+        plugins.push(BuiltIn {
+            setup: catalog_text(dir, &plugin.setup)?,
+            entry: plugin.entry.as_deref().map(|path| catalog_text(dir, path)).transpose()?,
+            icon: catalog_text(dir, &plugin.icon)?,
+            id: plugin.id,
+            name: plugin.name,
+            skill_id: plugin.skill_id,
+            summary: plugin.summary,
+            welcome: plugin.welcome,
+            input_hint: plugin.input_hint,
+            start_prompt: plugin.start_prompt,
+            command: plugin.command,
+            icon_path: plugin.icon_path,
+            required_files: plugin.required_files,
+            repository: plugin.repository,
+            revision: plugin.revision,
+            skills: plugin.skills,
+            category_ids: plugin.category_ids,
+            unpack: plugin.unpack,
+            skip: plugin.skip,
+            preset_plugin_id: plugin.preset_plugin_id,
+        });
+    }
+    Ok(Catalog { categories: file.categories.into_iter().map(|category| (category.id, category.name)).collect(), plugins })
+}
+
+fn load_market_catalog(app: &AppHandle) -> Result<Catalog, String> {
+    let bundled = crate::media_runtime::runtime::resource_directory(app)?.join("plugins");
+    if bundled.join("catalog.json").is_file() { return load_catalog_from(&bundled); }
+    load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins"))
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -121,7 +147,11 @@ struct BuiltInState {
     plugin_id: Option<String>,
     #[serde(default)]
     owned_skills: Vec<String>,
+    #[serde(default = "loaded_by_default")]
+    enabled: bool,
 }
+
+fn loaded_by_default() -> bool { true }
 
 fn built_in_state_path(item: &BuiltIn) -> Result<PathBuf, String> {
     Ok(root()?.join(format!("{}-state.json", item.id)))
@@ -153,10 +183,10 @@ fn built_in_ready(item: &BuiltIn, state: &BuiltInState) -> bool {
 }
 
 fn built_in_ready_at(item: &BuiltIn, state: &BuiltInState, root: &Path) -> bool {
-    state.revision.as_deref() == Some(item.revision)
+    state.revision.as_deref() == Some(item.revision.as_str())
         && built_in_setup_installed_at(item, root)
-        && item.entry.is_none_or(|entry| {
-            let dir = root.join(item.skill_id);
+        && item.entry.as_deref().is_none_or(|entry| {
+            let dir = root.join(&item.skill_id);
             market_skill_installed_at(&dir)
                 && fs::read_to_string(dir.join("SKILL.md")).is_ok_and(|content| content == entry)
         })
@@ -186,15 +216,15 @@ fn install_market_skill(dir: &Path, content: &str) -> Result<(), String> {
 
 fn install_built_in_setup(item: &BuiltIn) -> Result<(), String> {
     if built_in_setup_installed(item) { return Ok(()); }
-    install_market_skill(&built_in_setup_dir(item)?, item.setup)
+    install_market_skill(&built_in_setup_dir(item)?, &item.setup)
 }
 
 fn built_in_entry_dir(item: &BuiltIn) -> Result<PathBuf, String> {
-    Ok(crate::skills::kivio_skills_dir().ok_or("用户目录不可用")?.join(item.skill_id))
+    Ok(crate::skills::kivio_skills_dir().ok_or("用户目录不可用")?.join(&item.skill_id))
 }
 
 fn install_built_in_entry(item: &BuiltIn) -> Result<(), String> {
-    if let Some(content) = item.entry { install_market_skill(&built_in_entry_dir(item)?, content)?; }
+    if let Some(content) = item.entry.as_deref() { install_market_skill(&built_in_entry_dir(item)?, content)?; }
     Ok(())
 }
 
@@ -234,16 +264,16 @@ fn remove_market_skill(dir: &Path) -> Result<(), String> {
 }
 
 fn built_in_skill_installed_at(item: &BuiltIn, root: &Path) -> bool {
-    let skill = root.join(item.skill_id);
+    let skill = root.join(&item.skill_id);
     skill.join("SKILL.md").is_file()
         && item.required_files.iter().all(|file| skill.join(file).is_file())
 }
 
 fn built_in_manifest(item: &BuiltIn) -> Value {
-    let mut skill_ids = item.skills.to_vec();
-    if item.entry.is_some() { skill_ids.insert(0, item.skill_id); }
+    let mut skill_ids = item.skills.clone();
+    if item.entry.is_some() { skill_ids.insert(0, item.skill_id.clone()); }
     json!({"schemaVersion":1,"id":item.id,"version":"1.0.0","name":item.name,
-        "summary":item.summary,"categoryIds":[if item.id == "feishu-cli" { "productivity" } else { "videos" }],
+        "summary":item.summary,"categoryIds":item.category_ids,
         "icon":item.icon_path,
         "compatibility":{"minAppVersion":"1.0.1","platforms":["macos-arm64","macos-x64","windows-x64","linux-x64","linux-arm64"]},
         "notices":[],"welcome":item.welcome,"inputHint":item.input_hint,
@@ -255,17 +285,20 @@ fn built_in_manifest(item: &BuiltIn) -> Value {
 
 fn built_in_local(item: &BuiltIn, state: &BuiltInState, installed: bool) -> Option<Value> {
     if !installed && state.plugin_id.is_none() && state.revision.is_none() { return None; }
+    let preset_active = item.preset_plugin_id.as_deref().is_none_or(|id| {
+        !crate::plugins::is_installed(id) || crate::plugins::is_enabled(id)
+    });
     Some(json!({"id":item.id,"manifest":built_in_manifest(item),"source":{"kind":"built-in"},
-        "status":if installed { "ready" } else { "failed" },"enabled":installed,
-        "pluginId":state.plugin_id,"skillId":if installed { Some(item.skill_id) } else { None },
+        "status":if installed { "ready" } else { "failed" },"enabled":installed && state.enabled && preset_active,
+        "pluginId":state.plugin_id,"skillId":if installed { Some(item.skill_id.clone()) } else { None },
         "conversationId":null,"error":if installed { None } else { Some("插件组件缺失或未启用") },
         "phase":if installed { Some("ready") } else { None }}))
 }
 
-fn built_in_snapshot() -> Value {
-    json!({"categories":[{"id":"videos","name":"视频"},{"id":"productivity","name":"效率办公"}],
-        "entries":BUILT_INS.iter().map(|item| json!({"id":item.id,"version":"1.0.0","source":{"kind":"built-in"},"manifest":built_in_manifest(item)})).collect::<Vec<_>>(),
-        "installed":BUILT_INS.iter().filter_map(|item| { let state = built_in_state(item); built_in_local(item, &state, built_in_ready(item, &state)) }).collect::<Vec<_>>(),
+fn built_in_snapshot(catalog: &Catalog) -> Value {
+    json!({"categories":catalog.categories.iter().map(|(id, name)| json!({"id":id,"name":name})).collect::<Vec<_>>(),
+        "entries":catalog.plugins.iter().map(|item| json!({"id":item.id,"version":"1.0.0","source":{"kind":"built-in"},"manifest":built_in_manifest(item)})).collect::<Vec<_>>(),
+        "installed":catalog.plugins.iter().filter_map(|item| { let state = built_in_state(item); built_in_local(item, &state, built_in_ready(item, &state)) }).collect::<Vec<_>>(),
         "refreshedAt":chrono::Utc::now().timestamp_millis(),"error":null,"sourceUrl":"built-in"})
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -908,18 +941,17 @@ pub async fn market_command(
     request: Value,
 ) -> Result<Value, String> {
     let action = str_field(&request, "action")?;
-    if action == "snapshot" {
-        return Ok(built_in_snapshot());
-    }
-    if action == "refresh" {
-        return Ok(built_in_snapshot());
+    let catalog = load_market_catalog(&app)?;
+    if action == "snapshot" || action == "refresh" {
+        return Ok(built_in_snapshot(&catalog));
     }
     let id = str_field(&request, "id")?;
-    if let Some(item) = built_in(id) {
+    if let Some(item) = catalog.plugins.iter().find(|item| item.id == id) {
         let _guard = mutation_lock().lock().await;
         return match action {
-            "install" => install_built_in(&app, item).await,
-            "uninstall" => uninstall_built_in(&app, item).await,
+            "install" => install_plugin(&app, item).await,
+            "uninstall" => uninstall_plugin(&app, item).await,
+            "set_enabled" => set_built_in_enabled(&app, &*state, item, request["enabled"].as_bool().ok_or("缺少加载状态")?).await,
             _ => built_in_command(item, &request),
         };
     }
@@ -1047,7 +1079,7 @@ fn built_in_command(item: &BuiltIn, request: &Value) -> Result<Value, String> {
     match action {
         "icon" => {
             use base64::Engine;
-            Ok(json!(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(item.icon))))
+            Ok(json!(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(item.icon.as_bytes()))))
         }
         "detail" => Ok(json!({"example":{"schemaVersion":1,"messages":[
             {"role":"user","text":item.input_hint},
@@ -1064,14 +1096,13 @@ fn unpack_built_in_skills(item: &BuiltIn, bytes: Vec<u8>, stage: &Path) -> Resul
     for index in 0..zip.len() {
         let mut file = zip.by_index(index).map_err(|e| e.to_string())?;
         let Some((_, archive_path)) = file.name().split_once('/') else { continue; };
-        let selected = if item.id == "srt-whiteboard-animation" {
-            if archive_path.starts_with("examples/") { continue; }
-            if archive_path.is_empty() { continue; }
-            format!("srt-whiteboard-animation/{archive_path}")
+        let selected = if item.unpack == "root" {
+            if archive_path.is_empty() || item.skip.iter().any(|prefix| archive_path.starts_with(prefix)) { continue; }
+            format!("{}/{archive_path}", item.skill_id)
         } else {
             let Some(path) = archive_path.strip_prefix("skills/") else { continue; };
             let Some(skill) = path.split('/').next() else { continue; };
-            if !item.skills.contains(&skill) { continue; }
+            if !item.skills.iter().any(|name| name == skill) { continue; }
             path.to_string()
         };
         if selected.starts_with('/') || selected.contains('\\') || selected.contains(':')
@@ -1090,13 +1121,13 @@ fn unpack_built_in_skills(item: &BuiltIn, bytes: Vec<u8>, stage: &Path) -> Resul
         let mut output = fs::File::create(&target).map_err(|e| e.to_string())?;
         std::io::copy(&mut file, &mut output).map_err(|e| e.to_string())?;
     }
-    for skill in item.skills {
+    for skill in &item.skills {
         let dir = stage.join(skill);
         if !dir.join("SKILL.md").is_file() { return Err(format!("官方包缺少 {skill}/SKILL.md")); }
     }
-    if item.id == "srt-whiteboard-animation" {
-        let dir = stage.join(item.skill_id);
-        for relative in item.required_files {
+    if item.unpack == "root" {
+        let dir = stage.join(&item.skill_id);
+        for relative in &item.required_files {
             if !dir.join(relative).is_file() { return Err(format!("官方包缺少 {relative}")); }
         }
     }
@@ -1105,7 +1136,7 @@ fn unpack_built_in_skills(item: &BuiltIn, bytes: Vec<u8>, stage: &Path) -> Resul
 
 fn built_in_companion_source(app: &AppHandle, item: &BuiltIn) -> Result<PathBuf, String> {
     let source = crate::media_runtime::runtime::resource_directory(app)?
-        .join("plugins/market-companions").join(item.id);
+        .join("plugins/market-companions").join(&item.id);
     if !source.join(".kivio-plugin/plugin.json").is_file() {
         return Err(format!("{} 的内置命令资源缺失", item.name));
     }
@@ -1134,12 +1165,12 @@ fn market_owned_skill(item: &BuiltIn, state: &BuiltInState, root: &Path, skill: 
 fn built_in_skill_plan(item: &BuiltIn, state: &BuiltInState, root: &Path) -> Result<(Vec<String>, Vec<String>), String> {
     let mut missing = Vec::new();
     let mut replace = Vec::new();
-    for skill in item.skills {
+    for skill in &item.skills {
         let dir = root.join(skill);
         let metadata = match fs::symlink_metadata(&dir) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                missing.push((*skill).to_string());
+                missing.push(skill.clone());
                 continue;
             }
             Err(error) => return Err(error.to_string()),
@@ -1148,18 +1179,52 @@ fn built_in_skill_plan(item: &BuiltIn, state: &BuiltInState, root: &Path) -> Res
             return Err(format!("{} 已存在其他文件，请先检查", dir.display()));
         }
         let complete = dir.join("SKILL.md").is_file()
-            && (*skill != item.skill_id || item.required_files.iter().all(|file| dir.join(file).is_file()));
+            && (skill != &item.skill_id || item.required_files.iter().all(|file| dir.join(file).is_file()));
         if complete { continue; }
         if !market_owned_skill(item, state, root, skill) {
             return Err(format!("{} 已存在不完整的用户 Skill，请先检查", dir.display()));
         }
-        missing.push((*skill).to_string());
-        replace.push((*skill).to_string());
+        missing.push(skill.clone());
+        replace.push(skill.clone());
     }
     Ok((missing, replace))
 }
 
-async fn install_built_in(app: &AppHandle, item: &BuiltIn) -> Result<Value, String> {
+fn built_in_skill_ids(item: &BuiltIn) -> Vec<String> {
+    let mut ids = vec![built_in_setup_id(item)];
+    if item.entry.is_some() { ids.push(item.skill_id.clone()); }
+    ids.extend(item.skills.iter().cloned());
+    ids
+}
+
+async fn set_built_in_enabled(app: &AppHandle, state: &AppState, item: &BuiltIn, enabled: bool) -> Result<Value, String> {
+    let mut saved = built_in_state(item);
+    if !built_in_ready(item, &saved) { return Err(format!("{} 尚未安装", item.name)); }
+    if let Some(id) = item.preset_plugin_id.as_deref() {
+        if !enabled || crate::plugins::is_installed(id) {
+            crate::plugins::set_plugin_enabled(app, state, id, enabled).await?;
+        }
+    }
+    let ids = built_in_skill_ids(item);
+    crate::settings::update_settings(app, state, |next| {
+        for id in &ids {
+            next.chat_tools.disabled_skill_ids.retain(|skill| skill != id);
+            if !enabled { next.chat_tools.disabled_skill_ids.push(id.clone()); }
+        }
+        Ok(())
+    }).map_err(|e| e.to_string())?;
+    if let Some(id) = saved.plugin_id.clone() {
+        if market_companion_package(item, &id)?.is_some() {
+            crate::plugins::packages::plugin_packages_set_enabled(app.clone(), app.state::<AppState>(), id, enabled).await?;
+        }
+    }
+    saved.enabled = enabled;
+    save_built_in_state(item, &saved)?;
+    let _ = app.emit("kivio-configuration-changed", ());
+    Ok(built_in_local(item, &saved, true).unwrap())
+}
+
+async fn install_plugin(app: &AppHandle, item: &BuiltIn) -> Result<Value, String> {
     let previous = built_in_state(item);
     if built_in_ready(item, &previous) { return Ok(built_in_local(item, &previous, true).unwrap()); }
     let skills_root = crate::skills::user_skills_dir(app)?;
@@ -1171,8 +1236,8 @@ async fn install_built_in(app: &AppHandle, item: &BuiltIn) -> Result<Value, Stri
     let mut backed_up = Vec::<String>::new();
     let mut new_plugin = None::<String>;
     let had_setup = built_in_setup_installed(item);
-    let had_entry = item.entry.is_some_and(|_| crate::skills::kivio_skills_dir()
-        .is_some_and(|root| market_skill_installed_at(&root.join(item.skill_id))));
+    let had_entry = item.entry.is_some() && crate::skills::kivio_skills_dir()
+        .is_some_and(|root| market_skill_installed_at(&root.join(&item.skill_id)));
     let mut result: Result<Value, String> = async {
         if !missing.is_empty() {
             let url = format!("https://codeload.github.com/{}/zip/{}", item.repository, item.revision);
@@ -1226,8 +1291,13 @@ async fn install_built_in(app: &AppHandle, item: &BuiltIn) -> Result<Value, Stri
         };
         let mut owned_skills = previous.owned_skills.clone();
         for skill in &moved { if !owned_skills.contains(skill) { owned_skills.push(skill.clone()); } }
-        let state = BuiltInState { revision: Some(item.revision.into()), plugin_id, owned_skills };
+        let state = BuiltInState { revision: Some(item.revision.clone()), plugin_id, owned_skills, enabled: true };
         if !built_in_ready(item, &state) { return Err(format!("{} 的组件没有完成注册", item.name)); }
+        if let Some(id) = item.preset_plugin_id.as_deref() {
+            if crate::plugins::is_installed(id) {
+                crate::plugins::set_plugin_enabled(app, &app.state::<AppState>(), id, true).await?;
+            }
+        }
         save_built_in_state(item, &state)?;
         let _ = app.emit("kivio-configuration-changed", ());
         Ok(built_in_local(item, &state, true).unwrap())
@@ -1256,9 +1326,12 @@ async fn install_built_in(app: &AppHandle, item: &BuiltIn) -> Result<Value, Stri
     result
 }
 
-async fn uninstall_built_in(app: &AppHandle, item: &BuiltIn) -> Result<Value, String> {
+async fn uninstall_plugin(app: &AppHandle, item: &BuiltIn) -> Result<Value, String> {
     let state = built_in_state(item);
     if state.revision.is_none() && state.plugin_id.is_none() { return Err(format!("{} 尚未安装", item.name)); }
+    if let Some(id) = item.preset_plugin_id.as_deref() {
+        crate::plugins::set_plugin_enabled(app, &app.state::<AppState>(), id, false).await?;
+    }
     let skills_root = crate::skills::user_skills_dir(app)?;
     if let Some(plugin_id) = state.plugin_id.as_ref() {
         if market_companion_package(item, plugin_id)?.is_some() {
@@ -1266,7 +1339,7 @@ async fn uninstall_built_in(app: &AppHandle, item: &BuiltIn) -> Result<Value, St
         }
     }
     for skill in &state.owned_skills {
-        if !item.skills.contains(&skill.as_str()) { continue; }
+        if !item.skills.iter().any(|name| name == skill) { continue; }
         let dir = skills_root.join(skill);
         if fs::symlink_metadata(&dir).is_ok_and(|meta| meta.file_type().is_symlink()) { continue; }
         let owned = fs::read(dir.join(".kivio-market-owner.json")).ok()
@@ -1437,12 +1510,21 @@ pub async fn finalize(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn plugin(id: &str) -> BuiltIn {
+        load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins"))
+            .unwrap()
+            .plugins
+            .into_iter()
+            .find(|item| item.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"))
+    }
     #[test]
     fn built_in_skills_have_setup_skills_and_market_entries() {
-        let hypit = built_in("hypit").unwrap();
-        let remotion = built_in("remotion-agent-skills").unwrap();
-        let whiteboard = built_in("srt-whiteboard-animation").unwrap();
-        let feishu = built_in("feishu-cli").unwrap();
+        let hypit = plugin("hypit");
+        let remotion = plugin("remotion-agent-skills");
+        let whiteboard = plugin("srt-whiteboard-animation");
+        let feishu = plugin("feishu-cli");
+        let resolve = plugin("davinci-resolve");
         assert!(hypit.setup.contains("github.com/hypit-ai/hypit"));
         assert!(hypit.setup.contains("~/.kivio/skills/hypit"));
         assert!(remotion.setup.contains("github.com/remotion-dev/skills"));
@@ -1454,8 +1536,13 @@ mod tests {
         assert!(feishu.setup.contains("最小只读请求"));
         assert!(feishu.entry.unwrap().contains("lark-im"));
         assert!(feishu.skills.is_empty());
-        let snapshot = built_in_snapshot();
-        assert_eq!(snapshot["entries"].as_array().unwrap().len(), 4);
+        assert!(resolve.setup.contains("File > Setup AI Assistants"));
+        assert!(resolve.setup.contains("mcp_upsert"));
+        assert!(resolve.entry.unwrap().contains("official MCP"));
+        assert!(resolve.skills.is_empty());
+        assert!(resolve.command.is_none());
+        let snapshot = built_in_snapshot(&load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap());
+        assert_eq!(snapshot["entries"].as_array().unwrap().len(), 11);
         assert_eq!(snapshot["entries"][0]["source"]["kind"], "built-in");
         assert_eq!(snapshot["entries"][0]["id"], "hypit");
         assert_eq!(snapshot["entries"][0]["manifest"]["icon"], "assets/hypit-logo.svg");
@@ -1473,70 +1560,129 @@ mod tests {
         assert!(remotion.icon.contains("viewBox=\"0 0 410 425\""));
         assert!(whiteboard.icon.contains("viewBox=\"0 0 64 64\""));
         assert!(feishu.icon.contains("viewBox=\"0 0 24 24\""));
+        assert_eq!(snapshot["entries"][4]["id"], "davinci-resolve");
+        assert_eq!(snapshot["entries"][4]["manifest"]["categoryIds"][0], "videos");
+        assert_eq!(snapshot["entries"][4]["manifest"]["icon"], "assets/davinci-resolve-logo.svg");
+        assert!(snapshot["entries"][4]["manifest"]["checkCommand"].is_null());
+        assert!(resolve.icon.contains("viewBox=\"0 0 24 24\""));
+        let fanpai = plugin("daihuo-fanpai");
+        assert!(fanpai.setup.contains("github.com/wangcanyu/daihuo-fanpai"));
+        assert!(fanpai.setup.contains("python3 doctor.py"));
+        assert!(fanpai.command.is_none());
+        assert_eq!(snapshot["entries"][5]["id"], "daihuo-fanpai");
+        assert_eq!(snapshot["entries"][5]["manifest"]["categoryIds"][0], "videos");
+        assert_eq!(snapshot["entries"][5]["manifest"]["icon"], "assets/daihuo-fanpai-logo.svg");
+        assert!(snapshot["entries"][5]["manifest"]["checkCommand"].is_null());
+        assert!(fanpai.icon.contains("viewBox=\"0 0 48 48\""));
+        let jianying = plugin("jianying-editor");
+        assert!(jianying.setup.contains("github.com/luoluoluo22/jianying-editor-skill"));
+        assert!(jianying.setup.contains("scripts/jy_wrapper.py"));
+        assert!(jianying.command.is_none());
+        assert_eq!(snapshot["entries"][6]["id"], "jianying-editor");
+        assert_eq!(snapshot["entries"][6]["manifest"]["categoryIds"][0], "videos");
+        assert_eq!(snapshot["entries"][6]["manifest"]["icon"], "assets/jianying-editor-logo.svg");
+        assert!(snapshot["entries"][6]["manifest"]["checkCommand"].is_null());
+        assert!(jianying.icon.contains("viewBox=\"0 0 32 32\""));
+        let wecom = plugin("wecom-cli");
+        assert!(wecom.setup.contains("npx skills add WeComTeam/wecom-cli -y -g"));
+        assert!(wecom.setup.contains("wecom-cli auth show --status"));
+        assert!(wecom.entry.as_deref().unwrap().contains("npx skills add WeComTeam/wecom-cli -y -g"));
+        assert!(wecom.skills.is_empty());
+        assert!(wecom.command.is_none());
+        assert_eq!(snapshot["entries"][7]["id"], "wecom-cli");
+        assert_eq!(snapshot["entries"][7]["manifest"]["categoryIds"][0], "productivity");
+        assert_eq!(snapshot["entries"][7]["manifest"]["icon"], "assets/wecom-logo.svg");
+        assert_eq!(snapshot["entries"][7]["manifest"]["skillIds"].as_array().unwrap().len(), 1);
+        assert!(snapshot["entries"][7]["manifest"]["checkCommand"].is_null());
+        assert!(wecom.icon.contains("viewBox=\"0 0 24 24\""));
+        let ziniao = plugin("ziniao-cli");
+        assert_eq!(ziniao.preset_plugin_id.as_deref(), Some("ziniao-cli"));
+        assert!(ziniao.setup.contains("ziniao-cli doctor"));
+        assert!(ziniao.entry.as_deref().unwrap().contains("ziniao-shared"));
+        assert!(ziniao.skills.is_empty());
+        let shopkeeper = plugin("1688-shopkeeper");
+        assert_eq!(shopkeeper.repository, "next-1688/1688-shopkeeper");
+        assert!(shopkeeper.setup.contains("ALI_1688_AK"));
+        assert!(shopkeeper.setup.contains("--dry-run"));
+        assert!(shopkeeper.command.is_none());
+        assert_eq!(snapshot["entries"][8]["id"], "1688-shopkeeper");
+        assert_eq!(snapshot["entries"][8]["manifest"]["categoryIds"][0], "commerce");
+        assert_eq!(snapshot["entries"][8]["manifest"]["icon"], "assets/1688-shopkeeper-logo.svg");
+        assert_eq!(snapshot["entries"][9]["id"], "ziniao-cli");
+        assert_eq!(snapshot["entries"][9]["manifest"]["categoryIds"][0], "productivity");
+        let shopify = plugin("shopify-ai-toolkit");
+        assert_eq!(shopify.repository, "Shopify/Shopify-AI-Toolkit");
+        assert_eq!(shopify.skill_id, "shopify-use-shopify-cli");
+        assert_eq!(shopify.skills, ["shopify-use-shopify-cli", "shopify-admin", "shopify-shopifyql"]);
+        assert!(shopify.setup.contains("shopify store auth list"));
+        assert!(shopify.icon.contains("viewBox=\"0 0 109.5 124.5\""));
+        assert_eq!(snapshot["entries"][10]["id"], "shopify-ai-toolkit");
+        assert_eq!(snapshot["entries"][10]["manifest"]["categoryIds"][0], "commerce");
+        assert_eq!(snapshot["entries"][10]["manifest"]["icon"], "assets/shopify-ai-toolkit-logo.svg");
     }
     #[test]
     fn built_in_status_requires_all_skill_files_and_setup() {
-        let item = built_in("remotion-agent-skills").unwrap();
+        let item = plugin("remotion-agent-skills");
         let dir = tempfile::tempdir().unwrap();
         let mut state = BuiltInState::default();
-        for skill in item.skills {
+        for skill in &item.skills {
             let target = dir.path().join(skill);
             fs::create_dir_all(&target).unwrap();
             fs::write(target.join("SKILL.md"), "# Remotion").unwrap();
         }
-        assert!(!built_in_ready_at(item, &state, dir.path()));
-        let setup = dir.path().join(built_in_setup_id(item));
+        assert!(!built_in_ready_at(&item, &state, dir.path()));
+        let setup = dir.path().join(built_in_setup_id(&item));
         fs::create_dir_all(&setup).unwrap();
-        fs::write(setup.join("SKILL.md"), item.setup).unwrap();
-        assert!(!built_in_ready_at(item, &state, dir.path()));
-        state.revision = Some(item.revision.into());
-        assert!(built_in_ready_at(item, &state, dir.path()));
+        fs::write(setup.join("SKILL.md"), &item.setup).unwrap();
+        assert!(!built_in_ready_at(&item, &state, dir.path()));
+        state.revision = Some(item.revision.clone());
+        assert!(built_in_ready_at(&item, &state, dir.path()));
         fs::remove_file(dir.path().join("remotion-render/SKILL.md")).unwrap();
-        assert!(!built_in_ready_at(item, &state, dir.path()));
+        assert!(!built_in_ready_at(&item, &state, dir.path()));
     }
     #[test]
     fn feishu_status_requires_entry_and_setup() {
-        let item = built_in("feishu-cli").unwrap();
+        let item = plugin("feishu-cli");
         let dir = tempfile::tempdir().unwrap();
-        let state = BuiltInState { revision: Some(item.revision.into()), ..Default::default() };
-        let setup = dir.path().join(built_in_setup_id(item));
+        let state = BuiltInState { revision: Some(item.revision.clone()), ..Default::default() };
+        let setup = dir.path().join(built_in_setup_id(&item));
         fs::create_dir_all(&setup).unwrap();
-        fs::write(setup.join("SKILL.md"), item.setup).unwrap();
-        assert!(!built_in_ready_at(item, &state, dir.path()));
-        let entry = dir.path().join(item.skill_id);
+        fs::write(setup.join("SKILL.md"), &item.setup).unwrap();
+        assert!(!built_in_ready_at(&item, &state, dir.path()));
+        let entry = dir.path().join(&item.skill_id);
         fs::create_dir_all(&entry).unwrap();
-        fs::write(entry.join("SKILL.md"), item.entry.unwrap()).unwrap();
-        assert!(built_in_ready_at(item, &state, dir.path()));
+        fs::write(entry.join("SKILL.md"), item.entry.as_deref().unwrap()).unwrap();
+        assert!(built_in_ready_at(&item, &state, dir.path()));
         fs::write(setup.join("SKILL.md"), "---\nname: feishu-cli-setup\ndescription: setup completed once\nkivio-market-managed: true\n---\n").unwrap();
-        assert!(built_in_ready_at(item, &state, dir.path()));
+        assert!(built_in_ready_at(&item, &state, dir.path()));
         fs::write(entry.join("SKILL.md"), "---\nkivio-market-managed: true\n---\n").unwrap();
-        assert!(!built_in_ready_at(item, &state, dir.path()));
-        fs::write(entry.join("SKILL.md"), item.entry.unwrap()).unwrap();
+        assert!(!built_in_ready_at(&item, &state, dir.path()));
+        fs::write(entry.join("SKILL.md"), item.entry.as_deref().unwrap()).unwrap();
         fs::remove_file(setup.join("SKILL.md")).unwrap();
-        assert!(!built_in_ready_at(item, &state, dir.path()));
-        assert!(built_in_local(item, &state, false).is_some());
-        assert!(built_in_local(item, &BuiltInState::default(), false).is_none());
+        assert!(!built_in_ready_at(&item, &state, dir.path()));
+        assert!(built_in_local(&item, &state, false).is_some());
+        assert!(built_in_local(&item, &BuiltInState::default(), false).is_none());
     }
     #[test]
     fn repair_replaces_only_incomplete_market_owned_skills() {
-        let item = built_in("hypit").unwrap();
+        let item = plugin("hypit");
         let dir = tempfile::tempdir().unwrap();
         let skill = dir.path().join("hypit");
         fs::create_dir_all(&skill).unwrap();
         let mut state = BuiltInState::default();
         state.owned_skills.push("hypit".into());
-        assert!(built_in_skill_plan(item, &state, dir.path()).is_err());
+        assert!(built_in_skill_plan(&item, &state, dir.path()).is_err());
         fs::write(skill.join(".kivio-market-owner.json"), r#"{"id":"hypit"}"#).unwrap();
-        let (missing, replace) = built_in_skill_plan(item, &state, dir.path()).unwrap();
+        let (missing, replace) = built_in_skill_plan(&item, &state, dir.path()).unwrap();
         assert_eq!(missing, vec!["hypit"]);
         assert_eq!(replace, vec!["hypit"]);
         fs::write(skill.join("SKILL.md"), "# Hypit").unwrap();
-        assert_eq!(built_in_skill_plan(item, &state, dir.path()).unwrap(), (vec![], vec![]));
+        assert_eq!(built_in_skill_plan(&item, &state, dir.path()).unwrap(), (vec![], vec![]));
     }
     #[test]
     fn built_in_archive_extracts_only_the_official_skill_subtree() {
         use std::io::Write;
-        let item = built_in("hypit").unwrap();
+        let item = plugin("hypit");
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file("hypit-revision/skills/hypit/SKILL.md", options).unwrap();
@@ -1547,17 +1693,61 @@ mod tests {
         zip.write_all(b"skip").unwrap();
         let bytes = zip.finish().unwrap().into_inner();
         let dir = tempfile::tempdir().unwrap();
-        unpack_built_in_skills(item, bytes, dir.path()).unwrap();
+        unpack_built_in_skills(&item, bytes, dir.path()).unwrap();
         assert!(dir.path().join("hypit/SKILL.md").is_file());
         assert!(dir.path().join("hypit/references/check.md").is_file());
         assert!(!dir.path().join("packages").exists());
+    }
+    #[test]
+    fn daihuo_fanpai_archive_keeps_root_scripts_and_skips_showcase() {
+        use std::io::Write;
+        let item = plugin("daihuo-fanpai");
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("daihuo-fanpai-revision/SKILL.md", options).unwrap();
+        zip.write_all(b"# fanpai").unwrap();
+        zip.start_file("daihuo-fanpai-revision/doctor.py", options).unwrap();
+        zip.write_all(b"print('ok')").unwrap();
+        zip.start_file("daihuo-fanpai-revision/route.py", options).unwrap();
+        zip.write_all(b"print('route')").unwrap();
+        zip.start_file("daihuo-fanpai-revision/deliver.py", options).unwrap();
+        zip.write_all(b"print('deliver')").unwrap();
+        zip.start_file("daihuo-fanpai-revision/showcase/demo.mp4", options).unwrap();
+        zip.write_all(b"video").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let dir = tempfile::tempdir().unwrap();
+        unpack_built_in_skills(&item, bytes, dir.path()).unwrap();
+        assert!(dir.path().join("daihuo-fanpai/SKILL.md").is_file());
+        assert!(dir.path().join("daihuo-fanpai/doctor.py").is_file());
+        assert!(!dir.path().join("daihuo-fanpai/showcase").exists());
+    }
+    #[test]
+    fn jianying_editor_archive_maps_root_and_skips_github() {
+        use std::io::Write;
+        let item = plugin("jianying-editor");
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("jianying-editor-skill-revision/SKILL.md", options).unwrap();
+        zip.write_all(b"# jianying").unwrap();
+        zip.start_file("jianying-editor-skill-revision/requirements.txt", options).unwrap();
+        zip.write_all(b"pyjianying\n").unwrap();
+        zip.start_file("jianying-editor-skill-revision/scripts/jy_wrapper.py", options).unwrap();
+        zip.write_all(b"print('ok')").unwrap();
+        zip.start_file("jianying-editor-skill-revision/.github/workflows/ci.yml", options).unwrap();
+        zip.write_all(b"ci").unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let dir = tempfile::tempdir().unwrap();
+        unpack_built_in_skills(&item, bytes, dir.path()).unwrap();
+        assert!(dir.path().join("jianying-editor/SKILL.md").is_file());
+        assert!(dir.path().join("jianying-editor/scripts/jy_wrapper.py").is_file());
+        assert!(!dir.path().join("jianying-editor/.github").exists());
     }
     #[test]
     fn bundled_check_commands_are_valid_native_plugins() {
         let resources = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("resources/plugins/market-companions");
         let temp = tempfile::tempdir().unwrap();
-        for item in BUILT_INS.iter().filter(|item| item.command.is_some()) {
+        for item in load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap().plugins.into_iter().filter(|item| item.command.is_some()) {
             let package = crate::plugins::packages::Package {
                 id: uuid::Uuid::new_v4().to_string(), name: String::new(),
                 description: String::new(), version: None, format: String::new(),
@@ -1565,7 +1755,7 @@ mod tests {
                 components: Default::default(), diagnostics: vec![],
             };
             let resolved = crate::plugins::packages::resolve(
-                &resources.join(item.id), package, temp.path(),
+                &resources.join(&item.id), package, temp.path(),
             ).unwrap();
             assert_eq!(resolved.package.format, "kivio");
             assert_eq!(resolved.commands.len(), 1);
@@ -1574,21 +1764,21 @@ mod tests {
     }
     #[test]
     fn whiteboard_status_requires_the_complete_skill() {
-        let item = built_in("srt-whiteboard-animation").unwrap();
+        let item = plugin("srt-whiteboard-animation");
         let dir = tempfile::tempdir().unwrap();
-        let skill = dir.path().join(item.skill_id);
+        let skill = dir.path().join(&item.skill_id);
         fs::create_dir_all(&skill).unwrap();
         fs::write(skill.join("SKILL.md"), "# Whiteboard").unwrap();
-        assert!(!built_in_skill_installed_at(item, dir.path()));
-        for file in item.required_files {
+        assert!(!built_in_skill_installed_at(&item, dir.path()));
+        for file in &item.required_files {
             let path = skill.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "ready").unwrap();
         }
-        assert!(built_in_skill_installed_at(item, dir.path()));
-        assert_eq!(built_in_local(item, &BuiltInState::default(), true).unwrap()["status"], "ready");
+        assert!(built_in_skill_installed_at(&item, dir.path()));
+        assert_eq!(built_in_local(&item, &BuiltInState::default(), true).unwrap()["status"], "ready");
         fs::remove_file(skill.join("scripts/render_stream_whiteboard.py")).unwrap();
-        assert!(!built_in_skill_installed_at(item, dir.path()));
+        assert!(!built_in_skill_installed_at(&item, dir.path()));
     }
     #[test]
     fn local_catalog_lists_multiple_packages() {
