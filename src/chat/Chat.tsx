@@ -8,6 +8,8 @@ import { useSettingsExit } from './hooks/useSettingsExit'
 import { useSidebarLayout } from './hooks/useSidebarLayout'
 import { useAssistantActions } from './hooks/useAssistantActions'
 import { createChatNavigationController } from './chatNavigationController'
+import { useConversationHistory } from './hooks/useConversationHistory'
+import { EMPTY_HISTORY_DIRECTORY, isPartialConversation, mergeConversationMetadata } from './conversationHistoryWindow'
 import { createChatExecutionOwner } from './chatExecutionOwner'
 import { createChatStreamLifecycleOwner, type StreamLifecycleResult } from './chatStreamLifecycleOwner'
 import { createChatPopoutOwnershipOwner } from './chatPopoutOwnershipOwner'
@@ -118,6 +120,8 @@ import { getSettingsCached, subscribeSettings, updateSettingsCached } from '../a
 import { setExclusiveConversationIds } from '../api/chatProtocol'
 import { OnboardingShell } from '../onboarding/public/shell'
 import type { SettingsShellHandle, SettingsTab } from '../settings/public/shell'
+import { AppDialogHost } from '../components/AppDialog'
+import { confirmDialog } from '../components/dialogQueue'
 import { i18n, LangContext, type Lang } from '../components/i18n'
 import { estimateTokens } from '../utils/tokens'
 import {
@@ -448,6 +452,9 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     return 'chat'
   })
   const [uiLang, setUiLang] = useState<Lang>('zh')
+  // 给只建一次的 controller 回调读当前语言用，免得把 uiLang 塞进它们的依赖而重建。
+  const uiLangRef = useRef(uiLang)
+  uiLangRef.current = uiLang
   const [extensionsNavItem, setExtensionsNavItem] = useState<ExtensionsNavItem | null>(null)
   // 工具目录 / MCP 开关 / 审批策略 / 供应商能力表（apiFormat 用于判断内置搜索能不能选）。
   const {
@@ -496,7 +503,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     animateClearBoundaryId,
     refreshContextStats,
     refreshCurrent: handleRefreshContext,
-    compressCurrent: handleCompressContext,
+    compressConversation,
     clearCurrent: handleClearContext,
   } = useConversationContext({ currentConversation, currentConversationIdRef, setCurrentConversation, refreshSidebar })
   const contextCompressing = currentConversation
@@ -504,6 +511,21 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     : false
 
   const streamErrorsRef = useRef<Record<string, string>>({})
+  const setStreamErrorForConversation = useCallback((conversationId: string, error: string) => {
+    if (error) {
+      streamErrorsRef.current[conversationId] = error
+    } else {
+      delete streamErrorsRef.current[conversationId]
+    }
+    if (currentConversationIdRef.current === conversationId) {
+      setStreamCoarse({ streamError: error })
+    }
+  }, [])
+
+  const { cache: warmConversationCache, historyLoadError, readConversation, readConversationWindow,
+    forgetHistory, reportHistoryError, loadInputHistory } = useConversationHistory(
+    currentConversationRef, currentConversationIdRef, setStreamErrorForConversation,
+  )
   const settingsRef = useRef<SettingsShellHandle>(null)
   // A 合帧（render coalescing）：高频 stream/tool/subagent/userprompt 事件不再每条都同步
   // setState 重渲，而是把"待显示的快照"记到 ref，用 requestAnimationFrame 每帧最多 flush 一次。
@@ -528,6 +550,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   // These hooks retain the latest callbacks internally, so their commands can be
   // used by earlier lifecycle handlers without a second Chat-level ref bridge.
   const messageQueue = useMessageQueue({
+    onCompactContext: (conversation) => compressConversation(conversation.id),
     onSendMessage: (content, attachments, options) =>
       handleSendMessage(content, attachments, options),
     onRestoreToComposer: (message) => insertTextIntoComposer(message.content),
@@ -536,6 +559,19 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     },
   })
   const queueCommands = messageQueue.commands
+  const handleStopCompression = useCallback(() => {
+    const id = currentConversationIdRef.current
+    if (id) void chatApi.cancelStream(id).catch((err) => console.error('Failed to stop compaction:', err))
+  }, [])
+  const handleCompressContext = useCallback(async () => {
+    const conversation = currentConversationRef.current
+    if (!conversation || compactingConversationIds.has(conversation.id)) return
+    queueCommands.enqueueCompact(conversation.id)
+    if (!executionOwner.snapshot(conversation.id).inFlight && !previewOwner.isStreaming(conversation.id)) {
+      await queueCommands.drain(conversation)
+    }
+  }, [compactingConversationIds, executionOwner, previewOwner, queueCommands])
+
   const { drainExternalSends, wakeAfterRun } = useExternalSendQueue({
     onEnterConversationView: () => setChatView('conversation'),
     onImportConversation: (messages, attachmentPaths) =>
@@ -548,6 +584,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   // B：彻底把一个会话从所有本地乐观/in-flight/快照状态中剔除（ghost 清理）。
   // 不触碰 currentConversation/route，由调用方按场景决定。
   const dropConversationLocally = useCallback((conversationId: string) => {
+    forgetHistory(conversationId)
     delete streamErrorsRef.current[conversationId]
     interactionInbox.observe({ kind: 'drop', conversationId })
     previewOwner.drop(conversationId)
@@ -556,25 +593,15 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     queueCommands.clearConversation(conversationId)
     setOptimisticSidebarConversations((items) => items.filter((item) => item.id !== conversationId))
     syncGeneratingConversationIds()
-  }, [executionOwner, interactionInbox, previewOwner, queueCommands, syncGeneratingConversationIds])
-
-  const setStreamErrorForConversation = useCallback((conversationId: string, error: string) => {
-    if (error) {
-      streamErrorsRef.current[conversationId] = error
-    } else {
-      delete streamErrorsRef.current[conversationId]
-    }
-    if (currentConversationIdRef.current === conversationId) {
-      setStreamCoarse({ streamError: error })
-    }
-  }, [])
+  }, [executionOwner, interactionInbox, previewOwner, queueCommands, syncGeneratingConversationIds, forgetHistory])
 
   const isCurrentConversationBusy = useCallback(() => (
     Boolean(currentConversationIdRef.current && (
       executionOwner.snapshot(currentConversationIdRef.current).inFlight
       || previewOwner.isStreaming(currentConversationIdRef.current)
+      || compactingConversationIds.has(currentConversationIdRef.current)
     ))
-  ), [executionOwner, previewOwner])
+  ), [executionOwner, previewOwner, compactingConversationIds])
 
   const applyConversation = useCallback((conversation: Conversation | null) => {
     const current = currentConversationRef.current
@@ -600,8 +627,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       }
     }
     setCurrentConversation((previous) => conversation && previous?.id === conversation.id
-      && conversation.revision < previous.revision ? previous : conversation)
+      && (conversation.revision < previous.revision
+        || (conversation.revision === previous.revision
+          && isPartialConversation(conversation) && !isPartialConversation(previous)))
+      ? previous : conversation)
   }, [])
+
 
   const occupyConversationInMain = useCallback((
     conversationId: string,
@@ -632,10 +663,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   // messages 数组引用**。否则每条消息都变成新对象，击穿 MessageBubble/ChatMarkdown 的 memo，
   // 历史消息里的 LaTeX 会整屏重渲闪一下。这类更新后端不会改 messages，沿用旧引用安全。
   const applyConversationMeta = useCallback((updated: Conversation) => {
-    setCurrentConversation((prev) => {
-      if (!prev || prev.id !== updated.id || updated.revision < prev.revision) return prev
-      return { ...updated, messages: prev.messages }
-    })
+    setCurrentConversation((previous) => mergeConversationMetadata(previous, updated))
   }, [])
 
   const patchAgentTodoState = useCallback((nextState: AgentTodoState) => {
@@ -864,7 +892,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     currentConversationId: () => currentConversationIdRef.current,
     listPopouts: (refresh) => refresh
       ? popoutOwner.refresh().then((change) => change.next) : popoutOwner.list(),
-    readConversation: chatApi.getConversation,
+    readConversation,
+    readConversationWindow,
+    readHistoryPage: chatApi.getConversationPage,
+    showHistoryPage: applyConversation,
     isConversationInFlight: (conversationId) => executionOwner.snapshot(conversationId).inFlight,
     prepareNewConversation: () => {
       setSelectedProject(null)
@@ -883,10 +914,14 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       setAssistantStreamStatsByMessageId({})
       setStreamError('')
     },
-    requestClearChat: (conversationId) => {
-      if (executionOwner.snapshot(conversationId).inFlight || previewOwner.isStreaming(conversationId)) return 'busy'
-      return window.confirm('Clear this chat? This will delete the current conversation history.')
-        ? 'confirmed' : 'cancelled'
+    requestClearChat: async (conversationId) => {
+      const busy = () => executionOwner.snapshot(conversationId).inFlight || previewOwner.isStreaming(conversationId)
+      if (busy()) return 'busy'
+      const t = i18n[uiLangRef.current]
+      const confirmed = await confirmDialog({ message: t.chatClearChatConfirm, confirmLabel: t.dialogClear, danger: true })
+      if (!confirmed) return 'cancelled'
+      // 对话框不冻结页面：等待期间可能已开始新一轮回复。
+      return busy() ? 'busy' : 'confirmed'
     },
     deleteConversation: async (conversationId) => { await chatApi.deleteConversation(conversationId) },
     cancelDeletedRun: async (conversationId) => { await chatApi.cancelStream(conversationId) },
@@ -900,10 +935,17 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       refreshSidebar()
     },
     reportClearError: setStreamErrorForConversation,
+    showHistoryTarget: (conversation, messageId) => {
+      applyConversation(conversation)
+      setFocusMessageId(messageId)
+    },
+    reportHistoryError,
     focusPopout: (conversationId) => { void chatApi.focusConversationPopout(conversationId) },
     occupyPopout: (conversationId) => occupyConversationInMain(conversationId, currentConversationRef.current),
     prepareSelection: (focusMessageId, fresh) => {
       if (fresh) {
+        const leaving = currentConversationRef.current
+        if (leaving && !executionOwner.snapshot(leaving.id).inFlight) warmConversationCache.rememberSoon(leaving)
         setAssistantStreamStatsByMessageId({})
         setHookWarning(null)
       }
@@ -930,7 +972,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     activeAgentRuntime, activeModel, activeProviderId, applyConversation, clearDisplayedConversation,
     dropConversationLocally, executionOwner, occupyConversationInMain, popoutOwner,
     previewOwner, refreshSidebar, resetComposerDraftContext, resetContext, restoreStreamingPreview,
-    setStreamErrorForConversation,
+    setStreamErrorForConversation, warmConversationCache, readConversation, readConversationWindow, reportHistoryError,
   ])
 
   const openEmbeddedSettingsForPlugins = useCallback(() => {
@@ -1957,6 +1999,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     setAssistantStreamStatsByMessageId,
     refreshSidebar,
     refreshContextStats,
+    lang: uiLang,
   })
 
   const presentRunCommandEvent = useCallback((event: RunCommandPresentationEvent) => {
@@ -2131,6 +2174,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         usesExternalRuntime={usesExternalRuntime}
         onRefresh={handleRefreshContext}
         onCompress={handleCompressContext}
+        onStopCompression={handleStopCompression}
         onClear={usesExternalRuntime ? undefined : handleClearContext}
         lang={uiLang}
       />
@@ -2143,6 +2187,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       displayMessages,
       handleClearContext,
       handleCompressContext,
+      handleStopCompression,
       handleRefreshContext,
       streamCoarse.streaming,
       uiLang,
@@ -2354,6 +2399,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   // 六个中心页共用 key="center"：React 复用同一个 div，入场动画只在「从会话页进来」时跑一次。
   // 各页各自 key 的话每次互切都是新节点 → 重播 opacity 0→1，中间几帧透出背景，就是那下闪。
   const centerPageClass = `chat-motion-view-in chat-center-page relative flex min-h-0 min-w-0 flex-1 flex-col ${centerPagePadTop}`
+  const worksPageClass = `chat-center-page relative flex min-h-0 min-w-0 flex-1 flex-col ${centerPagePadTop}`
 
   const handleOpenConversationPopout = useCallback(async (conversationId: string) => {
     try {
@@ -2562,6 +2608,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     externalAgentName: activeAgentRuntime.externalAgentId ?? null,
     conversationId: currentConversation?.id ?? null,
     inputHistory: currentConversation?.messages.filter((message) => message.role === 'user').map((message) => message.content),
+    onLoadInputHistory: isPartialConversation(currentConversation) ? loadInputHistory : undefined,
     knowledgeBaseIds: composerKnowledgeBaseIds,
     onChangeKnowledgeBaseIds: handleChangeKnowledgeBaseIds,
     forceKnowledgeSearch: composerForceKnowledgeSearch,
@@ -2602,6 +2649,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     composerKnowledgeBaseIds,
     composerAdditionalDirectories,
     composerUsageSlot,
+    loadInputHistory,
     conversationProject,
     currentConversation,
     currentConversationIsBlank,
@@ -2646,6 +2694,13 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
   const messageListProps = useMemo<MessageListProps>(() => ({
     conversationId: currentConversation?.id,
     messages: displayMessages,
+    historyStart: currentConversation?.history_start ?? 0,
+    historyDirectory: currentConversation?.history_directory ?? EMPTY_HISTORY_DIRECTORY,
+    historyArtifacts: currentConversation?.history_artifacts,
+    historyLoadError: historyLoadError?.conversationId === currentConversation?.id
+      ? historyLoadError?.message : null,
+    onLoadOlder: navigation.loadOlderHistory,
+    onFocusHistoryMessage: navigation.focusHistoryMessage,
     renderRequestId: conversationRenderRequestId,
     onInitialRender: handleConversationFirstCommit,
     agentPlanState: currentConversation?.agent_plan_state ?? currentConversation?.agentPlanState ?? null,
@@ -2681,8 +2736,11 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     contextCompressing,
     contextState,
     currentConversation,
+    historyLoadError,
     conversationRenderRequestId,
     displayMessages,
+    navigation.focusHistoryMessage,
+    navigation.loadOlderHistory,
     handleConversationFirstCommit,
     handleDeleteMessage,
     handleExecuteAgentPlan,
@@ -2857,11 +2915,9 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
             </Suspense>
           </div>
         ) : chatView === 'artifacts' ? (
-          <div key="center" className={centerPageClass}>
+          <div key="center" className={worksPageClass}>
             {centerPageTopStrip}
-            <Suspense fallback={null}>
-              <ArtifactsCenter onOpenConversation={handleSidebarSelectConversation} />
-            </Suspense>
+            <ArtifactsCenter onOpenConversation={handleSidebarSelectConversation} />
           </div>
         ) : chatView === 'workbench' ? (
           <div key="center" className={centerPageClass}>
@@ -2974,6 +3030,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
       </div>
     </Profiler>
     </AsyncQuestionsContext.Provider>
+    <AppDialogHost />
     </LangContext.Provider>
   )
 }

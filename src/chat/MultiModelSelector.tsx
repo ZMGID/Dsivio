@@ -9,6 +9,7 @@ import { ModelIcon } from '../components/ModelIcon'
 import { IconButton } from '../components/Button'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import type { ModelRef } from './types'
+import { usePopoverMenu } from './usePopoverMenu'
 
 const MAX_REPLY_MODELS = 4
 
@@ -30,6 +31,7 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up' }: MultiMode
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const triggerRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+  usePopoverMenu(open, () => setOpen(false), popoverRef)
   const maxH = usePopoverMaxHeight(open, popoverRef, placement === 'down' ? 'down' : 'up', 360)
 
   const loadProviders = useCallback(async () => {

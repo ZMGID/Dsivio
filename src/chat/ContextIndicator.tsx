@@ -1,9 +1,10 @@
-import { Archive, Eraser, RefreshCw } from 'lucide-react'
+import { Button } from '../components/Button'
+import { Archive, Eraser, RefreshCw, Square } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   buildContextBarSlices,
-  CONTEXT_AUTO_COMPRESS_PERCENT,
+  autoCompactPercent,
   CONTEXT_CRITICAL_PERCENT,
   CONTEXT_FREE_SEGMENT_ID,
   CONTEXT_WARNING_PERCENT,
@@ -13,6 +14,7 @@ import {
 import { i18n, type I18n, type Lang } from '../components/i18n'
 import { formatTokensK } from '../utils/tokens'
 import type { ConversationContextState } from './types'
+import { usePopoverMenu } from './usePopoverMenu'
 
 const PANEL_WIDTH = 280
 const PANEL_GAP = 8
@@ -34,6 +36,7 @@ interface ContextIndicatorProps {
   usesExternalRuntime?: boolean
   onRefresh?: () => void
   onCompress?: () => void
+  onStopCompression?: () => void
   onClear?: () => void
   placement?: 'up' | 'down'
   lang?: Lang
@@ -87,6 +90,7 @@ export function ContextIndicator({
   usesExternalRuntime = false,
   onRefresh,
   onCompress,
+  onStopCompression,
   onClear,
   placement: _placement = 'down',
   lang = 'zh',
@@ -99,6 +103,7 @@ export function ContextIndicator({
   const [pos, setPos] = useState<{ bottom: number; right: number; maxH: number; width: number } | null>(null)
   const triggerRef = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+  usePopoverMenu(open, () => setOpen(false), popoverRef)
 
   const estimatedInputTokens = valueFrom(
     contextState?.estimated_input_tokens,
@@ -179,9 +184,12 @@ export function ContextIndicator({
   const compressLabel = isExternalContext
     ? (compressing ? t.contextCliCompacting : t.contextCliCompact)
     : (compressing ? t.contextCompressing : t.contextCompress)
-  const autoHint = isExternalContext
+  // Automatic compaction runs inside a generation, and stopping it stops that generation.
+  const stopLabel = generating ? t.contextStopGeneration : t.contextStopCompression
+  const autoPercent = autoCompactPercent(contextState)
+  const autoHint = isExternalContext || autoPercent == null
     ? null
-    : t.contextPanelAutoCompress.replace('{auto}', String(CONTEXT_AUTO_COMPRESS_PERCENT))
+    : t.contextPanelAutoCompress.replace('{auto}', String(autoPercent))
   // 只在真正压过时露出次数；自动压缩阈值放压缩按钮 title，不占正文。
   const compressMeta = compressionCount > 0
     ? t.contextCompressionCount.replace('{count}', String(compressionCount))
@@ -273,17 +281,17 @@ export function ContextIndicator({
             >
               <RefreshCw size={13} strokeWidth={1.9} className={loading ? 'animate-spin' : ''} />
             </button>
-            <button
-              type="button"
-              className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-[11px] font-semibold text-neutral-700 transition-colors hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40 dark:text-neutral-200 dark:hover:bg-neutral-800"
-              aria-label={t.contextCompressAria}
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={compressing && onStopCompression ? stopLabel : t.contextCompressAria}
               title={autoHint ? `${compressLabel} · ${autoHint}` : compressLabel}
-              onClick={onCompress}
-              disabled={!canCompress}
+              onClick={compressing && onStopCompression ? onStopCompression : onCompress}
+              disabled={compressing ? !onStopCompression : !canCompress}
             >
-              <Archive size={13} strokeWidth={1.9} />
-              <span>{compressLabel}</span>
-            </button>
+              {compressing ? <Square size={13} /> : <Archive size={13} strokeWidth={1.9} />}
+              <span>{compressing && onStopCompression ? stopLabel : compressLabel}</span>
+            </Button>
             {onClear && (
               <button
                 type="button"

@@ -17,6 +17,7 @@ import { artifactReferenceId, inlineArtifactReferenceLinks } from './artifactRef
 import { artifactId } from './artifactPresentation'
 import { ArtifactFileChip } from './GeneratedFileArtifacts'
 import { loadArtifactDataUrl } from './attachmentPreview'
+import { openChatImageViewer } from './imageViewer'
 import { remarkCitations, type CitationView } from './citations'
 import { citationPopoverPosition, type CitationPopoverPosition } from './citationPopover'
 import { isWebCitation } from './webSearchCitations'
@@ -482,15 +483,14 @@ function DeferredCodeBlock({ code, language }: { code: string; language: string 
   const streaming = useContext(MarkdownStreamingContext)
   // ⚠️ fallback 必须与 CodeBlock 逐像素同几何：同 figure（my-3 + border）、同 pre
   // padding（pt-10 pb-4 px-4）、同 nowrap 横向滚动、渲染**全文**（不截断）。
-  // 回翻历史时行先按 fallback 首测入列，~180ms 后 hydrate 换真身；backward 滚动中的
-  // re-measure 刻意不做滚动补偿（shouldAdjustChatItemSizeChange 对齐上游默认），
-  // fallback 与真身的任何高度差都会直接变成「翻历史时抽一下」。旧 fallback 是裸
+  // 回翻历史时行先按 fallback 首测入列，空闲时 hydrate 换真身；
+  // fallback 与真身的任何高度差都需要补偿，也会移动行内的阅读位置。旧 fallback 是裸
   // pre（少 24px 外边距/边框、py-4 vs pt-10）+ pre-wrap（长行换行）+ >14k 截断，
   // 三处全在制造高度差。纯文本是单个 text node，渲染很便宜 —— 贵的是高亮 token
   // span，所以全文照渲、只延后高亮。
   return (
     <ChatHeavyIsland
-      minHeight={112}
+      minHeight={0}
       delayMs={180}
       eager={conversationOpening || streaming}
       fallback={(
@@ -1065,7 +1065,7 @@ function buildArtifactLookup(artifacts: ChatToolArtifact[]): Map<string, ChatToo
   return lookup
 }
 
-/** Markdown 内图片：有 path 时懒加载整图，缩略图仅作占位（重载对话后不再显示 256px 小图）。 */
+/** Markdown 内图片优先显示已有缩略图；查看器按需读取原图。 */
 function MarkdownArtifactImage({
   rawSrc,
   alt,
@@ -1087,8 +1087,11 @@ function MarkdownArtifactImage({
 
   useEffect(() => {
     let cancelled = false
-    if (artifact?.path && conversationId) {
-      if (inline) setSrc(inline)
+    if (inline) {
+      setSrc(inline)
+      return
+    }
+    if (artifact?.path) {
       void loadArtifactDataUrl(artifact, conversationId).then((loaded) => {
         if (!cancelled && loaded) setSrc(loaded)
       })
@@ -1096,25 +1099,29 @@ function MarkdownArtifactImage({
         cancelled = true
       }
     }
-    if (inline) {
-      setSrc(inline)
-      return
-    }
-    if (isExternalOrAbsoluteImageSrc(rawSrc)) setSrc(rawSrc)
+    setSrc(isExternalOrAbsoluteImageSrc(rawSrc) ? rawSrc : '')
     return () => {
       cancelled = true
     }
   }, [artifact, conversationId, inline, rawSrc])
 
   if (!src) return null
-  const openViewer = () => onImageClick?.(src, alt, rawSrc)
+  const openViewer = () => {
+    if (artifact?.path) {
+      openChatImageViewer({ src, alt, name: artifact.name ?? rawSrc, path: artifact.path, conversationId })
+    } else {
+      onImageClick?.(src, alt, rawSrc)
+    }
+  }
   return (
     <span data-chat-md-image="" className="inline-block max-w-full align-top">
       <ChatInlineImage
         src={src}
         alt={alt}
         name={artifact?.name ?? rawSrc}
-        path={artifact?.path ?? artifact?.filePath ?? artifact?.localPath ?? rawSrc}
+        path={artifact
+          ? artifact.path ?? artifact.filePath ?? artifact.localPath
+          : /^(?:[a-z]:[\\/]|\/|\\\\)/i.test(rawSrc) ? rawSrc : undefined}
         conversationId={conversationId}
         onOpenViewer={openViewer}
         className="mb-2 mr-2"

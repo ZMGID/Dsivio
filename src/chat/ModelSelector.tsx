@@ -9,6 +9,7 @@ import { ModelIcon } from '../components/ModelIcon'
 import { createProviderRequestDraft } from '../settings/public/providerDraft'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import { chatTitlebarPillButtonClass } from './platform'
+import { usePopoverMenu } from './usePopoverMenu'
 
 interface ModelSelectorProps {
   currentProviderId: string
@@ -34,6 +35,7 @@ function ModelSelectorBase({
   const [providers, setProviders] = useState<ModelProvider[]>([])
   const [favorites, setFavorites] = useState<string[]>([])
   const menuRef = useRef<HTMLDivElement>(null)
+  usePopoverMenu(open, () => setOpen(false), menuRef)
   const maxH = usePopoverMaxHeight(open, menuRef, 'down', 400)
 
   const loadSettings = useCallback(async () => {
@@ -167,6 +169,8 @@ function ModelSelectorBase({
       <button
         type="button"
         onClick={() => setOpen(!open)}
+        aria-haspopup="menu"
+        aria-expanded={open}
         title={tooltipText || undefined}
         className={`${chatTitlebarPillButtonClass} max-w-full min-w-0`}
       >

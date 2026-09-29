@@ -227,7 +227,6 @@ fn system_prompt(app: &AppHandle, settings: &Settings, request: &AiTaskRequest, 
         None,
         None,
         None,
-        None,
         workdir_str.as_deref(),
         None,
         obsidian_vault_path,
@@ -287,6 +286,7 @@ fn assemble<'a>(
         initial_anchor_total_tokens: None,
         initial_anchor_trailing_estimate: 0,
         skill_project_cwd: workdir,
+        todo_state: Default::default(),
     }
 }
 

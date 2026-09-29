@@ -10,6 +10,7 @@ import { builtinAssistantGlyph } from './assistantIcons'
 import { IconButton } from '../components/Button'
 import { usePopoverMaxHeight } from './usePopoverMaxHeight'
 import type { ChatAssistant } from './types'
+import { usePopoverMenu } from './usePopoverMenu'
 
 export function AssistantPicker({
   currentAssistant,
@@ -29,6 +30,7 @@ export function AssistantPicker({
   const [assistants, setAssistants] = useState<ChatAssistant[]>([])
   const ref = useRef<HTMLDivElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
+  usePopoverMenu(open, () => setOpen(false), popoverRef)
 
   const load = useCallback(async () => {
     try {

@@ -4,28 +4,16 @@ import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   ArrowUp,
-  Archive,
   Check,
   ChevronDown,
-  CircleHelp,
-  Eraser,
   Folder,
   FolderPlus,
   Layers,
-  ListChecks,
-  MessageSquarePlus,
-  Network,
-  Paperclip,
   Plus,
   Search,
-  Settings,
-  Sparkles,
   Square,
-  Terminal,
   TextQuote,
-  Target,
   WandSparkles,
-  Wrench,
   X,
 } from 'lucide-react'
 import { ChatAttachments } from './ChatAttachments'
@@ -34,8 +22,9 @@ import { ComposerAddMenu } from './ComposerAddMenu'
 import { useComposerContextMenu, type ComposerPasteTarget } from './useComposerContextMenu'
 import { SourcesButton } from './SourcesButton'
 import { onComposerInsert, onComposerTextInsert } from './composerInsert'
-import { draftKey, getComposerDraft, migrateNewChatDraft, setComposerDraft } from './composerDraft'
-import { applyComposerAutoHeight } from './composerAutoHeight'
+import { beginComposerAttachmentOperation, beginComposerDraftOperation, invalidateComposerAttachmentPath, draftKey, getComposerDraft, registerComposerDraftScope, setComposerDraft, subscribeComposerDraft, updateComposerDraft } from './composerDraft'
+import { ComposerEditor, type ComposerEditorHandle } from './ComposerEditor'
+import { SlashCommandIcon } from './SlashCommandIcon'
 import { canOptimizeComposerText } from './promptOptimize'
 import { AssistantPicker } from './AssistantPicker'
 import { MultiModelSelector } from './MultiModelSelector'
@@ -50,16 +39,23 @@ import type { AdditionalDirectory, AgentPlanMode, AgentPlanState, AgentTodoState
 import {
   buildSlashCommands,
   commandMatches,
-  shouldOpenSlashPopover,
-  matchComposerSlashCommand,
+  findActiveSlashToken,
+  findComposerCommands,
+  type ActiveSlashToken,
   type SlashCommandDefinition,
   type SlashSkill,
 } from './slashCommands'
 import type { ModeOption, ModeTone } from './permissionModes'
 import { isTauriRuntime } from './utils'
 import { isVideoFile } from './attachmentType'
+import { usePopoverMenu } from './usePopoverMenu'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
+type AttachmentOperationScope = ReturnType<typeof beginComposerAttachmentOperation>
+const SPREADSHEET_HTML = /<table\b|office:excel|Excel\.Sheet|Microsoft\s+Excel|mso-(?:number-format|displayed-decimal-separator)/iu
+function preferSpreadsheetText(text: string, html: string): boolean {
+  return text.length > 0 && (text.includes('\t') || SPREADSHEET_HTML.test(html))
+}
 /** 与 `index.css` 问题优化出场 / 入场时长对齐：`--kv-dur-slow`、`slow + fast`。 */
 const OPTIMIZE_OUT_MS = 320
 const OPTIMIZE_IN_MS = 470
@@ -71,7 +67,7 @@ function isAttachableClipboardFile(file: File): boolean {
 }
 
 function undoAccidentalFilenamePaste(
-  textarea: HTMLTextAreaElement,
+  textarea: ComposerEditorHandle,
   valueBeforePaste: string,
   clipText: string,
   selectionStart: number,
@@ -87,10 +83,8 @@ function undoAccidentalFilenamePaste(
   const cleaned = `${valueBeforePaste.slice(0, selectionStart)}${valueBeforePaste.slice(selectionEnd)}`
   setValue(cleaned)
   requestAnimationFrame(() => {
-    textarea.value = cleaned
     textarea.selectionStart = selectionStart
     textarea.selectionEnd = selectionStart
-    applyComposerAutoHeight(textarea)
   })
 }
 
@@ -166,11 +160,6 @@ type SlashCommandId =
   | 'attach'
 type LocalSlashCommand = SlashCommandDefinition & { id: SlashCommandId; kind: 'action' }
 
-interface ActiveSlashToken {
-  start: number
-  end: number
-  query: string
-}
 
 const LOCAL_SLASH_COMMANDS: LocalSlashCommand[] = [
   {
@@ -265,41 +254,7 @@ const LOCAL_SLASH_COMMANDS: LocalSlashCommand[] = [
   },
 ]
 
-function slashCommandIcon(command: SlashCommandDefinition) {
-  if (command.kind === 'skill') {
-    return Sparkles
-  }
-  if (command.kind === 'cli') {
-    return Terminal
-  }
-  switch (command.id as SlashCommandId) {
-    case 'help':
-      return CircleHelp
-    case 'plan':
-      return ListChecks
-    case 'goal':
-      return Target
-    case 'orchestrate':
-      return Network
-    case 'new':
-      return MessageSquarePlus
-    case 'compact':
-      return Archive
-    case 'clear':
-      return Eraser
-    case 'settings':
-      return Settings
-    case 'tools':
-      return Wrench
-    case 'attach':
-      return Paperclip
-    default:
-      return Sparkles
-  }
-}
 
-// pill 颜色呼应输入框边框：Act=neutral、Plan=emerald、Orchestrate=violet。
-// 档位表由 Chat 传入（内置三档 / 本地 CLI 档位），这里只按 tone 取样式。
 const MODE_PILL_CLASS: Record<ModeTone, { idle: string; iconColor: string }> = {
   neutral: {
     idle: 'text-neutral-600 hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-700/55',
@@ -315,25 +270,6 @@ const MODE_PILL_CLASS: Record<ModeTone, { idle: string; iconColor: string }> = {
   },
 }
 
-function findActiveSlashToken(value: string, cursor: number): ActiveSlashToken | null {
-  if (cursor < 0 || cursor > value.length) return null
-
-  let start = cursor
-  while (start > 0 && !/\s/.test(value[start - 1])) {
-    start -= 1
-  }
-
-  const token = value.slice(start, cursor)
-  if (!token.startsWith('/')) return null
-  if (start > 0 && !/\s/.test(value[start - 1])) return null
-  if (token.slice(1).includes('/')) return null
-
-  return {
-    start,
-    end: cursor,
-    query: token.slice(1),
-  }
-}
 
 function imageExtensionForMime(mimeType: string): string {
   switch (mimeType.toLowerCase()) {
@@ -431,6 +367,8 @@ export interface InputBarProps {
   conversationId?: string | null
   /** 当前会话的用户消息，按发送时间从旧到新排列。 */
   inputHistory?: readonly string[]
+  /** Load older prompts only when the reader starts browsing input history. */
+  onLoadInputHistory?: () => Promise<readonly string[] | null>
   /** 本会话挂载的知识库 id；缺省时 knowledge_search 检索全部库 */
   knowledgeBaseIds?: string[]
   onChangeKnowledgeBaseIds?: (ids: string[]) => void | Promise<void>
@@ -513,6 +451,7 @@ export const InputBar = memo(function InputBar({
   externalAgentName = null,
   conversationId = null,
   inputHistory = [],
+  onLoadInputHistory,
   knowledgeBaseIds = [],
   onChangeKnowledgeBaseIds,
   forceKnowledgeSearch = false,
@@ -550,21 +489,26 @@ export const InputBar = memo(function InputBar({
   const draftKeyValue = draftKey(conversationId)
   const [input, setInput] = useState(() => getComposerDraft(draftKeyValue)?.input ?? '')
   const historyRef = useRef<{ entries: string[]; index: number; draft: string } | null>(null)
+  const historyReadRef = useRef<object | null>(null)
   const historyCaretRef = useRef<number | null>(null)
   useLayoutEffect(() => {
     if (historyCaretRef.current === null) return
-    textareaRef.current?.setSelectionRange(historyCaretRef.current, historyCaretRef.current)
+    editorRef.current?.setSelectionRange(historyCaretRef.current, historyCaretRef.current)
     historyCaretRef.current = null
   }, [input])
   const [quotes, setQuotes] = useState<string[]>(() => getComposerDraft(draftKeyValue)?.quotes ?? [])
   const [attachments, setAttachments] = useState<PendingAttachment[]>(() => getComposerDraft(draftKeyValue)?.attachments ?? [])
-  const [attachmentError, setAttachmentError] = useState('')
+  const [attachmentError, setAttachmentError] = useState(() => getComposerDraft(draftKeyValue)?.attachmentError ?? '')
   const [editingAttachment, setEditingAttachment] = useState<PendingAttachment | null>(null)
   const [dragActive, setDragActive] = useState(false)
   const [toolPanelOpen, setToolPanelOpen] = useState(false)
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const [presetMenuOpen, setPresetMenuOpen] = useState(false)
   const [projectMenuOpen, setProjectMenuOpen] = useState(false)
+  const toolPanelRef = useRef<HTMLDivElement>(null)
+  const modeMenuRef = useRef<HTMLDivElement>(null)
+  // 两处项目菜单（有项目的状态栏 / 无项目的工具栏）互斥渲染，共用一个 ref。
+  const projectMenuRef = useRef<HTMLDivElement>(null)
   const [projectOptions, setProjectOptions] = useState<ChatProject[]>([])
   const [projectOptionsLoading, setProjectOptionsLoading] = useState(false)
   const [projectOptionsError, setProjectOptionsError] = useState('')
@@ -573,6 +517,7 @@ export const InputBar = memo(function InputBar({
   const [slashPanelOpen, setSlashPanelOpen] = useState(false)
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
   const [activeSlashToken, setActiveSlashToken] = useState<ActiveSlashToken | null>(null)
+  const [commandError, setCommandError] = useState('')
   const [slashPanelLeft, setSlashPanelLeft] = useState(0)
   const [optimizing, setOptimizing] = useState(false)
   const [optimizeMotion, setOptimizeMotion] = useState<'idle' | 'out' | 'in'>('idle')
@@ -581,32 +526,43 @@ export const InputBar = memo(function InputBar({
   const optimizeRequestRef = useRef(0)
   const pendingOptimizeTextRef = useRef<string | null>(null)
   const innerRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const slashHighlightRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<ComposerEditorHandle>(null)
   // 草稿持久化：会话 key 变化（切对话且未卸载）时载入对应草稿；每次内容变化写回内存 store。
-  // keyRef 保证写回落到当前会话，不串到刚切走的会话。
-  const draftKeyRef = useRef(draftKeyValue)
-  // 发送等待期间如果「新会话占位键」迁移成真实会话 id，清理目标也要跟着迁移；
-  // 但普通切会话没有发生草稿迁移时，绝不能误清新会话自己的草稿。
-  const sendingDraftKeyRef = useRef<string | null>(null)
+  // scope 保证写回落到当前会话，不串到刚切走的会话。
+  const draftScopeRef = useRef({ key: draftKeyValue })
   useEffect(() => {
-    if (draftKeyRef.current === draftKeyValue) return
+    const scope = draftScopeRef.current
+    const release = registerComposerDraftScope(scope)
+    const unsubscribe = subscribeComposerDraft((key, draft) => {
+      if (scope.key !== key) return
+      setInput(draft.input)
+      setQuotes(draft.quotes)
+      setAttachments(draft.attachments)
+      setAttachmentError(draft.attachmentError ?? '')
+    })
+    return () => { unsubscribe(); release() }
+  }, [])
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  useEffect(() => {
+    if (draftScopeRef.current.key === draftKeyValue) return
     historyRef.current = null
+    historyReadRef.current = null
     historyCaretRef.current = null
-    const prevKey = draftKeyRef.current
-    draftKeyRef.current = draftKeyValue
-    // 新建会话刚落库拿到 id（切 plan/orchestrate 模式等会触发）：草稿跟着搬过去，
-    // 本地 state 已经是那份内容，直接返回，别当成「切到了另一条会话」把字清掉。
-    if (migrateNewChatDraft(prevKey, draftKeyValue)) {
-      if (sendingDraftKeyRef.current === prevKey) {
-        sendingDraftKeyRef.current = draftKeyValue
-      }
-      return
-    }
+    setActiveSlashToken(null)
+    setSlashPanelOpen(false)
+    setCommandError('')
+    draftScopeRef.current.key = draftKeyValue
+    // Creation commits migrate the store before this binding changes. Ordinary
+    // navigation only loads the target draft; it never transfers ownership.
     const d = getComposerDraft(draftKeyValue)
     setInput(d?.input ?? '')
     setQuotes(d?.quotes ?? [])
     setAttachments(d?.attachments ?? [])
+    setAttachmentError(d?.attachmentError ?? '')
     setOptimizeSnapshot(null)
     setOptimizeError('')
     setOptimizing(false)
@@ -615,8 +571,8 @@ export const InputBar = memo(function InputBar({
     optimizeRequestRef.current += 1
   }, [draftKeyValue])
   useEffect(() => {
-    setComposerDraft(draftKeyRef.current, { input, quotes, attachments })
-  }, [input, quotes, attachments])
+    setComposerDraft(draftScopeRef.current.key, { input, quotes, attachments, attachmentError })
+  }, [input, quotes, attachments, attachmentError])
   useEffect(() => {
     if (optimizeMotion !== 'out') return
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -626,7 +582,7 @@ export const InputBar = memo(function InputBar({
       if (next != null) setInput(next)
       setOptimizeMotion('in')
       requestAnimationFrame(() => {
-        const el = textareaRef.current
+        const el = editorRef.current
         if (!el) return
         el.focus({ preventScroll: true })
         el.selectionStart = el.selectionEnd = el.value.length
@@ -749,7 +705,7 @@ export const InputBar = memo(function InputBar({
     if (!onSelectProject) return
     closeProjectMenu()
     await onSelectProject(project)
-    requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
+    requestAnimationFrame(() => editorRef.current?.focus({ preventScroll: true }))
   }, [closeProjectMenu, onSelectProject])
 
   const createBlankProject = useCallback(async () => {
@@ -780,7 +736,7 @@ export const InputBar = memo(function InputBar({
       setProjectOptionsError(typeof err === 'string' ? err : err instanceof Error ? err.message : t.chatProjectCreateFailed)
     } finally {
       setProjectCreating(false)
-      requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
+      requestAnimationFrame(() => editorRef.current?.focus({ preventScroll: true }))
     }
   }, [closeProjectMenu, disabled, onSelectProject, projectCreating, projectOptions, t])
 
@@ -808,28 +764,18 @@ export const InputBar = memo(function InputBar({
       setProjectOptionsError(typeof err === 'string' ? err : err instanceof Error ? err.message : t.chatProjectCreateFailed)
     } finally {
       setProjectCreating(false)
-      requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
+      requestAnimationFrame(() => editorRef.current?.focus({ preventScroll: true }))
     }
   }, [closeProjectMenu, disabled, onSelectProject, projectCreating, t])
 
-  const updateTextareaHeight = useCallback(() => {
-    const textarea = textareaRef.current
-    if (!textarea) return
-    applyComposerAutoHeight(textarea)
-  }, [])
 
-  // 高度/滚动条是 input 的纯函数，统一在这里跟。原来每条改 input 的路径各自补一次
-  // requestAnimationFrame(updateTextareaHeight)，草稿回填那条（见上方 draftKeyValue effect）
-  // 漏了 —— 切走再切回时框子还留着上一条会话的高度且 overflowY:hidden，下半截文本看不到也滚不动。
-  // 用 layout effect 而非 rAF：DOM 提交后、绘制前跑完，不闪；也不必在每个 setInput 后手动记得调。
-  useLayoutEffect(updateTextareaHeight, [input, updateTextareaHeight])
 
   // 消息区「添加到聊天」：把选中文字作为引用卡片挂到输入框上方（发送时才拼进正文）。
   const insertQuoteFromSelection = useCallback((text: string) => {
     const trimmed = text.trim()
     if (!trimmed) return
     setQuotes((prev) => [...prev, trimmed])
-    requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }))
+    requestAnimationFrame(() => editorRef.current?.focus({ preventScroll: true }))
   }, [])
 
   useEffect(() => onComposerInsert(insertQuoteFromSelection), [insertQuoteFromSelection])
@@ -842,7 +788,7 @@ export const InputBar = memo(function InputBar({
       return `${prev}${needsSpace ? ' ' : ''}${text}`
     })
     requestAnimationFrame(() => {
-      const textarea = textareaRef.current
+      const textarea = editorRef.current
       if (textarea) {
         textarea.focus({ preventScroll: true })
         textarea.selectionStart = textarea.value.length
@@ -859,7 +805,7 @@ export const InputBar = memo(function InputBar({
   const syncSlashToken = useCallback((value: string, cursor: number) => {
     const token = findActiveSlashToken(value, cursor)
     setActiveSlashToken(token)
-    if (token && shouldOpenSlashPopover()) {
+    if (token && !editorRef.current?.atCommand) {
       setSlashPanelOpen(true)
       setToolPanelOpen(false)
       closeProjectMenu()
@@ -885,21 +831,6 @@ export const InputBar = memo(function InputBar({
     )),
     [allSlashCommands, activeSlashToken?.query],
   )
-  const slashHighlight = useMemo(
-    () => matchComposerSlashCommand(input, allSlashCommands),
-    [allSlashCommands, input],
-  )
-
-  const syncSlashHighlightScroll = useCallback(() => {
-    const textarea = textareaRef.current
-    const overlay = slashHighlightRef.current
-    if (!textarea || !overlay) return
-    overlay.scrollTop = textarea.scrollTop
-    overlay.scrollLeft = textarea.scrollLeft
-  }, [])
-  useLayoutEffect(() => {
-    syncSlashHighlightScroll()
-  }, [input, slashHighlight, syncSlashHighlightScroll])
   const visibleProjectOptions = useMemo(() => {
     const query = projectSearchQuery.trim().toLowerCase()
     return [...projectOptions]
@@ -912,69 +843,12 @@ export const InputBar = memo(function InputBar({
       .slice(0, 8)
   }, [projectOptions, projectSearchQuery])
 
-  const removeActiveSlashToken = useCallback(() => {
-    const token = activeSlashToken
-    if (!token) {
-      setInput('')
-      return
-    }
-
-    setInput((prev) => {
-      const next = `${prev.slice(0, token.start)}${prev.slice(token.end)}`.replace(/^\s+/, '')
-      requestAnimationFrame(() => {
-        const textarea = textareaRef.current
-        if (!textarea) return
-        textarea.selectionStart = Math.min(token.start, next.length)
-        textarea.selectionEnd = Math.min(token.start, next.length)
-      })
-      return next
-    })
-  }, [activeSlashToken])
-
   const completeActiveSlashToken = useCallback((command: SlashCommandDefinition) => {
     const token = activeSlashToken
-    if (!token) return
-
-    const cursor = token.start + command.slash.length
-    setInput((prev) => {
-      const next = `${prev.slice(0, token.start)}${command.slash}${prev.slice(token.end)}`
-      requestAnimationFrame(() => {
-        const textarea = textareaRef.current
-        if (!textarea) return
-        textarea.focus({ preventScroll: true })
-        textarea.selectionStart = cursor
-        textarea.selectionEnd = cursor
-      })
-      return next
-    })
-    setActiveSlashToken({
-      start: token.start,
-      end: cursor,
-      query: command.slash.slice(1),
-    })
-    setSlashPanelOpen(true)
-  }, [activeSlashToken])
-
-  // Skill commands complete to `/name ` (trailing space) and close the popover
-  // so the user types arguments; the whole string is sent on Enter and parsed
-  // by the backend slash-trigger preprocessing.
-  const completeSkillSlashToken = useCallback((command: SlashCommandDefinition) => {
-    const token = activeSlashToken
-    if (!token) return
-
-    const insertion = `${command.slash} `
-    const cursor = token.start + insertion.length
-    setInput((prev) => {
-      const next = `${prev.slice(0, token.start)}${insertion}${prev.slice(token.end)}`
-      requestAnimationFrame(() => {
-        const textarea = textareaRef.current
-        if (!textarea) return
-        textarea.focus({ preventScroll: true })
-        textarea.selectionStart = cursor
-        textarea.selectionEnd = cursor
-      })
-      return next
-    })
+    const editor = editorRef.current
+    if (!token || !editor) return
+    editor.replaceText(token.start, token.end, `${command.slash} `)
+    editor.focus({ preventScroll: true })
     setActiveSlashToken(null)
     setSlashPanelOpen(false)
   }, [activeSlashToken])
@@ -982,17 +856,27 @@ export const InputBar = memo(function InputBar({
   const selectedSlashCommand = filteredSlashCommands[slashSelectedIndex]
     ?? filteredSlashCommands[0]
 
+  const setScopedAttachmentError = useCallback((message: string, scope?: AttachmentOperationScope) => {
+    if (!scope || (mountedRef.current && scope.key === draftScopeRef.current.key)) {
+      setAttachmentError(message)
+    } else {
+      updateComposerDraft(scope.key, (draft) => ({ ...draft, attachmentError: message }))
+    }
+  }, [])
+
   const addAttachments = useCallback(
-    (next: PendingAttachment[], options?: { imagesOnly?: boolean }) => {
+    (next: PendingAttachment[], options?: { imagesOnly?: boolean }, scope?: AttachmentOperationScope) => {
+      const addable = scope ? next.filter((attachment) => !scope.removedPaths.has(attachment.path)) : next
+      if (addable.length === 0 && next.length > 0) return
       const filtered = options?.imagesOnly
-        ? next.filter((attachment) => attachment.type === 'image')
-        : next.filter((attachment) => attachment.name.trim() !== '')
+        ? addable.filter((attachment) => attachment.type === 'image')
+        : addable.filter((attachment) => attachment.name.trim() !== '')
       if (filtered.length === 0) {
-        setAttachmentError(options?.imagesOnly ? t.chatDropImagesOnly : t.chatNoAddableFiles)
+        setScopedAttachmentError(options?.imagesOnly ? t.chatDropImagesOnly : t.chatNoAddableFiles, scope)
         return
       }
 
-      setAttachments((prev) => {
+      const append = (prev: PendingAttachment[]) => {
         const existing = new Set(prev.map((attachment) => attachment.path))
         const dedupedNext = filtered.filter((attachment) => {
           if (existing.has(attachment.path)) return false
@@ -1000,15 +884,25 @@ export const InputBar = memo(function InputBar({
           return true
         })
         if (dedupedNext.length === 0) {
-          setAttachmentError(t.chatAttachmentAdded)
-          return prev
+          return { attachments: prev, error: t.chatAttachmentAdded }
         }
-        setAttachmentError('')
-        return [...prev, ...dedupedNext]
-      })
-      textareaRef.current?.focus()
+        return { attachments: [...prev, ...dedupedNext], error: '' }
+      }
+      if (scope && (!mountedRef.current || scope.key !== draftScopeRef.current.key)) {
+        updateComposerDraft(scope.key, (draft) => {
+          const result = append(draft.attachments)
+          return { ...draft, attachments: result.attachments, attachmentError: result.error }
+        })
+      } else {
+        setAttachments((prev) => {
+          const result = append(prev)
+          setAttachmentError(result.error)
+          return result.attachments
+        })
+        editorRef.current?.focus()
+      }
     },
-    [t],
+    [setScopedAttachmentError, t],
   )
 
   // 编辑弹窗保存：用编辑后的内容重建内存附件数据（提交时由 api 层生成新的 File/Blob 内容）。
@@ -1028,7 +922,7 @@ export const InputBar = memo(function InputBar({
       await onAgentPlanModeChange(mode)
     }
     requestAnimationFrame(() => {
-      textareaRef.current?.focus({ preventScroll: true })
+      editorRef.current?.focus({ preventScroll: true })
     })
   }, [agentPlanMode, closeModeMenu, closeProjectMenu, disabled, onAgentPlanModeChange])
 
@@ -1044,7 +938,7 @@ export const InputBar = memo(function InputBar({
       await onModeChange(value)
     }
     requestAnimationFrame(() => {
-      textareaRef.current?.focus({ preventScroll: true })
+      editorRef.current?.focus({ preventScroll: true })
     })
   }, [closeModeMenu, closePresetMenu, closeProjectMenu, disabled, modeValue, onModeChange])
 
@@ -1068,7 +962,7 @@ export const InputBar = memo(function InputBar({
       await onPresetChange(value)
     }
     requestAnimationFrame(() => {
-      textareaRef.current?.focus({ preventScroll: true })
+      editorRef.current?.focus({ preventScroll: true })
     })
   }, [closeModeMenu, closePresetMenu, closeProjectMenu, disabled, onPresetChange, presetLocked, presetValue])
 
@@ -1091,10 +985,11 @@ export const InputBar = memo(function InputBar({
 
   const openAttachmentPicker = useCallback(async () => {
     if (composerLocked) return
+    const scope = beginComposerAttachmentOperation(draftScopeRef.current.key)
     setToolPanelOpen(false)
     closeProjectMenu()
     setSlashPanelOpen(false)
-    setAttachmentError('')
+    setScopedAttachmentError('', scope)
     try {
       const selected = await open({
         multiple: true,
@@ -1103,53 +998,30 @@ export const InputBar = memo(function InputBar({
       const paths = Array.isArray(selected) ? selected : selected ? [selected] : []
       if (paths.length === 0) return
 
-      addAttachments(await pendingFromPaths(paths))
+      addAttachments(await pendingFromPaths(paths), undefined, scope)
     } catch (err) {
       console.error('Failed to add chat attachment:', err)
-      setAttachmentError(
+      setScopedAttachmentError(
         typeof err === 'string' ? err : err instanceof Error ? err.message : t.chatAttachmentAddFailed,
+        scope,
       )
+    } finally {
+      scope.release()
     }
-  }, [addAttachments, closeProjectMenu, composerLocked, pendingFromPaths, t])
+  }, [addAttachments, closeProjectMenu, composerLocked, pendingFromPaths, setScopedAttachmentError, t])
 
-  const handleSlashCommandSelect = useCallback(async (command: SlashCommandDefinition) => {
+  const executeSlashAction = async (command: SlashCommandDefinition, start: number, end: number) => {
     if (disabled) return
-
-    if (command.kind === 'skill' || command.kind === 'cli') {
-      // Complete the token; user can add args then send with Enter (CLI passthrough).
-      completeSkillSlashToken(command)
-      return
-    }
-
-    if (command.id === 'help') {
-      setInput('/')
-      setActiveSlashToken({ start: 0, end: 1, query: '' })
-      setSlashPanelOpen(true)
-      setToolPanelOpen(false)
-      closeProjectMenu()
-      requestAnimationFrame(() => {
-        const textarea = textareaRef.current
-        if (!textarea) return
-        textarea.focus({ preventScroll: true })
-        textarea.selectionStart = 1
-        textarea.selectionEnd = 1
-      })
-      return
-    }
-
-    removeActiveSlashToken()
+    editorRef.current?.replaceText(start, end, '')
+    // A mode action may create a conversation and migrate/remount its composer
+    // before React commits. Persist the consumed command before starting it.
+    updateComposerDraft(draftScopeRef.current.key, draft => ({ ...draft, input: `${input.slice(0, start)}${input.slice(end)}` }))
     setSlashPanelOpen(false)
 
     switch (command.id) {
-      case 'goal':
-        setInput('/goal ')
-        requestAnimationFrame(() => {
-          const textarea = textareaRef.current
-          if (!textarea) return
-          textarea.focus({ preventScroll: true })
-          textarea.selectionStart = 6
-          textarea.selectionEnd = 6
-        })
+      case 'help':
+        editorRef.current?.replaceText(start, start, '/')
+        syncSlashToken(editorRef.current?.value ?? '/', start + 1)
         return
       case 'plan':
         await setAgentPlanMode('plan')
@@ -1187,26 +1059,15 @@ export const InputBar = memo(function InputBar({
         await openAttachmentPicker()
         return
     }
-  }, [
-    disabled,
-    completeSkillSlashToken,
-    onClearChat,
-    onCompactContext,
-    onNewChat,
-    onOpenSettings,
-    onOpenTools,
-    openAttachmentPicker,
-    removeActiveSlashToken,
-    setAgentPlanMode,
-    closeProjectMenu,
-  ])
+  }
 
 
   const clearSentDraft = (sentDraftKey: string) => {
     setComposerDraft(sentDraftKey, { input: '', quotes: [], attachments: [] })
     // 等待发送时用户可能已经切到另一条有自己草稿的会话。只清本次提交实际归属的输入框。
-    if (draftKeyRef.current !== sentDraftKey) return
+    if (draftScopeRef.current.key !== sentDraftKey) return
     historyRef.current = null
+    historyReadRef.current = null
     setInput('')
     setQuotes([])
     setAttachments([])
@@ -1219,7 +1080,6 @@ export const InputBar = memo(function InputBar({
     setToolPanelOpen(false)
     closeProjectMenu()
     setSlashPanelOpen(false)
-    if (textareaRef.current) applyComposerAutoHeight(textareaRef.current)
   }
 
   const canUndoOptimize = Boolean(optimizeSnapshot && input === optimizeSnapshot.result)
@@ -1231,7 +1091,7 @@ export const InputBar = memo(function InputBar({
       setOptimizeMotion('idle')
       setInput(next)
       requestAnimationFrame(() => {
-        const el = textareaRef.current
+        const el = editorRef.current
         if (!el) return
         el.focus({ preventScroll: true })
         el.selectionStart = el.selectionEnd = el.value.length
@@ -1274,6 +1134,30 @@ export const InputBar = memo(function InputBar({
   const handleSend = async () => {
     const trimmed = input.trim()
     if (sendPending || (!trimmed && quotes.length === 0 && attachments.length === 0) || sendDisabledReason) return
+    const action = findComposerCommands(input, allSlashCommands).find(item => item.command.kind === 'action' && item.command.id !== 'goal')
+    if (action) {
+      if (disabled) return
+      const scope = beginComposerDraftOperation(draftScopeRef.current.key)
+      const snapshot = { input, quotes: [...quotes], attachments: [...attachments] }
+      const remaining = `${input.slice(0, action.start)}${input.slice(action.end)}`
+      setSendPending(true)
+      setCommandError('')
+      try {
+        await executeSlashAction(action.command, action.start, action.end)
+      } catch (error) {
+        updateComposerDraft(scope.key, draft => (
+          draft.input === remaining || !draft.input ? { ...draft, ...snapshot } : draft
+        ))
+        if (mountedRef.current && draftScopeRef.current.key === scope.key) {
+          setCommandError(error instanceof Error ? error.message : String(error))
+        }
+      } finally {
+        scope.release()
+        if (mountedRef.current) setSendPending(false)
+      }
+      return
+    }
+    historyReadRef.current = null
     // 生成中：有排队入口就排队（本轮结束后自动发出），没有就照旧什么都不做。
     if (disabled && !onQueue) return
     const quotedBlock = quotes
@@ -1284,9 +1168,9 @@ export const InputBar = memo(function InputBar({
       : trimmed
     if (disabled && onQueue) {
       onQueue(content, attachments)
-      clearSentDraft(draftKeyRef.current)
+      clearSentDraft(draftScopeRef.current.key)
     } else {
-      sendingDraftKeyRef.current = draftKeyRef.current
+      const sendingScope = beginComposerDraftOperation(draftScopeRef.current.key)
       setSendPending(true)
       const sentSnapshot = {
         input,
@@ -1298,22 +1182,20 @@ export const InputBar = memo(function InputBar({
       const notifyAccepted = () => {
         if (acceptedNotified) return
         acceptedNotified = true
-        // 必须读 ref：欢迎页首发会把 `__new__` 迁到真实会话 id，冻在发送开始会清错键。
-        clearedDraftKey = sendingDraftKeyRef.current ?? draftKeyRef.current
+        // Creation may migrate the scope even if the welcome composer unmounted.
+        clearedDraftKey = sendingScope.key
         clearSentDraft(clearedDraftKey)
-        sendingDraftKeyRef.current = null
         // 后端生成仍在继续，但输入框已经可以接收下一条排队消息。
         setSendPending(false)
       }
       const restoreRejectedDraft = () => {
         if (!acceptedNotified || !clearedDraftKey) return
-        const typedAfterAccept = (textareaRef.current?.value ?? '').trim().length > 0
-        if (draftKeyRef.current !== clearedDraftKey || typedAfterAccept) return
+        const typedAfterAccept = (editorRef.current?.value ?? '').trim().length > 0
+        if (draftScopeRef.current.key !== clearedDraftKey || typedAfterAccept) return
         setComposerDraft(clearedDraftKey, sentSnapshot)
         setInput(sentSnapshot.input)
         setQuotes(sentSnapshot.quotes)
         setAttachments(sentSnapshot.attachments)
-        if (textareaRef.current) applyComposerAutoHeight(textareaRef.current)
       }
       try {
         const accepted = await onSend(content, attachments, { onAccepted: notifyAccepted })
@@ -1327,14 +1209,15 @@ export const InputBar = memo(function InputBar({
         console.error('Failed to submit composer message:', error)
         restoreRejectedDraft()
       } finally {
-        sendingDraftKeyRef.current = null
+        sendingScope.release()
         setSendPending(false)
       }
     }
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== 'ArrowUp') historyReadRef.current = null
+    if (e.isComposing || e.keyCode === 229) return
 
     if (e.key === 'Tab' && e.shiftKey && modeEntryEnabled && !disabled) {
       e.preventDefault()
@@ -1362,18 +1245,14 @@ export const InputBar = memo(function InputBar({
       if (e.key === 'Tab') {
         e.preventDefault()
         if (selectedSlashCommand) {
-          if (selectedSlashCommand.kind === 'skill') {
-            completeSkillSlashToken(selectedSlashCommand)
-          } else {
-            completeActiveSlashToken(selectedSlashCommand)
-          }
+          completeActiveSlashToken(selectedSlashCommand)
         }
         return
       }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault()
         if (selectedSlashCommand) {
-          void handleSlashCommandSelect(selectedSlashCommand)
+          completeActiveSlashToken(selectedSlashCommand)
         }
         return
       }
@@ -1389,13 +1268,36 @@ export const InputBar = memo(function InputBar({
       !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey &&
       !sendPending && !optimizeBusy
     ) {
-      const el = e.currentTarget
+      const el = editorRef.current
+      if (!el) return
       const up = e.key === 'ArrowUp'
       // 多行文本只在首尾切换历史，保留正文中的光标移动与选区操作。
       const atBoundary = !input.includes('\n') ||
         (up ? el.selectionStart === 0 : el.selectionEnd === input.length)
       if (el.selectionStart === el.selectionEnd && atBoundary) {
         if (!historyRef.current && up) {
+          if (onLoadInputHistory) {
+            e.preventDefault()
+            if (historyReadRef.current) return
+            const request = {}
+            const key = draftScopeRef.current.key
+            historyReadRef.current = request
+            void onLoadInputHistory().catch(error => {
+              console.error('Failed to load input history:', error)
+              return null
+            }).then(result => {
+              if (!mountedRef.current || historyReadRef.current !== request
+                || draftScopeRef.current.key !== key || el.value !== input) return
+              const entries = (result ?? inputHistory).filter(text => text.trim())
+              if (!entries.length) return
+              historyRef.current = { entries, index: entries.length - 1, draft: input }
+              const next = entries[entries.length - 1]
+              historyCaretRef.current = next.length
+              setInput(next)
+              setSlashPanelOpen(false)
+            }).finally(() => { if (historyReadRef.current === request) historyReadRef.current = null })
+            return
+          }
           const entries = inputHistory.filter((text) => text.trim())
           if (entries.length) historyRef.current = { entries, index: entries.length, draft: input }
         }
@@ -1431,195 +1333,219 @@ export const InputBar = memo(function InputBar({
     void handleSend()
   }
 
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  const handleInput = (nextValue: string, cursor: number) => {
     historyRef.current = null
-    const nextValue = e.target.value
+    historyReadRef.current = null
     setInput(nextValue)
-    // 高度/滚动条由 input 的 layout effect 统一跟，这里不再内联量一遍。
-    syncSlashToken(nextValue, e.target.selectionStart)
+    setCommandError('')
+    syncSlashToken(nextValue, cursor)
   }
 
-  const handleSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const el = e.currentTarget
-    syncSlashToken(el.value, el.selectionStart)
+  const handleSelect = () => {
+    const el = editorRef.current
+    if (el) syncSlashToken(el.value, el.selectionStart)
   }
 
   const handlePaste = async (
     e: { clipboardData: Pick<DataTransfer, 'files' | 'getData'>; preventDefault: () => void },
     menuTarget?: ComposerPasteTarget,
     knownNativePaths?: string[],
+    operationScope?: AttachmentOperationScope,
   ) => {
     if (composerLocked || optimizeBusy || (!isTauriRuntime() && !menuTarget)) return
 
-    const attachableClipboardFiles = Array.from(e.clipboardData.files).filter(isAttachableClipboardFile)
-    const textarea = textareaRef.current
-    const clipText = e.clipboardData.getData('text/plain')
-    const selectionStart = textarea?.selectionStart ?? input.length
-    const selectionEnd = textarea?.selectionEnd ?? input.length
-    const valueBeforePaste = textarea?.value ?? input
-
-    // 需同步拦截的两种情形：剪贴板有 File 对象（阻止文件名文本插入），或超长纯文本
-    // （转虚拟附件，阻止正文插入）。必须在任何 await 之前调用 preventDefault——
-    // 事件处理是 async 的，等读取完系统文件路径再调，浏览器默认粘贴早已把文本
-    // 插入输入框（事后清空又会误删用户已写内容）。
-    if (attachableClipboardFiles.length > 0 || clipText.length > PASTE_TEXT_ATTACHMENT_THRESHOLD) {
-      e.preventDefault()
-    }
-
-    const nativePaths: string[] = knownNativePaths ?? []
+    const scope = operationScope ?? beginComposerAttachmentOperation(draftScopeRef.current.key)
     try {
-      if (!knownNativePaths && isTauriRuntime()) {
-        const native = await api.chatReadClipboardFiles()
-        if (native.success && native.files?.length) {
-          nativePaths.push(...native.files.map((file) => file.path))
-        }
+      const clipText = e.clipboardData.getData('text/plain')
+      const spreadsheetText = preferSpreadsheetText(clipText, e.clipboardData.getData('text/html'))
+      const attachableClipboardFiles = spreadsheetText ? [] : Array.from(e.clipboardData.files).filter(isAttachableClipboardFile)
+      const textarea = editorRef.current
+      const selectionStart = textarea?.selectionStart ?? input.length
+      const selectionEnd = textarea?.selectionEnd ?? input.length
+      const valueBeforePaste = textarea?.value ?? input
+
+      // 需同步拦截的两种情形：剪贴板有 File 对象（阻止文件名文本插入），或超长纯文本
+      // （转虚拟附件，阻止正文插入）。必须在任何 await 之前调用 preventDefault——
+      // 事件处理是 async 的，等读取完系统文件路径再调，浏览器默认粘贴早已把文本
+      // 插入输入框（事后清空又会误删用户已写内容）。
+      if (attachableClipboardFiles.length > 0 || clipText.length > PASTE_TEXT_ATTACHMENT_THRESHOLD) {
+        e.preventDefault()
       }
-    } catch (err) {
-      console.error('Failed to read clipboard files:', err)
-    }
 
-    if (menuTarget && !menuTarget.isCurrent()) return
-    const hasNativeFiles = nativePaths.length > 0
-    const hasClipboardFiles = attachableClipboardFiles.length > 0
-
-    // 纯文字粘贴：短文本放行交给浏览器默认处理；超长文本已在上方同步阶段 preventDefault
-    // （正文不会进输入框），这里只需生成内存虚拟 txt 附件（不落盘）。
-    if (!hasNativeFiles && !hasClipboardFiles) {
-      if (clipText.length > PASTE_TEXT_ATTACHMENT_THRESHOLD) {
-        addAttachments([
-          {
-            id: `pending-att-${crypto.randomUUID()}`,
-            type: 'file',
-            name: t.chatPastedTextAttachmentName,
-            path: `memory://${crypto.randomUUID()}`,
-            content: clipText,
-          },
-        ])
-      } else if (clipText) menuTarget?.insertText(clipText)
-      return
-    }
-
-    if (hasNativeFiles && textarea && !menuTarget) {
-      // 等浏览器默认粘贴与 React onChange 完成后，只在内容完全等于“插入了文件名”时撤销。
-      window.setTimeout(() => {
-        undoAccidentalFilenamePaste(
-          textarea,
-          valueBeforePaste,
-          clipText,
-          selectionStart,
-          selectionEnd,
-          setInput,
-        )
-      }, 0)
-    }
-
-    setAttachmentError('')
-
-    try {
-      const pastedAttachments: PendingAttachment[] = []
-
-      if (hasNativeFiles) {
-        pastedAttachments.push(...await pendingFromPaths(nativePaths))
-      } else for (const [index, file] of attachableClipboardFiles.entries()) {
-        const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-
-        if (file.type.startsWith('image/') || IMAGE_EXTENSIONS.includes(ext)) {
-          const imageExt = file.type.startsWith('image/')
-            ? imageExtensionForMime(file.type)
-            : ext
-          const name = file.name || `pasted-image-${Date.now()}-${index + 1}.${imageExt}`
-          const dataBase64 = await readFileAsBase64(file, t.chatClipboardImageReadFailed)
-          const result = await api.chatSavePastedImage(
-            name,
-            file.type || `image/${imageExt}`,
-            dataBase64,
-          )
-          if (!result.success || !result.path || !result.name) {
-            throw new Error(result.error || t.chatPasteImageFailed)
+      const nativePaths: string[] = knownNativePaths ?? []
+      try {
+        if (!spreadsheetText && !knownNativePaths && isTauriRuntime()) {
+          const native = await api.chatReadClipboardFiles()
+          if (native.success && native.files?.length) {
+            nativePaths.push(...native.files.map((file) => file.path))
           }
-          pastedAttachments.push({
-            id: `pending-att-${crypto.randomUUID()}`,
-            type: 'image',
-            name: result.name,
-            path: result.path,
-          })
-          continue
         }
-
-        if (file.size <= 0) continue
-
-        const name = file.name || `pasted-file-${Date.now()}-${index + 1}.${ext}`
-        const dataBase64 = await readFileAsBase64(file, t.chatClipboardImageReadFailed)
-        const result = await api.chatSavePastedAttachment(name, dataBase64)
-        if (!result.success || !result.path || !result.name) {
-          throw new Error(result.error || t.chatPasteAttachmentFailed)
-        }
-        pastedAttachments.push({
-          id: `pending-att-${crypto.randomUUID()}`,
-          type: isVideoFile(result.name) ? 'video' : 'file',
-          name: result.name,
-          path: result.path,
-        })
+      } catch (err) {
+        console.error('Failed to read clipboard files:', err)
       }
 
-      if (pastedAttachments.length === 0) {
-        setAttachmentError(t.chatNoAddableFiles)
+      const hasNativeFiles = !spreadsheetText && nativePaths.length > 0
+      const hasClipboardFiles = attachableClipboardFiles.length > 0
+      if (menuTarget && !menuTarget.isCurrent() && !hasNativeFiles && !hasClipboardFiles) return
+
+      // 纯文字粘贴：短文本放行交给浏览器默认处理；超长文本已在上方同步阶段 preventDefault
+      // （正文不会进输入框），这里只需生成内存虚拟 txt 附件（不落盘）。
+      if (!hasNativeFiles && !hasClipboardFiles) {
+        if (clipText.length > PASTE_TEXT_ATTACHMENT_THRESHOLD) {
+          addAttachments([
+            {
+              id: `pending-att-${crypto.randomUUID()}`,
+              type: 'file',
+              name: t.chatPastedTextAttachmentName,
+              path: `memory://${crypto.randomUUID()}`,
+              content: clipText,
+            },
+          ], undefined, scope)
+        } else if (clipText) menuTarget?.insertText(clipText)
         return
       }
 
-      if (!menuTarget || menuTarget.isCurrent()) addAttachments(pastedAttachments)
-    } catch (err) {
-      console.error('Failed to paste chat attachment:', err)
-      setAttachmentError(
-        typeof err === 'string' ? err : err instanceof Error ? err.message : t.chatPasteAttachmentFailed,
-      )
+      if (hasNativeFiles && textarea && !menuTarget) {
+        // 等浏览器默认粘贴与 React onChange 完成后，只在内容完全等于“插入了文件名”时撤销。
+        window.setTimeout(() => {
+          if (draftScopeRef.current.key !== scope.key) return
+          undoAccidentalFilenamePaste(
+            textarea,
+            valueBeforePaste,
+            clipText,
+            selectionStart,
+            selectionEnd,
+            setInput,
+          )
+        }, 0)
+      }
+
+      setScopedAttachmentError('', scope)
+
+      try {
+        const pastedAttachments: PendingAttachment[] = []
+
+        if (hasNativeFiles) {
+          pastedAttachments.push(...await pendingFromPaths(nativePaths))
+        } else for (const [index, file] of attachableClipboardFiles.entries()) {
+          const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+
+          if (file.type.startsWith('image/') || IMAGE_EXTENSIONS.includes(ext)) {
+            const imageExt = file.type.startsWith('image/')
+              ? imageExtensionForMime(file.type)
+              : ext
+            const name = file.name || `pasted-image-${Date.now()}-${index + 1}.${imageExt}`
+            const dataBase64 = await readFileAsBase64(file, t.chatClipboardImageReadFailed)
+            const result = await api.chatSavePastedImage(
+              name,
+              file.type || `image/${imageExt}`,
+              dataBase64,
+            )
+            if (!result.success || !result.path || !result.name) {
+              throw new Error(result.error || t.chatPasteImageFailed)
+            }
+            pastedAttachments.push({
+              id: `pending-att-${crypto.randomUUID()}`,
+              type: 'image',
+              name: result.name,
+              path: result.path,
+            })
+            continue
+          }
+
+          if (file.size <= 0) continue
+
+          const name = file.name || `pasted-file-${Date.now()}-${index + 1}.${ext}`
+          const dataBase64 = await readFileAsBase64(file, t.chatClipboardImageReadFailed)
+          const result = await api.chatSavePastedAttachment(name, dataBase64)
+          if (!result.success || !result.path || !result.name) {
+            throw new Error(result.error || t.chatPasteAttachmentFailed)
+          }
+          pastedAttachments.push({
+            id: `pending-att-${crypto.randomUUID()}`,
+            type: isVideoFile(result.name) ? 'video' : 'file',
+            name: result.name,
+            path: result.path,
+          })
+        }
+
+        if (pastedAttachments.length === 0) {
+          setScopedAttachmentError(t.chatNoAddableFiles, scope)
+          return
+        }
+
+        addAttachments(pastedAttachments, undefined, scope)
+      } catch (err) {
+        console.error('Failed to paste chat attachment:', err)
+        setScopedAttachmentError(
+          typeof err === 'string' ? err : err instanceof Error ? err.message : t.chatPasteAttachmentFailed,
+          scope,
+        )
+      }
+    } finally {
+      scope.release()
     }
   }
 
   const composerContextMenu = useComposerContextMenu({
-    textareaRef, scopeKey: draftKeyValue, readOnly: composerLocked || optimizeBusy,
+    editorRef, scopeKey: draftKeyValue, readOnly: composerLocked || optimizeBusy,
     onError: setAttachmentError,
     onPaste: async (target) => {
-      // 桌面端全部走系统剪贴板；WebView 的 read/readText 会弹出网站权限请求。
-      let nativePaths: string[] = []
-      const clipboard = new DataTransfer()
-      if (isTauriRuntime()) {
-        const content = await api.chatReadClipboard()
-        if (!target.isCurrent()) return
-        if (content.kind === 'files') nativePaths = content.paths
-        if (content.kind === 'text') clipboard.setData('text/plain', content.text)
-        if (content.kind === 'image') {
-          const bytes = Uint8Array.from(atob(content.dataBase64), char => char.charCodeAt(0))
-          clipboard.items.add(new File([bytes], 'pasted-image.png', { type: 'image/png' }))
-        }
-        await handlePaste({ clipboardData: clipboard, preventDefault: () => {} }, target, nativePaths)
-        return
-      }
-      if (!target.isCurrent()) return
-      if (!nativePaths.length) {
-        if (navigator.clipboard?.read) {
-          const items = await navigator.clipboard.read()
-          for (const item of items) {
-            const imageType = item.types.find(type => type.startsWith('image/'))
-            if (imageType) {
-              const blob = await item.getType(imageType)
-              clipboard.items.add(new File([blob], `pasted-image.${imageExtensionForMime(imageType)}`, { type: imageType }))
-            } else if (item.types.includes('text/plain')) {
-              clipboard.setData('text/plain', await (await item.getType('text/plain')).text())
+      const scope = beginComposerAttachmentOperation(draftScopeRef.current.key)
+      try {
+        // 桌面端全部走系统剪贴板；WebView 的 read/readText 会弹出网站权限请求。
+        let nativePaths: string[] = []
+        const clipboard = new DataTransfer()
+        if (isTauriRuntime()) {
+          const content = await api.chatReadClipboard()
+          if (content.kind === 'text' && !target.isCurrent()) return
+          if (content.kind === 'files') nativePaths = content.paths
+          if (content.kind === 'text') clipboard.setData('text/plain', content.text)
+          if (content.kind === 'image') {
+            if (preferSpreadsheetText(content.text ?? '', content.html ?? '')) {
+              clipboard.setData('text/plain', content.text ?? '')
+              clipboard.setData('text/html', content.html ?? '')
+            } else {
+              const bytes = Uint8Array.from(atob(content.dataBase64), char => char.charCodeAt(0))
+              clipboard.items.add(new File([bytes], 'pasted-image.png', { type: 'image/png' }))
             }
           }
-        } else if (navigator.clipboard?.readText) {
-          clipboard.setData('text/plain', await navigator.clipboard.readText())
-        } else {
-          throw new Error('Clipboard is unavailable')
+          await handlePaste({ clipboardData: clipboard, preventDefault: () => {} }, target, nativePaths, scope)
+          return
         }
+        if (!nativePaths.length) {
+          if (navigator.clipboard?.read) {
+            const items = await navigator.clipboard.read()
+            for (const item of items) {
+              const imageType = item.types.find(type => type.startsWith('image/'))
+              if (imageType) {
+                const blob = await item.getType(imageType)
+                clipboard.items.add(new File([blob], `pasted-image.${imageExtensionForMime(imageType)}`, { type: imageType }))
+              } else if (item.types.includes('text/plain')) {
+                clipboard.setData('text/plain', await (await item.getType('text/plain')).text())
+              }
+            }
+          } else if (navigator.clipboard?.readText) {
+            clipboard.setData('text/plain', await navigator.clipboard.readText())
+          } else {
+            throw new Error('Clipboard is unavailable')
+          }
+        }
+        await handlePaste({ clipboardData: clipboard, preventDefault: () => {} }, target, nativePaths, scope)
+      } catch (err) {
+        console.error('Failed to read clipboard:', err)
+        setScopedAttachmentError('无法读取剪贴板，请重试或使用 Ctrl+V。', scope)
+      } finally {
+        scope.release()
       }
-      if (!target.isCurrent()) return
-      await handlePaste({ clipboardData: clipboard, preventDefault: () => {} }, target, nativePaths)
     },
   })
 
   const removeAttachment = (id: string) => {
+    const removed = attachments.find((attachment) => attachment.id === id)
+    if (removed) {
+      invalidateComposerAttachmentPath(draftScopeRef.current.key, removed.path)
+    }
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== id))
     setAttachmentError('')
   }
@@ -1628,7 +1554,7 @@ export const InputBar = memo(function InputBar({
     if (!autoFocus || disabled) return
     requestAnimationFrame(() => {
       if (shouldComposerAutoFocus(document.activeElement)) {
-        const el = textareaRef.current
+        const el = editorRef.current
         el?.focus({ preventScroll: true })
         // 恢复草稿后光标应落到末尾，而非开头，省得每次手动移到最后再输入。
         if (el) el.selectionStart = el.selectionEnd = el.value.length
@@ -1645,7 +1571,7 @@ export const InputBar = memo(function InputBar({
       if (!focused || cancelled) return
       requestAnimationFrame(() => {
         if (!cancelled && !disabled && shouldComposerAutoFocus(document.activeElement)) {
-          textareaRef.current?.focus({ preventScroll: true })
+          editorRef.current?.focus({ preventScroll: true })
         }
       })
     }).then((handler) => {
@@ -1664,38 +1590,9 @@ export const InputBar = memo(function InputBar({
     }
   }, [autoFocus, disabled])
 
-  useEffect(() => {
-    if (!toolPanelOpen) return
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setToolPanelOpen(false)
-      }
-    }
-    window.addEventListener('keydown', handleEscape)
-    return () => window.removeEventListener('keydown', handleEscape)
-  }, [toolPanelOpen])
-
-  useEffect(() => {
-    if (!modeMenuOpen) return
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        closeModeMenu()
-      }
-    }
-    window.addEventListener('keydown', handleEscape)
-    return () => window.removeEventListener('keydown', handleEscape)
-  }, [closeModeMenu, modeMenuOpen])
-
-  useEffect(() => {
-    if (!projectMenuOpen) return
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        closeProjectMenu()
-      }
-    }
-    window.addEventListener('keydown', handleEscape)
-    return () => window.removeEventListener('keydown', handleEscape)
-  }, [closeProjectMenu, projectMenuOpen])
+  usePopoverMenu(toolPanelOpen, () => setToolPanelOpen(false), toolPanelRef)
+  usePopoverMenu(modeMenuOpen, closeModeMenu, modeMenuRef)
+  usePopoverMenu(projectMenuOpen, closeProjectMenu, projectMenuRef)
 
   useEffect(() => {
     if (!slashPanelOpen) return
@@ -1715,11 +1612,11 @@ export const InputBar = memo(function InputBar({
 
     const updateSlashPanelLeft = () => {
       const inner = innerRef.current
-      const textarea = textareaRef.current
+      const textarea = editorRef.current
       if (!inner || !textarea) return
 
       const innerRect = inner.getBoundingClientRect()
-      const textareaRect = textarea.getBoundingClientRect()
+      const textareaRect = textarea.dom.getBoundingClientRect()
       setSlashPanelLeft(Math.max(0, Math.round(textareaRect.left - innerRect.left)))
     }
 
@@ -1731,7 +1628,7 @@ export const InputBar = memo(function InputBar({
       : new ResizeObserver(updateSlashPanelLeft)
     if (resizeObserver) {
       if (innerRef.current) resizeObserver.observe(innerRef.current)
-      if (textareaRef.current) resizeObserver.observe(textareaRef.current)
+      if (editorRef.current) resizeObserver.observe(editorRef.current.dom)
     }
 
     return () => {
@@ -1777,7 +1674,10 @@ export const InputBar = memo(function InputBar({
 
       if (event.payload.type === 'drop') {
         setDragActive(false)
-        void pendingFromPaths(event.payload.paths).then(addAttachments)
+        const scope = beginComposerAttachmentOperation(draftScopeRef.current.key)
+        void pendingFromPaths(event.payload.paths)
+          .then((attachments) => addAttachments(attachments, undefined, scope))
+          .finally(() => { scope.release() })
       }
     }).then((handler) => {
       if (cancelled) {
@@ -1929,6 +1829,7 @@ export const InputBar = memo(function InputBar({
           <>
             <div className="fixed inset-0 z-30" onClick={() => setToolPanelOpen(false)} aria-hidden />
             <div
+              ref={toolPanelRef}
               className={`chat-motion-popover absolute inset-x-0 z-40 overflow-hidden kv-menu ${projectPanelPlacementClass}`}
               style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
               data-tauri-drag-region="false"
@@ -1993,7 +1894,6 @@ export const InputBar = memo(function InputBar({
             <div className="chat-popover-scroll max-h-[min(184px,34vh)] overflow-y-auto">
               {filteredSlashCommands.length > 0 ? (
                 filteredSlashCommands.map((command, index) => {
-                  const Icon = slashCommandIcon(command)
                   const selected = index === slashSelectedIndex
                   return (
                     <button
@@ -2002,16 +1902,16 @@ export const InputBar = memo(function InputBar({
                       aria-selected={selected}
                       onMouseEnter={() => setSlashSelectedIndex(index)}
                       onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => void handleSlashCommandSelect(command)}
+                      onClick={() => completeActiveSlashToken(command)}
                       className={`flex h-[26px] w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-left transition-colors ${
                         selected
                           ? 'bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-50'
                           : 'text-neutral-700 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-800/70'
                       }`}
                     >
-                      <Icon
+                      <SlashCommandIcon
+                        command={command}
                         size={13}
-                        strokeWidth={1.8}
                         className="shrink-0 text-neutral-600 dark:text-neutral-300"
                       />
                       <span className="min-w-0 flex-1 truncate text-[12px] leading-none">
@@ -2063,6 +1963,7 @@ export const InputBar = memo(function InputBar({
                       aria-hidden
                     />
                     <div
+                      ref={projectMenuRef}
                       className={`chat-motion-popover absolute left-0 z-50 w-[min(260px,calc(100vw-24px))] overflow-visible kv-menu ${projectPanelPlacementClass}`}
                       style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
                       data-tauri-drag-region="false"
@@ -2140,6 +2041,9 @@ export const InputBar = memo(function InputBar({
               {optimizeError}
             </div>
           )}
+          {commandError && (
+            <div role="alert" className="mb-2 px-1 text-[12px] text-red-500 dark:text-red-400">{commandError}</div>
+          )}
           {quotes.length > 0 && (
             <div className="chat-motion-fade-up mb-2 flex flex-col gap-1.5">
               {quotes.map((q, i) => (
@@ -2173,55 +2077,25 @@ export const InputBar = memo(function InputBar({
               这 12px 是常量）。垂直方向仍旧不写死数值——shell 的 py 在容器查询里会变。 */}
           <div className="relative -mr-3 pr-3">
             <div className="relative w-[calc(100%-1.75rem)]">
-              {slashHighlight && (
-                <div
-                  ref={slashHighlightRef}
-                  aria-hidden
-                  className="chat-composer-highlight py-1.5 pl-1 pr-1 text-[15px] leading-relaxed text-neutral-900 dark:text-neutral-100"
-                >
-                  {slashHighlight.prefix}
-                  <span className="chat-composer-slash">{slashHighlight.command}</span>
-                  {slashHighlight.rest}
-                  {input.endsWith('\n') ? '\u200b' : null}
-                </div>
-              )}
-              <textarea
-                ref={textareaRef}
+              <ComposerEditor
+                ref={editorRef}
                 value={input}
+                scopeKey={draftKeyValue}
+                commands={allSlashCommands}
                 readOnly={sendPending || optimizeBusy}
-                aria-busy={sendPending || optimizeBusy}
+                busy={sendPending || optimizeBusy}
                 onChange={handleInput}
-                onPaste={(e) => void handlePaste(e)}
+                onPaste={(e) => { if (e.clipboardData) void handlePaste({ clipboardData: e.clipboardData, preventDefault: () => e.preventDefault() }) }}
                 onContextMenu={composerContextMenu.onContextMenu}
                 onKeyDown={handleKeyDown}
                 onSelect={handleSelect}
-                onScroll={syncSlashHighlightScroll}
                 onAnimationEnd={(event) => {
-                  if (event.target !== event.currentTarget) return
-                  if (event.animationName === 'chat-composer-optimize-in') {
-                    setOptimizeMotion('idle')
-                  }
+                  if (event.animationName === 'chat-composer-optimize-in') setOptimizeMotion('idle')
                 }}
-                autoCapitalize="off"
-                autoCorrect="off"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder={
-                  usesExternalRuntime
-                    ? t.chatCliCommandPlaceholder.replace('{agent}', cliAgentLabel)
-                    : 'Ask me anything...'
-                }
-                rows={1}
-                /* 宽度用 calc 收 28px（= 发送键 28 宽 + right-2 的 8 − 与滚动条留的 4px 呼吸）而不是
-                   w-full + pr-*：滚动条长在**盒子右边缘**，padding 挡不住它，只有把盒子本身收窄
-                   才能让它落到绝对定位的发送键左侧（原来 pr-10 只挡住了文字，滚动条仍压在键下）。
-                   不用 margin —— w-full 是 width:100%，再加 margin 会溢出容器 28px。
-                   custom-scrollbar：与全站同一根 8px 细条，否则这里是 WebView2 原生带箭头的粗条。 */
-                className={`custom-scrollbar block max-h-40 min-h-[28px] w-full select-text resize-none overflow-y-hidden border-0 bg-transparent py-1.5 pl-1 pr-1 text-[15px] leading-relaxed outline-none placeholder:text-neutral-400 disabled:opacity-50 [field-sizing:content] ${
-                  slashHighlight
-                    ? 'is-slash-highlight'
-                    : 'text-neutral-900 dark:text-neutral-100'
-                } ${optimizing ? 'is-optimizing' : ''} ${optimizeMotion === 'out' ? 'is-optimize-out' : ''} ${optimizeMotion === 'in' ? 'is-optimize-reveal' : ''}`}
+                placeholder={usesExternalRuntime
+                  ? t.chatCliCommandPlaceholder.replace('{agent}', cliAgentLabel)
+                  : t.chatComposerPlaceholder}
+                className={`${optimizing ? 'is-optimizing' : ''} ${optimizeMotion === 'out' ? 'is-optimize-out' : ''} ${optimizeMotion === 'in' ? 'is-optimize-reveal' : ''}`}
               />
               {composerContextMenu.menu}
             </div>
@@ -2338,6 +2212,7 @@ export const InputBar = memo(function InputBar({
                       aria-hidden
                     />
                     <div
+                      ref={projectMenuRef}
                       className={`chat-motion-popover absolute left-0 z-50 w-[min(260px,calc(100vw-24px))] overflow-visible kv-menu ${projectPanelPlacementClass}`}
                       style={{ ['--chat-popover-origin' as string]: projectPanelOrigin }}
                       data-tauri-drag-region="false"
@@ -2500,6 +2375,7 @@ export const InputBar = memo(function InputBar({
                   <>
                     <div className="fixed inset-0 z-30" onClick={closeModeMenu} aria-hidden />
                     <div
+                      ref={modeMenuRef}
                       className={`chat-motion-popover absolute right-0 z-40 w-[min(236px,calc(100vw-32px))] overflow-visible kv-menu ${projectPanelPlacementClass}`}
                       style={{ ['--chat-popover-origin' as string]: modePanelOrigin }}
                       data-tauri-drag-region="false"

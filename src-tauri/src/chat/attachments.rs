@@ -193,6 +193,7 @@ fn normalize_pasted_image_mime(mime_type: &str) -> Result<&'static str, String> 
 
 fn extension_for_image_mime(mime_type: &str) -> &'static str {
     match mime_type {
+        "image/svg+xml" => "svg",
         "image/jpeg" => "jpg",
         "image/gif" => "gif",
         "image/webp" => "webp",
@@ -211,6 +212,7 @@ fn mime_type_for_attachment(name: &str) -> &'static str {
         .map(|ext| ext.to_ascii_lowercase())
         .unwrap_or_default();
     match ext.as_str() {
+        "svg" => "image/svg+xml",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -1205,6 +1207,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn svg_attachment_preview_preserves_mime_and_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 30"><rect width="40" height="30" fill="red"/></svg>"#;
+        for name in ["diagram.svg", "diagram.SVG"] {
+            let path = dir.path().join(name);
+            fs::write(&path, svg).unwrap();
+            let data_url = read_attachment_as_data_url(&path).unwrap();
+            let (mime, encoded) = parse_data_url(&data_url).unwrap();
+            assert_eq!(mime, "image/svg+xml");
+            assert_eq!(general_purpose::STANDARD.decode(encoded).unwrap(), svg);
+        }
+    }
+
+    #[test]
     fn attachment_type_detects_images_case_insensitively() {
         assert_eq!(attachment_type_for_name("screenshot.PNG"), "image");
         assert_eq!(attachment_type_for_name("scan.tif"), "image");
@@ -1523,6 +1539,36 @@ mod tests {
     }
 
     #[test]
+    fn externalized_svg_can_be_reopened_as_an_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="30"><!--{}--><rect width="40" height="30" fill="red"/></svg>"#,
+            " ".repeat(ARTIFACT_INLINE_THRESHOLD_BYTES)
+        );
+        let data_url = format!(
+            "data:image/svg+xml;base64,{}",
+            general_purpose::STANDARD.encode(svg.as_bytes())
+        );
+        let mut artifact: ChatToolArtifact = serde_json::from_value(serde_json::json!({
+            "name": "diagram.svg",
+            "mime_type": "image/svg+xml",
+            "data_url": data_url,
+        }))
+        .unwrap();
+
+        assert!(externalize_image_artifact_in_dir(dir.path(), &mut artifact));
+        let path = dir.path().join(artifact.path.as_ref().unwrap());
+        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("svg"));
+        assert_eq!(read_attachment_as_data_url(&path).unwrap(), data_url);
+        assert!(artifact.data_url.is_empty());
+        assert!(!externalize_image_artifact_in_dir(
+            dir.path(),
+            &mut artifact
+        ));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
     fn repeated_draft_snapshots_share_one_original_image() {
         let dir = tempfile::tempdir().unwrap();
         let original = artifact_with(
@@ -1810,6 +1856,40 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn compaction_fix_replay_image_survives_gc_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = general_purpose::STANDARD.encode(b"retained-image");
+        let original = format!("data:image/png;base64,{payload}");
+        let mut replay = vec![api_image_message(&original)];
+        externalize_api_message_images_in_dir(dir.path(), &mut replay);
+        let file_name = api_image_url(&replay[0]).rsplit('/').next().unwrap().to_string();
+        let conversation: crate::chat::Conversation = serde_json::from_value(serde_json::json!({
+            "id":"gc-replay", "title":"test", "provider_id":"p", "model":"m", "created_at":1, "updated_at":1,
+            "messages":[{"id":"u", "role":"user", "content":"image", "timestamp":1,
+                "attachments":[{"id":"a", "type":"image", "name":"photo.png", "path":"att_original.png"}]},
+                {"id":"a", "role":"assistant", "content":"answer", "timestamp":2}],
+            "context_state":{"summary":{"id":"s", "content":"summary", "source_message_ids":["u"],
+                "source_until_message_id":"u", "token_estimate_before":10, "token_estimate_after":5,
+                "created_at":2, "provider_id":"p", "model":"m", "stale":false,
+                "replay":{"through_message_id":"a", "messages":replay}}}
+        })).unwrap();
+        let disk = dir.path().join("conversation.json");
+        fs::write(&disk, serde_json::to_vec(&conversation).unwrap()).unwrap();
+        let mut restored: crate::chat::Conversation = serde_json::from_slice(&fs::read(disk).unwrap()).unwrap();
+        let referenced = crate::chat::gc::referenced_attachment_names(&restored);
+        let orphan = "msgimg-unreferenced.png".to_string();
+        fs::write(dir.path().join(&orphan), b"unused").unwrap();
+        for name in crate::chat::gc::unreferenced_attachment_names(&[file_name.clone(), orphan.clone()], &referenced) {
+            fs::remove_file(dir.path().join(name)).unwrap();
+        }
+        assert!(dir.path().join(&file_name).exists(), "live replay image was deleted");
+        assert!(!dir.path().join(orphan).exists(), "unused files must still be collected");
+        let tail = &mut restored.context_state.summary.as_mut().unwrap().replay.as_mut().unwrap().messages;
+        rehydrate_api_message_images_in_dir(dir.path(), tail);
+        assert_eq!(api_image_url(&tail[0]), original);
+    }
+
     /// 回放前必须还原成 data URL，且 mime 逐字保留（不能靠扩展名猜）。
     #[test]
     fn rehydrate_api_message_images_round_trips() {
@@ -1901,5 +1981,16 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// Reuse the existing attachment store for the compacted provider tail.
+pub(crate) fn externalize_compaction_images(
+    app: &AppHandle,
+    conversation_id: &str,
+    messages: &mut [serde_json::Value],
+) {
+    if let Ok(dir) = conversation_attachments_dir(app, conversation_id) {
+        externalize_api_message_images_in_dir(&dir, messages);
     }
 }

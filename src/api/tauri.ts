@@ -145,6 +145,8 @@ export type ChatContextState = {
   estimatedInputTokens?: number
   context_window_tokens?: number | null
   contextWindowTokens?: number | null
+  auto_compact_threshold_tokens?: number | null
+  autoCompactThresholdTokens?: number | null
   context_window_estimated?: boolean
   contextWindowEstimated?: boolean
   usage_ratio?: number | null
@@ -497,7 +499,7 @@ export type ChatClipboardFilesResult = {
 
 export type ChatClipboardContent =
   | { kind: 'files'; paths: string[] }
-  | { kind: 'image'; dataBase64: string }
+  | { kind: 'image'; dataBase64: string; text?: string; html?: string }
   | { kind: 'text'; text: string }
   | { kind: 'empty' }
 
@@ -1370,7 +1372,7 @@ export type PluginInstallBrief = {
   userMessage: string
 }
 
-export type UsageRange = 'today' | '1d' | '7d' | '30d'
+export type UsageRange = 'today' | '1d' | '7d' | '30d' | '365d'
 
 export type UsageStatsQuery = {
   range?: UsageRange
@@ -1822,8 +1824,8 @@ export const api = {
   getMediaTask: (id: string, resume = false) => invoke<MediaTask>('get_media_task', { id, resume }),
   previewVideoModelRequest: (input: { model: string; protocol: VideoProtocol; baseUrl: string }) =>
     invoke<VideoRequestPreview>('preview_video_model_request', input),
-  chatArtifactsList: () => invoke<ArtifactLibraryPage>('chat_artifacts_list'),
-  chatArtifactAction: (id: string, action: 'preview' | 'open' | 'reveal' | 'export' | 'delete' | 'rename', destination?: string, name?: string) =>
+  chatArtifactsList: (importHistory = true) => invoke<ArtifactLibraryPage>('chat_artifacts_list', { importHistory }),
+  chatArtifactAction: (id: string, action: 'open' | 'reveal' | 'export' | 'export_unique' | 'delete' | 'rename', destination?: string, name?: string) =>
     invoke<string | null>('chat_artifact_action', { id, action, destination, name }),
   studioTaskFileAction: (domain: 'image' | 'video', id: string, action: 'reveal' | 'delete') =>
     invoke<void>('studio_task_file_action', { domain, id, action }),

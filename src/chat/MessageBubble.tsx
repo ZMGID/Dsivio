@@ -155,13 +155,16 @@ function ArtifactImage({
 }) {
   const inline = artifactDataUrl(artifact)
   const path = (artifact.path ?? '').trim()
-  // 有 path 时 data_url 通常是 256px 缩略图（落盘外置后）；聊天区应显示整图，缩略图仅作秒显占位。
+  // 列表使用已落盘的真实缩略图；查看器按需读取原图。
   const [src, setSrc] = useState<string>(inline)
 
   useEffect(() => {
     let cancelled = false
-    if (path && conversationId) {
-      if (inline) setSrc(inline)
+    if (inline) {
+      setSrc(inline)
+      return
+    }
+    if (path) {
       void loadArtifactDataUrl(artifact, conversationId).then((loaded) => {
         if (!cancelled && loaded) setSrc(loaded)
       })
@@ -169,10 +172,7 @@ function ArtifactImage({
         cancelled = true
       }
     }
-    if (inline) {
-      setSrc(inline)
-      return
-    }
+    setSrc('')
     return () => {
       cancelled = true
     }
@@ -290,7 +290,7 @@ function ArtifactPresentationBlock({
   if (!presentation) {
     return (
       <ToolCallErrorBoundary>
-        <ToolCallBlock toolCall={toolCall} />
+        <ToolCallBlock toolCall={toolCall} conversationId={conversationId} />
       </ToolCallErrorBoundary>
     )
   }
@@ -307,7 +307,7 @@ function ArtifactPresentationBlock({
   if (presentation.artifactIds.length === 0) {
     return (
       <ToolCallErrorBoundary>
-        <ToolCallBlock toolCall={toolCall} />
+        <ToolCallBlock toolCall={toolCall} conversationId={conversationId} />
       </ToolCallErrorBoundary>
     )
   }
@@ -454,7 +454,7 @@ function ClusteredToolCalls({
           return (
             <div key={key} className={itemClassName}>
               <ToolCallErrorBoundary>
-                <ImageReadCluster toolCalls={item.toolCalls} />
+                <ImageReadCluster toolCalls={item.toolCalls} conversationId={conversationId} />
               </ToolCallErrorBoundary>
             </div>
           )
@@ -473,7 +473,7 @@ function ClusteredToolCalls({
               />
             ) : (
               <ToolCallErrorBoundary>
-                <ToolCallBlock toolCall={toolCall} />
+                <ToolCallBlock toolCall={toolCall} conversationId={conversationId} />
               </ToolCallErrorBoundary>
             )}
           </div>
@@ -516,7 +516,7 @@ function TimelineToolSegment({
   }
   return (
     <ToolCallErrorBoundary>
-      <ToolCallBlock toolCall={toolCall} />
+      <ToolCallBlock toolCall={toolCall} conversationId={conversationId} />
     </ToolCallErrorBoundary>
   )
 }
@@ -564,6 +564,8 @@ function TimelineSegmentNode({
   reasoningDurationMs,
   reasoningDurationMsBySegmentId,
   reasoningSegmentCount,
+  activeReasoningId,
+  onReasoningExpand,
 }: {
   segment: ChatMessageSegment
   index: number
@@ -576,6 +578,8 @@ function TimelineSegmentNode({
   reasoningDurationMs?: number | null
   reasoningDurationMsBySegmentId?: Record<string, number>
   reasoningSegmentCount: number
+  activeReasoningId?: string
+  onReasoningExpand: () => void
 }) {
   if (segment.kind === 'tool') {
     return (
@@ -594,6 +598,8 @@ function TimelineSegmentNode({
       <ReasoningBlock
         reasoning={reasoning}
         streaming={reasoningStreaming && index === segmentCount - 1}
+        previewActive={segment.id === activeReasoningId}
+        onExpand={onReasoningExpand}
         durationMs={
           reasoningDurationMsBySegmentId?.[segment.id]
             ?? (reasoningSegmentCount === 1 ? reasoningDurationMs : null)
@@ -657,6 +663,8 @@ function renderProcessSegments({
   reasoningDurationMs,
   reasoningDurationMsBySegmentId,
   reasoningSegmentCount,
+  activeReasoningId,
+  onReasoningExpand,
 }: {
   segments: ChatMessageSegment[]
   toolCallById: ReadonlyMap<string, ToolCallRecord>
@@ -667,6 +675,8 @@ function renderProcessSegments({
   reasoningDurationMs?: number | null
   reasoningDurationMsBySegmentId?: Record<string, number>
   reasoningSegmentCount: number
+  activeReasoningId?: string
+  onReasoningExpand: () => void
 }) {
   const nodes: ReactNode[] = []
   const segmentCount = segments.length
@@ -688,7 +698,7 @@ function renderProcessSegments({
         nodes.push(
           <div key={segment.id}>
             <ToolCallErrorBoundary>
-              <ImageReadCluster toolCalls={imageReads} />
+              <ImageReadCluster toolCalls={imageReads} conversationId={conversationId} />
             </ToolCallErrorBoundary>
           </div>,
         )
@@ -710,6 +720,8 @@ function renderProcessSegments({
           reasoningDurationMs={reasoningDurationMs}
           reasoningDurationMsBySegmentId={reasoningDurationMsBySegmentId}
           reasoningSegmentCount={reasoningSegmentCount}
+          activeReasoningId={activeReasoningId}
+          onReasoningExpand={onReasoningExpand}
         />
       </div>,
     )
@@ -721,7 +733,7 @@ function renderProcessSegments({
 /**
  * 一轮过程共用一个 Working 开关；产物前后的过程按时间顺序分别展示。
  * - 整轮生成中默认展开，后续过程不再被搬到已交付产物上方。
- * - 流式结束后默认收起，最终答复始终是容器外的独立正文。
+ * - 整轮结束后统一收起过程，历史首挂也默认收起。
  * - 用户手动点过开关后以用户操作为准。
  * - 折叠态只留 header，不挂组内 ReasoningBlock / ToolCallBlock / 过程旁白。
  */
@@ -730,7 +742,11 @@ function TimelineGroupBlock({
   allProcessSegments,
   showHeader,
   userOpen,
+  defaultOpen,
   onToggle,
+  onReasoningExpand,
+  hiddenProcessCount,
+  onShowEarlier,
   toolCalls,
   toolCallById,
   artifacts,
@@ -746,7 +762,11 @@ function TimelineGroupBlock({
   allProcessSegments: ChatMessageSegment[]
   showHeader: boolean
   userOpen: boolean | null
+  defaultOpen: boolean
   onToggle: () => void
+  onReasoningExpand: () => void
+  hiddenProcessCount: number
+  onShowEarlier: () => void
   toolCalls: ToolCallRecord[]
   toolCallById: ReadonlyMap<string, ToolCallRecord>
   artifacts: ChatToolArtifact[]
@@ -768,7 +788,7 @@ function TimelineGroupBlock({
     [allProcessSegments, toolCalls, toolCallById, reasoningDurationMs],
   )
   const title = workingGroupTitle(generating, durationMs)
-  const renderDetails = userOpen ?? generating
+  const renderDetails = userOpen ?? defaultOpen
 
   if (!showHeader && !renderDetails) return null
 
@@ -812,6 +832,11 @@ function TimelineGroupBlock({
       <ChatDisclosureBody open={renderDetails} animate={userOpen !== null}>
         {() => (
           <div className="space-y-1.5">
+            {showHeader && hiddenProcessCount > 0 && (
+              <Button size="sm" variant="ghost" data-chat-disclosure onClick={onShowEarlier}>
+                显示更早的过程（{hiddenProcessCount}）
+              </Button>
+            )}
             {/* A new tool can move existing commentary into this group. Keep
                 those segments visible instead of replaying opacity from zero. */}
             {renderProcessSegments({
@@ -824,6 +849,8 @@ function TimelineGroupBlock({
               reasoningDurationMs,
               reasoningDurationMsBySegmentId,
               reasoningSegmentCount,
+              activeReasoningId: messageStreaming ? allProcessSegments.at(-1)?.id : undefined,
+              onReasoningExpand,
             })}
           </div>
         )}
@@ -860,6 +887,11 @@ function TimelineSegments({
   onOutlineSourceChange?: (update: MarkdownOutlineSourceUpdate) => void
 }) {
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
+  // Bound historical inspection across groups separated by artifacts. Never
+  // evict steps already shown during a live run, including its settle handoff.
+  const [processLimit, setProcessLimit] = useState(20)
+  if (messageStreaming && processLimit !== Infinity) setProcessLimit(Infinity)
+  const defaultOpen = messageStreaming
   const prepared = useMemo(() => {
     const ordered = segments
     const toolCallById = new Map<string, ToolCallRecord>()
@@ -922,6 +954,8 @@ function TimelineSegments({
   }, [segments, toolCalls, completed, messageStreaming])
 
   const { toolCallById, citations, reasoningSegmentCount, groupItems, processGroups, allProcessSegments, presentationExclusions, fallbackIds } = prepared
+  const visibleProcess = new Set(allProcessSegments.slice(-processLimit))
+  const hiddenProcessCount = Math.max(0, allProcessSegments.length - processLimit)
   const artifactById = new Map(artifacts.map(artifact => [artifactId(artifact), artifact]))
   return (
     <section aria-label="回答时间线" className="space-y-1.5">
@@ -966,11 +1000,18 @@ function TimelineSegments({
         return (
           <TimelineGroupBlock
             key={groupKey}
-            segments={item.segments}
+            segments={item.segments.filter(segment => visibleProcess.has(segment))}
             allProcessSegments={allProcessSegments}
             showHeader={showHeader}
             userOpen={userOpen}
-            onToggle={() => setUserOpen(current => !(current ?? messageStreaming))}
+            defaultOpen={defaultOpen}
+            onReasoningExpand={() => setUserOpen(true)}
+            onToggle={() => {
+              if (!messageStreaming && !(userOpen ?? defaultOpen)) setProcessLimit(20)
+              setUserOpen(current => !(current ?? defaultOpen))
+            }}
+            hiddenProcessCount={hiddenProcessCount}
+            onShowEarlier={() => setProcessLimit(limit => limit + 20)}
             toolCalls={toolCalls}
             toolCallById={toolCallById}
             artifacts={artifacts}
@@ -1067,14 +1108,18 @@ function MessageBubbleComponent({
     ].join('\n\n')
     const localArtifacts = [...messageArtifacts, ...toolArtifacts]
     const localIds = new Set(localArtifacts.map(artifactId))
-    const earlierReferencedArtifacts = [...referencedArtifactIds(artifactReferenceContent)]
+    const selectedIds = new Set([
+      ...referencedArtifactIds(artifactReferenceContent),
+      ...toolCalls.flatMap(tool => artifactPresentationFromToolCall(tool)?.artifactIds ?? []),
+    ])
+    const earlierReferencedArtifacts = [...selectedIds]
       .filter(id => !localIds.has(id))
       .flatMap(id => {
         const artifact = conversationArtifactsById?.get(id)
         return artifact ? [artifact] : []
       })
     // A later reply may cite an artifact produced by an earlier turn. Only add
-    // the cited IDs so unrelated files cannot affect relative image matching.
+    // the cited or explicitly presented IDs so unrelated files cannot affect relative image matching.
     const renderArtifacts = [...earlierReferencedArtifacts, ...localArtifacts]
     const legacyMessageArtifacts = messageArtifacts.filter((artifact) => !artifactId(artifact))
     const legacyToolCalls = toolCalls.map((toolCall) => ({
@@ -1333,6 +1378,7 @@ function MessageBubbleComponent({
           <ReasoningBlock
             reasoning={message.reasoning ?? ''}
             streaming={reasoningStreaming}
+            previewActive={messageStreaming}
             durationMs={reasoningDurationMs}
           />
         )}

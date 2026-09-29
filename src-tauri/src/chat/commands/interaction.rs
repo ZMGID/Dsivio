@@ -117,6 +117,7 @@ pub(crate) async fn chat_execute_agent_plan(
         None,
         None,
         Some(message_id.unwrap_or_default()),
+        None,
     )
     .await
 }
@@ -338,6 +339,9 @@ pub(crate) async fn chat_steer_message(
     content: String,
     text_attachments: Option<Vec<TextAttachmentInput>>,
 ) -> Result<bool, String> {
+    if defer_command_injection(&content) {
+        return Ok(false);
+    }
     let content = compose_text_attachments_for_api(&content, &text_attachments.unwrap_or_default());
     let Some(message) = crate::chat::agent::SteeringMessage::new(steer_id, &content) else {
         return Ok(false);
@@ -347,6 +351,39 @@ pub(crate) async fn chat_steer_message(
     Ok(state
         .chat_runtime()
         .push_steering(&conversation_id, message))
+}
+
+// Commands need the normal send path's skill/protocol resolution. Returning false
+// preserves the queue item for that path instead of injecting an unexpanded token.
+// Inspect only the user's draft, before attachments add quoted source material.
+fn defer_command_injection(content: &str) -> bool {
+    !crate::chat::slash_commands::command_ranges(content).is_empty()
+}
+
+#[cfg(test)]
+mod command_injection_tests {
+    use super::defer_command_injection;
+
+    #[test]
+    fn explicit_commands_wait_for_normal_send() {
+        for content in ["/wizard task", "请用/skill:wizard task", "/unknown task"] {
+            assert!(defer_command_injection(content), "{content}");
+        }
+    }
+
+    #[test]
+    fn literal_commands_and_paths_still_allow_injection() {
+        for content in [
+            "ordinary task",
+            "https://host/wizard",
+            "C:/wizard",
+            "`/wizard`",
+            "```\n/wizard\n```",
+            "> /wizard",
+        ] {
+            assert!(!defer_command_injection(content), "{content}");
+        }
+    }
 }
 
 /// 原生 follow-up：把消息排到当前运行结束后，由同一个常驻会话 / 内置循环继续处理。
@@ -365,6 +402,9 @@ pub(crate) async fn chat_follow_up_message(
     attachments: Vec<String>,
     text_attachments: Option<Vec<TextAttachmentInput>>,
 ) -> Result<bool, String> {
+    if defer_command_injection(&content) {
+        return Ok(false);
+    }
     let content = compose_text_attachments_for_api(&content, &text_attachments.unwrap_or_default());
     // Attachments remain queued for a normal turn so none are silently discarded.
     if !attachments.is_empty() {
