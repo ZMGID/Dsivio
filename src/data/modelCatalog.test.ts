@@ -1,3 +1,4 @@
+import catalogSource from './modelDatabase.json?raw'
 import { describe, expect, it } from 'vitest'
 import type { ModelProvider } from '../api/tauri'
 import { applyModelCatalog } from './modelCatalog'
@@ -44,5 +45,12 @@ describe('imported model video capabilities', () => {
       const imported = applyModelCatalog(provider, { models: [id], capabilities: {} })
       expect(resolveModelInfo(id, imported.modelOverrides, provider).capabilities?.videoInput).not.toBe(true)
     }
+  })
+})
+
+describe('upstream catalog integration', () => {
+  it.each(['gpt-6-sol', 'gpt-6-luna', 'claude-opus-5.5'])('keeps a single authoritative entry for %s', (id) => {
+    const keys = Array.from(catalogSource.matchAll(/^ {2}"([^"]+)":/gm), match => match[1])
+    expect(keys.filter(key => key === id)).toHaveLength(1)
   })
 })

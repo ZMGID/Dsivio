@@ -104,30 +104,6 @@
     ]
   },
 
-  "gpt-6-sol": {
-    "displayName": "GPT-6 Sol",
-    "contextWindow": 256000,
-    "maxOutput": 128000,
-    "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
-    "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
-    "pricing": { "input": 2, "output": 10, "cachedInput": 0.2 }
-  },
-  "gpt-6-luna": {
-    "displayName": "GPT-6 Luna",
-    "contextWindow": 256000,
-    "maxOutput": 128000,
-    "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
-    "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
-    "pricing": { "input": 0.1, "output": 0.5, "cachedInput": 0.01 }
-  },
-  "claude-opus-5.5": {
-    "displayName": "Claude Opus 5.5",
-    "contextWindow": 1000000,
-    "maxOutput": 128000,
-    "capabilities": { "vision": true, "functionCalling": true, "reasoning": true, "streaming": true, "webSearch": true },
-    "reasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
-    "pricing": { "input": 4, "output": 20, "cachedInput": 0.2 }
-  },
   "mimo-v2.6-pro": {
     "displayName": "MiMo V2.6 Pro",
     "contextWindow": 1048576,
