@@ -345,19 +345,84 @@ fn install_market_skill(dir: &Path, content: &str) -> Result<(), String> {
 }
 
 fn install_built_in_setup(item: &BuiltIn) -> Result<(), String> {
-    let dir = built_in_setup_dir(item)?;
-    if !built_in_setup_installed(item) { install_market_skill(&dir, &item.setup)?; }
+    sync_setup_files(item, &built_in_setup_dir(item)?)
+}
+
+/// Bring the installed setup Skill, its Dsivio reference and its adapter in line with this
+/// release. They ship with the app, not with the upstream revision, so an app update must reach
+/// installs that are otherwise ready. The done marker survives only when nothing changed: a changed
+/// adapter or Skill has to be set up again (e.g. copied into the plugin's project).
+fn sync_setup_files(item: &BuiltIn, dir: &Path) -> Result<(), String> {
+    let skill_file = dir.join("SKILL.md");
+    let current = fs::read_to_string(&skill_file).ok();
+    let unchanged = current.as_deref().is_some_and(|text| without_done_marker(text) == item.setup)
+        && item.dsivio_reference.as_deref().is_none_or(|reference| {
+            fs::read_to_string(dir.join(DSIVIO_REFERENCE_PATH)).is_ok_and(|text| text == reference)
+        })
+        && adapter_matches(item, &dir.join(ADAPTER_PATH));
+    if unchanged {
+        return Ok(());
+    }
+    install_market_skill(dir, &item.setup)?;
     if let Some(reference) = &item.dsivio_reference {
         let file = dir.join(DSIVIO_REFERENCE_PATH);
         fs::create_dir_all(file.parent().ok_or("无效路径")?).map_err(|e| e.to_string())?;
         fs::write(file, reference).map_err(|e| e.to_string())?;
     }
+    let adapter = dir.join(ADAPTER_PATH);
+    if adapter.is_dir() && !fs::symlink_metadata(&adapter).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        fs::remove_dir_all(&adapter).map_err(|e| e.to_string())?;
+    }
     for (relative, content) in &item.adapter_files {
-        let file = dir.join(ADAPTER_PATH).join(relative);
+        let file = adapter.join(relative);
         fs::create_dir_all(file.parent().ok_or("无效路径")?).map_err(|e| e.to_string())?;
         fs::write(file, content).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn without_done_marker(text: &str) -> String {
+    let mut in_front_matter = false;
+    text.split_inclusive('\n')
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                in_front_matter = line.trim_end() == "---";
+            } else if in_front_matter && line.trim_end() == "---" {
+                in_front_matter = false;
+            } else if in_front_matter && line.starts_with("description:") {
+                let (body, newline) = line.strip_suffix('\n').map_or((line, ""), |b| (b, "\n"));
+                if let Some(original) = body.trim_end().strip_suffix(SETUP_DONE_MARKER.trim_start()) {
+                    return format!("{}{newline}", original.trim_end());
+                }
+            }
+            line.to_string()
+        })
+        .collect()
+}
+
+fn adapter_matches(item: &BuiltIn, adapter: &Path) -> bool {
+    if item.adapter_files.is_empty() {
+        return !adapter.exists();
+    }
+    let mut installed = Vec::new();
+    let mut pending = vec![adapter.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&current) else { return false };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(relative) = path.strip_prefix(adapter) {
+                installed.push(relative.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    installed.sort();
+    installed.len() == item.adapter_files.len()
+        && item.adapter_files.iter().zip(&installed).all(|((relative, content), found)| {
+            relative == found && fs::read_to_string(adapter.join(relative)).is_ok_and(|text| &text == content)
+        })
 }
 
 fn built_in_entry_dir(item: &BuiltIn) -> Result<PathBuf, String> {
@@ -1232,7 +1297,14 @@ fn built_in_command(item: &BuiltIn, request: &Value) -> Result<Value, String> {
             use base64::Engine;
             Ok(json!(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(item.icon.as_bytes()))))
         }
-        "setup_state" => Ok(json!({"setupDone":built_in_setup_done(item)})),
+        "setup_state" => {
+            // Read right before the plugin is used: refresh shipped setup files first, so an app
+            // update that changed them sends this use through setup again.
+            if built_in_ready(item, &built_in_state(item)) {
+                install_built_in_setup(item)?;
+            }
+            Ok(json!({"setupDone":built_in_setup_done(item)}))
+        }
         "detail" => Ok(json!({"example":{"schemaVersion":1,"messages":[
             {"role":"user","text":item.input_hint},
             {"role":"assistant","text":item.welcome}
@@ -1776,6 +1848,38 @@ mod tests {
         assert!(!dir.join("adapter/test").exists());
         remove_market_skill(&dir).unwrap();
         assert!(!dir.exists(), "adapter files are removed with the setup Skill");
+    }
+    #[test]
+    fn shipped_setup_files_replace_stale_installs_and_rerun_setup_only_when_they_changed() {
+        let hypit = plugin("hypit");
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("hypit-setup");
+        // An install from an older release: older Skill text marked done, an older adapter.
+        let old = hypit.setup.replacen(
+            "description: Check Dsivio integration",
+            "description: Old text",
+            1,
+        );
+        let old = old.replacen("\nkivio-market-managed", " [setup completed once]\nkivio-market-managed", 1);
+        install_market_skill(&dir, &old).unwrap();
+        assert!(setup_description_done(&old));
+        fs::create_dir_all(dir.join("adapter/src")).unwrap();
+        fs::write(dir.join("adapter/src/provider.js"), "// stale").unwrap();
+        fs::write(dir.join("adapter/src/removed.js"), "// gone upstream").unwrap();
+
+        sync_setup_files(&hypit, &dir).unwrap();
+        let skill = fs::read_to_string(dir.join("SKILL.md")).unwrap();
+        assert!(skill.contains("description: Check Dsivio integration"), "the Skill text follows the catalog");
+        assert!(!setup_description_done(&skill), "changed shipped files must be set up again (copied into the project)");
+        let (_, provider) = hypit.adapter_files.iter().find(|(path, _)| path == "src/provider.js").unwrap();
+        assert_eq!(&fs::read_to_string(dir.join("adapter/src/provider.js")).unwrap(), provider);
+        assert!(!dir.join("adapter/src/removed.js").exists());
+
+        // Setup completes against these files; a later sync with nothing changed keeps the marker.
+        let done = skill.replacen("\nkivio-market-managed", " [setup completed once]\nkivio-market-managed", 1);
+        fs::write(dir.join("SKILL.md"), &done).unwrap();
+        sync_setup_files(&hypit, &dir).unwrap();
+        assert_eq!(fs::read_to_string(dir.join("SKILL.md")).unwrap(), done);
     }
     #[test]
     fn hypit_project_prompt_follows_the_plugin_installation() {

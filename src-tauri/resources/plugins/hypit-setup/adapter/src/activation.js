@@ -37,7 +37,7 @@ export default {
       const found = offersFrom(listed, options);
       const offers = found.length > 0 ? found : placeholderOffers(
         listed.length === 0
-          ? "Dsivio did not answer or has no image/video model enabled: open Dsivio and enable models in Settings > 媒体创作, then restart the Hypit Runtime"
+          ? "Dsivio did not answer or has no image/video model enabled: open Dsivio and enable models in Settings > 媒体创作, then run `hypit runtime down` and `hypit runtime up`"
           : "none of the models enabled in Dsivio matches a Hypit model this adapter can serve",
       );
       return { endpoint: createDsivioProvider({ ...options, offers }), diagnose: async () => await probeDsivio(options, offers) };

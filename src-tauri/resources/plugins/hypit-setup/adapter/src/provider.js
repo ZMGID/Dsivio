@@ -178,6 +178,11 @@ function taskFailure(task, id) {
     : typeof task.error?.message === "string"
       ? task.error.message
       : "no diagnostic";
+  // A failed task that can still be resumed kept a receipt the provider stopped returning: it may
+  // have been charged, so it is reported apart from an ordinary generation failure.
+  if (task.canResume === true) {
+    return { code: "DSIVIO_RECEIPT_LOST", message: `Dsivio task ${id} (receipt ${task.remoteId ?? "unknown"}): ${detail}. Check with the provider before generating again; \`dsivio media status ${id} --resume\` queries the same receipt.` };
+  }
   return { code: "DSIVIO_GENERATION_FAILED", message: `Dsivio task ${id} failed: ${detail}` };
 }
 
@@ -194,6 +199,8 @@ export function argumentsFor(kind, row, request, tmpFiles) {
     const port = table[name];
     if (port === undefined || name === "prompt" || values === undefined || values.length === 0) continue;
     if (port.kind === "off-only") continue;
+    // `auto` video ratio means "the model's default"; the image command accepts `auto` itself.
+    if (port.kind === "flag" && kind === "video" && name === "aspectRatio" && values[0] === "auto") continue;
     if (port.kind === "flag") args.push(port.flag, String(values[0]));
     else if (port.kind === "switch") {
       if (values[0] === true) args.push(port.flag);
@@ -208,7 +215,7 @@ export function argumentsFor(kind, row, request, tmpFiles) {
 /**
  * The Dsivio models this endpoint serves, read once from `dsivio media models` when Hypit activates
  * it. `supports` is synchronous in Hypit, so it answers from this snapshot; a model changed in Dsivio
- * later is picked up the next time the Runtime starts.
+ * later is picked up after `hypit runtime down` / `hypit runtime up`.
  */
 export function offersFrom(listed, options = {}) {
   const offers = [];
@@ -341,12 +348,16 @@ export function createDsivioProvider(options) {
       },
       async poll(context) {
         const id = nonemptyText(context.handle?.id, "task id");
-        const task = await media(["media", "status", id]);
-        if (task.status === "running" && task.canResume === true && typeof task.error === "string" && task.error.startsWith("视频查询路由未匹配")) {
-          return { status: "failed", receipt: { id }, failure: {
-            code: "DSIVIO_QUERY_PAUSED",
-            message: `Dsivio task ${id}: ${task.error}`,
-          } };
+        let task;
+        try {
+          task = await media(["media", "status", id]);
+        } catch (error) {
+          // The paid task lives in Dsivio and continues when it is opened again; failing here would
+          // make Hypit give up on a task that is still running.
+          if (error?.exitCode === 6 || error?.code === "DSIVIO_NOT_RUNNING") {
+            return wakeAfter({ id }, interval, Date.now(), { phase: `Dsivio is not running; open Dsivio to continue task ${id}` });
+          }
+          throw error;
         }
         if (task.status === "running") {
           return wakeAfter({ id }, interval, Date.now(), { phase: task.error || `Dsivio task ${id} is running` });

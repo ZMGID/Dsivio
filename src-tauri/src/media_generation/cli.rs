@@ -262,10 +262,22 @@ async fn submit_request(app: &tauri::AppHandle, submit: Submit) -> Result<MediaT
             ..Default::default()
         },
     )?;
-    if let Some(task) = existing.into_iter().next() {
+    if let Some(task) = submission_for_key(existing) {
         return Ok(task);
     }
     super::start_media_generation(app.clone(), request).await
+}
+
+/// The task an idempotency key already names, if a new submission must not be made. Only a
+/// request the provider definitively refused (nothing charged) may be submitted again under the
+/// same key, so a caller that fixed the cause can retry the same operation.
+fn submission_for_key(existing: Vec<MediaTask>) -> Option<MediaTask> {
+    let refused = |task: &MediaTask| {
+        task.status == MediaStatus::Failed
+            && task.submission_state == Some(MediaSubmissionState::Rejected)
+            && !task.can_resume
+    };
+    existing.into_iter().find(|task| !refused(task))
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -1292,6 +1304,33 @@ mod tests {
         assert!(origin_for(Some("hypit"), Some("")).is_err());
     }
 
+    #[test]
+    fn an_idempotency_key_resubmits_only_after_a_definite_refusal() {
+        let task = |id: &str, status: &str, state: Value, resume: bool| -> MediaTask {
+            serde_json::from_value(json!({"id":id,"providerId":"p","model":"m","kind":"video",
+                "status":status,"createdAt":"now","error":null,"remoteId":null,"outputs":[],
+                "canResume":resume,"submissionState":state}))
+            .unwrap()
+        };
+        assert!(submission_for_key(vec![]).is_none());
+        assert!(submission_for_key(vec![task("refused", "failed", json!("rejected"), false)]).is_none());
+        for kept in [
+            task("running", "running", json!(null), false),
+            task("done", "succeeded", json!(null), false),
+            task("uncertain", "failed", json!("uncertain"), false),
+            task("failed-after-accept", "failed", json!(null), false),
+            task("lost", "failed", json!(null), true),
+        ] {
+            let id = kept.id.clone();
+            assert_eq!(submission_for_key(vec![kept]).map(|t| t.id), Some(id));
+        }
+        // A retry after a refusal is itself found by the key next time.
+        let found = submission_for_key(vec![
+            task("refused", "failed", json!("rejected"), false),
+            task("retry", "running", json!(null), false),
+        ]);
+        assert_eq!(found.map(|t| t.id).as_deref(), Some("retry"));
+    }
     #[test]
     fn requests_need_the_current_token() {
         let line = serde_json::to_string(&Envelope {

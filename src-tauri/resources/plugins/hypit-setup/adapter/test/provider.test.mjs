@@ -397,14 +397,41 @@ test("image sizes and last-frame pairing follow the selected Dsivio capabilities
   assert.equal(checkLimits(seedance, { lastFrame: [{}] }).status, "unsupported");
 });
 
-test("a paused query reports the configuration error and preserves the receipt", async () => {
-  const dsivio = scripted([{ id: "original", status: "running", canResume: true, error: "视频查询路由未匹配（HTTP 404）：Failed to read static file." }]);
+test("a receipt Dsivio could not find again is its own failure, keeping the receipt for the provider", async () => {
+  const dsivio = scripted([{ id: "original", status: "failed", canResume: true, remoteId: "remote-1", error: "供应商受理后一直查不到该任务（回执 remote-1），可能已扣费" }]);
   const provider = providerFor(models, dsivio.run);
   const { endpoint } = capabilityOf(provider, "grok-imagine-video-1.5-preview");
   const result = await endpoint.poll({ handle: { id: "original" }, command: { id: "verify" } });
   assert.equal(result.status, "failed");
-  assert.equal(result.failure.code, "DSIVIO_QUERY_PAUSED");
-  assert.match(result.failure.message, /Failed to read static file/u);
+  assert.equal(result.failure.code, "DSIVIO_RECEIPT_LOST");
+  assert.match(result.failure.message, /remote-1/u);
   assert.deepEqual(result.receipt, { id: "original" });
-  assert.deepEqual(dsivio.calls.map(c => c.args), [["media", "status", "original"]]);
+  assert.deepEqual(dsivio.calls.map((c) => c.args), [["media", "status", "original"]]);
+});
+
+test("polling keeps the paid task pending while Dsivio is closed, and says to open it", async () => {
+  const closed = Object.assign(new Error("Dsivio media status exited 6: Dsivio is not running"), { code: "DSIVIO_NOT_RUNNING", exitCode: 6 });
+  const dsivio = scripted([closed, { id: "t", status: "running" }]);
+  const provider = providerFor(models, dsivio.run);
+  const { endpoint } = capabilityOf(provider, "grok-imagine-video-1.5-preview");
+  const waiting = await endpoint.poll({ handle: { id: "t" }, command: { id: "c" } });
+  assert.equal(waiting.status, "pending");
+  assert.deepEqual(waiting.handle, { id: "t" });
+  assert.match(waiting.progress.phase, /open Dsivio/u);
+  assert.equal((await endpoint.poll({ handle: { id: "t" }, command: { id: "c" } })).status, "pending");
+});
+
+test("an auto aspect ratio lets Dsivio use the model default instead of sending an unsupported value", async () => {
+  const dsivio = scripted([{ id: "task-auto", status: "running", outputs: [] }]);
+  const provider = providerFor(models, dsivio.run);
+  const { context } = startContext({ ports: { prompt: ["p"], aspectRatio: ["auto"], resolution: ["720p"], duration: [5] } });
+  await capabilityOf(provider, "grok-imagine-video-1.5-preview").endpoint.start(context);
+  assert.ok(!dsivio.calls[0].args.includes("--ratio"), dsivio.calls[0].args.join(" "));
+  // The image command accepts `auto` itself, so it is passed through there.
+  const imageDsivio = scripted([{ id: "img", status: "running", outputs: [] }]);
+  const images = providerFor(models, imageDsivio.run);
+  const { context: imageContext } = startContext({ ports: { prompt: ["p"], aspectRatio: ["auto"], resolution: ["1K"] } });
+  await capabilityOf(images, "gpt-image-2").endpoint.start(imageContext);
+  const args = imageDsivio.calls[0].args;
+  assert.equal(args[args.indexOf("--ratio") + 1], "auto");
 });
