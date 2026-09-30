@@ -219,6 +219,8 @@ pub fn resolve_runtime_prompt_sources(
 pub struct ProjectPromptContext {
     pub name: String,
     pub root_path: Option<String>,
+    /// Instructions an installed plugin attaches to its dedicated project (see `market::project_prompt_for`).
+    pub plugin_prompt: Option<String>,
 }
 
 fn work_style_prompt(available_builtin_tools: &[String]) -> String {
@@ -263,6 +265,14 @@ fn work_style_prompt(available_builtin_tools: &[String]) -> String {
 }
 
 fn project_context_prompt(project: &ProjectPromptContext) -> String {
+    let base = project_folder_prompt(project);
+    match project.plugin_prompt.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+        Some(plugin) => format!("{base}\n\n{plugin}"),
+        None => base,
+    }
+}
+
+fn project_folder_prompt(project: &ProjectPromptContext) -> String {
     match &project.root_path {
         // Do not interpolate the folder path here. It changes per project (and
         // Chat Probe rebinds the same project to a new cwd) and would sit in
@@ -1541,6 +1551,30 @@ mod tests {
     }
 
     #[test]
+    fn plugin_project_prompt_joins_the_project_paragraph_and_only_when_present() {
+        let registry = skills::SkillRegistry::default();
+        let chat_tools = crate::settings::ChatToolsConfig::default();
+        let build = |plugin_prompt: Option<&str>| {
+            let project = ProjectPromptContext {
+                name: "Hypit".to_string(),
+                root_path: Some("/tmp/hypit".to_string()),
+                plugin_prompt: plugin_prompt.map(str::to_owned),
+            };
+            build_chat_system_prompt(
+                "zh-CN", false, false, &registry, &chat_tools, true, &[], None, None, None, None, "", false,
+                None, None, None, Some(&project), Some("/tmp/hypit"), None, None, &[],
+            )
+        };
+        let with = build(Some("  Hypit generation runs through `dsivio media`.  "));
+        assert!(with.contains("This is a project conversation. Project \"Hypit\""));
+        assert!(with.contains("Hypit generation runs through `dsivio media`."));
+        assert!(!with.contains("/tmp/hypit\n"), "the plugin text must not drag the absolute path into the static prefix");
+        let without = build(None);
+        assert!(!without.contains("dsivio media"));
+        assert_eq!(build(Some("   ")), without, "blank plugin text adds nothing");
+    }
+
+    #[test]
     fn project_folder_path_stays_out_of_static_system_prefix() {
         let registry = skills::SkillRegistry::default();
         let mut chat_tools = crate::settings::ChatToolsConfig::default();
@@ -1550,6 +1584,7 @@ mod tests {
             let project = ProjectPromptContext {
                 name: "Chat Probe".to_string(),
                 root_path: Some(root.to_string()),
+                plugin_prompt: None,
             };
             build_chat_system_prompt(
                 "zh-CN",

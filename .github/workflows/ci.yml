@@ -52,6 +52,9 @@ jobs:
       - name: Check desktop packaging contracts
         run: npm run package:check && npm run test:packaging
 
+      - name: Test bundled plugin adapters
+        run: npm run test:adapters
+
       - name: Build Swift sidecar
         run: npm run build:swift
 

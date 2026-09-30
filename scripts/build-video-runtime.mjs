@@ -84,11 +84,12 @@ try {
     ? '../../../python-packages\n../../../python-packages/win32\n../../../python-packages/win32/lib\n../../../python-packages/pythonwin\nimport pywin32_bootstrap\n'
     : '../../../../python-packages\n')
   mkdirSync(join(staging, 'bin'))
-  const probe = spawnSync(node, ['-p', 'require("ffprobe-static").path'], { cwd: analyzer, encoding: 'utf8' })
+  const probe = spawnSync(node, ['-p', 'require("@ffprobe-installer/ffprobe").path'], { cwd: analyzer, encoding: 'utf8' })
   if (probe.status !== 0) throw new Error(`Cannot locate bundled ffprobe: ${probe.stderr}`)
   cpSync(probe.stdout.trim(), join(staging, 'bin', process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'))
-  // ffprobe-static includes other OS binaries; ship only this target's binary.
-  rmSync(join(analyzer, 'node_modules/ffprobe-static/bin'), { recursive: true, force: true })
+  // The installer selects a native binary, including macOS arm64. Once copied,
+  // its platform packages are no longer needed in the shipped analyzer.
+  rmSync(join(analyzer, 'node_modules/@ffprobe-installer'), { recursive: true, force: true })
   const launcher = join(staging, 'bin', process.platform === 'win32' ? 'comfy.exe' : 'comfy')
   run('rustc', ['--edition=2021', '-C', 'opt-level=s', '-C', 'strip=symbols', join(inputs, 'launcher.rs'), '-o', launcher])
   cpSync(launcher, join(staging, 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'))

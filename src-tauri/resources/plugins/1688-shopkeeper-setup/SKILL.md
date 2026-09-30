@@ -1,6 +1,6 @@
 ---
 name: 1688-shopkeeper-setup
-description: Check Dsivio's 1688 AI 店长 installation, Python runtime, AK, and store binding before use.
+description: Check Dsivio's 1688 AI 店长 installation, Python runtime, AK, and store binding before use. Also load it when this integration fails, a dependency or authorization is missing, or Dsivio adaptation needs checking.
 kivio-market-managed: true
 ---
 

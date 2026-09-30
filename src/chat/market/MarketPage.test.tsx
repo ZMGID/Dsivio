@@ -155,20 +155,19 @@ it('SRT 白板手绘动画作为内置视频插件提供安装和卸载入口', 
   await waitFor(() => expect(onUninstall).toHaveBeenCalledWith('srt-whiteboard-animation'))
 })
 
-it('内置插件详情展示 setup、主 Skill 与环境检查命令', async () => {
+it('内置插件详情展示 setup 与主 Skill', async () => {
   const base = (await import('../../../packages/srt-whiteboard-animation/market.json')).default.manifest
-  const manifest = { ...base, schemaVersion: 1 as const, setupSkillId: 'srt-whiteboard-animation-setup', mainSkillId: 'srt-whiteboard-animation', skillIds: ['srt-whiteboard-animation'], checkCommand: '/srt-whiteboard-market:check' }
+  const manifest = { ...base, schemaVersion: 1 as const, setupSkillId: 'srt-whiteboard-animation-setup', mainSkillId: 'srt-whiteboard-animation', skillIds: ['srt-whiteboard-animation'] }
   state.snapshot.entries = [{ id: manifest.id, version: manifest.version, source: { kind: 'built-in' }, manifest }]
   window.location.hash = '#chat/market/srt-whiteboard-animation'
   show()
   expect(screen.getByText('srt-whiteboard-animation-setup')).toBeTruthy()
   expect(screen.getByText('srt-whiteboard-animation')).toBeTruthy()
-  expect(screen.getByText('/srt-whiteboard-market:check')).toBeTruthy()
 })
 
-it('没有命令包的内置组件丢失时仍可修复或卸载', async () => {
+it('内置组件丢失时仍可修复或卸载', async () => {
   const base = (await import('../../../packages/srt-whiteboard-animation/market.json')).default.manifest
-  const manifest = { ...base, schemaVersion: 1 as const, id: 'feishu-cli', name: '飞书 CLI', checkCommand: null }
+  const manifest = { ...base, schemaVersion: 1 as const, id: 'feishu-cli', name: '飞书 CLI' }
   state.snapshot.entries = [{ id: manifest.id, version: manifest.version, source: { kind: 'built-in' }, manifest }]
   state.snapshot.installed = [{ id: manifest.id, manifest, source: { kind: 'built-in' }, status: 'failed', enabled: false, pluginId: null, skillId: null, conversationId: null, error: '插件组件缺失' }]
   const onInstall = vi.fn().mockResolvedValue(undefined)
@@ -185,7 +184,7 @@ it('没有命令包的内置组件丢失时仍可修复或卸载', async () => {
 
 it('飞书 CLI 在效率办公分类只展示两个 Skill，不展示命令', async () => {
   const base = (await import('../../../packages/srt-whiteboard-animation/market.json')).default.manifest
-  const manifest = { ...base, schemaVersion: 1 as const, id: 'feishu-cli', name: '飞书 CLI', categoryIds: ['productivity'], setupSkillId: 'feishu-cli-setup', mainSkillId: 'feishu-cli', skillIds: ['feishu-cli'], checkCommand: null }
+  const manifest = { ...base, schemaVersion: 1 as const, id: 'feishu-cli', name: '飞书 CLI', categoryIds: ['productivity'], setupSkillId: 'feishu-cli-setup', mainSkillId: 'feishu-cli', skillIds: ['feishu-cli'] }
   state.snapshot.categories = [{ id: 'productivity', name: '效率办公' }]
   state.snapshot.entries = [{ id: manifest.id, version: manifest.version, source: { kind: 'built-in' }, manifest }]
   const onInstall = vi.fn().mockResolvedValue(undefined)
@@ -203,7 +202,7 @@ it('飞书 CLI 在效率办公分类只展示两个 Skill，不展示命令', as
 
 it('紫鸟 CLI 在插件市场提供安装入口和两个接入 Skill', async () => {
   const base = (await import('../../../packages/srt-whiteboard-animation/market.json')).default.manifest
-  const manifest = { ...base, schemaVersion: 1 as const, id: 'ziniao-cli', name: '紫鸟 CLI', categoryIds: ['productivity'], setupSkillId: 'ziniao-cli-setup', mainSkillId: 'ziniao-cli', skillIds: ['ziniao-cli'], checkCommand: null }
+  const manifest = { ...base, schemaVersion: 1 as const, id: 'ziniao-cli', name: '紫鸟 CLI', categoryIds: ['productivity'], setupSkillId: 'ziniao-cli-setup', mainSkillId: 'ziniao-cli', skillIds: ['ziniao-cli'] }
   state.snapshot.categories = [{ id: 'productivity', name: '效率办公' }]
   state.snapshot.entries = [{ id: manifest.id, version: manifest.version, source: { kind: 'built-in' }, manifest }]
   const onInstall = vi.fn().mockResolvedValue(undefined)

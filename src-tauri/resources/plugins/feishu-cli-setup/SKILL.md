@@ -1,6 +1,6 @@
 ---
 name: feishu-cli-setup
-description: Check Dsivio integration and Lark CLI, reuse existing profiles or guide first-time app and OAuth setup, then verify identity, scopes, and a minimal read-only call.
+description: Check Dsivio integration and Lark CLI, reuse existing profiles or guide first-time app and OAuth setup, then verify identity, scopes, and a minimal read-only call. Also load it when this integration fails, a dependency or authorization is missing, or Dsivio adaptation needs checking.
 kivio-market-managed: true
 ---
 

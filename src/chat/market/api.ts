@@ -55,6 +55,10 @@ export const marketApi = {
     })
     return localRequest
   },
+  ensureProject: (id: string) => call<{ id: string; name: string; rootPath: string | null }>('ensure_project', { id }),
+  async setupDone(id: string): Promise<boolean> {
+    return (await call<{ setupDone: boolean }>('setup_state', { id })).setupDone
+  },
   async setEnabled(id: string, enabled: boolean) {
     await call<MarketLocal>('set_enabled', { id, enabled }); await this.refresh(false)
   },

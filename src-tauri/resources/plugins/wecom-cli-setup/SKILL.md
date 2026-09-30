@@ -1,6 +1,6 @@
 ---
 name: wecom-cli-setup
-description: Install the official wecom-cli and its published skills, then verify scan-code login with one read-only identity call.
+description: Install the official wecom-cli and its published skills, then verify scan-code login with one read-only identity call. Also load it when this integration fails, a dependency or authorization is missing, or Dsivio adaptation needs checking.
 kivio-market-managed: true
 ---
 

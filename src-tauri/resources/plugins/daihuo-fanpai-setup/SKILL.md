@@ -1,6 +1,6 @@
 ---
 name: daihuo-fanpai-setup
-description: Check Dsivio integration and run the daihuo-fanpai doctor before the first commerce-video remake.
+description: Check Dsivio integration and run the daihuo-fanpai doctor before the first commerce-video remake. Also load it when this integration fails, a dependency or authorization is missing, or Dsivio adaptation needs checking.
 kivio-market-managed: true
 ---
 

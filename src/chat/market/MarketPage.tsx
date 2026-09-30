@@ -123,7 +123,6 @@ export function MarketPage({ lang, onInstall, onUse, onUninstall }: MarketAction
               <div><strong>{chosen.manifest.setupSkillId}</strong><span>{marketText(lang, '检查 Dsivio 接入并补齐运行环境', 'Check Dsivio integration and fill missing dependencies')}</span></div>
               {(chosen.manifest.skillIds ?? [chosen.manifest.mainSkillId]).filter((skill): skill is string => Boolean(skill)).map(skill => <div key={skill}><strong>{skill}</strong><span>{marketText(lang, '安装后即可使用', 'Available after installation')}</span></div>)}
             </section>}
-            {chosen.manifest.checkCommand && <section className="market-components"><h2>{marketText(lang, '命令', 'Commands')} 1</h2><div><code>{chosen.manifest.checkCommand}</code><span>{marketText(lang, '检查接入、配置和实际可用性', 'Check integration, configuration, and runtime readiness')}</span></div></section>}
           </> : <>
           <h2>{marketText(lang, '使用示例', 'How to use')}</h2><p className="market-muted">{marketText(lang, '示例仅供说明，不会发送到你的对话。', 'This example will not be sent to your conversation.')}</p>
           <Example id={chosen.id} lang={lang} local={Boolean(chosen.local)} />

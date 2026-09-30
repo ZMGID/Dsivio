@@ -1,6 +1,6 @@
 ---
 name: davinci-resolve-setup
-description: Check Dsivio integration and connect DaVinci Resolve Studio 21.1's official MCP server, then verify with one read-only project query.
+description: Check Dsivio integration and connect DaVinci Resolve Studio 21.1's official MCP server, then verify with one read-only project query. Also load it when this integration fails, a dependency or authorization is missing, or Dsivio adaptation needs checking.
 kivio-market-managed: true
 ---
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isBuiltInMarketId, marketItems, marketUsePrompt, primaryAction, type MarketLocal, type MarketSnapshot } from './types'
+import { isBuiltInMarketId, marketItems, marketUsePrompt, marketUseTarget, primaryAction, type MarketLocal, type MarketSnapshot } from './types'
 
 const local = { id: 'test', manifest: { name: '已安装版本' }, status: 'ready', enabled: true } as MarketLocal
 const snapshot: MarketSnapshot = { categories: [], entries: [], installed: [local], refreshedAt: null, error: '离线', sourceUrl: '' }
@@ -42,6 +42,17 @@ it('使用已安装插件时发送明确启动请求，不把使用示例当作�
   const withoutPrompt = { ...local, source: { kind: 'built-in' }, manifest: { ...local.manifest, inputHint: '帮我删除一份文档' } } as MarketLocal
   expect(marketUsePrompt(withoutPrompt)).toBe('使用这个插件，告诉我可以做什么。')
   expect(marketUsePrompt(withoutPrompt)).not.toContain('删除一份文档')
+})
+
+it('首次使用内置插件固定加载 setup，完成后回到主 skill', () => {
+  const builtIn = { ...local, skillId: 'hypit', source: { kind: 'built-in' }, manifest: { ...local.manifest, name: 'Hypit', setupSkillId: 'hypit-setup', startPrompt: '使用 Hypit，告诉我可以做什么。' } } as MarketLocal
+  const first = marketUseTarget(builtIn, false)
+  expect(first.skillId).toBe('hypit-setup')
+  expect(first.prompt).toContain('hypit-setup')
+  expect(first.prompt).toContain('hypit')
+  expect(marketUseTarget(builtIn, true)).toEqual({ skillId: 'hypit', prompt: '使用 Hypit，告诉我可以做什么。' })
+  const noSetup = { ...builtIn, manifest: { ...builtIn.manifest, setupSkillId: undefined } } as MarketLocal
+  expect(marketUseTarget(noSetup, false).skillId).toBe('hypit')
 })
 
 it('内置插件使用直接安装和卸载流程', () => {

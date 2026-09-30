@@ -1,0 +1,213 @@
+{
+ "seedance-2": {
+  "result": "video",
+  "ports": [
+   "prompt",
+   "referenceImage",
+   "referenceVideo",
+   "referenceAudio",
+   "firstFrame",
+   "lastFrame",
+   "resolution",
+   "aspectRatio",
+   "duration",
+   "generateAudio",
+   "webSearch"
+  ],
+  "required": [
+   "prompt",
+   "resolution",
+   "aspectRatio",
+   "duration",
+   "generateAudio",
+   "webSearch"
+  ]
+ },
+ "seedance-2-fast": {
+  "result": "video",
+  "ports": [
+   "prompt",
+   "referenceImage",
+   "referenceVideo",
+   "referenceAudio",
+   "firstFrame",
+   "lastFrame",
+   "resolution",
+   "aspectRatio",
+   "duration",
+   "generateAudio",
+   "webSearch"
+  ],
+  "required": [
+   "prompt",
+   "resolution",
+   "aspectRatio",
+   "duration",
+   "generateAudio",
+   "webSearch"
+  ]
+ },
+ "seedance-2-mini": {
+  "result": "video",
+  "ports": [
+   "prompt",
+   "referenceImage",
+   "referenceVideo",
+   "referenceAudio",
+   "firstFrame",
+   "lastFrame",
+   "resolution",
+   "aspectRatio",
+   "duration",
+   "generateAudio",
+   "webSearch"
+  ],
+  "required": [
+   "prompt",
+   "resolution",
+   "aspectRatio",
+   "duration",
+   "generateAudio",
+   "webSearch"
+  ]
+ },
+ "seedance-2.5": {
+  "result": "video",
+  "ports": [
+   "prompt",
+   "referenceImage",
+   "referenceVideo",
+   "referenceAudio",
+   "firstFrame",
+   "lastFrame",
+   "resolution",
+   "aspectRatio",
+   "duration",
+   "generateAudio",
+   "webSearch"
+  ],
+  "required": [
+   "prompt",
+   "resolution",
+   "aspectRatio",
+   "duration",
+   "generateAudio",
+   "webSearch"
+  ]
+ },
+ "minimax-h3": {
+  "result": "video",
+  "ports": [
+   "prompt",
+   "duration",
+   "resolution",
+   "aspectRatio",
+   "referenceImage",
+   "referenceVideo",
+   "referenceAudio",
+   "firstFrame",
+   "lastFrame"
+  ],
+  "required": [
+   "prompt",
+   "duration"
+  ]
+ },
+ "grok-imagine-video": {
+  "result": "video",
+  "ports": [
+   "prompt",
+   "aspectRatio",
+   "resolution",
+   "duration",
+   "images"
+  ],
+  "required": [
+   "prompt",
+   "aspectRatio",
+   "resolution",
+   "duration"
+  ]
+ },
+ "grok-imagine-video-1.5-preview": {
+  "result": "video",
+  "ports": [
+   "prompt",
+   "aspectRatio",
+   "resolution",
+   "duration",
+   "images"
+  ],
+  "required": [
+   "prompt",
+   "aspectRatio",
+   "resolution",
+   "duration"
+  ]
+ },
+ "gpt-image-2": {
+  "result": "image",
+  "ports": [
+   "prompt",
+   "aspectRatio",
+   "resolution",
+   "background",
+   "images"
+  ],
+  "required": [
+   "prompt",
+   "aspectRatio",
+   "resolution"
+  ]
+ },
+ "seedream-5-lite": {
+  "result": "image",
+  "ports": [
+   "prompt",
+   "aspectRatio",
+   "quality",
+   "outputFormat",
+   "nsfwCheck",
+   "images"
+  ],
+  "required": [
+   "prompt",
+   "aspectRatio",
+   "quality",
+   "outputFormat",
+   "nsfwCheck"
+  ]
+ },
+ "nano-banana-2": {
+  "result": "image",
+  "ports": [
+   "prompt",
+   "images",
+   "aspectRatio",
+   "resolution",
+   "outputFormat"
+  ],
+  "required": [
+   "prompt",
+   "aspectRatio",
+   "resolution",
+   "outputFormat"
+  ]
+ },
+ "nano-banana-pro": {
+  "result": "image",
+  "ports": [
+   "prompt",
+   "images",
+   "aspectRatio",
+   "resolution",
+   "outputFormat"
+  ],
+  "required": [
+   "prompt",
+   "aspectRatio",
+   "resolution",
+   "outputFormat"
+  ]
+ }
+}

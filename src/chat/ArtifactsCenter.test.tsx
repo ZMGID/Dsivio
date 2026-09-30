@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, type ArtifactLibraryItem, type ArtifactLibraryPage } from '../api/tauri'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -38,6 +38,36 @@ describe('Works library', () => {
     expect(screen.getByRole('button', { name: 'indexed.png' })).toBeTruthy()
     finishImport(page(work('indexed'), work('legacy')))
     expect(await screen.findByRole('button', { name: 'legacy.png' })).toBeTruthy()
+  })
+
+  it('keeps a known empty library visible on return and refresh', async () => {
+    const first = render(<ArtifactsCenter onOpenConversation={vi.fn()} />)
+    await screen.findByText('你的创作，从这里开始')
+    first.unmount()
+    let finishImport!: (value: ArtifactLibraryPage) => void
+    const pendingImport = new Promise<ArtifactLibraryPage>((resolve) => { finishImport = resolve })
+    vi.mocked(api.chatArtifactsList).mockImplementation((importHistory) => importHistory ? pendingImport : Promise.resolve(page()))
+    render(<ArtifactsCenter onOpenConversation={vi.fn()} />)
+    expect(screen.getByText('你的创作，从这里开始')).toBeTruthy()
+    expect(screen.queryByText('正在整理作品…')).toBeNull()
+    await act(async () => finishImport(page()))
+    fireEvent.click(screen.getByRole('button', { name: '刷新作品' }))
+    expect(screen.getByText('你的创作，从这里开始')).toBeTruthy()
+    expect(screen.queryByText('正在整理作品…')).toBeNull()
+    await waitFor(() => expect(screen.getByRole('button', { name: '刷新作品' })).not.toBeDisabled())
+  })
+
+  it('keeps the initial loading state until an empty index finishes historical import', async () => {
+    let finishImport!: (value: ArtifactLibraryPage) => void
+    const pendingImport = new Promise<ArtifactLibraryPage>((resolve) => { finishImport = resolve })
+    vi.mocked(api.chatArtifactsList).mockImplementation((importHistory) => importHistory ? pendingImport : Promise.resolve(page()))
+    render(<ArtifactsCenter onOpenConversation={vi.fn()} />)
+    await waitFor(() => expect(api.chatArtifactsList).toHaveBeenCalledWith(true))
+    expect(screen.getByText('正在整理作品…')).toBeTruthy()
+    expect(screen.queryByText('你的创作，从这里开始')).toBeNull()
+    await act(async () => finishImport(page(work('imported'))))
+    expect(screen.getByRole('button', { name: 'imported.png' })).toBeTruthy()
+    expect(screen.queryByText('正在整理作品…')).toBeNull()
   })
 
   it('opens the original in the default application without reading an in-app preview', async () => {

@@ -1,0 +1,10 @@
+{
+  "name": "@dsivio/hypit-provider",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Hypit Endpoint package that generates images and videos through the running Dsivio (`dsivio media`). It holds no service address and no account key.",
+  "hypit": { "activation": "./src/activation.js" },
+  "exports": { ".": "./src/provider.js" },
+  "files": ["src"]
+}

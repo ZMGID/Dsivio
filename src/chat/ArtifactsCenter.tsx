@@ -45,6 +45,7 @@ export function ArtifactsCenter({ onOpenConversation }: { onOpenConversation: (i
   const zh = useLang() === 'zh'
   const [page, setPage] = useState<ArtifactLibraryPage>(() => cachedPage ?? { items: [], warnings: 0 })
   const [loading, setLoading] = useState(true)
+  const [hasLoadedPage, setHasLoadedPage] = useState(() => cachedPage !== null)
   const [error, setError] = useState('')
   const [refresh, setRefresh] = useState(0)
   const [query, setQuery] = useState('')
@@ -67,7 +68,7 @@ export function ArtifactsCenter({ onOpenConversation }: { onOpenConversation: (i
       return api.chatArtifactsList(true)
     }).then((result) => { if (active) { cachedPage = result; setPage(result) } })
       .catch((e) => { if (active) setError(String(e)) })
-      .finally(() => { if (active) setLoading(false) })
+      .finally(() => { if (active) { setLoading(false); setHasLoadedPage(true) } })
     return () => { active = false }
   }, [refresh])
 
@@ -197,7 +198,7 @@ export function ArtifactsCenter({ onOpenConversation }: { onOpenConversation: (i
       </div>
     </div>
     {error && <div role="alert" className="kv-works-notice">{error}<Button size="sm" onClick={reload}>{zh ? '重试' : 'Retry'}</Button></div>}
-    {loading && !page.items.length ? <div className="kv-works-empty" role="status">{zh ? '正在整理作品…' : 'Loading works…'}</div>
+    {loading && !hasLoadedPage && !page.items.length ? <div className="kv-works-empty" role="status">{zh ? '正在整理作品…' : 'Loading works…'}</div>
         : !filtered.length ? <div className="kv-works-empty"><span className="kv-works-mark-well"><WorksIcon size={34} strokeWidth={1.6} /></span><h2>{query || activeKind !== 'all' ? (zh ? '没有找到匹配的作品' : 'No matching works') : (zh ? '你的创作，从这里开始' : 'Your creations belong here')}</h2><p>{zh ? '聊天里交付的文档、图片、表格会显示在这里，文件仍留在项目或对话原来的位置。删除对话后，对应作品会一起消失。' : 'Documents, images and spreadsheets delivered in chats appear here. The files stay in the project or conversation. Deleting a chat removes its works from this gallery.'}</p></div>
         : <div className={`kv-works-grid ${list ? 'is-list' : ''}`} aria-busy={loading}>
           {filtered.map((items) => <WorkCard key={items[0].id} item={items[0]} versions={items.length} zh={zh} checked={chosen.has(items[0].workId)} managing={managing}

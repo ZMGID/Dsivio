@@ -1,6 +1,6 @@
 ---
 name: shopify-ai-toolkit-setup
-description: Check Shopify's official store-operation Skills, CLI runtime, and store authorization in Dsivio.
+description: Check Shopify's official store-operation Skills, CLI runtime, and store authorization in Dsivio. Also load it when this integration fails, a dependency or authorization is missing, or Dsivio adaptation needs checking.
 kivio-market-managed: true
 ---
 

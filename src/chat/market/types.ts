@@ -16,7 +16,8 @@ export type MarketManifest = {
   setupSkillId?: string
   mainSkillId?: string
   skillIds?: string[]
-  checkCommand?: string | null
+  /** Dedicated project the plugin runs in; created on install, reused on every use. */
+  project?: { name: string } | null
   verification: { platform: string; dsivioVersion: string; verifiedAt: string; record: string }[]
 }
 export type MarketExample = {
@@ -73,4 +74,15 @@ export function primaryAction(item: MarketItem): 'install' | 'repair' | 'continu
 export function marketUsePrompt(local: MarketLocal): string {
   return (local.source.kind === 'built-in' ? local.manifest.startPrompt?.trim() : '')
     || '使用这个插件，告诉我可以做什么。'
+}
+
+/** First use pins the setup Skill; once setup has succeeded, use pins the main Skill. */
+export function marketUseTarget(local: MarketLocal, setupDone: boolean): { skillId: string; prompt: string } {
+  const main = local.skillId ?? ''
+  const setup = local.source.kind === 'built-in' ? local.manifest.setupSkillId : undefined
+  if (!setup || setupDone) return { skillId: main, prompt: marketUsePrompt(local) }
+  return {
+    skillId: setup,
+    prompt: `这是首次使用「${local.manifest.name}」：先按 ${setup} 检查并补齐运行环境，验收通过后加载 ${main} 告诉我可以做什么。`,
+  }
 }

@@ -14,6 +14,7 @@ import { createChatExecutionOwner } from './chatExecutionOwner'
 import { createChatStreamLifecycleOwner, type StreamLifecycleResult } from './chatStreamLifecycleOwner'
 import { createChatPopoutOwnershipOwner } from './chatPopoutOwnershipOwner'
 import { createRunInteractionInbox } from './runInteractionInbox'
+import { useRunInteractionSnapshot } from './hooks/useRunInteractionSnapshot'
 import { createChatSendController, type SendPresentationEvent } from './chatSendController'
 import { createChatRunCommands, type RunCommandPresentationEvent } from './chatRunCommands'
 import { createStreamPreviewOwner } from './streamPreviewOwner'
@@ -197,7 +198,7 @@ const NotesCenter = lazy(() => import('./NotesCenter').then((module) => ({
 import { StudioPage } from './StudioPage'
 import { MarketPage } from './market/MarketPage'
 import { marketApi } from './market/api'
-import { isBuiltInMarketId, marketUsePrompt, type MarketLocal } from './market/types'
+import { isBuiltInMarketId, marketUseTarget, type MarketLocal } from './market/types'
 const ArtifactsCenter = lazy(() => import('./ArtifactsCenter').then((module) => ({ default: module.ArtifactsCenter })))
 const WorkbenchHome = lazy(() => import('./workbench/WorkbenchHome').then((module) => ({ default: module.WorkbenchHome })))
 
@@ -399,11 +400,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     confirmTool: api.chatConfirmToolCall,
     respondConsent: api.chatRespondSessionConsent,
   }))
-  const interactionSnapshot = useSyncExternalStore(
-    interactionInbox.subscribe,
-    interactionInbox.getSnapshot,
-    interactionInbox.getSnapshot,
-  )
+  const interactionSnapshot = useRunInteractionSnapshot(interactionInbox, currentConversation?.id ?? null)
   useSyncExternalStore(
     executionOwner.subscribe,
     executionOwner.getRevision,
@@ -702,13 +699,12 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
 
   const restoreStreamingPreview = useCallback((conversationId: string | null) => {
     previewOwner.activate(conversationId)
-    interactionInbox.activate(conversationId)
     if (!conversationId) {
       setStreamCoarse({ streamError: '' })
       return
     }
     setStreamCoarse({ streamError: streamErrorsRef.current[conversationId] ?? '' })
-  }, [interactionInbox, previewOwner])
+  }, [previewOwner])
 
   // One view reset for every navigation path that actually leaves a conversation.
   // Background execution remains owned by executionOwner and is not cancelled here.
@@ -2521,17 +2517,21 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再切换应用。')
     const startingHash = window.location.hash
     if (!item.enabled || item.id === 'ziniao-cli') await marketApi.setEnabled(item.id, true)
+    const target = marketUseTarget(item, await marketApi.setupDone(item.id))
     await loadSkills()
     if (window.location.hash !== startingHash) return
-    let conv = !newChat && currentConversation ? currentConversation : await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined, selectedProject?.name, selectedProject?.id ?? null)
-    conv = await chatApi.updateConversation(conv.id, { activeSkillId: item.skillId, assistantId: null, ...(newChat ? { title: item.manifest.name } : {}) })
+    const pluginProject = item.manifest.project ? await marketApi.ensureProject(item.id) : null
+    const useProject = pluginProject ?? (selectedProject ? { id: selectedProject.id, name: selectedProject.name } : null)
+    const reuse = !newChat && currentConversation && (!pluginProject || (currentConversation.project_id ?? currentConversation.projectId) === pluginProject.id)
+    let conv = reuse ? currentConversation : await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined, useProject?.name, useProject?.id ?? null)
+    conv = await chatApi.updateConversation(conv.id, { activeSkillId: target.skillId, assistantId: null, ...(newChat ? { title: item.manifest.name } : {}) })
     if (window.location.hash !== startingHash) return
     currentConversationIdRef.current = conv.id
     applyConversation(conv)
     setChatView('conversation')
     syncConversationRoute(conv.id)
     refreshSidebar()
-    const accepted = await handleSendMessage(marketUsePrompt(item), [], { conversationOverride: conv, activeSkillId: item.skillId })
+    const accepted = await handleSendMessage(target.prompt, [], { conversationOverride: conv, activeSkillId: target.skillId })
     if (!accepted) throw new Error('启动消息未发送，请在对话中重试。')
   }, [activeProviderId, activeModel, usesExternalRuntime, usesChatRuntime, draftAgentRuntime.kind, currentConversation, isCurrentConversationBusy, selectedProject, loadSkills, applyConversation, syncConversationRoute, refreshSidebar, handleSendMessage])
 
@@ -2917,7 +2917,7 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
         ) : chatView === 'artifacts' ? (
           <div key="center" className={worksPageClass}>
             {centerPageTopStrip}
-            <ArtifactsCenter onOpenConversation={handleSidebarSelectConversation} />
+            <Suspense fallback={null}><ArtifactsCenter onOpenConversation={handleSidebarSelectConversation} /></Suspense>
           </div>
         ) : chatView === 'workbench' ? (
           <div key="center" className={centerPageClass}>

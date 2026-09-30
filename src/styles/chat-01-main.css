@@ -627,7 +627,7 @@ button.chat-composer-status-item:hover {
 
 /* 回答标题目录：和右侧轮次导航共用主区的绝对层，不参与消息列宽度计算。
    刻度和标题是同一行：收起时只露出刻度，悬停时原地展开标题，行位置不动，也不做过渡动画。
-   行高按可用高度和标题数自适应（24–36px），放不下时列表滚动。
+   行高统一为紧凑的 24px，放不下时列表滚动。
    层级靠刻度长短和标题字重区分：主级刻度最长、标题最重，子级依次缩短、变淡并缩进。 */
 .chat-heading-navigator {
   --outline-tick: rgb(163 163 163);
@@ -696,7 +696,7 @@ button.chat-composer-status-item:hover {
 .chat-heading-navigator-item {
   display: flex;
   width: 100%;
-  height: clamp(24px, calc((100cqh - 12px) / var(--heading-count)), 36px);
+  height: 24px;
   flex: 0 0 auto;
   align-items: center;
   border: 0;
@@ -724,7 +724,7 @@ button.chat-composer-status-item:hover {
 .chat-heading-navigator-tick::before {
   content: '';
   display: block;
-  width: calc(14px - min(var(--heading-depth), 2) * 3.5px);
+  width: calc(10px - min(var(--heading-depth), 2) * 2.5px);
   height: 1.5px;
   border-radius: 999px;
   background: var(--outline-tick);

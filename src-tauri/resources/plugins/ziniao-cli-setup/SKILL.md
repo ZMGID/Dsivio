@@ -1,6 +1,6 @@
 ---
 name: ziniao-cli-setup
-description: Check the official Ziniao CLI, its Skills and authorization, and complete missing setup steps.
+description: Check the official Ziniao CLI, its Skills and authorization, and complete missing setup steps. Also load it when this integration fails, a dependency or authorization is missing, or Dsivio adaptation needs checking.
 kivio-market-managed: true
 ---
 

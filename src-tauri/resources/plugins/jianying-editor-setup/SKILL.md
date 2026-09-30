@@ -1,6 +1,6 @@
 ---
 name: jianying-editor-setup
-description: Check Dsivio integration and the Jianying editor Skill runtime before the first draft.
+description: Check Dsivio integration and the Jianying editor Skill runtime before the first draft. Also load it when this integration fails, a dependency or authorization is missing, or Dsivio adaptation needs checking.
 kivio-market-managed: true
 ---
 

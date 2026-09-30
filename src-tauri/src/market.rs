@@ -14,6 +14,12 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const DEFAULT_CATALOG: &str =
     "https://raw.githubusercontent.com/ZMGID/Dsivio/main/packages/catalog.json";
 
+#[derive(Clone, Deserialize)]
+struct ProjectSpec {
+    name: String,
+    dir: String,
+}
+
 #[derive(Clone)]
 struct BuiltIn {
     id: String,
@@ -25,7 +31,12 @@ struct BuiltIn {
     start_prompt: String,
     setup: String,
     entry: Option<String>,
-    command: Option<String>,
+    /// Text of the shared Dsivio reference, present only when this plugin's setup reads it.
+    dsivio_reference: Option<String>,
+    /// Dsivio adapter shipped next to the setup Skill (`adapter/...`), present only when the setup uses it.
+    adapter_files: Vec<(String, String)>,
+    project: Option<ProjectSpec>,
+    project_prompt: Option<String>,
     icon: String,
     icon_path: String,
     required_files: Vec<String>,
@@ -70,7 +81,10 @@ struct CatalogPlugin {
     #[serde(default)]
     entry: Option<String>,
     #[serde(default)]
-    command: Option<String>,
+    project: Option<ProjectSpec>,
+    /// Text file added to the system prompt of conversations in this plugin's dedicated project.
+    #[serde(default)]
+    project_prompt: Option<String>,
     icon: String,
     icon_path: String,
     #[serde(default)]
@@ -98,16 +112,53 @@ fn catalog_text(dir: &Path, relative: &str) -> Result<String, String> {
     fs::read_to_string(dir.join(relative)).map_err(|e| format!("无法读取 {relative}：{e}"))
 }
 
+/// Shared reference about Dsivio. Only setups that ask to read it get a copy,
+/// installed next to their SKILL.md.
+const DSIVIO_REFERENCE_SOURCE: &str = "_shared/dsivio.md";
+const DSIVIO_REFERENCE_PATH: &str = "references/dsivio.md";
+/// A setup Skill that mentions this path ships the adapter found under `<setup dir>/adapter/` in the catalog.
+const ADAPTER_PATH: &str = "adapter/";
+
+fn adapter_files(dir: &Path, setup: &str, plugin_setup: &str) -> Result<Vec<(String, String)>, String> {
+    if !setup.contains(ADAPTER_PATH) { return Ok(Vec::new()); }
+    let root = Path::new(plugin_setup).parent().ok_or("适配器目录无效")?.join("adapter");
+    let mut files = Vec::new();
+    let mut pending = vec![dir.join(&root)];
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(&current).map_err(|e| format!("无法读取适配器目录：{e}"))? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            let relative = path.strip_prefix(dir.join(&root)).map_err(|e| e.to_string())?;
+            // Tests live next to the source in the repository and are not installed.
+            if relative.components().next().is_some_and(|c| c.as_os_str() == "test") { continue; }
+            if path.is_dir() { pending.push(path); continue; }
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            files.push((relative, fs::read_to_string(&path).map_err(|e| format!("无法读取 {}：{e}", path.display()))?));
+        }
+    }
+    if files.is_empty() { return Err("适配器目录没有文件".into()); }
+    files.sort();
+    Ok(files)
+}
+
 fn load_catalog_from(dir: &Path) -> Result<Catalog, String> {
     let file: CatalogFile = serde_json::from_str(&catalog_text(dir, "catalog.json")?).map_err(|e| format!("插件目录无效：{e}"))?;
+    let reference = catalog_text(dir, DSIVIO_REFERENCE_SOURCE)?;
     let mut plugins = Vec::new();
     for plugin in file.plugins {
+        if plugin.project.as_ref().is_some_and(|p| p.name.trim().is_empty() || !id_ok(&p.dir.to_ascii_lowercase())) {
+            return Err(format!("插件目录条目无效：{}", plugin.id));
+        }
         if !id_ok(&plugin.id) || plugin.unpack != "skills" && plugin.unpack != "root"
             || plugin.preset_plugin_id.as_deref().is_some_and(|id| id != plugin.id || crate::plugins::catalog_plugin(id).is_none()) {
             return Err(format!("插件目录条目无效：{}", plugin.id));
         }
+        let setup = catalog_text(dir, &plugin.setup)?;
+        let dsivio_reference = setup.contains(DSIVIO_REFERENCE_PATH).then(|| reference.clone());
+        let adapter_files = adapter_files(dir, &setup, &plugin.setup)?;
         plugins.push(BuiltIn {
-            setup: catalog_text(dir, &plugin.setup)?,
+            setup,
+            dsivio_reference,
+            adapter_files,
             entry: plugin.entry.as_deref().map(|path| catalog_text(dir, path)).transpose()?,
             icon: catalog_text(dir, &plugin.icon)?,
             id: plugin.id,
@@ -117,7 +168,9 @@ fn load_catalog_from(dir: &Path) -> Result<Catalog, String> {
             welcome: plugin.welcome,
             input_hint: plugin.input_hint,
             start_prompt: plugin.start_prompt,
-            command: plugin.command,
+            project_prompt: plugin.project_prompt.as_deref().map(|path| catalog_text(dir, path)).transpose()?
+                .filter(|_| plugin.project.is_some()),
+            project: plugin.project,
             icon_path: plugin.icon_path,
             required_files: plugin.required_files,
             repository: plugin.repository,
@@ -169,16 +222,9 @@ fn save_built_in_state(item: &BuiltIn, state: &BuiltInState) -> Result<(), Strin
 fn built_in_ready(item: &BuiltIn, state: &BuiltInState) -> bool {
     let skills_ready = crate::skills::kivio_skills_dir()
         .is_some_and(|root| built_in_ready_at(item, state, &root));
-    let command_ready = if item.command.is_some() {
-        state.plugin_id.as_deref()
-            .and_then(|id| market_companion_package(item, id).ok().flatten())
-            .is_some_and(|package| package.enabled && package.diagnostics.is_empty()
-                && package.components.get("commands").copied().unwrap_or_default() > 0)
-    } else {
-        // A previous release installed a Feishu companion command. Keep it in
-        // repair state until the owned package has been removed.
-        state.plugin_id.is_none()
-    };
+    // Releases before this one installed a companion command package. Keep such
+    // an install in repair state until the owned package has been removed.
+    let command_ready = state.plugin_id.is_none();
     skills_ready && command_ready
 }
 
@@ -195,6 +241,90 @@ fn built_in_ready_at(item: &BuiltIn, state: &BuiltInState, root: &Path) -> bool 
 }
 
 fn built_in_setup_id(item: &BuiltIn) -> String { format!("{}-setup", item.id) }
+
+const SETUP_DONE_MARKER: &str = " [setup completed once]";
+
+/// The setup Skill records a successful first setup by ending its YAML
+/// `description` line with the marker. Anything else counts as not done.
+fn setup_description_done(text: &str) -> bool {
+    let mut lines = text.lines();
+    if lines.next().map(str::trim_end) != Some("---") { return false; }
+    lines.take_while(|line| line.trim_end() != "---")
+        .find_map(|line| line.strip_prefix("description:"))
+        .is_some_and(|value| value.trim_end().ends_with(SETUP_DONE_MARKER.trim_start()) && value.trim_end().len() > SETUP_DONE_MARKER.len())
+}
+
+fn built_in_setup_done(item: &BuiltIn) -> bool {
+    built_in_setup_dir(item).ok()
+        .and_then(|dir| fs::read_to_string(dir.join("SKILL.md")).ok())
+        .is_some_and(|text| setup_description_done(&text))
+}
+
+/// Windows keeps work out of the system drive: `<first non-C drive>:\dsiviowork\<dir>`.
+/// Elsewhere (and without another drive) it is `Documents/Dsivio/<dir>`.
+fn project_root_for(dir: &str, drive: Option<String>, documents: Option<PathBuf>) -> Option<PathBuf> {
+    match drive {
+        Some(drive) => Some(PathBuf::from(drive).join("dsiviowork").join(dir)),
+        None => documents.map(|documents| documents.join("Dsivio").join(dir)),
+    }
+}
+
+fn work_drive_root(exists: impl Fn(&str) -> bool) -> Option<String> {
+    ('D'..='Z').map(|letter| format!("{letter}:\\")).find(|root| exists(root))
+}
+
+/// Extra system-prompt text for a conversation in the dedicated project of an installed and
+/// enabled built-in plugin. Installation state is the only switch: uninstalling resets it and
+/// disabling turns it off, so the text disappears with the plugin. Other projects and other
+/// plugins are never affected.
+pub fn project_prompt_for(app: &AppHandle, project_name: &str) -> Option<String> {
+    let catalog = load_market_catalog(app).ok()?;
+    project_prompt_in(&catalog, project_name, |item| {
+        let state = built_in_state(item);
+        state.revision.is_some() && state.enabled
+    })
+}
+
+fn project_prompt_in(catalog: &Catalog, project_name: &str, installed: impl Fn(&BuiltIn) -> bool) -> Option<String> {
+    catalog.plugins.iter()
+        .find(|item| item.project.as_ref().is_some_and(|project| project.name == project_name) && item.project_prompt.is_some())
+        .filter(|item| installed(item))
+        .and_then(|item| item.project_prompt.clone())
+}
+
+/// The plugin's dedicated project: reuse it when it exists, otherwise create
+/// it at the fixed root. A missing folder is recreated in the same place.
+fn ensure_project(app: &AppHandle, item: &BuiltIn) -> Result<Value, String> {
+    let spec = item.project.as_ref().ok_or("该插件没有专属项目")?;
+    let drive = if cfg!(windows) { work_drive_root(|root| Path::new(root).is_dir()) } else { None };
+    let documents = directories::UserDirs::new().map(|dirs| dirs.document_dir().map(Path::to_path_buf).unwrap_or_else(|| dirs.home_dir().to_path_buf()));
+    let root = project_root_for(&spec.dir, drive, documents).ok_or("无法确定项目目录")?;
+    let root_text = root.display().to_string();
+    let existing = crate::chat::storage::get_projects(app)?.into_iter()
+        .find(|project| project.root_path.as_deref() == Some(root_text.as_str()) || project.name == spec.name);
+    let project = match existing {
+        Some(project) => {
+            if let Some(path) = project.root_path.as_deref() {
+                fs::create_dir_all(path).map_err(|e| format!("无法创建项目目录 {path}：{e}"))?;
+            }
+            project
+        }
+        None => {
+            fs::create_dir_all(&root).map_err(|e| format!("无法创建项目目录 {root_text}：{e}"))?;
+            let now = chrono::Local::now().timestamp();
+            crate::chat::storage::create_project_with_options(app, crate::chat::ChatProject {
+                id: format!("proj_{}", uuid::Uuid::new_v4()),
+                name: spec.name.clone(),
+                description: Some(format!("{} 专属项目", item.name)),
+                color: None,
+                root_path: Some(root_text),
+                created_at: now,
+                updated_at: now,
+            }, true)?
+        }
+    };
+    Ok(json!({"id":project.id,"name":project.name,"rootPath":project.root_path}))
+}
 
 fn built_in_setup_dir(item: &BuiltIn) -> Result<PathBuf, String> {
     Ok(crate::skills::kivio_skills_dir().ok_or("用户目录不可用")?.join(built_in_setup_id(item)))
@@ -215,8 +345,19 @@ fn install_market_skill(dir: &Path, content: &str) -> Result<(), String> {
 }
 
 fn install_built_in_setup(item: &BuiltIn) -> Result<(), String> {
-    if built_in_setup_installed(item) { return Ok(()); }
-    install_market_skill(&built_in_setup_dir(item)?, &item.setup)
+    let dir = built_in_setup_dir(item)?;
+    if !built_in_setup_installed(item) { install_market_skill(&dir, &item.setup)?; }
+    if let Some(reference) = &item.dsivio_reference {
+        let file = dir.join(DSIVIO_REFERENCE_PATH);
+        fs::create_dir_all(file.parent().ok_or("无效路径")?).map_err(|e| e.to_string())?;
+        fs::write(file, reference).map_err(|e| e.to_string())?;
+    }
+    for (relative, content) in &item.adapter_files {
+        let file = dir.join(ADAPTER_PATH).join(relative);
+        fs::create_dir_all(file.parent().ok_or("无效路径")?).map_err(|e| e.to_string())?;
+        fs::write(file, content).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn built_in_entry_dir(item: &BuiltIn) -> Result<PathBuf, String> {
@@ -256,6 +397,15 @@ fn remove_built_in_entry(item: &BuiltIn) -> Result<(), String> {
 
 fn remove_market_skill(dir: &Path) -> Result<(), String> {
     if !market_skill_installed_at(dir) { return Ok(()); }
+    let reference = dir.join(DSIVIO_REFERENCE_PATH);
+    if reference.is_file() {
+        fs::remove_file(&reference).map_err(|e| e.to_string())?;
+        let _ = fs::remove_dir(dir.join("references"));
+    }
+    let adapter = dir.join("adapter");
+    if adapter.is_dir() && !fs::symlink_metadata(&adapter).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        fs::remove_dir_all(&adapter).map_err(|e| e.to_string())?;
+    }
     fs::remove_file(dir.join("SKILL.md")).map_err(|e| e.to_string())?;
     if fs::read_dir(&dir).map_err(|e| e.to_string())?.next().is_none() {
         fs::remove_dir(dir).map_err(|e| e.to_string())?;
@@ -280,7 +430,7 @@ fn built_in_manifest(item: &BuiltIn) -> Value {
         "startPrompt":item.start_prompt,"verification":[],
         "setupSkillId":built_in_setup_id(item),"mainSkillId":item.skill_id,
         "skillIds":skill_ids,
-        "checkCommand":item.command})
+        "project":item.project.as_ref().map(|p| json!({"name":p.name}))})
 }
 
 fn built_in_local(item: &BuiltIn, state: &BuiltInState, installed: bool) -> Option<Value> {
@@ -951,6 +1101,7 @@ pub async fn market_command(
         return match action {
             "install" => install_plugin(&app, item).await,
             "uninstall" => uninstall_plugin(&app, item).await,
+            "ensure_project" => ensure_project(&app, item),
             "set_enabled" => set_built_in_enabled(&app, &*state, item, request["enabled"].as_bool().ok_or("缺少加载状态")?).await,
             _ => built_in_command(item, &request),
         };
@@ -1081,6 +1232,7 @@ fn built_in_command(item: &BuiltIn, request: &Value) -> Result<Value, String> {
             use base64::Engine;
             Ok(json!(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(item.icon.as_bytes()))))
         }
+        "setup_state" => Ok(json!({"setupDone":built_in_setup_done(item)})),
         "detail" => Ok(json!({"example":{"schemaVersion":1,"messages":[
             {"role":"user","text":item.input_hint},
             {"role":"assistant","text":item.welcome}
@@ -1132,15 +1284,6 @@ fn unpack_built_in_skills(item: &BuiltIn, bytes: Vec<u8>, stage: &Path) -> Resul
         }
     }
     Ok(())
-}
-
-fn built_in_companion_source(app: &AppHandle, item: &BuiltIn) -> Result<PathBuf, String> {
-    let source = crate::media_runtime::runtime::resource_directory(app)?
-        .join("plugins/market-companions").join(&item.id);
-    if !source.join(".kivio-plugin/plugin.json").is_file() {
-        return Err(format!("{} 的内置命令资源缺失", item.name));
-    }
-    Ok(source)
 }
 
 fn market_companion_package(item: &BuiltIn, id: &str) -> Result<Option<crate::plugins::packages::Package>, String> {
@@ -1234,7 +1377,6 @@ async fn install_plugin(app: &AppHandle, item: &BuiltIn) -> Result<Value, String
     fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
     let mut moved = Vec::<String>::new();
     let mut backed_up = Vec::<String>::new();
-    let mut new_plugin = None::<String>;
     let had_setup = built_in_setup_installed(item);
     let had_entry = item.entry.is_some() && crate::skills::kivio_skills_dir()
         .is_some_and(|root| market_skill_installed_at(&root.join(&item.skill_id)));
@@ -1264,34 +1406,14 @@ async fn install_plugin(app: &AppHandle, item: &BuiltIn) -> Result<Value, String
         }
         install_built_in_setup(item)?;
         install_built_in_entry(item)?;
-        let plugin_id = if item.command.is_some() {
-            let existing = previous.plugin_id.as_deref()
-                .map(|id| market_companion_package(item, id).map(|package| package.map(|_| id.to_string())))
-                .transpose()?.flatten();
-            let id = if let Some(id) = existing {
-                if !crate::plugins::packages::owner_enabled(&id) {
-                    crate::plugins::packages::plugin_packages_set_enabled(app.clone(), app.state::<AppState>(), id.clone(), true).await?;
-                }
-                id
-            } else {
-                let source = built_in_companion_source(app, item)?;
-                let package = crate::plugins::packages::plugin_packages_import(source.display().to_string(), None).await?;
-                new_plugin = Some(package.id.clone());
-                crate::plugins::packages::plugin_packages_set_enabled(app.clone(), app.state::<AppState>(), package.id.clone(), true).await?;
-                package.id
-            };
-            Some(id)
-        } else {
-            if let Some(id) = previous.plugin_id.as_deref() {
-                if market_companion_package(item, id)?.is_some() {
-                    crate::plugins::packages::plugin_packages_remove(app.clone(), app.state::<AppState>(), id.to_string()).await?;
-                }
+        if let Some(id) = previous.plugin_id.as_deref() {
+            if market_companion_package(item, id)?.is_some() {
+                crate::plugins::packages::plugin_packages_remove(app.clone(), app.state::<AppState>(), id.to_string()).await?;
             }
-            None
-        };
+        }
         let mut owned_skills = previous.owned_skills.clone();
         for skill in &moved { if !owned_skills.contains(skill) { owned_skills.push(skill.clone()); } }
-        let state = BuiltInState { revision: Some(item.revision.clone()), plugin_id, owned_skills, enabled: true };
+        let state = BuiltInState { revision: Some(item.revision.clone()), plugin_id: None, owned_skills, enabled: true };
         if !built_in_ready(item, &state) { return Err(format!("{} 的组件没有完成注册", item.name)); }
         if let Some(id) = item.preset_plugin_id.as_deref() {
             if crate::plugins::is_installed(id) {
@@ -1299,14 +1421,12 @@ async fn install_plugin(app: &AppHandle, item: &BuiltIn) -> Result<Value, String
             }
         }
         save_built_in_state(item, &state)?;
+        if item.project.is_some() { let _ = ensure_project(app, item); }
         let _ = app.emit("kivio-configuration-changed", ());
         Ok(built_in_local(item, &state, true).unwrap())
     }.await;
     let mut keep_stage = false;
     if result.is_err() {
-        if let Some(id) = new_plugin {
-            let _ = crate::plugins::packages::plugin_packages_remove(app.clone(), app.state::<AppState>(), id).await;
-        }
         for skill in moved {
             if let Err(error) = fs::remove_dir_all(skills_root.join(&skill)) {
                 keep_stage = true;
@@ -1540,7 +1660,6 @@ mod tests {
         assert!(resolve.setup.contains("mcp_upsert"));
         assert!(resolve.entry.unwrap().contains("official MCP"));
         assert!(resolve.skills.is_empty());
-        assert!(resolve.command.is_none());
         let snapshot = built_in_snapshot(&load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap());
         assert_eq!(snapshot["entries"].as_array().unwrap().len(), 11);
         assert_eq!(snapshot["entries"][0]["source"]["kind"], "built-in");
@@ -1554,8 +1673,6 @@ mod tests {
         assert_eq!(snapshot["entries"][3]["manifest"]["startPrompt"], "使用飞书 CLI，告诉我可以做什么。");
         assert_eq!(snapshot["entries"][3]["manifest"]["categoryIds"][0], "productivity");
         assert_eq!(snapshot["entries"][3]["manifest"]["skillIds"].as_array().unwrap().len(), 1);
-        assert!(snapshot["entries"][3]["manifest"]["checkCommand"].is_null());
-        assert!(feishu.command.is_none());
         assert!(hypit.icon.contains("viewBox=\"54.9 170.6 252.6 252.6\""));
         assert!(remotion.icon.contains("viewBox=\"0 0 410 425\""));
         assert!(whiteboard.icon.contains("viewBox=\"0 0 64 64\""));
@@ -1563,37 +1680,30 @@ mod tests {
         assert_eq!(snapshot["entries"][4]["id"], "davinci-resolve");
         assert_eq!(snapshot["entries"][4]["manifest"]["categoryIds"][0], "videos");
         assert_eq!(snapshot["entries"][4]["manifest"]["icon"], "assets/davinci-resolve-logo.svg");
-        assert!(snapshot["entries"][4]["manifest"]["checkCommand"].is_null());
         assert!(resolve.icon.contains("viewBox=\"0 0 24 24\""));
         let fanpai = plugin("daihuo-fanpai");
         assert!(fanpai.setup.contains("github.com/wangcanyu/daihuo-fanpai"));
         assert!(fanpai.setup.contains("python3 doctor.py"));
-        assert!(fanpai.command.is_none());
         assert_eq!(snapshot["entries"][5]["id"], "daihuo-fanpai");
         assert_eq!(snapshot["entries"][5]["manifest"]["categoryIds"][0], "videos");
         assert_eq!(snapshot["entries"][5]["manifest"]["icon"], "assets/daihuo-fanpai-logo.svg");
-        assert!(snapshot["entries"][5]["manifest"]["checkCommand"].is_null());
         assert!(fanpai.icon.contains("viewBox=\"0 0 48 48\""));
         let jianying = plugin("jianying-editor");
         assert!(jianying.setup.contains("github.com/luoluoluo22/jianying-editor-skill"));
         assert!(jianying.setup.contains("scripts/jy_wrapper.py"));
-        assert!(jianying.command.is_none());
         assert_eq!(snapshot["entries"][6]["id"], "jianying-editor");
         assert_eq!(snapshot["entries"][6]["manifest"]["categoryIds"][0], "videos");
         assert_eq!(snapshot["entries"][6]["manifest"]["icon"], "assets/jianying-editor-logo.svg");
-        assert!(snapshot["entries"][6]["manifest"]["checkCommand"].is_null());
         assert!(jianying.icon.contains("viewBox=\"0 0 32 32\""));
         let wecom = plugin("wecom-cli");
         assert!(wecom.setup.contains("npx skills add WeComTeam/wecom-cli -y -g"));
         assert!(wecom.setup.contains("wecom-cli auth show --status"));
         assert!(wecom.entry.as_deref().unwrap().contains("npx skills add WeComTeam/wecom-cli -y -g"));
         assert!(wecom.skills.is_empty());
-        assert!(wecom.command.is_none());
         assert_eq!(snapshot["entries"][7]["id"], "wecom-cli");
         assert_eq!(snapshot["entries"][7]["manifest"]["categoryIds"][0], "productivity");
         assert_eq!(snapshot["entries"][7]["manifest"]["icon"], "assets/wecom-logo.svg");
         assert_eq!(snapshot["entries"][7]["manifest"]["skillIds"].as_array().unwrap().len(), 1);
-        assert!(snapshot["entries"][7]["manifest"]["checkCommand"].is_null());
         assert!(wecom.icon.contains("viewBox=\"0 0 24 24\""));
         let ziniao = plugin("ziniao-cli");
         assert_eq!(ziniao.preset_plugin_id.as_deref(), Some("ziniao-cli"));
@@ -1604,7 +1714,6 @@ mod tests {
         assert_eq!(shopkeeper.repository, "next-1688/1688-shopkeeper");
         assert!(shopkeeper.setup.contains("ALI_1688_AK"));
         assert!(shopkeeper.setup.contains("--dry-run"));
-        assert!(shopkeeper.command.is_none());
         assert_eq!(snapshot["entries"][8]["id"], "1688-shopkeeper");
         assert_eq!(snapshot["entries"][8]["manifest"]["categoryIds"][0], "commerce");
         assert_eq!(snapshot["entries"][8]["manifest"]["icon"], "assets/1688-shopkeeper-logo.svg");
@@ -1639,6 +1748,112 @@ mod tests {
         assert!(built_in_ready_at(&item, &state, dir.path()));
         fs::remove_file(dir.path().join("remotion-render/SKILL.md")).unwrap();
         assert!(!built_in_ready_at(&item, &state, dir.path()));
+    }
+    #[test]
+    fn hypit_adapter_ships_with_its_setup_and_is_removed_with_it() {
+        let hypit = plugin("hypit");
+        let names: Vec<&str> = hypit.adapter_files.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(names, ["package.json", "src/activation.js", "src/models.js", "src/provider.js"], "tests stay in the repository");
+        // Every other setup ships no adapter: the Skill decides by naming the path.
+        for item in load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap().plugins {
+            assert_eq!(item.adapter_files.is_empty(), !item.setup.contains(ADAPTER_PATH), "{}", item.id);
+        }
+        // The adapter is a bridge only: no service address, no key, no vendor protocol.
+        for (path, text) in &hypit.adapter_files {
+            for forbidden in ["fetch(", "https://", "Authorization", "apiKey:", "settings.json", "bearer"] {
+                assert!(!text.to_ascii_lowercase().contains(&forbidden.to_ascii_lowercase()), "{path} 含有 {forbidden}");
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("hypit-setup");
+        install_market_skill(&dir, &hypit.setup).unwrap();
+        for (relative, content) in &hypit.adapter_files {
+            let file = dir.join(ADAPTER_PATH).join(relative);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, content).unwrap();
+        }
+        assert!(dir.join("adapter/src/provider.js").is_file());
+        assert!(!dir.join("adapter/test").exists());
+        remove_market_skill(&dir).unwrap();
+        assert!(!dir.exists(), "adapter files are removed with the setup Skill");
+    }
+    #[test]
+    fn hypit_project_prompt_follows_the_plugin_installation() {
+        let catalog = load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap();
+        let installed = |_: &BuiltIn| true;
+        let prompt = project_prompt_in(&catalog, "Hypit", installed).expect("installed Hypit adds its prompt");
+        for needed in ["dsivio media models", "Settings > 媒体创作", "exits with 5", "hypit-setup", "capabilities", "known: false", "hypit plan"] {
+            assert!(prompt.contains(needed), "缺少 {needed}");
+        }
+        // Uninstalled: nothing is added. Other projects and other plugins never receive it.
+        assert!(project_prompt_in(&catalog, "Hypit", |_| false).is_none());
+        assert!(project_prompt_in(&catalog, "My own project", installed).is_none());
+        for item in catalog.plugins.iter().filter(|item| item.id != "hypit") {
+            assert!(item.project_prompt.is_none(), "{}", item.id);
+        }
+        // The prompt only claims what the shipped adapter and Profile actually do.
+        assert!(!prompt.contains("baseUrl\": "), "no service address instructions");
+    }
+    #[test]
+    fn hypit_setup_uses_the_shipped_adapter_instead_of_writing_a_provider() {
+        let hypit = plugin("hypit");
+        for needed in ["adapter/", "@dsivio/hypit-provider", "dsivio media models", "no `baseUrl`", "DSIVIO_MODEL_NOT_IN_HYPIT", "no `bindings`"] {
+            assert!(hypit.setup.contains(needed), "缺少 {needed}");
+        }
+        assert!(hypit.setup.contains("do not write your own Provider"));
+    }
+    #[test]
+    fn dsivio_reference_is_installed_only_for_setups_that_read_it() {
+        let catalog = load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap();
+        for item in &catalog.plugins {
+            assert_eq!(item.dsivio_reference.is_some(), item.setup.contains(DSIVIO_REFERENCE_PATH), "{}", item.id);
+        }
+        let hypit = catalog.plugins.iter().find(|item| item.id == "hypit").unwrap();
+        let text = hypit.dsivio_reference.as_deref().unwrap();
+        for needle in ["dsivio media image", "dsivio media video", "dsivio media status", "--idempotency-key", "不要重新提交", "mixer_generate_image", "mixer_video_analysis"] {
+            assert!(text.contains(needle), "缺少 {needle}");
+        }
+        // Plugins call Dsivio; they no longer read keys or reimplement vendor protocols (ADR 0009).
+        for stale in ["apiKeys", "settings.json", "xai_video", "images/generations"] {
+            assert!(!text.contains(stale), "不应再教插件自己对接：{stale}");
+        }
+        assert!(!hypit.setup.contains("关于 Dsivio"));
+        assert!(hypit.setup.contains("dsivio media"));
+        assert!(hypit.adapter_files.iter().any(|(_, text)| text.contains("--idempotency-key") && text.contains("--no-wait")));
+        for needed in ["capabilities", "known: false", "firstFrame", "maxReferenceImages"] {
+            assert!(text.contains(needed), "参考文档没有说明 {needed}");
+        }
+        for stale in ["apiKeys", "settings.json", "workbenchMedia", "xai_video", "images/generations"] {
+            assert!(!hypit.setup.contains(stale), "hypit setup 不应再让插件读密钥或自己对接：{stale}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("hypit-setup");
+        install_market_skill(&target, &hypit.setup).unwrap();
+        fs::create_dir_all(target.join("references")).unwrap();
+        fs::write(target.join(DSIVIO_REFERENCE_PATH), text).unwrap();
+        remove_market_skill(&target).unwrap();
+        assert!(!target.exists());
+    }
+    #[test]
+    fn project_root_avoids_the_system_drive() {
+        let docs = Some(PathBuf::from("/Users/a/Documents"));
+        assert_eq!(project_root_for("Hypit", None, docs.clone()), Some(PathBuf::from("/Users/a/Documents/Dsivio/Hypit")));
+        assert_eq!(project_root_for("Hypit", Some("D:\\".into()), docs), Some(PathBuf::from("D:\\").join("dsiviowork").join("Hypit")));
+        assert_eq!(project_root_for("Hypit", None, None), None);
+        assert_eq!(work_drive_root(|root| root == "E:\\" || root == "F:\\"), Some("E:\\".into()));
+        assert_eq!(work_drive_root(|_| false), None);
+    }
+    #[test]
+    fn setup_done_only_when_description_line_ends_with_marker() {
+        let head = "---\nname: x-setup\n";
+        let tail = "kivio-market-managed: true\n---\n# body [setup completed once]\n";
+        assert!(!setup_description_done(&format!("{head}description: Check env.\n{tail}")));
+        assert!(setup_description_done(&format!("{head}description: Check env. [setup completed once]\n{tail}")));
+        assert!(setup_description_done(&format!("{head}description: Check env. [setup completed once]  \n{tail}")));
+        assert!(!setup_description_done(&format!("{head}description: [setup completed once] Check env.\n{tail}")));
+        assert!(!setup_description_done(&format!("{head}description: [setup completed once]\n{tail}")));
+        assert!(!setup_description_done("description: Check. [setup completed once]\n"));
+        assert!(!setup_description_done(""));
     }
     #[test]
     fn feishu_status_requires_entry_and_setup() {
@@ -1741,26 +1956,6 @@ mod tests {
         assert!(dir.path().join("jianying-editor/SKILL.md").is_file());
         assert!(dir.path().join("jianying-editor/scripts/jy_wrapper.py").is_file());
         assert!(!dir.path().join("jianying-editor/.github").exists());
-    }
-    #[test]
-    fn bundled_check_commands_are_valid_native_plugins() {
-        let resources = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("resources/plugins/market-companions");
-        let temp = tempfile::tempdir().unwrap();
-        for item in load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap().plugins.into_iter().filter(|item| item.command.is_some()) {
-            let package = crate::plugins::packages::Package {
-                id: uuid::Uuid::new_v4().to_string(), name: String::new(),
-                description: String::new(), version: None, format: String::new(),
-                source: "bundled test".into(), revision: None, enabled: true,
-                components: Default::default(), diagnostics: vec![],
-            };
-            let resolved = crate::plugins::packages::resolve(
-                &resources.join(&item.id), package, temp.path(),
-            ).unwrap();
-            assert_eq!(resolved.package.format, "kivio");
-            assert_eq!(resolved.commands.len(), 1);
-            assert!(resolved.servers.is_empty());
-        }
     }
     #[test]
     fn whiteboard_status_requires_the_complete_skill() {

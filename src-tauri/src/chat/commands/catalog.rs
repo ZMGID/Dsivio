@@ -51,12 +51,14 @@ pub(super) fn project_prompt_context_for(
     let project = crate::chat::storage::resolve_conversation_project(app, conversation)
         .ok()
         .flatten()?;
+    let plugin_prompt = crate::market::project_prompt_for(app, &project.name);
     Some(agent_prepare::ProjectPromptContext {
         name: project.name,
         root_path: project
             .root_path
             .map(|root| root.trim().to_string())
             .filter(|root| !root.is_empty()),
+        plugin_prompt,
     })
 }
 
