@@ -12,6 +12,7 @@ network data and use a fixed timestamp so the same run produces the same row key
 | F2 | 20 assistant answers with 200 code blocks | code-heavy row estimates and syntax-heavy layout |
 | F3 | tables, KaTeX, Mermaid, tool calls, images | heavy-island hydration and height compensation |
 | F4 | one 20,000-character streaming answer | live Markdown and render cadence |
+| F5 | one live run with 300 or 1,000 alternating text/tool steps | unchanged segments inside a growing live answer |
 
 ## Collection
 
@@ -39,3 +40,50 @@ environment-specific and should be recorded on the same machine and window size.
 - Repeat navigation to the same conversation: measurement snapshot/cache hit.
 - Scroll authority: navigation, TanStack `scrollToIndex`, measurement adjustments and
   bottom pin all use the same programmatic scroll writer.
+
+## Dsivio long-task verification (2026-09-30)
+
+Selectively imported the renderer/reference, bubble-animation and file-tree fixes
+from upstream commits `b0186ca0`, `91570b86`, `2c2895dd`, `442f53c4` and `1f8c20d5`.
+The regression suite covers unchanged Markdown/reasoning, live changes, late and
+replaced citations, same-ID image replacement and failed reads, outline ownership,
+remembered directory expansion and stale file-list requests across tree resets.
+
+Build the same real-component fixture against the Dsivio baseline and current
+renderers. The baseline overlays three renderer/reference modules and chat CSS;
+it does not replace tracked source files or create a historical application build.
+The emitted CSS fill mode is checked, and the temporary historical CSS is removed
+in `finally`.
+
+```sh
+node scripts/build-chat-performance.mjs 091f3768
+node scripts/build-chat-performance.mjs
+npx vite preview --outDir node_modules/.cache/chat-performance/current --port 5724
+# In another terminal:
+npx vite preview --outDir node_modules/.cache/chat-performance/baseline --port 5725
+```
+
+Open `/scripts/fixtures/chat-performance.html` on each server. On the current
+build, run `playwright-cli run-code --filename=scripts/probe-chat-long-run.playwright.js`.
+It checks all four F5 combinations, retained text, released animation transform
+and bottom anchoring after resizing. The baseline can be measured with
+`await window.chatAcceptance.longRun(300, 'text')` and `'tool'`.
+
+The [local measurement record](dsivio-streaming-2026-09-30.json) contains one serial
+comparison on macOS Chrome, 1280×900, with 20 updates per case:
+
+| Scenario | Before, median update | After, median update |
+|---|---:|---:|
+| 300 steps, text | 73.3 ms | 1.3 ms |
+| 300 steps, tool | 72.0 ms | 3.8 ms |
+| 1,000 steps, text | not measured | 5.1 ms |
+| 1,000 steps, tool | not measured | 5.6 ms |
+
+All four current cases retained every text step, released the completed transform
+and had a 0px bottom gap after resizing; no >50ms browser long tasks were observed
+during the sampled updates. The fixture uses synthetic local events through the
+real preview owner and renderers, without model calls or backend writes.
+Synchronous submission and timer-queue time are not native input-to-display
+latency; mount timing retains module caches and is not application cold start.
+Native macOS interaction was not verified: the running development app was not
+exposed by the available UI automation inventory.

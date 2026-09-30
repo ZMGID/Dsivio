@@ -1,0 +1,383 @@
+{
+  "date": "2026-09-30",
+  "environment": {
+    "platform": "macOS",
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    "viewport": {
+      "width": 1280,
+      "height": 900
+    },
+    "build": "Vite production fixture",
+    "sampleOrder": "current four cases, then baseline two cases; serial in one browser"
+  },
+  "baselineRef": "091f3768",
+  "upstreamFixes": [
+    "b0186ca0230134860522e8d7f203b64c60e26e6c",
+    "91570b86b028c391f41f6c3df17af071226a8b0c",
+    "2c2895ddd450443d3d7145253186e8fea69c41c2",
+    "442f53c4eb69a77138ec474e551cc73b423343d5",
+    "1f8c20d5c17bb4baaa09cdb58beac649b48798af"
+  ],
+  "limitations": [
+    "Synthetic local events through the real preview owner and renderers; no model or backend writes.",
+    "Synchronous update and timer queue measurements are not native input-to-display latency.",
+    "The baseline overlays only renderer/reference modules and chat CSS.",
+    "macOS desktop interaction was not verified: the development app is not exposed by the available UI automation inventory."
+  ],
+  "baseline": [
+    {
+      "steps": 300,
+      "update": "text",
+      "seedMs": 5.4000000059604645,
+      "mountCommitMs": 148.09999999403954,
+      "mountToSecondFrameMs": 171.30000001192093,
+      "updateMs": {
+        "median": 73.30000001192093,
+        "p95": 83.5,
+        "max": 83.5
+      },
+      "queuedTaskMs": {
+        "median": 84.2999999821186,
+        "p95": 89.2999999821186,
+        "max": 89.2999999821186
+      },
+      "domNodes": 10895,
+      "mountedRows": 4,
+      "markdownBlocks": 301,
+      "liveBubbleTransform": "matrix(1, 0, 0, 1, 0, 0)",
+      "longTaskSupport": true,
+      "longTasks": [
+        {
+          "durationMs": 83,
+          "startTime": 1671.199999988079
+        },
+        {
+          "durationMs": 76,
+          "startTime": 1908.9000000059605
+        },
+        {
+          "durationMs": 74,
+          "startTime": 2126.4000000059605
+        },
+        {
+          "durationMs": 73,
+          "startTime": 2359.300000011921
+        },
+        {
+          "durationMs": 73,
+          "startTime": 2592
+        },
+        {
+          "durationMs": 73,
+          "startTime": 2821.9000000059605
+        },
+        {
+          "durationMs": 73,
+          "startTime": 3055.5
+        },
+        {
+          "durationMs": 73,
+          "startTime": 3287.800000011921
+        },
+        {
+          "durationMs": 72,
+          "startTime": 3521.300000011921
+        },
+        {
+          "durationMs": 72,
+          "startTime": 3755.0999999940395
+        },
+        {
+          "durationMs": 73,
+          "startTime": 3987.800000011921
+        },
+        {
+          "durationMs": 71,
+          "startTime": 4221.800000011921
+        },
+        {
+          "durationMs": 71,
+          "startTime": 4455.0999999940395
+        },
+        {
+          "durationMs": 72,
+          "startTime": 4688.5999999940395
+        },
+        {
+          "durationMs": 71,
+          "startTime": 4921.800000011921
+        },
+        {
+          "durationMs": 71,
+          "startTime": 5155
+        },
+        {
+          "durationMs": 71,
+          "startTime": 5391.800000011921
+        },
+        {
+          "durationMs": 78,
+          "startTime": 5625.4000000059605
+        },
+        {
+          "durationMs": 73,
+          "startTime": 5854.5999999940395
+        },
+        {
+          "durationMs": 72,
+          "startTime": 6087.5999999940395
+        }
+      ],
+      "report": {
+        "capturedAt": "2026-09-30T03:36:45.942Z",
+        "enabled": false,
+        "longTaskSupport": "unknown",
+        "buckets": [],
+        "samples": [],
+        "longTasks": []
+      }
+    },
+    {
+      "steps": 300,
+      "update": "tool",
+      "seedMs": 4.0999999940395355,
+      "mountCommitMs": 120.60000002384186,
+      "mountToSecondFrameMs": 142.7000000178814,
+      "updateMs": {
+        "median": 72,
+        "p95": 77.40000000596046,
+        "max": 77.40000000596046
+      },
+      "queuedTaskMs": {
+        "median": 83.09999999403954,
+        "p95": 88.09999999403954,
+        "max": 88.09999999403954
+      },
+      "domNodes": 10895,
+      "mountedRows": 4,
+      "markdownBlocks": 301,
+      "liveBubbleTransform": "matrix(1, 0, 0, 1, 0, 0)",
+      "longTaskSupport": true,
+      "longTasks": [
+        {
+          "durationMs": 74,
+          "startTime": 7971.5999999940395
+        },
+        {
+          "durationMs": 71,
+          "startTime": 8188.300000011921
+        },
+        {
+          "durationMs": 71,
+          "startTime": 8404.300000011921
+        },
+        {
+          "durationMs": 72,
+          "startTime": 8638.199999988079
+        },
+        {
+          "durationMs": 71,
+          "startTime": 8871.5
+        },
+        {
+          "durationMs": 71,
+          "startTime": 9107.800000011921
+        },
+        {
+          "durationMs": 72,
+          "startTime": 9341.800000011921
+        },
+        {
+          "durationMs": 71,
+          "startTime": 9570.699999988079
+        },
+        {
+          "durationMs": 71,
+          "startTime": 9794
+        },
+        {
+          "durationMs": 71,
+          "startTime": 10021.5
+        },
+        {
+          "durationMs": 77,
+          "startTime": 10254.09999999404
+        },
+        {
+          "durationMs": 74,
+          "startTime": 10487.59999999404
+        },
+        {
+          "durationMs": 72,
+          "startTime": 10721.59999999404
+        },
+        {
+          "durationMs": 72,
+          "startTime": 10954.199999988079
+        },
+        {
+          "durationMs": 73,
+          "startTime": 11188.199999988079
+        },
+        {
+          "durationMs": 72,
+          "startTime": 11421.59999999404
+        },
+        {
+          "durationMs": 72,
+          "startTime": 11654.800000011921
+        },
+        {
+          "durationMs": 71,
+          "startTime": 11888.09999999404
+        },
+        {
+          "durationMs": 72,
+          "startTime": 12121.5
+        },
+        {
+          "durationMs": 71,
+          "startTime": 12354.40000000596
+        }
+      ],
+      "report": {
+        "capturedAt": "2026-09-30T03:36:52.212Z",
+        "enabled": false,
+        "longTaskSupport": "unknown",
+        "buckets": [],
+        "samples": [],
+        "longTasks": []
+      }
+    }
+  ],
+  "current": [
+    {
+      "steps": 300,
+      "update": "text",
+      "seedMs": 5.5999999940395355,
+      "mountCommitMs": 177.5,
+      "mountToSecondFrameMs": 261.10000002384186,
+      "updateMs": {
+        "median": 1.300000011920929,
+        "p95": 2.7000000178813934,
+        "max": 2.7000000178813934
+      },
+      "queuedTaskMs": {
+        "median": 5,
+        "p95": 7.299999982118607,
+        "max": 7.299999982118607
+      },
+      "domNodes": 10895,
+      "mountedRows": 4,
+      "markdownBlocks": 301,
+      "liveBubbleTransform": "none",
+      "longTaskSupport": true,
+      "longTasks": [],
+      "report": {
+        "capturedAt": "2026-09-30T03:35:19.615Z",
+        "enabled": false,
+        "longTaskSupport": "unknown",
+        "buckets": [],
+        "samples": [],
+        "longTasks": []
+      },
+      "bottomGap": 0
+    },
+    {
+      "steps": 300,
+      "update": "tool",
+      "seedMs": 4.699999988079071,
+      "mountCommitMs": 154.5,
+      "mountToSecondFrameMs": 181.69999998807907,
+      "updateMs": {
+        "median": 3.800000011920929,
+        "p95": 4.800000011920929,
+        "max": 4.800000011920929
+      },
+      "queuedTaskMs": {
+        "median": 8.200000017881393,
+        "p95": 9.600000023841858,
+        "max": 9.600000023841858
+      },
+      "domNodes": 10895,
+      "mountedRows": 4,
+      "markdownBlocks": 301,
+      "liveBubbleTransform": "none",
+      "longTaskSupport": true,
+      "longTasks": [],
+      "report": {
+        "capturedAt": "2026-09-30T03:35:24.894Z",
+        "enabled": false,
+        "longTaskSupport": "unknown",
+        "buckets": [],
+        "samples": [],
+        "longTasks": []
+      },
+      "bottomGap": 0
+    },
+    {
+      "steps": 1000,
+      "update": "text",
+      "seedMs": 71.2999999821186,
+      "mountCommitMs": 405.80000001192093,
+      "mountToSecondFrameMs": 549.6000000238419,
+      "updateMs": {
+        "median": 5.0999999940395355,
+        "p95": 6.9000000059604645,
+        "max": 6.9000000059604645
+      },
+      "queuedTaskMs": {
+        "median": 5.5,
+        "p95": 6.9000000059604645,
+        "max": 6.9000000059604645
+      },
+      "domNodes": 36095,
+      "mountedRows": 4,
+      "markdownBlocks": 1001,
+      "liveBubbleTransform": "none",
+      "longTaskSupport": true,
+      "longTasks": [],
+      "report": {
+        "capturedAt": "2026-09-30T03:35:30.616Z",
+        "enabled": false,
+        "longTaskSupport": "unknown",
+        "buckets": [],
+        "samples": [],
+        "longTasks": []
+      },
+      "bottomGap": 0
+    },
+    {
+      "steps": 1000,
+      "update": "tool",
+      "seedMs": 60.5,
+      "mountCommitMs": 410.59999999403954,
+      "mountToSecondFrameMs": 558.6999999880791,
+      "updateMs": {
+        "median": 5.5999999940395355,
+        "p95": 6.300000011920929,
+        "max": 6.300000011920929
+      },
+      "queuedTaskMs": {
+        "median": 5.699999988079071,
+        "p95": 11.199999988079071,
+        "max": 11.199999988079071
+      },
+      "domNodes": 36095,
+      "mountedRows": 4,
+      "markdownBlocks": 1001,
+      "liveBubbleTransform": "none",
+      "longTaskSupport": true,
+      "longTasks": [],
+      "report": {
+        "capturedAt": "2026-09-30T03:35:36.347Z",
+        "enabled": false,
+        "longTaskSupport": "unknown",
+        "buckets": [],
+        "samples": [],
+        "longTasks": []
+      },
+      "bottomGap": 0
+    }
+  ]
+}
