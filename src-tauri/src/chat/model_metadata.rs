@@ -685,7 +685,7 @@ fn override_model_info<'a>(provider: &'a ModelProvider, model: &str) -> Option<&
 
 pub(crate) fn model_can_generate_images_directly(provider: &ModelProvider, model: &str) -> bool {
     model_supports_image_generation(Some(provider), model) == Some(true)
-        && crate::chat::image_generation::has_known_direct_image_generation_route(provider, model)
+        && crate::media_generation::image_providers::has_known_direct_image_generation_route(provider, model)
 }
 
 /// 当前 provider 是否支持模型**原生内置联网搜索**（任务 07-23）。

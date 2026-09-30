@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import type { Settings } from '../../api/tauri'
@@ -52,6 +52,56 @@ describe('Workbench media pools', () => {
     await userEvent.type(search, 'no-match')
     expect(screen.getByText('没有匹配的模型')).toBeTruthy()
     expect(savedSettings().workbenchMedia.imageModels).toHaveLength(1)
+  })
+
+  const order = () => savedSettings().workbenchMedia.imageModels.map(m => m.model)
+  const pointer = (type: string, clientY: number) => new MouseEvent(type, { clientY, bubbles: true, cancelable: true })
+  // jsdom rows have no height, so one row is the hook's 30px fallback plus its default 1px gap.
+  const drag = (handle: HTMLElement, rows: number) => {
+    fireEvent(handle, pointer('pointerdown', 0))
+    fireEvent(document, pointer('pointermove', rows * 31))
+    fireEvent(document, pointer('pointerup', rows * 31))
+  }
+  async function selectAll() {
+    for (const model of imageModels) await userEvent.click(screen.getByRole('switch', { name: `OpenAI / ${model}` }))
+  }
+
+  it('lists selected models first in pool order, marks the first as the default, and dragging changes the priority', async () => {
+    render(<Fixture />)
+    await selectAll()
+    const images = within(screen.getByRole('region', { name: '图片模型池' }))
+    expect(order()).toEqual(['image-a', 'image-b', 'image-c'])
+    expect(images.getAllByText('默认')).toHaveLength(1)
+    expect(images.getByText('image-a').parentElement!.textContent).toContain('默认')
+    // Drag the last row to the top: it becomes the default and the saved pool order follows.
+    drag(images.getByRole('button', { name: /拖动调整优先级: OpenAI \/ image-c/ }), -2)
+    expect(order()).toEqual(['image-c', 'image-a', 'image-b'])
+    expect(images.getByText('image-c').parentElement!.textContent).toContain('默认')
+    expect(images.getByText('image-a').parentElement!.textContent).not.toContain('默认')
+    // Video pool and chat defaults are untouched by reordering images.
+    expect(savedSettings().workbenchMedia.videoModels).toEqual([])
+  })
+
+  it('shows selected models above unselected ones, appends a newly selected model last, and keeps order across toggles', async () => {
+    render(<Fixture />)
+    await userEvent.click(screen.getByRole('switch', { name: 'OpenAI / image-c' }))
+    await userEvent.click(screen.getByRole('switch', { name: 'OpenAI / image-a' }))
+    expect(order()).toEqual(['image-c', 'image-a'])
+    const names = within(screen.getByRole('region', { name: '图片模型池' })).getAllByRole('switch').map(item => item.getAttribute('aria-label'))
+    expect(names).toEqual(['OpenAI / image-c', 'OpenAI / image-a', 'OpenAI / image-b'])
+    await userEvent.click(screen.getByRole('switch', { name: 'OpenAI / image-c' }))
+    expect(order()).toEqual(['image-a'])
+  })
+
+  it('offers dragging only for two or more selected models and not while a search hides part of the pool', async () => {
+    render(<Fixture />)
+    const images = within(screen.getByRole('region', { name: '图片模型池' }))
+    await userEvent.click(screen.getByRole('switch', { name: 'OpenAI / image-a' }))
+    expect(images.queryByRole('button', { name: /拖动调整优先级/ })).toBeNull()
+    await userEvent.click(screen.getByRole('switch', { name: 'OpenAI / image-b' }))
+    expect(images.getAllByRole('button', { name: /拖动调整优先级/ })).toHaveLength(2)
+    await userEvent.type(screen.getByRole('searchbox', { name: '搜索图片模型' }), 'image')
+    expect(images.queryByRole('button', { name: /拖动调整优先级/ })).toBeNull()
   })
 
   it('keeps unavailable members visible and removable without deleting their provider', async () => {

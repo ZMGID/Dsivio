@@ -819,7 +819,7 @@ async fn resume(
 ) -> Result<(), String> {
     if let Some(url) = t.results[index].download_url.clone() {
         stopped(flag)?;
-        let bytes = media::download(app, &url).await?;
+        let bytes = media::download(app, &t.results[index].config, &url).await?;
         return media::store_image(&t.id, &mut t.results[index], &bytes);
     }
     let remote = t.results[index]

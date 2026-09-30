@@ -45,7 +45,7 @@ pub(super) fn decode_oriented(bytes: &[u8]) -> Option<DynamicImage> {
 
 /// 入口降采样：返回 `Some((jpeg_bytes, "image/jpeg"))` 表示已处理，`None` 表示
 /// 原字节直接可用（尺寸/体积都在界内且无需 EXIF 旋转，或根本解不出来——直通是唯一安全的降级）。
-pub(super) fn prepare_image_bytes_for_model(bytes: &[u8]) -> Option<(Vec<u8>, &'static str)> {
+pub(crate) fn prepare_image_bytes_for_model(bytes: &[u8]) -> Option<(Vec<u8>, &'static str)> {
     // 只开 decoder 读尺寸 + Orientation，避免「本来就合规」的图付一次全量像素解码。
     // 头部尺寸不含 EXIF 旋转；有 Orientation 就必须落地转正——JPEG 重编码会丢掉 EXIF，
     // 多数模型也不自己转，小图直通会把手机竖拍侧着送进去。

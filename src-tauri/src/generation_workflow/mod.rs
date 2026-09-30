@@ -591,39 +591,38 @@ async fn execute_node(
                 save(root, run)?;
                 task.id
             };
-            // Recovery only queries/resumes the saved media receipt. A failed receipt is never silently resubmitted.
-            let mut task =
-                media_generation::get_media_task(app.clone(), task_id.clone(), Some(true))?;
-            loop {
-                stopped(cancelled)?;
-                match task.status {
-                    MediaStatus::Succeeded => {
-                        let files: Vec<_> = task.outputs.into_iter().map(|o| o.path).collect();
-                        if files.is_empty() {
-                            return Err("生成任务没有返回文件".into());
-                        }
-                        // Single-file ports intentionally use the first artifact; all artifacts remain in MediaTask.
-                        return Ok(output(
-                            if node.kind == "image.generate" {
-                                "image"
-                            } else {
-                                "video"
-                            },
-                            WorkflowValue {
-                                text: None,
-                                files: files.into_iter().take(1).collect(),
-                            },
-                        ));
-                    }
-                    MediaStatus::Failed => {
-                        return Err(task.error.unwrap_or_else(|| {
-                            "媒体生成失败；可继续查询，或新建一次运行重新生成".into()
-                        }))
-                    }
-                    MediaStatus::Running => {}
+            // Recovery resumes the saved receipt once, then only reads. A failed receipt is never
+            // silently resubmitted.
+            media_generation::get_media_task(app.clone(), task_id.clone(), Some(true))?;
+            let task =
+                media_generation::wait(app, &task_id, None, &|| cancelled.load(Ordering::SeqCst))
+                    .await?;
+            stopped(cancelled)?;
+            match task.status {
+                MediaStatus::Succeeded => {
+                    // Single-file ports intentionally use the first artifact; all artifacts remain in MediaTask.
+                    let file = task
+                        .outputs
+                        .into_iter()
+                        .next()
+                        .ok_or("生成任务没有返回文件")?;
+                    let port = if node.kind == "image.generate" {
+                        "image"
+                    } else {
+                        "video"
+                    };
+                    Ok(output(
+                        port,
+                        WorkflowValue {
+                            text: None,
+                            files: vec![file.path],
+                        },
+                    ))
                 }
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                task = media_generation::get_media_task(app.clone(), task_id.clone(), None)?;
+                MediaStatus::Failed => Err(task
+                    .error
+                    .unwrap_or_else(|| "媒体生成失败；可继续查询，或新建一次运行重新生成".into())),
+                MediaStatus::Running => Err("媒体任务仍在运行；可稍后继续运行以查询结果".into()),
             }
         }
         WorkflowConfig::Placeholder => Err("节点尚未实现".into()),

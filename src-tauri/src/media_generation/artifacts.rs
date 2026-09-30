@@ -5,6 +5,111 @@ use tokio::io::AsyncWriteExt;
 
 const LIMIT: usize = 512 * 1024 * 1024;
 
+/// Credentials attached to a result download. Only sent to the provider's own origin.
+pub(crate) enum DownloadAuth<'a> {
+    None,
+    Bearer(&'a str),
+    Token(&'a str),
+    Google(&'a str),
+}
+
+/// Result downloads follow redirects by hand, so they use clients with redirects disabled,
+/// one per proxy policy, built once.
+pub(crate) fn download_client(
+    provider: &crate::settings::ModelProvider,
+) -> &'static reqwest::Client {
+    static PROXIED: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    static DIRECT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    let direct = !provider.request.use_system_proxy;
+    (if direct { &DIRECT } else { &PROXIED }).get_or_init(|| {
+        let builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(20));
+        let builder = if direct { builder.no_proxy() } else { builder };
+        builder.build().unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
+/// GET a generated result with the provider's proxy policy. Redirects are followed by hand so a
+/// credential never leaves the original origin and HTTPS is never downgraded.
+pub(crate) async fn fetch(
+    client: &reqwest::Client,
+    origin: &reqwest::Url,
+    url: &str,
+    auth: DownloadAuth<'_>,
+    timeout: std::time::Duration,
+) -> Result<reqwest::Response, String> {
+    let relative = url.starts_with('/') && !url.starts_with("//");
+    let mut url = if relative {
+        origin.join(url).map_err(|_| "结果地址无效")?
+    } else {
+        reqwest::Url::parse(url).map_err(|_| "结果地址无效")?
+    };
+    let authenticated = !matches!(auth, DownloadAuth::None);
+    if authenticated && origin.origin() != url.origin() {
+        return Err("结果下载要求鉴权，但地址与原服务不一致，已阻止发送密钥".into());
+    }
+    for _ in 0..5 {
+        if !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+        {
+            return Err("结果地址必须是 HTTP(S)".into());
+        }
+        let mut request = client.get(url.clone()).timeout(timeout);
+        if origin.origin() == url.origin() {
+            request = match auth {
+                DownloadAuth::None => request,
+                DownloadAuth::Bearer(key) => request.bearer_auth(key),
+                DownloadAuth::Token(key) => request.header("Authorization", format!("Token {key}")),
+                DownloadAuth::Google(key) => request.header("x-goog-api-key", key),
+            };
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|e| format!("结果下载失败：{}；已受理的任务可继续查询", e.without_url()))?;
+        if !response.status().is_redirection() {
+            return Ok(response);
+        }
+        let target = response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or("下载跳转缺少地址")?;
+        let next = url.join(target).map_err(|_| "下载跳转地址无效")?;
+        if url.scheme() == "https" && next.scheme() != "https" {
+            return Err("下载跳转不能降低 HTTPS 安全性".into());
+        }
+        url = next;
+    }
+    Err("下载跳转次数过多".into())
+}
+
+/// Read a response body into memory with a size bound (small results such as images).
+pub(crate) async fn read_bounded(
+    mut response: reqwest::Response,
+    max: usize,
+) -> Result<Vec<u8>, String> {
+    if !response.status().is_success() {
+        return Err(format!("结果下载 HTTP {}", response.status().as_u16()));
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > max as u64)
+    {
+        return Err("结果文件过大".into());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "下载中断，可恢复")? {
+        if bytes.len() + chunk.len() > max {
+            return Err("结果文件过大".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 pub(crate) async fn save_response(
     mut response: reqwest::Response,
     path: &Path,

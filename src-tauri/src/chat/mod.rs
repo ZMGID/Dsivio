@@ -16,7 +16,7 @@ pub mod goal;
 pub mod hooks;
 mod image_collage;
 pub mod image_generation;
-mod image_prep;
+pub(crate) mod image_prep;
 pub(crate) mod interaction_state;
 pub mod knowledge_base;
 mod mcp_image_feedback;

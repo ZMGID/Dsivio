@@ -20,6 +20,23 @@ struct Protocol {
     query_path: String,
     auth: String,
     headers: BTreeMap<String, String>,
+    capabilities: ProtocolCapabilities,
+}
+/// What an entry point accepts regardless of model. Model limits narrow these further.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProtocolCapabilities {
+    /// Multimodal reference images/videos/audios.
+    references: bool,
+    last_frame: bool,
+    audio_toggle: bool,
+    /// Reference video/audio may be sent inline (data URL / `mm_file://`) instead of an HTTP URL.
+    inline_reference_media: bool,
+    /// Result URLs must be fetched with the API key.
+    download_requires_auth: bool,
+}
+fn protocol_capabilities(protocol: &str) -> Option<&'static ProtocolCapabilities> {
+    CATALOG.protocols.get(protocol).map(|p| &p.capabilities)
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +56,8 @@ struct Model {
     frame_ratio: Option<String>,
     reference_task_type: Option<String>,
     reference_limits: Option<ReferenceLimits>,
+    last_frame_needs_first: Option<bool>,
+    frames_exclude_references: Option<bool>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,6 +76,67 @@ fn model_profile(model: &str) -> Option<&'static Model> {
         .models
         .iter()
         .find(|item| item.id.eq_ignore_ascii_case(model.trim()))
+}
+/// What a catalogued video model accepts, for callers that must decide before submitting
+/// (`dsivio media models`). Facts come from the catalog; a model outside it is `None`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoCapabilities {
+    pub protocol: String,
+    pub modes: Vec<String>,
+    pub durations: Vec<u32>,
+    pub resolutions: Vec<String>,
+    pub ratios: Vec<String>,
+    pub audio_toggle: bool,
+    /// A first frame (image-to-video).
+    pub first_frame: bool,
+    /// A last frame; pair requirements are model-specific.
+    pub last_frame: bool,
+    pub last_frame_needs_first: bool,
+    pub max_reference_images: usize,
+    pub max_reference_videos: usize,
+    pub max_reference_audios: usize,
+    /// Reference audio needs a reference image or video with it.
+    pub reference_audio_needs_visual: bool,
+    /// Reference videos and audios accepted as a local file (sent inline); otherwise they must be http(s) URLs.
+    pub local_reference_media: bool,
+    /// First/last frames and multimodal references cannot be combined in one request.
+    pub frames_exclude_references: bool,
+    pub max_prompt_length: Option<usize>,
+    pub defaults: Value,
+}
+pub(crate) fn capabilities(provider: &ModelProvider, model: &str) -> Option<VideoCapabilities> {
+    let profile = model_profile(model)?;
+    // A user-chosen protocol wins in `selected`, so describe the model as it would actually be sent.
+    let protocol = provider
+        .model_overrides
+        .get(model)
+        .and_then(|m| m.video_protocol.clone())
+        .unwrap_or_else(|| profile.protocol.clone());
+    let has = |mode: &str| profile.modes.iter().any(|value| value == mode);
+    let entry = protocol_capabilities(&protocol)?;
+    let references = has("reference") && entry.references;
+    let last_frame = has("frames") && entry.last_frame;
+    let limits = profile.reference_limits.as_ref().filter(|_| references);
+    Some(VideoCapabilities {
+        modes: profile.modes.clone(),
+        durations: profile.durations.clone(),
+        resolutions: profile.resolutions.clone(),
+        ratios: profile.ratios.clone(),
+        audio_toggle: profile.audio_toggle && entry.audio_toggle,
+        first_frame: has("image") || last_frame,
+        last_frame,
+        last_frame_needs_first: profile.last_frame_needs_first.unwrap_or(true),
+        max_reference_images: limits.map_or(0, |l| l.images),
+        max_reference_videos: limits.map_or(0, |l| l.videos),
+        max_reference_audios: limits.map_or(0, |l| l.audios),
+        reference_audio_needs_visual: limits.is_some_and(|l| !l.audio_only && l.audios > 0),
+        local_reference_media: entry.inline_reference_media,
+        frames_exclude_references: references && profile.frames_exclude_references.unwrap_or(true),
+        max_prompt_length: profile.max_prompt_length.filter(|n| *n > 0),
+        defaults: profile.defaults.clone(),
+        protocol,
+    })
 }
 pub(crate) fn supports_mode(model: &str, mode: &str) -> bool {
     model_profile(model).is_none_or(|profile| profile.modes.iter().any(|value| value == mode))
@@ -131,6 +211,12 @@ pub struct VideoResult {
     pub file_id: Option<String>,
     pub error: Option<String>,
     pub download_requires_auth: bool,
+    #[serde(skip)]
+    #[ts(skip)]
+    pub(crate) submission_response: Option<Value>,
+    #[serde(skip)]
+    #[ts(skip)]
+    pub(crate) submission_request: Option<Value>,
 }
 fn protocol_definition(protocol: &str) -> Result<&'static Protocol, String> {
     CATALOG
@@ -166,7 +252,11 @@ fn validate(protocol: &str, model: &str, input: &VideoInput) -> Result<(), Strin
     if input.prompt.trim().is_empty() {
         return Err("请填写视频提示词".into());
     }
-    if input.last_frame.is_some() && input.first_frame.is_none() {
+    let profile = model_profile(model).filter(|p| p.protocol == protocol);
+    if input.last_frame.is_some()
+        && input.first_frame.is_none()
+        && profile.is_none_or(|p| p.last_frame_needs_first.unwrap_or(true))
+    {
         return Err("尾帧模式必须同时提供首帧".into());
     }
     if input.duration == Some(0) {
@@ -247,14 +337,15 @@ fn validate(protocol: &str, model: &str, input: &VideoInput) -> Result<(), Strin
         {
             return Err("提示词超过该模型长度限制".into());
         }
-        if input.generate_audio.is_some() && !profile.audio_toggle && protocol != "seedance" {
+        if input.generate_audio.is_some() && !profile.audio_toggle {
             return Err("此模型入口不支持声音开关".into());
         }
     }
-    if reference && !matches!(protocol, "minimax_h3" | "seedance" | "xai_video") {
+    let entry = protocol_capabilities(protocol).ok_or("未知视频协议")?;
+    if reference && !entry.references {
         return Err("此协议入口不支持多模态参考，请使用其专用接口".into());
     }
-    if matches!(protocol, "minimax_h3" | "seedance" | "xai_video") && reference {
+    if reference && profile.is_none_or(|p| p.frames_exclude_references.unwrap_or(true)) {
         if input.first_frame.is_some() || input.last_frame.is_some() {
             return Err("首尾帧和多模态参考不能混用".into());
         }
@@ -267,7 +358,7 @@ fn validate(protocol: &str, model: &str, input: &VideoInput) -> Result<(), Strin
         return Err("音色仅支持有声 xAI 参考生成，最多 3 个".into());
     }
     if protocol == "xai_video"
-        && reference
+        && (reference || input.last_frame.is_some())
         && (input.reference_images.len() > 7
             || input.resolution.as_deref() == Some("1080p")
             || !input.reference_videos.is_empty()
@@ -275,12 +366,10 @@ fn validate(protocol: &str, model: &str, input: &VideoInput) -> Result<(), Strin
     {
         return Err("xAI 参考生成最多 7 张图片，最高 720p；不支持参考音视频文件".into());
     }
-    if input.last_frame.is_some() && !matches!(protocol, "minimax_h3" | "seedance" | "luma") {
+    if input.last_frame.is_some() && !entry.last_frame {
         return Err("此协议入口未支持尾帧".into());
     }
-    if input.generate_audio.is_some()
-        && !matches!(protocol, "xai_video" | "vidu" | "seedance" | "kling")
-    {
+    if input.generate_audio.is_some() && !entry.audio_toggle {
         return Err("此协议不支持声音开关".into());
     }
     if protocol == "minimax_hailuo" && input.ratio.is_some() {
@@ -302,7 +391,7 @@ fn validate(protocol: &str, model: &str, input: &VideoInput) -> Result<(), Strin
     {
         if !(media.starts_with("https://")
             || media.starts_with("http://")
-            || protocol == "minimax_h3"
+            || entry.inline_reference_media
                 && (media.starts_with("data:") || media.starts_with("mm_file://")))
         {
             return Err("参考视频和音频需要可访问的 HTTP(S) URL".into());
@@ -317,7 +406,7 @@ fn validate(protocol: &str, model: &str, input: &VideoInput) -> Result<(), Strin
         .chain(input.reference_audios.iter())
     {
         if !valid_media(media)
-            && !(protocol == "minimax_h3"
+            && !(entry.inline_reference_media
                 && (media.starts_with("data:video/")
                     || media.starts_with("data:audio/")
                     || media.starts_with("mm_file://")))
@@ -457,6 +546,9 @@ pub(crate) fn prepare(
                 );
             }
             if protocol == "xai_video" {
+                if let Some(frame) = &input.last_frame {
+                    body["last_frame"] = json!({"url":frame});
+                }
                 if !input.reference_images.is_empty() {
                     body["reference_images"] = json!(input
                         .reference_images
@@ -700,30 +792,50 @@ fn decode(protocol: &str, value: &Value, id: &str) -> Result<VideoResult, String
         "failed" | "fail" => "failed",
         "expired" => "expired",
         "cancelled" | "canceled" | "aborted" => "cancelled",
-        _ => return Err(format!("视频任务返回未识别状态：{raw}")),
-    }
-    .to_owned();
+        // A fresh receipt is queried next; an unknown word on a query cannot be waited out.
+        _ if id.is_empty() => "running",
+        _ => "unknown",
+    };
     let url = read_string(value, url_path);
     let file_id = if protocol == "minimax_hailuo" {
         read_string(value, "/file_id")
     } else {
         None
     };
-    if status == "succeeded" && url.is_none() && file_id.is_none() {
-        return Err("视频任务结束但未返回可下载结果（可能被内容过滤），请核查供应商任务".into());
-    }
-    let error = if matches!(status.as_str(), "failed" | "expired" | "cancelled") {
-        Some(format!("视频任务 {status}；请检查供应商任务详情"))
-    } else {
-        None
+    let provider_message = [
+        "/error/message",
+        "/error",
+        "/message",
+        "/fail_reason",
+        "/base_resp/status_msg",
+    ]
+    .into_iter()
+    .find_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+    .map(|m| m.chars().take(300).collect::<String>());
+    let (status, error) = match status {
+        "succeeded" if url.is_none() && file_id.is_none() => (
+            "failed",
+            Some("视频任务已结束但没有返回成片（可能被内容审核过滤），请核查供应商任务".into()),
+        ),
+        "unknown" => ("failed", Some(format!("视频任务返回未识别状态：{raw}"))),
+        "failed" | "expired" | "cancelled" => {
+            let detail = provider_message
+                .map(|m| format!("：{m}"))
+                .unwrap_or_default();
+            (status, Some(format!("视频任务 {status}{detail}")))
+        }
+        _ => (status, None),
     };
     Ok(VideoResult {
         remote_id,
-        status,
+        status: status.to_owned(),
         download_url: url,
         file_id,
         error,
-        download_requires_auth: protocol == "veo",
+        download_requires_auth: protocol_capabilities(protocol)
+            .is_some_and(|c| c.download_requires_auth),
+        submission_response: None,
+        submission_request: None,
     })
 }
 pub(crate) fn selected<'a>(provider: &'a ModelProvider, model: &str) -> Result<&'a str, String> {
@@ -747,18 +859,35 @@ pub(crate) fn selected<'a>(provider: &'a ModelProvider, model: &str) -> Result<&
 pub(crate) struct RequestFailure {
     pub message: String,
     pub rejected: bool,
+    pub http_status: Option<u16>,
 }
 impl RequestFailure {
-    fn uncertain(message: impl Into<String>) -> Self { Self { message: message.into(), rejected: false } }
+    fn uncertain(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            rejected: false,
+            http_status: None,
+        }
+    }
 }
 impl From<String> for RequestFailure {
-    fn from(message: String) -> Self { Self { message, rejected: true } }
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            rejected: true,
+            http_status: None,
+        }
+    }
 }
 impl From<&str> for RequestFailure {
-    fn from(message: &str) -> Self { message.to_owned().into() }
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
 }
 impl std::fmt::Display for RequestFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { self.message.fmt(f) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(f)
+    }
 }
 
 async fn send(
@@ -783,7 +912,7 @@ async fn send(
     } else {
         client.get(url)
     };
-    request = crate::provider_request::apply(request, provider, None);
+    request = super::with_provider_headers(request, provider, None);
     request = match definition.auth.as_str() {
         "google" => request.header("x-goog-api-key", key),
         "token" => request.header("Authorization", format!("Token {key}")),
@@ -807,13 +936,51 @@ async fn send(
         ))
     })?;
     if !response.status().is_success() {
+        let status = response.status();
+        let mut response = response;
+        let mut bytes = Vec::new();
+        while bytes.len() < 8192 {
+            let Some(chunk) = response.chunk().await.ok().flatten() else {
+                break;
+            };
+            bytes.extend_from_slice(&chunk[..chunk.len().min(8192 - bytes.len())]);
+        }
+        let raw = String::from_utf8_lossy(&bytes);
+        let parsed = serde_json::from_slice::<Value>(&bytes).ok();
+        let detail = parsed
+            .as_ref()
+            .and_then(|v| {
+                v.pointer("/error/message")
+                    .or_else(|| v.get("message"))
+                    .or_else(|| v.get("error"))
+            })
+            .and_then(Value::as_str)
+            .unwrap_or(&raw);
+        let mut detail = detail.to_owned();
+        for key in &provider.api_keys {
+            if !key.is_empty() {
+                detail = detail.replace(key, "[redacted]");
+            }
+        }
+        let method = if body.is_some() { "POST" } else { "GET" };
+        let path = reqwest::Url::parse(url)
+            .ok()
+            .map(|u| u.path().to_owned())
+            .unwrap_or_default();
+        let detail: String = detail.chars().take(500).collect();
         return Err(RequestFailure {
-            message: format!("视频接口 HTTP {}；请检查密钥、权限与请求参数", response.status().as_u16()),
-            rejected: response.status().is_client_error() && response.status().as_u16() != 408,
+            message: format!(
+                "视频接口 HTTP {}（{method} {path}）：{detail}",
+                status.as_u16()
+            ),
+            rejected: status.is_client_error() && !matches!(status.as_u16(), 408 | 429),
+            http_status: Some(status.as_u16()),
         });
     }
     response.json().await.map_err(|_| {
-        RequestFailure::uncertain("视频接口返回了无效 JSON；若为提交请求，结果不确定，请核查供应商控制台，勿自动重试")
+        RequestFailure::uncertain(
+            "视频接口返回了无效 JSON；若为提交请求，结果不确定，请核查供应商控制台，勿自动重试",
+        )
     })
 }
 
@@ -826,20 +993,23 @@ pub(crate) async fn submit_video_model_request(
 ) -> Result<VideoResult, RequestFailure> {
     let protocol = selected(&provider, &model)?;
     let request = prepare(protocol, &provider.base_url, &model, &input)?;
-    decode(
+    let value = send(
+        state.client_for(&provider),
+        provider,
         protocol,
-        &send(
-            state.client_for(&provider),
-            &provider,
-            protocol,
-            &request.url,
-            Some(&request.body),
-        )
-        .await?,
-        "",
-    ).map_err(RequestFailure::uncertain)
+        &request.url,
+        Some(&request.body),
+    )
+    .await?;
+    let mut result = decode(protocol, &value, "").map_err(RequestFailure::uncertain)?;
+    result.submission_response = Some(value);
+    result.submission_request =
+        Some(json!({"method":request.method,"url":request.url,"body":request.body}));
+    Ok(result)
 }
 
+/// Prefix of a pending result whose receipt the provider did not return on this read.
+pub(crate) const RECEIPT_UNSEEN: &str = "任务已提交，供应商暂未返回该回执";
 /// Query the original connection only; changing provider/model must never re-submit a task.
 pub(crate) async fn query_video_model_request(
     state: &AppState,
@@ -877,18 +1047,39 @@ pub(crate) async fn query_video_model_request(
         &base_url,
         &definition.query_path.replace("{id}", &remote_id),
     )?;
-    let mut result = decode(
+    let response = send(
+        state.client_for(&provider),
+        &provider,
         &protocol,
-        &send(
-            state.client_for(&provider),
-            &provider,
-            &protocol,
-            &url,
-            None,
-        )
-        .await.map_err(|e| e.to_string())?,
-        &remote_id,
-    )?;
+        &url,
+        None,
+    )
+    .await;
+    let value = match response {
+        Ok(value) => value,
+        // This is a GET for an already accepted receipt, never a new paid submission.
+        // Some providers expose the receipt only after generation has progressed.
+        // Gateways may not expose a receipt yet, or may have lost it; the caller bounds how long
+        // an unseen receipt is waited for. Auth and request errors still surface immediately.
+        Err(RequestFailure {
+            http_status: Some(code @ (404 | 408 | 429 | 500..=599)),
+            ..
+        }) => {
+            return Ok(VideoResult {
+                remote_id,
+                status: "running".into(),
+                download_url: None,
+                file_id: None,
+                error: Some(format!("{RECEIPT_UNSEEN}（HTTP {code}）")),
+                download_requires_auth: protocol_capabilities(&protocol)
+                    .is_some_and(|c| c.download_requires_auth),
+                submission_response: None,
+                submission_request: None,
+            });
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut result = decode(&protocol, &value, &remote_id)?;
     if let Some(file) = &result.file_id {
         if !file.chars().all(|c| c.is_ascii_digit()) {
             return Err("MiniMax 返回无效文件 ID".into());
@@ -901,7 +1092,8 @@ pub(crate) async fn query_video_model_request(
             &url,
             None,
         )
-        .await.map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| e.to_string())?;
         result.download_url = read_string(&data, "/file/download_url");
         if result.download_url.is_none() {
             return Err("MiniMax 文件暂时无法下载；保留任务 ID 后重试查询".into());
@@ -1114,7 +1306,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(file.file_id.as_deref(), Some("456"));
-        assert!(decode("xai_video", &json!({"status":"done"}), "id").is_err());
+        // Done without a video (moderation) is a final failure, not a successful result.
+        let filtered = decode("xai_video", &json!({"status":"done"}), "id").unwrap();
+        assert_eq!(filtered.status, "failed");
+        assert!(filtered.error.unwrap().contains("内容审核"));
         assert_eq!(
             decode("xai_video", &json!({"status":"expired"}), "id")
                 .unwrap()
@@ -1248,7 +1443,8 @@ mod tests {
         )
         .await
         .unwrap_err()
-        .message.contains("503"));
+        .message
+        .contains("503"));
         let received = worker.join().unwrap();
         assert!(received[0].starts_with("POST /text2video HTTP/1.1"));
         assert!(received[0]
@@ -1275,5 +1471,46 @@ mod tests {
             encoded["modelOverrides"]["MiniMax-H3"]["capabilities"]["videoGeneration"],
             false
         );
+    }
+    #[test]
+    fn official_media_contract_regressions_preserve_frame_and_reference_requests() {
+        let mut i = input();
+        i.resolution = Some("720p".into());
+        i.first_frame = Some("https://example.com/first.png".into());
+        i.last_frame = Some("https://example.com/last.png".into());
+        i.reference_images = vec!["https://example.com/ref.png".into()];
+        let r = prepare(
+            "xai_video",
+            "https://api.x.ai/v1",
+            "grok-imagine-video-1.5",
+            &i,
+        )
+        .unwrap();
+        assert_eq!(
+            r.body["last_frame"]["url"],
+            i.last_frame.as_deref().unwrap()
+        );
+        assert!(prepare("xai_video", "https://api.x.ai/v1", "grok-imagine-video", &i).is_err());
+        i.first_frame = None;
+        i.reference_images.clear();
+        assert!(prepare(
+            "xai_video",
+            "https://api.x.ai/v1",
+            "grok-imagine-video-1.5",
+            &i
+        )
+        .is_ok());
+        i.resolution = Some("768P".into());
+        assert!(prepare("minimax_h3", "https://api.minimax.cn", "MiniMax-H3", &i).is_ok());
+        i.resolution = Some("720p".into());
+        i.duration = Some(5);
+        assert!(prepare("luma", "https://agents.lumalabs.ai/v1", "ray-3.2", &i).is_ok());
+        assert!(prepare(
+            "seedance",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "doubao-seedance-2-5-260628",
+            &i
+        )
+        .is_err());
     }
 }

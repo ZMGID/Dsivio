@@ -279,7 +279,7 @@ async fn derive(
                 brief: &task.brief,
             };
             let fetched = if let Some(url) = &result.download_url {
-                media::download(app, url).await
+                media::download(app, &result.config, url).await
             } else {
                 generation::resume(
                     &backend,

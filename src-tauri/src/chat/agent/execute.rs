@@ -965,7 +965,7 @@ fn effective_tool_timeout_ms(
         return default_timeout_ms.max(300_000);
     }
     if tool.source == "mixer" && tool.name == "mixer_generate_image" {
-        return default_timeout_ms.max(crate::chat::image_generation::IMAGE_GENERATION_TIMEOUT_MS);
+        return default_timeout_ms.max(crate::media_generation::image_providers::IMAGE_GENERATION_TIMEOUT_MS);
     }
     if tool.source == "mixer" && tool.name == "mixer_media_task" {
         return default_timeout_ms.max(35_000);
@@ -1890,7 +1890,7 @@ mod tests {
 
         assert_eq!(
             effective_tool_timeout_ms(&settings, &tool, &arguments),
-            crate::chat::image_generation::IMAGE_GENERATION_TIMEOUT_MS
+            crate::media_generation::image_providers::IMAGE_GENERATION_TIMEOUT_MS
         );
     }
 

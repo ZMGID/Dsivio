@@ -37,7 +37,7 @@ pub(super) async fn complete_direct_image_generation_reply(
         "n": 1,
     });
     let input_images =
-        crate::chat::image_generation::load_input_images_from_paths(last_user_image_paths)?;
+        crate::media_generation::image_providers::load_input_images_from_paths(last_user_image_paths)?;
     let started = Instant::now();
     emit_chat_stream_delta(
         app,

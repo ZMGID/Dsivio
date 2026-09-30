@@ -141,6 +141,8 @@ pub fn run() {
     // stays in C and BSD `ls` prints `?` for CJK filenames. One process-wide
     // fix is inherited by the dock PTY, run_command, MCP, and CLI probes.
     path_env::ensure_utf8_locale();
+    // `dsivio media` for chat shells, MCP servers and plugins (ADR 0009).
+    media_generation::cli::install_launcher();
 
     let autostart_plugin = {
         #[cfg(target_os = "macos")]
@@ -256,6 +258,7 @@ pub fn run() {
         .setup(|app| {
             if let Err(error) = media_runtime::initialize(app.handle()) { eprintln!("Video initialization failed: {error}"); }
             if let Err(error) = workbench::image_projects::initialize_skill_workspace(app.handle()) { eprintln!("Image initialization failed: {error}"); }
+            media_generation::cli::serve(app.handle().clone());
             let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
 
             // Windows：退出后台执行速度节流（EcoQoS）。无可见窗口时进程会被 Win11 当后台空闲

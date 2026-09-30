@@ -12,7 +12,14 @@
       "sources": [
         "https://platform.minimaxi.com/docs/api-reference/video-generation-v2-create"
       ],
-      "notes": "H3 与 Hailuo 使用不同协议；H3 必须提供 duration、resolution。"
+      "notes": "H3 与 Hailuo 使用不同协议；H3 必须提供 duration、resolution。",
+      "capabilities": {
+        "references": true,
+        "lastFrame": true,
+        "audioToggle": false,
+        "inlineReferenceMedia": true,
+        "downloadRequiresAuth": false
+      }
     },
     "minimax_hailuo": {
       "label": "MiniMax Hailuo (V1)",
@@ -24,7 +31,14 @@
       "sources": [
         "https://platform.minimax.io/docs/api-reference/video-generation-t2v"
       ],
-      "notes": "成功后返回 file_id，需再调用 files/retrieve 获取下载地址。"
+      "notes": "成功后返回 file_id，需再调用 files/retrieve 获取下载地址。",
+      "capabilities": {
+        "references": false,
+        "lastFrame": false,
+        "audioToggle": false,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": false
+      }
     },
     "seedance": {
       "label": "Volcengine Seedance",
@@ -38,7 +52,14 @@
         "https://github.com/volcengine/volcengine-python-sdk/blob/master/volcenginesdkarkruntime/resources/content_generation/tasks.py",
         "https://docs.volcengine.com/docs/ark/model-release-announcement?lang=zh"
       ],
-      "notes": "使用方舟 API Key 与已开通的模型 ID；支持自定义推理接入点 ID。"
+      "notes": "使用方舟 API Key 与已开通的模型 ID；支持自定义推理接入点 ID。",
+      "capabilities": {
+        "references": true,
+        "lastFrame": true,
+        "audioToggle": true,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": false
+      }
     },
     "xai_video": {
       "label": "Grok Imagine Video",
@@ -50,7 +71,14 @@
       "sources": [
         "https://docs.x.ai/developers/model-capabilities/video/generation"
       ],
-      "notes": "参考图、首尾帧与编辑有不同限制；输出链接有时效。"
+      "notes": "参考图、首尾帧与编辑有不同限制；输出链接有时效。",
+      "capabilities": {
+        "references": true,
+        "lastFrame": true,
+        "audioToggle": true,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": false
+      }
     },
     "veo": {
       "label": "Google Veo",
@@ -62,7 +90,14 @@
       "sources": [
         "https://ai.google.dev/gemini-api/docs/veo"
       ],
-      "notes": "使用 Gemini API 的长任务协议；操作名称包含 models/.../operations/...，下载需 API Key。"
+      "notes": "使用 Gemini API 的长任务协议；操作名称包含 models/.../operations/...，下载需 API Key。",
+      "capabilities": {
+        "references": false,
+        "lastFrame": false,
+        "audioToggle": false,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": true
+      }
     },
     "wan": {
       "label": "Alibaba Wan 2.7",
@@ -76,7 +111,14 @@
       "sources": [
         "https://help.aliyun.com/zh/model-studio/text-to-video-api-reference"
       ],
-      "notes": "本协议对应 Wan 2.7；API Key 与地域须一致，可替换为工作空间专属域名。"
+      "notes": "本协议对应 Wan 2.7；API Key 与地域须一致，可替换为工作空间专属域名。",
+      "capabilities": {
+        "references": false,
+        "lastFrame": false,
+        "audioToggle": false,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": false
+      }
     },
     "runway": {
       "label": "Runway",
@@ -90,7 +132,14 @@
       "sources": [
         "https://docs.dev.runwayml.com/api.md"
       ],
-      "notes": "图生视频改用 /image_to_video；ratio 为像素比例，如 1280:720。"
+      "notes": "图生视频改用 /image_to_video；ratio 为像素比例，如 1280:720。",
+      "capabilities": {
+        "references": false,
+        "lastFrame": false,
+        "audioToggle": false,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": false
+      }
     },
     "vidu": {
       "label": "Vidu",
@@ -102,7 +151,14 @@
       "sources": [
         "https://platform.vidu.com/docs/text-to-video"
       ],
-      "notes": "图生视频改用 /img2video；鉴权前缀是 Token。"
+      "notes": "图生视频改用 /img2video；鉴权前缀是 Token。",
+      "capabilities": {
+        "references": false,
+        "lastFrame": false,
+        "audioToggle": true,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": false
+      }
     },
     "luma": {
       "label": "Luma Agents Ray",
@@ -115,7 +171,14 @@
         "https://docs.agents.lumalabs.ai/guides/videos/migration/",
         "https://docs.agents.lumalabs.ai/guides/videos/generation/"
       ],
-      "notes": "Ray 3.2 使用 Agents API 与新密钥，不使用旧 Dream Machine 协议。"
+      "notes": "Ray 3.2 使用 Agents API 与新密钥，不使用旧 Dream Machine 协议。",
+      "capabilities": {
+        "references": false,
+        "lastFrame": true,
+        "audioToggle": false,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": false
+      }
     },
     "kling": {
       "label": "Kling (API Key)",
@@ -129,7 +192,14 @@
         "https://kling.ai/document-api/api/get-started/authentication",
         "https://kling.ai/document-api/api/video/3-0-turbo/image-to-video"
       ],
-      "notes": "新版 API Key 协议；不使用旧版 AK/SK JWT。模型 ID 位于 URL 路径，输出配置位于 settings。"
+      "notes": "新版 API Key 协议；不使用旧版 AK/SK JWT。模型 ID 位于 URL 路径，输出配置位于 settings。",
+      "capabilities": {
+        "references": false,
+        "lastFrame": false,
+        "audioToggle": true,
+        "inlineReferenceMedia": false,
+        "downloadRequiresAuth": false
+      }
     }
   },
   "models": [
@@ -181,7 +251,8 @@
         "videos": 3,
         "audios": 3,
         "audioOnly": true
-      }
+      },
+      "lastFrameNeedsFirst": false
     },
     {
       "id": "MiniMax-H3-Max",
@@ -229,7 +300,8 @@
         "videos": 3,
         "audios": 3,
         "audioOnly": true
-      }
+      },
+      "lastFrameNeedsFirst": false
     },
     {
       "id": "MiniMax-Hailuo-2.3",
@@ -459,7 +531,8 @@
       "modes": [
         "text",
         "image",
-        "reference"
+        "reference",
+        "frames"
       ],
       "durations": [
         1,
@@ -504,7 +577,9 @@
         "videos": 0,
         "audios": 0,
         "audioOnly": false
-      }
+      },
+      "lastFrameNeedsFirst": false,
+      "framesExcludeReferences": false
     },
     {
       "id": "grok-imagine-video",
@@ -953,7 +1028,8 @@
       },
       "maxPromptLength": 6000,
       "frameDuration": 5,
-      "notes": "使用首帧或尾帧时只支持 5 秒。"
+      "notes": "使用首帧或尾帧时只支持 5 秒。",
+      "lastFrameNeedsFirst": false
     },
     {
       "id": "kling-3.0",

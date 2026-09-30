@@ -1,9 +1,11 @@
 //! The generation lifecycle shared by chat tools and Workbench. Provider modules own wire formats.
 use crate::{comfyui, settings::ModelProvider, state::AppState};
+pub(crate) mod image_providers;
 pub mod video_providers;
-pub(crate) mod image_gateway;
+use image_providers::async_task as image_gateway;
 use video_providers as providers;
 pub(crate) mod artifacts;
+pub mod cli;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -108,9 +110,14 @@ pub struct MediaTaskFilter {
 }
 impl MediaTaskFilter {
     fn matches(&self, task: &MediaTask) -> bool {
-        self.provider_id.as_ref().is_none_or(|p| *p == task.provider_id)
+        self.provider_id
+            .as_ref()
+            .is_none_or(|p| *p == task.provider_id)
             && self.model.as_ref().is_none_or(|m| *m == task.model)
-            && self.origin.as_ref().is_none_or(|o| task.origin.as_ref() == Some(o))
+            && self
+                .origin
+                .as_ref()
+                .is_none_or(|o| task.origin.as_ref() == Some(o))
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -122,6 +129,9 @@ struct StoredTask {
     protocol: String,
     download_url: Option<String>,
     download_requires_auth: bool,
+    /// When the provider returned the receipt. Missing on older records; `created_at` stands in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    accepted_at: Option<String>,
 }
 static ACTIVE: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 struct Active(String);
@@ -382,10 +392,31 @@ pub(crate) fn import_legacy_at(
                 protocol: protocol.into(),
                 download_url: old["remote"]["download_url"].as_str().map(str::to_owned),
                 download_requires_auth: false,
+                accepted_at: None,
             },
         )?;
     }
     Ok(())
+}
+/// Provider headers for a media request, plus a browser `User-Agent` when the provider sets none:
+/// Cloudflare-fronted gateways reject default library agents (`error code: 1010`).
+pub(crate) fn with_provider_headers(
+    request: reqwest::RequestBuilder,
+    provider: &ModelProvider,
+    task_id: Option<&str>,
+) -> reqwest::RequestBuilder {
+    let has_agent = crate::provider_request::header_pairs(provider, task_id)
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"));
+    let request = crate::provider_request::apply(request, provider, task_id);
+    if has_agent {
+        request
+    } else {
+        request.header(
+            reqwest::header::USER_AGENT,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        )
+    }
 }
 fn provider(state: &AppState, id: &str) -> Result<ModelProvider, String> {
     state
@@ -412,26 +443,57 @@ fn video_input(request: &MediaRequest) -> Result<providers::VideoInput, String> 
         .iter()
         .map(|v| video_image(v))
         .collect::<Result<_, _>>()?;
-    input.reference_videos = input.reference_videos.iter().map(|v|video_reference(v,false)).collect::<Result<_,_>>()?;
-    input.reference_audios = input.reference_audios.iter().map(|v|video_reference(v,true)).collect::<Result<_,_>>()?;
+    input.reference_videos = input
+        .reference_videos
+        .iter()
+        .map(|v| video_reference(v, false))
+        .collect::<Result<_, _>>()?;
+    input.reference_audios = input
+        .reference_audios
+        .iter()
+        .map(|v| video_reference(v, true))
+        .collect::<Result<_, _>>()?;
     Ok(providers::input_with_defaults(&request.model, input))
 }
-fn video_reference(value:&str,audio:bool)->Result<String,String>{
-    if value.starts_with("https://") || value.starts_with("http://") || value.starts_with("mm_file://") || value.starts_with("data:"){return Ok(value.into());}
-    let path=Path::new(value);
-    let extension=path.extension().and_then(|v|v.to_str()).unwrap_or("").to_ascii_lowercase();
-    let mime=match (audio,extension.as_str()){(true,"mp3")=>"audio/mp3",(true,"wav")=>"audio/wav",(false,"mp4")=>"video/mp4",(false,"mov")=>"video/quicktime",_=>return Err("参考媒体格式不支持".into())};
-    let limit=if audio{15}else{50}*1024*1024;
-    if std::fs::metadata(path).map_err(|e|e.to_string())?.len()>limit{return Err("参考媒体文件超过大小限制".into());}
-    let bytes=std::fs::read(path).map_err(|e|e.to_string())?;
-    if bytes.is_empty() || bytes.len() as u64>limit{return Err("参考媒体为空或过大".into());}
-    Ok(format!("data:{mime};base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes)))
+fn video_reference(value: &str, audio: bool) -> Result<String, String> {
+    if value.starts_with("https://")
+        || value.starts_with("http://")
+        || value.starts_with("mm_file://")
+        || value.starts_with("data:")
+    {
+        return Ok(value.into());
+    }
+    let path = Path::new(value);
+    let extension = path
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match (audio, extension.as_str()) {
+        (true, "mp3") => "audio/mp3",
+        (true, "wav") => "audio/wav",
+        (false, "mp4") => "video/mp4",
+        (false, "mov") => "video/quicktime",
+        _ => return Err("参考媒体格式不支持".into()),
+    };
+    let limit = if audio { 15 } else { 50 } * 1024 * 1024;
+    if std::fs::metadata(path).map_err(|e| e.to_string())?.len() > limit {
+        return Err("参考媒体文件超过大小限制".into());
+    }
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    if bytes.is_empty() || bytes.len() as u64 > limit {
+        return Err("参考媒体为空或过大".into());
+    }
+    Ok(format!(
+        "data:{mime};base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
 }
 fn video_image(value: &str) -> Result<String, String> {
     if value.starts_with("http://") || value.starts_with("https://") {
         return Ok(value.into());
     }
-    Ok(crate::chat::image_generation::data_url_for_input(
+    Ok(image_providers::data_url_for_input(
         &image_inputs(&[value.into()])?.remove(0),
     ))
 }
@@ -468,7 +530,7 @@ fn comfy_values(
                     .get(*index as usize)
                     .ok_or("工作流缺少绑定的参考图")?;
                 images_used.insert(*index as usize);
-                Some(json!(crate::chat::image_generation::data_url_for_input(
+                Some(json!(image_providers::data_url_for_input(
                     &image_inputs(&[path.clone()])?.remove(0)
                 )))
             }
@@ -491,7 +553,7 @@ fn comfy_values(
                         let path = value
                             .as_str()
                             .ok_or("工作流图片参数必须是本地路径或 data URL")?;
-                        json!(crate::chat::image_generation::data_url_for_input(
+                        json!(image_providers::data_url_for_input(
                             &image_inputs(&[path.into()])?.remove(0)
                         ))
                     } else {
@@ -583,7 +645,7 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
             return Err("此模型未启用图片生成".into());
         }
         let images = image_inputs(&request.images)?;
-        crate::chat::image_generation::validate_generation(
+        image_providers::validate_generation(
             &p,
             &request.model,
             &image_arguments(&request)?,
@@ -591,7 +653,7 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
         )?;
         request.images = images
             .iter()
-            .map(crate::chat::image_generation::data_url_for_input)
+            .map(image_providers::data_url_for_input)
             .collect();
         "image".into()
     };
@@ -615,6 +677,7 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
         protocol,
         download_url: None,
         download_requires_auth: false,
+        accepted_at: None,
     };
     let guard = claim(&task.task.id).ok_or("任务已运行")?;
     save(&root()?, &task)?;
@@ -642,9 +705,7 @@ pub async fn start_media_generation(
     }
     start(&app, request).await
 }
-fn image_inputs(
-    images: &[String],
-) -> Result<Vec<crate::chat::image_generation::InputImage>, String> {
+fn image_inputs(images: &[String]) -> Result<Vec<image_providers::InputImage>, String> {
     if images.len() > 16 {
         return Err("最多使用 16 张参考图".into());
     }
@@ -652,16 +713,13 @@ fn image_inputs(
         .iter()
         .map(|image| {
             if image.starts_with("data:") {
-                let (mime_type, base64) =
-                    crate::chat::image_generation::parse_image_data_url(image)?;
-                Ok(crate::chat::image_generation::InputImage { mime_type, base64 })
+                let (mime_type, base64) = image_providers::parse_image_data_url(image)?;
+                Ok(image_providers::InputImage { mime_type, base64 })
             } else {
-                crate::chat::image_generation::load_input_images_from_paths(&[PathBuf::from(
-                    image,
-                )])?
-                .into_iter()
-                .next()
-                .ok_or("参考图无法读取".into())
+                image_providers::load_input_images_from_paths(&[PathBuf::from(image)])?
+                    .into_iter()
+                    .next()
+                    .ok_or("参考图无法读取".into())
             }
         })
         .collect()
@@ -672,6 +730,35 @@ fn run_background(app: AppHandle, id: String, request: Option<MediaRequest>) {
     };
     spawn_background(app, id, request, guard);
 }
+const POLL_PAUSE: Duration = Duration::from_secs(3);
+/// Non-pending read errors (e.g. authorization/download failures) stop this worker
+/// after a bounded number of tries. Expected pending HTTP responses are handled by the protocol.
+const MAX_CONSECUTIVE_READ_ERRORS: u32 = 10;
+// One worker performs at most 30 minutes of scheduled waits. Callers can continue
+// querying the same receipt after this bound; it never authorizes another POST.
+const MAX_POLL_READS: u32 = 600;
+/// Query the saved receipt until the task settles. Never submits, so retrying a read is free.
+async fn poll_until_settled<F, Fut>(mut refresh: F, pause: Duration) -> Result<(), String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<MediaTask, String>>,
+{
+    let mut consecutive_errors = 0;
+    for _ in 0..MAX_POLL_READS {
+        match refresh().await {
+            Ok(task) if task.status != MediaStatus::Running => return Ok(()),
+            Ok(_) => consecutive_errors = 0,
+            Err(error) => {
+                consecutive_errors += 1;
+                if consecutive_errors >= MAX_CONSECUTIVE_READ_ERRORS {
+                    return Err(error);
+                }
+            }
+        }
+        tokio::time::sleep(pause).await;
+    }
+    Err("查询等待达到上限，生成结果尚未确认；请继续查询同一任务，勿重新提交".into())
+}
 fn spawn_background(app: AppHandle, id: String, request: Option<MediaRequest>, guard: Active) {
     tauri::async_runtime::spawn(async move {
         let _guard = guard;
@@ -680,22 +767,13 @@ fn spawn_background(app: AppHandle, id: String, request: Option<MediaRequest>, g
                 submit_cloud_at(&root()?, &app.state::<AppState>(), &id, request).await?;
             }
             // Reading/downloading never submits. A restart resumes from the saved receipt.
-            for _ in 0..28800 {
-                let task = refresh_once(&app, &id).await?;
-                if task.status != MediaStatus::Running {
-                    return Ok::<_, String>(());
-                }
-                tokio::time::sleep(Duration::from_secs(3)).await;
-            }
-            Err("任务仍在供应商运行，可稍后继续查询".into())
+            poll_until_settled(|| refresh_once(&app, &id), POLL_PAUSE).await
         }
         .await;
         if let Err(error) = result {
             if let Ok(root) = root() {
                 if let Ok(mut saved) = read(&root, &id) {
-                    saved.task.status = MediaStatus::Failed;
-                    saved.task.can_resume = saved.task.remote_id.is_some() || saved.download_url.is_some();
-                    saved.task.error = Some(error);
+                    record_background_error(&mut saved, error);
                     let _ = save(&root, &saved);
                 } else if let Ok(comfy_root) = comfyui::root() {
                     if let Ok(mut task) = comfyui::read_task(&comfy_root, &id) {
@@ -708,6 +786,46 @@ fn spawn_background(app: AppHandle, id: String, request: Option<MediaRequest>, g
         }
     });
 }
+fn record_background_error(saved: &mut StoredTask, error: String) {
+    // A provider-confirmed failure or completed output is already authoritative.
+    if saved.task.status != MediaStatus::Running {
+        return;
+    }
+    saved.task.can_resume = saved.task.remote_id.is_some() || saved.download_url.is_some();
+    if !saved.task.can_resume {
+        saved.task.status = MediaStatus::Failed;
+    }
+    saved.task.error = Some(error);
+}
+/// How long an accepted receipt may stay invisible at the provider before the task stops
+/// waiting. Observed gateways lose some receipts outright; others lag briefly after acceptance.
+const RECEIPT_GRACE: chrono::TimeDelta = chrono::TimeDelta::minutes(10);
+fn receipt_lost(saved: &StoredTask, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let since = saved
+        .accepted_at
+        .as_deref()
+        .unwrap_or(&saved.task.created_at);
+    chrono::DateTime::parse_from_rfc3339(since)
+        .is_ok_and(|at| now.signed_duration_since(at) > RECEIPT_GRACE)
+}
+/// Settle a read that did not return the receipt: keep waiting within the grace period, then
+/// stop with the receipt kept so the user can query it once more after checking with the provider.
+fn apply_unseen_receipt(
+    saved: &mut StoredTask,
+    detail: String,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    if !receipt_lost(saved, now) {
+        saved.task.error = Some(detail);
+        return;
+    }
+    let receipt = saved.task.remote_id.as_deref().unwrap_or("");
+    saved.task.status = MediaStatus::Failed;
+    saved.task.can_resume = true;
+    saved.task.error = Some(format!(
+        "供应商受理后一直查不到该任务（回执 {receipt}），可能已扣费。请凭回执联系供应商核实；确认未生成后再重新生成"
+    ));
+}
 async fn submit_cloud_at(
     root: &Path,
     state: &AppState,
@@ -719,24 +837,106 @@ async fn submit_cloud_at(
     if p.base_url != saved.base_url {
         return Err("供应商连接已变更，本次未提交".into());
     }
-    if request.kind == MediaKind::Image && image_gateway::uses_gateway(&p.base_url,&request.model) {
-        let value=image_gateway::submit(state,&p,id,&request).await?;
-        saved.protocol="image-async".into();
-        saved.task.remote_id=image_gateway::remote_task_id(&value);
-        saved.download_url=image_gateway::image_download_url(&value).map(str::to_owned);
-        // Persist receipt/download URL before any potentially failing download.
-        save(root,&saved)?;
-        if saved.task.remote_id.is_none() && saved.download_url.is_none(){
-          let bytes=image_gateway::immediate_image(state,&value).await?;
-          saved.task.outputs=vec![artifacts::save_image(&bytes,&directory(root,id)?.join("output-0")).await?];saved.task.status=MediaStatus::Succeeded;
-        }
-        return save(root,&saved);
-    }
     if request.kind == MediaKind::Image {
-        let args = image_arguments(&request)?;
-        let result = crate::chat::image_generation::generate_image_with_provider(
-            &state,
-            &p,
+        let submitted = submit_image(root, state, &p, &mut saved, &request).await;
+        if let Err(error) = &submitted {
+            // A task with a receipt or any saved output is past submission; the poller owns it.
+            if saved.task.remote_id.is_none()
+                && saved.download_url.is_none()
+                && saved.task.outputs.is_empty()
+            {
+                saved.task.submission_state = Some(image_submission_state(error));
+                saved.task.status = MediaStatus::Failed;
+                saved.task.can_resume = false;
+                saved.task.error = Some(error.clone());
+                save(root, &saved)?;
+            }
+        }
+        return submitted;
+    }
+    if providers::selected(&p, &request.model)? != saved.protocol {
+        return Err("供应商协议已变更，本次未提交".into());
+    }
+    let result = providers::submit_video_model_request(
+        &state,
+        &p,
+        request.model.clone(),
+        video_input(&request)?,
+    )
+    .await;
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            saved.task.submission_state = Some(if error.rejected {
+                MediaSubmissionState::Rejected
+            } else {
+                MediaSubmissionState::Uncertain
+            });
+            saved.task.status = MediaStatus::Failed;
+            saved.task.can_resume = false;
+            saved.task.error = Some(error.to_string());
+            save(root, &saved)?;
+            return Err(error.to_string());
+        }
+    };
+    // Persist the receipt first. Failure to write diagnostics must never lose a paid task.
+    let diagnostics = [
+        ("submission-request.json", result.submission_request.clone()),
+        (
+            "submission-response.json",
+            result.submission_response.clone(),
+        ),
+    ];
+    apply_result(&mut saved, result);
+    save(root, &saved)?;
+    for (name, value) in diagnostics {
+        let Some(value) = value else { continue };
+        let mut text = value.to_string();
+        for key in p.api_keys.iter().filter(|k| !k.is_empty()) {
+            text = text.replace(key, "[redacted]");
+        }
+        let _ = std::fs::write(directory(root, id)?.join(name), text);
+    }
+    Ok(())
+}
+/// Image submission failures carry an HTTP status when the provider answered. A definite 4xx
+/// (not timeout/rate limit) was refused before generation; anything else may have been charged.
+fn image_submission_state(error: &str) -> MediaSubmissionState {
+    match crate::api::extract_status_code(error) {
+        Some(code) if (400..500).contains(&code) && !matches!(code, 408 | 429) => {
+            MediaSubmissionState::Rejected
+        }
+        _ => MediaSubmissionState::Uncertain,
+    }
+}
+async fn submit_image(
+    root: &Path,
+    state: &AppState,
+    p: &ModelProvider,
+    saved: &mut StoredTask,
+    request: &MediaRequest,
+) -> Result<(), String> {
+    let id = saved.task.id.clone();
+    if image_providers::resolve_image_route(p, &request.model)
+        == image_providers::ImageRoute::AsyncTask
+    {
+        let value = image_gateway::submit(state, p, &id, request).await?;
+        saved.protocol = "image-async".into();
+        saved.task.remote_id = image_gateway::remote_task_id(&value);
+        saved.download_url = image_gateway::image_download_url(&value).map(str::to_owned);
+        if saved.task.remote_id.is_some() || saved.download_url.is_some() {
+            saved.accepted_at = Some(chrono::Utc::now().to_rfc3339());
+            // Persist the receipt before any download that may fail.
+            return save(root, saved);
+        }
+        let bytes = image_gateway::immediate_image(p, &value).await?;
+        saved.task.outputs =
+            vec![artifacts::save_image(&bytes, &directory(root, &id)?.join("output-0")).await?];
+    } else {
+        let args = image_arguments(request)?;
+        let batch = image_providers::generate_image_with_provider(
+            state,
+            p,
             &request.model,
             &args,
             &image_inputs(&request.images)?,
@@ -744,48 +944,27 @@ async fn submit_cloud_at(
             "Media generation",
         )
         .await?;
-        if result.artifacts.is_empty() {
-            return Err(result.content);
-        }
-        for (i, artifact) in result.artifacts.iter().enumerate() {
-            let (_, data) = artifact.data_url.split_once(',').ok_or("图片响应无效")?;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .map_err(|_| "图片编码无效")?;
-            let path = directory(&root, id)?.join(format!("output-{i}"));
-            saved.task.outputs.push(artifacts::save_image(&bytes, &path).await?);
+        for (i, bytes) in batch.images.iter().enumerate() {
+            let path = directory(root, &id)?.join(format!("output-{i}"));
+            saved
+                .task
+                .outputs
+                .push(artifacts::save_image(bytes, &path).await?);
             // A later output may fail; keep the images already saved rather than losing a paid result.
-            save(root, &saved)?;
+            save(root, saved)?;
         }
-        saved.task.status = MediaStatus::Succeeded;
-    } else {
-        if providers::selected(&p, &request.model)? != saved.protocol {
-            return Err("供应商协议已变更，本次未提交".into());
+        if let Some(note) = batch.note {
+            saved.task.error = Some(note);
         }
-        let result = providers::submit_video_model_request(
-            &state,
-            &p,
-            request.model.clone(),
-            video_input(&request)?,
-        )
-        .await;
-        let result = match result {
-            Ok(result) => result,
-            Err(error) => {
-                saved.task.submission_state = Some(if error.rejected { MediaSubmissionState::Rejected } else { MediaSubmissionState::Uncertain });
-                saved.task.status = MediaStatus::Failed;
-                saved.task.can_resume = false;
-                saved.task.error = Some(error.to_string());
-                save(root, &saved)?;
-                return Err(error.to_string());
-            }
-        };
-        apply_result(&mut saved, result);
     }
-    save(&root, &saved)
+    saved.task.status = MediaStatus::Succeeded;
+    save(root, saved)
 }
 fn apply_result(saved: &mut StoredTask, result: providers::VideoResult) {
     saved.task.submission_state = None;
+    if !result.remote_id.is_empty() && saved.task.remote_id.is_none() {
+        saved.accepted_at = Some(chrono::Utc::now().to_rfc3339());
+    }
     if !result.remote_id.is_empty() {
         saved.task.remote_id = Some(result.remote_id);
     }
@@ -795,6 +974,8 @@ fn apply_result(saved: &mut StoredTask, result: providers::VideoResult) {
         saved.task.status = MediaStatus::Failed;
         saved.task.can_resume = false;
         saved.task.error = Some(result.error.unwrap_or("供应商生成失败".into()));
+    } else {
+        saved.task.error = result.error;
     }
 }
 async fn refresh_once(app: &AppHandle, id: &str) -> Result<MediaTask, String> {
@@ -811,11 +992,45 @@ async fn refresh_cloud_at(state: &AppState, root: &Path, id: &str) -> Result<Med
     if saved.task.status != MediaStatus::Running {
         return Ok(saved.task);
     }
-    if saved.task.kind==MediaKind::Image && saved.protocol=="image-async" {
-        let p=provider(state,&saved.task.provider_id)?;
-        if p.base_url.trim_end_matches('/')!=saved.base_url.trim_end_matches('/') {return Err("原任务连接已变更，请恢复原供应商地址后查询".into());}
-        let bytes=if let Some(url)=saved.download_url.as_deref(){Some(image_gateway::download(state,url).await?)}else if let Some(remote)=saved.task.remote_id.as_deref(){image_gateway::poll(state,&image_gateway::ReceiptConfig{provider_id:p.id,model:saved.task.model.clone(),protocol:"async".into()},id,remote).await?}else{None};
-        if let Some(bytes)=bytes{saved.task.outputs=vec![artifacts::save_image(&bytes,&directory(root,id)?.join("output-0")).await?];saved.task.status=MediaStatus::Succeeded;saved.task.can_resume=false;save(root,&saved)?;}
+    if saved.task.kind == MediaKind::Image && saved.protocol == "image-async" {
+        let p = provider(state, &saved.task.provider_id)?;
+        if p.base_url.trim_end_matches('/') != saved.base_url.trim_end_matches('/') {
+            return Err("原任务连接已变更，请恢复原供应商地址后查询".into());
+        }
+        let bytes = if let Some(url) = saved.download_url.as_deref() {
+            image_gateway::download(&p, url).await?
+        } else if let Some(remote) = saved.task.remote_id.clone() {
+            let cfg = image_gateway::ReceiptConfig {
+                provider_id: p.id,
+                model: saved.task.model.clone(),
+                protocol: "async".into(),
+            };
+            match image_gateway::poll(state, &cfg, id, &remote).await? {
+                image_gateway::ReceiptRead::Ready(bytes) => bytes,
+                image_gateway::ReceiptRead::Pending => return Ok(saved.task),
+                image_gateway::ReceiptRead::Unseen(code) => {
+                    let detail = format!("{}（HTTP {code}）", providers::RECEIPT_UNSEEN);
+                    apply_unseen_receipt(&mut saved, detail, chrono::Utc::now());
+                    save(root, &saved)?;
+                    return Ok(saved.task);
+                }
+                image_gateway::ReceiptRead::Failed(error) => {
+                    saved.task.status = MediaStatus::Failed;
+                    saved.task.can_resume = false;
+                    saved.task.error = Some(error);
+                    save(root, &saved)?;
+                    return Ok(saved.task);
+                }
+            }
+        } else {
+            return Ok(saved.task);
+        };
+        saved.task.outputs =
+            vec![artifacts::save_image(&bytes, &directory(root, id)?.join("output-0")).await?];
+        saved.task.status = MediaStatus::Succeeded;
+        saved.task.can_resume = false;
+        saved.task.error = None;
+        save(root, &saved)?;
         return Ok(saved.task);
     }
     let Some(remote) = saved.task.remote_id.clone() else {
@@ -831,7 +1046,17 @@ async fn refresh_cloud_at(state: &AppState, root: &Path, id: &str) -> Result<Med
             remote,
         )
         .await?;
-        apply_result(&mut saved, result);
+        let unseen = result.status == "running"
+            && result
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with(providers::RECEIPT_UNSEEN));
+        if unseen {
+            let detail = result.error.unwrap_or_default();
+            apply_unseen_receipt(&mut saved, detail, chrono::Utc::now());
+        } else {
+            apply_result(&mut saved, result);
+        }
         save(&root, &saved)?;
     }
     if let Some(url) = saved
@@ -869,66 +1094,32 @@ async fn download(
     auth: bool,
     path: &Path,
 ) -> Result<MediaOutput, String> {
-    let original = reqwest::Url::parse(base).map_err(|_| "原服务地址无效")?;
-    let relative = url.starts_with('/') && !url.starts_with("//");
-    let mut url = if relative {
-        original.join(url).map_err(|_| "结果地址无效")?
-    } else {
-        reqwest::Url::parse(url).map_err(|_| "结果地址无效")?
-    };
+    let origin = reqwest::Url::parse(base).map_err(|_| "原服务地址无效")?;
     // A provider-relative media path belongs to its authenticated API. Absolute CDN URLs
     // remain unauthenticated unless the protocol explicitly requires credentials.
-    let auth = auth || relative;
-    if auth && original.origin() != url.origin() {
-        return Err("结果下载要求鉴权，但地址与原服务不一致，已阻止发送密钥".into());
-    }
-    let mut builder = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(180));
-    if !provider.request.use_system_proxy {
-        builder = builder.no_proxy();
-    }
-    let client = builder.build().map_err(|e| e.to_string())?;
-    for _ in 0..5 {
-        if !matches!(url.scheme(), "http" | "https")
-            || !url.username().is_empty()
-            || url.password().is_some()
-        {
-            return Err("结果地址必须是 HTTP(S)".into());
-        }
-        let mut request = client.get(url.clone());
-        if auth && original.origin() == url.origin() {
-            let key = provider
-                .api_keys
-                .get(provider.active_key_index)
-                .or_else(|| provider.api_keys.first())
-                .ok_or("缺少下载密钥")?;
-            request = match providers::download_auth(protocol)? {
-                "google" => request.header("x-goog-api-key", key),
-                "token" => request.header("Authorization", format!("Token {key}")),
-                _ => request.bearer_auth(key),
-            };
-        }
-        let response = request
-            .send()
-            .await
-            .map_err(|e| e.without_url().to_string())?;
-        if response.status().is_redirection() {
-            let target = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|v| v.to_str().ok())
-                .ok_or("下载跳转缺少地址")?;
-            let next = url.join(target).map_err(|_| "下载跳转地址无效")?;
-            if url.scheme() == "https" && next.scheme() != "https" {
-                return Err("下载跳转不能降低 HTTPS 安全性".into());
-            }
-            url = next;
-            continue;
-        }
-        return artifacts::save_response(response, path, &MediaKind::Video).await;
-    }
-    Err("下载跳转次数过多".into())
+    let auth = auth || (url.starts_with('/') && !url.starts_with("//"));
+    let key = provider
+        .api_keys
+        .get(provider.active_key_index)
+        .or_else(|| provider.api_keys.first());
+    let credential = match (auth, key) {
+        (false, _) => artifacts::DownloadAuth::None,
+        (true, None) => return Err("缺少下载密钥".into()),
+        (true, Some(key)) => match providers::download_auth(protocol)? {
+            "google" => artifacts::DownloadAuth::Google(key),
+            "token" => artifacts::DownloadAuth::Token(key),
+            _ => artifacts::DownloadAuth::Bearer(key),
+        },
+    };
+    let response = artifacts::fetch(
+        artifacts::download_client(provider),
+        &origin,
+        url,
+        credential,
+        Duration::from_secs(180),
+    )
+    .await?;
+    artifacts::save_response(response, path, &MediaKind::Video).await
 }
 #[tauri::command]
 pub fn get_media_task(
@@ -966,18 +1157,26 @@ pub fn get_media_task(
 }
 // Caller holds the task claim, including the read. Recovery never submits another POST.
 fn recover_task(root: &Path, saved: &mut StoredTask, resume: bool) -> Result<(), String> {
-    if saved.task.status == MediaStatus::Running && saved.task.remote_id.is_none() && saved.download_url.is_none() {
+    if saved.task.status == MediaStatus::Running
+        && saved.task.remote_id.is_none()
+        && saved.download_url.is_none()
+    {
         saved.task.status = MediaStatus::Failed;
         saved.task.can_resume = false;
         saved.task.error = Some("上次生成中断，结果未确认，请核查后再决定是否重新生成".into());
         save(root, saved)?;
     }
-    if resume && saved.task.can_resume {
+    // An interrupted worker (Running + resumable) continues on its own; a stopped task
+    // (Failed + resumable, e.g. a lost receipt) is queried again only on an explicit resume.
+    if saved.task.can_resume && (resume || saved.task.status == MediaStatus::Running) {
         saved.task.status = MediaStatus::Running;
         saved.task.error = None;
         saved.task.can_resume = false;
-        // Refresh expired signed URLs using the SAME remote receipt.
-        if saved.task.remote_id.is_some() { saved.download_url = None; }
+        if resume && saved.task.remote_id.is_some() {
+            // Refresh expired signed URLs with the SAME receipt, and give it a fresh grace period.
+            saved.download_url = None;
+            saved.accepted_at = Some(chrono::Utc::now().to_rfc3339());
+        }
         save(root, saved)?;
     }
     Ok(())
@@ -996,9 +1195,15 @@ pub fn list_media_tasks(app: AppHandle, filter: MediaTaskFilter) -> Result<Vec<M
         }
     }
     for task in comfyui::list_comfy_tasks(|task| {
-        filter.provider_id.as_ref().is_none_or(|p| *p == task.provider_id)
+        filter
+            .provider_id
+            .as_ref()
+            .is_none_or(|p| *p == task.provider_id)
             && filter.model.as_ref().is_none_or(|m| *m == task.workflow_id)
-            && filter.origin.as_ref().is_none_or(|o| task.origin.as_ref() == Some(o))
+            && filter
+                .origin
+                .as_ref()
+                .is_none_or(|o| task.origin.as_ref() == Some(o))
     })? {
         tasks.push(get_media_task(app.clone(), task.id, None)?);
     }
@@ -1030,11 +1235,19 @@ pub(crate) fn tool_result(task: MediaTask) -> crate::mcp::types::McpToolCallResu
         ..Default::default()
     }
 }
-pub(crate) async fn wait(app: &AppHandle, id: &str, seconds: u64) -> Result<MediaTask, String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
+/// Read a task until it settles, the deadline passes (`None` waits indefinitely) or `stop` is set.
+/// Reading never submits; the background worker owns the provider queries.
+pub(crate) async fn wait(
+    app: &AppHandle,
+    id: &str,
+    deadline: Option<Duration>,
+    stop: &(dyn Fn() -> bool + Sync),
+) -> Result<MediaTask, String> {
+    let until = deadline.map(|d| tokio::time::Instant::now() + d);
     loop {
         let task = get_media_task(app.clone(), id.into(), None)?;
-        if task.status != MediaStatus::Running || tokio::time::Instant::now() >= deadline {
+        let expired = until.is_some_and(|at| tokio::time::Instant::now() >= at);
+        if task.status != MediaStatus::Running || expired || stop() {
             return Ok(task);
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1050,7 +1263,15 @@ pub(crate) async fn tool_call(
         let id = args["id"].as_str().ok_or("需要任务编号")?;
         get_media_task(app.clone(), id.into(), args["resume"].as_bool())?;
         return Ok(tool_result(
-            wait(app, id, args["waitSeconds"].as_u64().unwrap_or(0).min(30)).await?,
+            wait(
+                app,
+                id,
+                Some(Duration::from_secs(
+                    args["waitSeconds"].as_u64().unwrap_or(0).min(30),
+                )),
+                &|| false,
+            )
+            .await?,
         ));
     }
     let selection = app
@@ -1124,6 +1345,7 @@ mod tests {
             .into(),
             download_url: None,
             download_requires_auth: false,
+            accepted_at: None,
         };
         let request = MediaRequest {
             provider_id: "p".into(),
@@ -1205,6 +1427,84 @@ mod tests {
         assert!(!by_origin.matches(&legacy.task));
     }
     #[tokio::test]
+    async fn grok_generation_modes_reach_http_with_their_distinct_image_fields() {
+        // Capture the full submission path, including local-image conversion and reqwest JSON,
+        // rather than assuming that a correct preview is what the provider receives.
+        for mode in ["text", "first-frame", "reference"] {
+            let (base, server) = server(|_| vec![(200, br#"{"request_id":"captured"}"#.to_vec())]);
+            let root = tempfile::tempdir().unwrap();
+            let image_path = root.path().join("reference.png");
+            let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO6sAAAAASUVORK5CYII=").unwrap();
+            std::fs::write(&image_path, &png).unwrap();
+            let (mut settings, mut task, mut request) = fixture(&base, MediaKind::Video);
+            let model = "grok-imagine-video-1.5";
+            settings.providers[0].enabled_models = vec![model.into()];
+            task.task.model = model.into();
+            request.model = model.into();
+            request.prompt = "A subtle slow camera move. Keep the scene consistent.".into();
+            request.options =
+                serde_json::from_value(json!({"duration":1,"resolution":"480p","ratio":"16:9"}))
+                    .unwrap();
+            match mode {
+                "first-frame" => {
+                    request
+                        .options
+                        .insert("firstFrame".into(), json!(image_path));
+                }
+                "reference" => {
+                    request
+                        .options
+                        .insert("referenceImages".into(), json!([image_path]));
+                }
+                _ => {}
+            }
+            let state = AppState::new_headless(settings, root.path().join("usage"));
+            save(root.path(), &task).unwrap();
+            submit_cloud_at(root.path(), &state, &task.task.id, request)
+                .await
+                .unwrap();
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 1, "one paid submission per mode");
+            assert!(requests[0].starts_with("POST /videos/generations HTTP/1.1"));
+            let (headers, body) = requests[0].split_once("\r\n\r\n").unwrap();
+            assert!(headers
+                .to_ascii_lowercase()
+                .contains("content-type: application/json"));
+            let body: Value = serde_json::from_str(body).unwrap();
+            let mut expected = json!({"model":model,"prompt":"A subtle slow camera move. Keep the scene consistent.","duration":1,"resolution":"480p","aspect_ratio":"16:9"});
+            let data = format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&png)
+            );
+            match mode {
+                "first-frame" => expected["image"] = json!({"url":data}),
+                "reference" => expected["reference_images"] = json!([{"url":data}]),
+                _ => {}
+            }
+            assert_eq!(body, expected, "wire JSON differs for {mode}");
+            let diagnostic: Value = serde_json::from_slice(
+                &std::fs::read(
+                    directory(root.path(), &task.task.id)
+                        .unwrap()
+                        .join("submission-request.json"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(diagnostic["body"], body);
+            assert_eq!(diagnostic["url"], format!("{base}/videos/generations"));
+            assert!(!diagnostic.to_string().contains("test-key"));
+            assert_eq!(
+                read(root.path(), &task.task.id)
+                    .unwrap()
+                    .task
+                    .remote_id
+                    .as_deref(),
+                Some("captured")
+            );
+        }
+    }
+    #[tokio::test]
     async fn cloud_receipt_survives_download_failure_and_reopening_without_another_post() {
         let (base, server) = server(|base| {
             vec![
@@ -1269,7 +1569,10 @@ mod tests {
         let (base, server) = server(|_| {
             vec![
                 (200, br#"{"request_id":"r1"}"#.to_vec()),
-                (200, br#"{"status":"done","video":{"url":"/videos/r1/content"}}"#.to_vec()),
+                (
+                    200,
+                    br#"{"status":"done","video":{"url":"/videos/r1/content"}}"#.to_vec(),
+                ),
                 (200, b"\x00\x00\x00\x18ftypisom-saved-video".to_vec()),
             ]
         });
@@ -1286,9 +1589,14 @@ mod tests {
         assert_eq!(complete.status, MediaStatus::Succeeded);
         assert!(Path::new(&complete.outputs[0].path).is_file());
         let requests = server.join().unwrap();
-        assert_eq!(requests.iter().filter(|s| s.starts_with("POST ")).count(), 1);
+        assert_eq!(
+            requests.iter().filter(|s| s.starts_with("POST ")).count(),
+            1
+        );
         assert!(requests[2].starts_with("GET /videos/r1/content "));
-        assert!(requests[2].to_ascii_lowercase().contains("authorization: bearer test-key"));
+        assert!(requests[2]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-key"));
     }
     #[tokio::test]
     async fn relative_video_result_uses_each_protocols_auth_header() {
@@ -1296,9 +1604,8 @@ mod tests {
             ("vidu", "authorization: token test-key"),
             ("veo", "x-goog-api-key: test-key"),
         ] {
-            let (base, server) = server(|_| {
-                vec![(200, b"\x00\x00\x00\x18ftypisom-saved-video".to_vec())]
-            });
+            let (base, server) =
+                server(|_| vec![(200, b"\x00\x00\x00\x18ftypisom-saved-video".to_vec())]);
             let root = tempfile::tempdir().unwrap();
             let (settings, _, _) = fixture(&base, MediaKind::Video);
             let path = root.path().join("output.mp4");
@@ -1318,25 +1625,355 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn chat_image_count_creates_distinct_requests_and_preserves_partial_success() {
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO6sAAAAASUVORK5CYII=";
+        for partial in [false, true] {
+            let reply = serde_json::to_vec(&json!({"choices":[{"message":{"images":[{"image_url":{"url":format!("data:image/png;base64,{png}")}}]}}]})).unwrap();
+            let (base, server) = server(|_| {
+                vec![
+                    (200, reply.clone()),
+                    if partial {
+                        (400, br#"{"error":{"message":"invalid request"}}"#.to_vec())
+                    } else {
+                        (200, reply)
+                    },
+                ]
+            });
+            let root = tempfile::tempdir().unwrap();
+            let (settings, _, _) = fixture(&base, MediaKind::Image);
+            let state = AppState::new_headless(settings, root.path().join("usage"));
+            let result = image_providers::generate_image_with_provider(
+                &state,
+                &provider(&state, "p").unwrap(),
+                "gemini-3-pro-image-preview",
+                &json!({"prompt":"a paper boat", "n":2}),
+                &[],
+                1,
+                "chat count regression",
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.images.len(), if partial { 1 } else { 2 });
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests
+                .iter()
+                .all(|r| r.starts_with("POST /chat/completions ")));
+        }
+    }
+
+    const STATIC_FILE_404: &[u8] =
+        br#"{"error":{"message":"Failed to read static file.","type":"not_found_error"}}"#;
+    fn accepted(task: &mut StoredTask, minutes_ago: i64) {
+        task.task.remote_id = Some("accepted-receipt".into());
+        task.accepted_at =
+            Some((chrono::Utc::now() - chrono::TimeDelta::minutes(minutes_ago)).to_rfc3339());
+    }
+
+    #[tokio::test]
+    async fn an_unseen_receipt_keeps_waiting_within_the_grace_period() {
+        let (base, server) = server(|_| vec![(404, STATIC_FILE_404.to_vec())]);
+        let root = tempfile::tempdir().unwrap();
+        let (settings, mut task, _) = fixture(&base, MediaKind::Video);
+        accepted(&mut task, 1);
+        save(root.path(), &task).unwrap();
+        let state = AppState::new_headless(settings, root.path().join("usage"));
+        let pending = refresh_cloud_at(&state, root.path(), &task.task.id)
+            .await
+            .unwrap();
+        assert_eq!(pending.status, MediaStatus::Running);
+        assert!(pending
+            .error
+            .unwrap()
+            .starts_with(providers::RECEIPT_UNSEEN));
+        assert_eq!(pending.remote_id.as_deref(), Some("accepted-receipt"));
+        assert!(server.join().unwrap()[0].starts_with("GET /videos/accepted-receipt "));
+    }
+
+    #[tokio::test]
+    async fn a_lost_receipt_stops_after_the_grace_period_and_resumes_only_when_asked() {
+        let png = b"\x00\x00\x00\x18ftypisom-recovered".to_vec();
+        let (base, server) = server(|base| {
+            vec![
+                (404, STATIC_FILE_404.to_vec()),
+                (
+                    200,
+                    serde_json::to_vec(
+                        &json!({"status":"done","video":{"url":format!("{base}/output.mp4")}}),
+                    )
+                    .unwrap(),
+                ),
+                (200, png.clone()),
+            ]
+        });
+        let root = tempfile::tempdir().unwrap();
+        let (settings, mut task, _) = fixture(&base, MediaKind::Video);
+        accepted(&mut task, 11);
+        save(root.path(), &task).unwrap();
+        let state = AppState::new_headless(settings, root.path().join("usage"));
+        let lost = refresh_cloud_at(&state, root.path(), &task.task.id)
+            .await
+            .unwrap();
+        assert_eq!(lost.status, MediaStatus::Failed);
+        assert!(lost.can_resume);
+        assert!(lost.error.as_deref().unwrap().contains("accepted-receipt"));
+        // Reopening without an explicit resume leaves it stopped: no background reads.
+        let mut reopened = read(root.path(), &task.task.id).unwrap();
+        recover_task(root.path(), &mut reopened, false).unwrap();
+        assert_eq!(reopened.task.status, MediaStatus::Failed);
+        // The user resumes after checking with the provider: the same receipt is read again.
+        recover_task(root.path(), &mut reopened, true).unwrap();
+        assert_eq!(reopened.task.status, MediaStatus::Running);
+        let done = refresh_cloud_at(&state, root.path(), &task.task.id)
+            .await
+            .unwrap();
+        assert_eq!(done.status, MediaStatus::Succeeded);
+        let requests = server.join().unwrap();
+        assert!(requests.iter().all(|r| r.starts_with("GET ")));
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("GET /videos/accepted-receipt "))
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_confirmed_video_outcomes_are_final_and_never_resumed() {
+        for (body, expected) in [
+            (
+                json!({"status":"failed","error":{"code":"invalid_argument","message":"blocked"}}),
+                "blocked",
+            ),
+            (json!({"status":"expired"}), "expired"),
+            (
+                json!({"status":"done","video":{"respect_moderation":false}}),
+                "内容审核",
+            ),
+            (json!({"status":"mystery"}), "mystery"),
+        ] {
+            let (base, server) = server(|_| vec![(200, serde_json::to_vec(&body).unwrap())]);
+            let root = tempfile::tempdir().unwrap();
+            let (settings, mut task, _) = fixture(&base, MediaKind::Video);
+            accepted(&mut task, 1);
+            save(root.path(), &task).unwrap();
+            let state = AppState::new_headless(settings, root.path().join("usage"));
+            let settled = refresh_cloud_at(&state, root.path(), &task.task.id)
+                .await
+                .unwrap();
+            assert_eq!(settled.status, MediaStatus::Failed, "{body}");
+            assert!(!settled.can_resume, "{body}");
+            assert!(
+                settled.error.as_deref().unwrap().contains(expected),
+                "{body}: {:?}",
+                settled.error
+            );
+            let mut reopened = read(root.path(), &task.task.id).unwrap();
+            recover_task(root.path(), &mut reopened, true).unwrap();
+            assert_eq!(reopened.task.status, MediaStatus::Failed);
+            // Already final: no further read reaches the provider.
+            assert_eq!(
+                refresh_cloud_at(&state, root.path(), &task.task.id)
+                    .await
+                    .unwrap()
+                    .status,
+                MediaStatus::Failed
+            );
+            assert_eq!(server.join().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn async_image_receipt_failure_is_final_and_lost_receipt_is_bounded() {
+        for (status, body, final_status, resumable) in [
+            (
+                200,
+                br#"{"status":"failed","error":{"message":"policy"}}"#.to_vec(),
+                MediaStatus::Failed,
+                false,
+            ),
+            (404, STATIC_FILE_404.to_vec(), MediaStatus::Failed, true),
+        ] {
+            let (base, server) = server(|_| vec![(status, body)]);
+            let root = tempfile::tempdir().unwrap();
+            let (settings, mut task, _) = fixture(&base, MediaKind::Image);
+            task.protocol = "image-async".into();
+            accepted(&mut task, 11);
+            save(root.path(), &task).unwrap();
+            let state = AppState::new_headless(settings, root.path().join("usage"));
+            let settled = refresh_cloud_at(&state, root.path(), &task.task.id)
+                .await
+                .unwrap();
+            assert_eq!(settled.status, final_status);
+            assert_eq!(settled.can_resume, resumable);
+            assert_eq!(settled.remote_id.as_deref(), Some("accepted-receipt"));
+            assert_eq!(server.join().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn image_submission_failures_are_classified_before_reopening() {
+        for (status, expected) in [
+            (400, MediaSubmissionState::Rejected),
+            (401, MediaSubmissionState::Rejected),
+            (429, MediaSubmissionState::Uncertain),
+            (502, MediaSubmissionState::Uncertain),
+        ] {
+            let (base, server) =
+                server(|_| vec![(status, br#"{"error":{"message":"no"}}"#.to_vec())]);
+            let root = tempfile::tempdir().unwrap();
+            let (settings, task, request) = fixture(&base, MediaKind::Image);
+            let state = AppState::new_headless(settings, root.path().join("usage"));
+            save(root.path(), &task).unwrap();
+            submit_cloud_at(root.path(), &state, &task.task.id, request)
+                .await
+                .unwrap_err();
+            let mut saved = read(root.path(), &task.task.id).unwrap();
+            assert_eq!(saved.task.status, MediaStatus::Failed, "HTTP {status}");
+            assert_eq!(saved.task.submission_state, Some(expected), "HTTP {status}");
+            recover_task(root.path(), &mut saved, true).unwrap();
+            assert_eq!(saved.task.status, MediaStatus::Failed);
+            assert!(!saved.task.can_resume);
+            assert!(server.join().unwrap().len() >= 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn async_image_gateway_reads_the_camel_case_ratio() {
+        let (base, server) = server(|_| vec![(200, br#"{"task_id":"receipt"}"#.to_vec())]);
+        let root = tempfile::tempdir().unwrap();
+        let (settings, task, mut request) = fixture(&base, MediaKind::Image);
+        request.model = "gpt-image-2".into();
+        request.options.insert("aspectRatio".into(), json!("16:9"));
+        request.options.insert("size".into(), json!("1K"));
+        let state = AppState::new_headless(settings, root.path().join("usage"));
+        image_gateway::submit(
+            &state,
+            &provider(&state, "p").unwrap(),
+            &task.task.id,
+            &request,
+        )
+        .await
+        .unwrap();
+        let captured = server.join().unwrap();
+        let body: Value =
+            serde_json::from_str(captured[0].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(body["size"], "1536x864", "{body}");
+    }
+
+    #[tokio::test]
+    async fn luma_missing_receipt_keeps_waiting_without_losing_or_resubmitting_it() {
+        let (base, server) = server(|_| vec![(404, br#"{"error":"not found"}"#.to_vec())]);
+        let root = tempfile::tempdir().unwrap();
+        let (mut settings, mut task, _) = fixture(&base, MediaKind::Video);
+        settings.providers[0].enabled_models.push("ray-3.2".into());
+        task.task.model = "ray-3.2".into();
+        task.protocol = "luma".into();
+        task.task.remote_id = Some("original-receipt".into());
+        save(root.path(), &task).unwrap();
+        let state = AppState::new_headless(settings, root.path().join("usage"));
+        let pending = refresh_cloud_at(&state, root.path(), &task.task.id)
+            .await
+            .unwrap();
+        assert!(pending.error.as_deref().unwrap().contains("404"));
+        let saved = read(root.path(), &task.task.id).unwrap();
+        assert_eq!(saved.task.remote_id, task.task.remote_id);
+        assert_eq!(saved.task.status, MediaStatus::Running);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("GET "));
+    }
+
+    #[tokio::test]
+    async fn async_image_submission_preserves_explicit_quality_and_reference_bytes() {
+        for quality in [None, Some("low"), Some("max")] {
+            for reference in [false, true] {
+                let (base, server) = server(|_| vec![(200, br#"{"task_id":"receipt"}"#.to_vec())]);
+                let root = tempfile::tempdir().unwrap();
+                let (settings, task, mut request) = fixture(&base, MediaKind::Image);
+                request.model = "gpt-image-2.5-flare".into();
+                request.options.insert("size".into(), json!("2K"));
+                if let Some(quality) = quality {
+                    request.options.insert("quality".into(), json!(quality));
+                }
+                if reference {
+                    request.images.push("data:image/png;base64,aGVsbG8=".into());
+                }
+                let state = AppState::new_headless(settings, root.path().join("usage"));
+                image_gateway::submit(
+                    &state,
+                    &provider(&state, "p").unwrap(),
+                    &task.task.id,
+                    &request,
+                )
+                .await
+                .unwrap();
+                let captured = server.join().unwrap();
+                assert_eq!(captured.len(), 1);
+                let body = captured[0].split_once("\r\n\r\n").unwrap().1;
+                if reference {
+                    assert!(captured[0].starts_with("POST /v1/images/edits/async "));
+                    assert!(body.contains("name=\"image[]\""));
+                    assert!(body.contains("hello"));
+                    assert!(body.contains("2048x2048"));
+                    assert_eq!(body.contains("name=\"quality\""), quality.is_some());
+                    if let Some(quality) = quality {
+                        assert!(body.contains(&format!("\r\n\r\n{quality}\r\n")));
+                    }
+                } else {
+                    assert!(captured[0].starts_with("POST /v1/images/generations/async "));
+                    let body: Value = serde_json::from_str(body).unwrap();
+                    assert_eq!(body["size"], "2048x2048");
+                    assert_eq!(body.get("quality").and_then(Value::as_str), quality);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn async_image_gateway_recovers_receipt_without_resubmission() {
         let png="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aO6sAAAAASUVORK5CYII=";
-        let (base,server)=server(|_|vec![
-          (200,br#"{"task_id":"receipt"}"#.to_vec()),
-          (503,b"temporary failure".to_vec()),
-          (200,serde_json::to_vec(&json!({"status":"succeeded","data":[{"b64_json":png}]})).unwrap()),
-        ]);
-        let root=tempfile::tempdir().unwrap();let (settings,mut task,request)=fixture(&base,MediaKind::Image);
-        let state=AppState::new_headless(settings,root.path().join("usage"));
-        let p=provider(&state,"p").unwrap();
-        let response=image_gateway::submit(&state,&p,&task.task.id,&request).await.unwrap();
-        task.protocol="image-async".into();task.task.remote_id=image_gateway::remote_task_id(&response);save(root.path(),&task).unwrap();
-        assert!(refresh_cloud_at(&state,root.path(),&task.task.id).await.is_err());
-        assert_eq!(read(root.path(),&task.task.id).unwrap().task.remote_id.as_deref(),Some("receipt"));
-        let complete=refresh_cloud_at(&state,root.path(),&task.task.id).await.unwrap();
-        assert_eq!(complete.status,MediaStatus::Succeeded);assert!(Path::new(&complete.outputs[0].path).is_file());
-        let requests=server.join().unwrap();assert_eq!(requests.iter().filter(|s|s.starts_with("POST ")).count(),1);
+        let (base, server) = server(|_| {
+            vec![
+                (200, br#"{"task_id":"receipt"}"#.to_vec()),
+                (503, b"temporary failure".to_vec()),
+                (
+                    200,
+                    serde_json::to_vec(&json!({"status":"succeeded","data":[{"b64_json":png}]}))
+                        .unwrap(),
+                ),
+            ]
+        });
+        let root = tempfile::tempdir().unwrap();
+        let (settings, mut task, request) = fixture(&base, MediaKind::Image);
+        let state = AppState::new_headless(settings, root.path().join("usage"));
+        let p = provider(&state, "p").unwrap();
+        let response = image_gateway::submit(&state, &p, &task.task.id, &request)
+            .await
+            .unwrap();
+        task.protocol = "image-async".into();
+        task.task.remote_id = image_gateway::remote_task_id(&response);
+        save(root.path(), &task).unwrap();
+        let pending = refresh_cloud_at(&state, root.path(), &task.task.id)
+            .await
+            .unwrap();
+        assert_eq!(pending.status, MediaStatus::Running);
+        assert_eq!(pending.remote_id.as_deref(), Some("receipt"));
+        let complete = refresh_cloud_at(&state, root.path(), &task.task.id)
+            .await
+            .unwrap();
+        assert_eq!(complete.status, MediaStatus::Succeeded);
+        assert!(Path::new(&complete.outputs[0].path).is_file());
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests.iter().filter(|s| s.starts_with("POST ")).count(),
+            1
+        );
         assert!(requests[0].starts_with("POST /v1/images/generations/async "));
-        assert!(requests[1..].iter().all(|s|s.starts_with("GET /v1/images/tasks/receipt ")));
+        assert!(requests[1..]
+            .iter()
+            .all(|s| s.starts_with("GET /v1/images/tasks/receipt ")));
     }
     #[tokio::test]
     async fn cloud_image_uses_existing_transport_and_persists_an_output() {
@@ -1400,7 +2037,11 @@ mod tests {
             (401, b"{}".to_vec(), MediaSubmissionState::Rejected),
             (408, b"{}".to_vec(), MediaSubmissionState::Uncertain),
             (502, b"{}".to_vec(), MediaSubmissionState::Uncertain),
-            (200, b"invalid json".to_vec(), MediaSubmissionState::Uncertain),
+            (
+                200,
+                b"invalid json".to_vec(),
+                MediaSubmissionState::Uncertain,
+            ),
             (200, b"{}".to_vec(), MediaSubmissionState::Uncertain),
         ] {
             let (base, server) = server(|_| vec![(status, body)]);
@@ -1408,7 +2049,9 @@ mod tests {
             let (settings, task, request) = fixture(&base, MediaKind::Video);
             let state = AppState::new_headless(settings, root.path().join("usage"));
             save(root.path(), &task).unwrap();
-            assert!(submit_cloud_at(root.path(), &state, &task.task.id, request).await.is_err());
+            assert!(submit_cloud_at(root.path(), &state, &task.task.id, request)
+                .await
+                .is_err());
             let mut saved = read(root.path(), &task.task.id).unwrap();
             assert_eq!(saved.task.submission_state, Some(expected), "HTTP {status}");
             assert_eq!(saved.task.status, MediaStatus::Failed);
@@ -1478,18 +2121,13 @@ mod tests {
             request.options = serde_json::from_value(invalid).unwrap();
             assert!(image_arguments(&request).is_err());
         }
-        request.options = serde_json::from_value(json!({"aspectRatio":"16:9", "n":2})).unwrap();
+        request.options = serde_json::from_value(json!({"aspectRatio":"3:2", "n":2})).unwrap();
         let args = image_arguments(&request).unwrap();
-        assert_eq!(args["aspect_ratio"], "16:9");
-        crate::chat::image_generation::validate_generation(
-            &settings.providers[0],
-            &request.model,
-            &args,
-            0,
-        )
-        .unwrap();
+        assert_eq!(args["aspect_ratio"], "3:2");
+        image_providers::validate_generation(&settings.providers[0], &request.model, &args, 0)
+            .unwrap();
         request.options.insert("size".into(), json!("not-a-size"));
-        assert!(crate::chat::image_generation::validate_generation(
+        assert!(image_providers::validate_generation(
             &settings.providers[0],
             &request.model,
             &image_arguments(&request).unwrap(),
@@ -1531,9 +2169,10 @@ mod tests {
     fn comfy_video_options_map_once_in_the_workflow_instead_of_each_feature() {
         let (_, _, mut request) = fixture("http://localhost:8188", MediaKind::Video);
         request.prompt.clear();
-        request.options =
-            serde_json::from_value(json!({"duration":5,"firstFrame":"data:image/png;base64,aW1hZ2U="}))
-                .unwrap();
+        request.options = serde_json::from_value(
+            json!({"duration":5,"firstFrame":"data:image/png;base64,aW1hZ2U="}),
+        )
+        .unwrap();
         let flow: comfyui::ComfyWorkflow = serde_json::from_value(json!({
             "id":"wf", "name":"video", "kind":"video",
             "graph":{"1":{"class_type":"VideoNode","inputs":{"seconds":1,"image":"old.png"}}},
@@ -1641,16 +2280,30 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let (settings, _, _) = fixture(&base, MediaKind::Video);
         let path = root.path().join("output.mp4");
-        assert!(download(&settings.providers[0], &base, &base, "xai_video", false, &path)
-            .await
-            .is_err());
+        assert!(download(
+            &settings.providers[0],
+            &base,
+            &base,
+            "xai_video",
+            false,
+            &path
+        )
+        .await
+        .is_err());
         assert!(!path.exists());
         assert!(!path.with_extension("part").exists());
         assert_eq!(
-            download(&settings.providers[0], &base, &base, "xai_video", false, &path)
-                .await
-                .unwrap()
-                .mime,
+            download(
+                &settings.providers[0],
+                &base,
+                &base,
+                "xai_video",
+                false,
+                &path
+            )
+            .await
+            .unwrap()
+            .mime,
             "video/webm"
         );
         assert!(path.with_extension("webm").exists());
@@ -1704,6 +2357,250 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("已阻止发送密钥"));
     }
+    fn running_task() -> MediaTask {
+        fixture("http://127.0.0.1:1", MediaKind::Video).1.task
+    }
+    #[tokio::test]
+    async fn reference_video_survives_more_than_ten_pending_404s_without_resubmission() {
+        let (base, server) = server(|base| {
+            let mut replies = vec![(
+                200,
+                br#"{"request_id":"reference-receipt","status":"pending"}"#.to_vec(),
+            )];
+            replies.extend((0..15).map(|_| (404, br#"{"error":"not ready yet"}"#.to_vec())));
+            replies.push((200, serde_json::to_vec(&json!({"request_id":"reference-receipt","status":"done","video":{"url":format!("{base}/output.mp4")}})).unwrap()));
+            replies.push((200, b"\x00\x00\x00\x18ftypisom-reference-video".to_vec()));
+            replies
+        });
+        let root = tempfile::tempdir().unwrap();
+        let (settings, task, mut request) = fixture(&base, MediaKind::Video);
+        request.options.insert(
+            "referenceImages".into(),
+            json!(["data:image/png;base64,aW1hZ2U="]),
+        );
+        let state = AppState::new_headless(settings, root.path().join("usage"));
+        save(root.path(), &task).unwrap();
+        submit_cloud_at(root.path(), &state, &task.task.id, request)
+            .await
+            .unwrap();
+        for _ in 0..15 {
+            let pending = refresh_cloud_at(&state, root.path(), &task.task.id).await;
+            assert!(
+                pending.is_ok(),
+                "404 while awaiting an accepted task must remain pending: {pending:?}"
+            );
+            assert_eq!(pending.unwrap().status, MediaStatus::Running);
+        }
+        let done = refresh_cloud_at(&state, root.path(), &task.task.id)
+            .await
+            .unwrap();
+        assert_eq!(done.status, MediaStatus::Succeeded);
+        assert_eq!(done.remote_id.as_deref(), Some("reference-receipt"));
+        assert!(done.error.is_none());
+        assert_eq!(done.outputs.len(), 1);
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests.iter().filter(|r| r.starts_with("POST ")).count(),
+            1
+        );
+        assert!(requests[0].contains("reference_images"));
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|r| r.starts_with("GET /videos/reference-receipt "))
+                .count(),
+            16
+        );
+    }
+
+    #[test]
+    fn interrupted_query_keeps_the_receipt_pending_but_confirmed_failure_stays_failed() {
+        let root = tempfile::tempdir().unwrap();
+        let (_, mut saved, _) = fixture("http://localhost:8188", MediaKind::Video);
+        saved.task.remote_id = Some("paid-receipt".into());
+        record_background_error(&mut saved, "查询等待超时".into());
+        assert_eq!(saved.task.status, MediaStatus::Running);
+        assert!(saved.task.can_resume);
+        assert_eq!(saved.task.remote_id.as_deref(), Some("paid-receipt"));
+        save(root.path(), &saved).unwrap();
+        recover_task(root.path(), &mut saved, false).unwrap();
+        assert_eq!(saved.task.status, MediaStatus::Running);
+        assert!(!saved.task.can_resume);
+        apply_result(
+            &mut saved,
+            providers::VideoResult {
+                remote_id: "paid-receipt".into(),
+                status: "failed".into(),
+                download_url: None,
+                file_id: None,
+                error: Some("provider confirmed failure".into()),
+                download_requires_auth: false,
+                submission_response: None,
+                submission_request: None,
+            },
+        );
+        record_background_error(&mut saved, "another error".into());
+        assert_eq!(saved.task.status, MediaStatus::Failed);
+        assert!(!saved.task.can_resume);
+        assert_eq!(
+            saved.task.error.as_deref(),
+            Some("provider confirmed failure")
+        );
+    }
+    #[tokio::test]
+    async fn concurrent_reference_tasks_keep_independent_receipts_through_pending_404s() {
+        let (base, server) = server(|base| {
+            let mut replies = vec![
+                (
+                    200,
+                    br#"{"request_id":"receipt-a","status":"pending"}"#.to_vec(),
+                ),
+                (
+                    200,
+                    br#"{"request_id":"receipt-b","status":"pending"}"#.to_vec(),
+                ),
+            ];
+            replies.extend((0..24).map(|_| (404, br#"{"error":"not ready yet"}"#.to_vec())));
+            for _ in 0..2 {
+                replies.push((
+                    200,
+                    serde_json::to_vec(
+                        &json!({"status":"done","video":{"url":format!("{base}/output.mp4")}}),
+                    )
+                    .unwrap(),
+                ));
+                replies.push((200, b"\x00\x00\x00\x18ftypisom-concurrent-video".to_vec()));
+            }
+            replies
+        });
+        let root = tempfile::tempdir().unwrap();
+        let (settings, task_a, mut request_a) = fixture(&base, MediaKind::Video);
+        let (_, task_b, mut request_b) = fixture(&base, MediaKind::Video);
+        assert_ne!(task_a.task.id, task_b.task.id);
+        for request in [&mut request_a, &mut request_b] {
+            request.options.insert(
+                "referenceImages".into(),
+                json!(["data:image/png;base64,aW1hZ2U="]),
+            );
+        }
+        let state = AppState::new_headless(settings, root.path().join("usage"));
+        for task in [&task_a, &task_b] {
+            save(root.path(), task).unwrap();
+        }
+        let (a, b) = tokio::join!(
+            submit_cloud_at(root.path(), &state, &task_a.task.id, request_a),
+            submit_cloud_at(root.path(), &state, &task_b.task.id, request_b),
+        );
+        a.unwrap();
+        b.unwrap();
+        let receipt_a = read(root.path(), &task_a.task.id).unwrap().task.remote_id;
+        let receipt_b = read(root.path(), &task_b.task.id).unwrap().task.remote_id;
+        assert_ne!(receipt_a, receipt_b);
+        for _ in 0..12 {
+            let (a, b) = tokio::join!(
+                refresh_cloud_at(&state, root.path(), &task_a.task.id),
+                refresh_cloud_at(&state, root.path(), &task_b.task.id),
+            );
+            let (a, b) = (a.unwrap(), b.unwrap());
+            assert_eq!(a.status, MediaStatus::Running);
+            assert_eq!(b.status, MediaStatus::Running);
+            assert_eq!(a.remote_id, receipt_a);
+            assert_eq!(b.remote_id, receipt_b);
+        }
+        for task in [&task_a, &task_b] {
+            let done = refresh_cloud_at(&state, root.path(), &task.task.id)
+                .await
+                .unwrap();
+            assert_eq!(done.status, MediaStatus::Succeeded);
+            assert_eq!(done.outputs.len(), 1);
+            assert!(done.outputs[0].path.contains(&task.task.id));
+        }
+        let requests = server.join().unwrap();
+        assert_eq!(
+            requests.iter().filter(|r| r.starts_with("POST ")).count(),
+            2
+        );
+        assert!(requests[..2].iter().all(|r| r.contains("reference_images")));
+    }
+    #[tokio::test]
+    async fn a_provider_404_right_after_acceptance_does_not_fail_the_task() {
+        let mut reads = 0;
+        let result = poll_until_settled(
+            || {
+                reads += 1;
+                let step = reads;
+                async move {
+                    match step {
+                        1 | 2 => Err("视频接口 HTTP 404；请检查密钥、权限与请求参数".to_string()),
+                        3 => Ok(running_task()),
+                        _ => Ok(MediaTask {
+                            status: MediaStatus::Succeeded,
+                            ..running_task()
+                        }),
+                    }
+                }
+            },
+            Duration::ZERO,
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(reads, 4);
+    }
+    #[tokio::test]
+    async fn a_read_that_keeps_failing_is_given_up_after_a_bounded_number_of_tries() {
+        let mut reads = 0;
+        let result = poll_until_settled(
+            || {
+                reads += 1;
+                async {
+                    Err::<MediaTask, _>("视频接口 HTTP 401；请检查密钥、权限与请求参数".to_string())
+                }
+            },
+            Duration::ZERO,
+        )
+        .await;
+        assert!(result.unwrap_err().contains("401"));
+        assert_eq!(reads, MAX_CONSECUTIVE_READ_ERRORS);
+    }
+    #[tokio::test]
+    async fn pending_receipt_has_a_bounded_wait_and_can_be_queried_again() {
+        let mut reads = 0;
+        let result = poll_until_settled(
+            || {
+                reads += 1;
+                async { Ok(running_task()) }
+            },
+            Duration::ZERO,
+        )
+        .await;
+        assert!(result.unwrap_err().contains("勿重新提交"));
+        assert_eq!(reads, MAX_POLL_READS);
+    }
+    #[tokio::test]
+    async fn successful_reads_reset_the_error_budget() {
+        let mut reads = 0u32;
+        let result = poll_until_settled(
+            || {
+                reads += 1;
+                let step = reads;
+                async move {
+                    // Alternating error/running never reaches the consecutive limit; finish after 40 reads.
+                    match step {
+                        40 => Ok(MediaTask {
+                            status: MediaStatus::Succeeded,
+                            ..running_task()
+                        }),
+                        n if n % 2 == 1 => Err("HTTP 502".to_string()),
+                        _ => Ok(running_task()),
+                    }
+                }
+            },
+            Duration::ZERO,
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!(reads, 40);
+    }
     #[test]
     fn one_worker_owns_each_task_and_release_allows_recovery() {
         let id = uuid::Uuid::new_v4().to_string();
@@ -1715,19 +2612,35 @@ mod tests {
 }
 
 /// Attach a missing receipt to an uncertain task. This only permits future GETs, never resubmits.
-pub(crate) fn attach_receipt(_app:&AppHandle,id:&str,remote:&str)->Result<(),String>{
- let remote=remote.trim();
- if remote.is_empty() || remote.len()>160 || !remote.bytes().all(|c|c.is_ascii_alphanumeric() || c==b'-' || c==b'_'){return Err("请输入有效的远程任务编号".into());}
- let _guard=claim(id).ok_or("任务仍在运行，请稍后查询")?;
- let base=root()?;
- if directory(&base,id)?.join("task.json").exists(){
-  let mut saved=read(&base,id)?;
-  if saved.task.remote_id.is_some() || !saved.task.outputs.is_empty(){return Err("任务已有回执或成片，不能覆盖".into());}
-  saved.task.remote_id=Some(remote.into());saved.task.can_resume=true;saved.task.status=MediaStatus::Failed;
-  save(&base,&saved)
- }else{
-  let base=comfyui::root()?;let mut saved=comfyui::read_task(&base,id)?;
-  if saved.prompt_id.is_some() || !saved.outputs.is_empty(){return Err("任务已有回执或成片，不能覆盖".into());}
-  saved.prompt_id=Some(remote.into());saved.status=comfyui::ComfyTaskStatus::DownloadPending;comfyui::save(&base,&saved)
- }
+pub(crate) fn attach_receipt(_app: &AppHandle, id: &str, remote: &str) -> Result<(), String> {
+    let remote = remote.trim();
+    if remote.is_empty()
+        || remote.len() > 160
+        || !remote
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    {
+        return Err("请输入有效的远程任务编号".into());
+    }
+    let _guard = claim(id).ok_or("任务仍在运行，请稍后查询")?;
+    let base = root()?;
+    if directory(&base, id)?.join("task.json").exists() {
+        let mut saved = read(&base, id)?;
+        if saved.task.remote_id.is_some() || !saved.task.outputs.is_empty() {
+            return Err("任务已有回执或成片，不能覆盖".into());
+        }
+        saved.task.remote_id = Some(remote.into());
+        saved.task.can_resume = true;
+        saved.task.status = MediaStatus::Failed;
+        save(&base, &saved)
+    } else {
+        let base = comfyui::root()?;
+        let mut saved = comfyui::read_task(&base, id)?;
+        if saved.prompt_id.is_some() || !saved.outputs.is_empty() {
+            return Err("任务已有回执或成片，不能覆盖".into());
+        }
+        saved.prompt_id = Some(remote.into());
+        saved.status = comfyui::ComfyTaskStatus::DownloadPending;
+        comfyui::save(&base, &saved)
+    }
 }

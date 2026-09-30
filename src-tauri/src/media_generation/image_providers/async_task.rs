@@ -1,7 +1,8 @@
-//! Shared asynchronous image gateway adapter, including legacy receipt recovery.
+//! `ImageRoute::AsyncTask`: gateways that accept an image job and return a receipt to poll
+//! (apimart, ybw `gpt-image`/DALL·E). Also reads receipts saved by older Workbench tasks.
 use crate::{settings::ModelProvider, state::AppState};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use reqwest::{Client, Response};
+use reqwest::Response;
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -50,20 +51,7 @@ fn request(
     } else {
         req.bearer_auth(p.preferred_api_key().unwrap_or_default())
     };
-    let req = crate::provider_request::apply(req, p, Some(task_id));
-    // dsimage always sends a browser UA. Cloudflare on this gateway 403s
-    // default library UAs; only add ours when the provider did not set one.
-    if crate::provider_request::header_pairs(p, Some(task_id))
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
-    {
-        req
-    } else {
-        req.header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        )
-    }
+    crate::media_generation::with_provider_headers(req, p, Some(task_id))
 }
 
 async fn body(mut r: Response, max: usize) -> Result<Vec<u8>, String> {
@@ -118,27 +106,38 @@ pub(crate) fn explain_image_http_error(status: u16, body: &str) -> String {
         return "该模型需要像素尺寸（如 1024x1024），不能把画幅比例直接当作 size。请重新生成。"
             .into();
     }
-    if let Ok(v) = serde_json::from_str::<Value>(body) {
-        if let Some(msg) = v
-            .pointer("/error/message")
-            .or_else(|| v.pointer("/message"))
-            .and_then(Value::as_str)
-        {
-            let clean: String = msg.chars().take(160).collect();
-            if !clean.is_empty() {
-                return format!("图片接口拒绝请求：{clean}");
-            }
-        }
+    // Keep "HTTP {status}" parseable: submission failures are classified by status code.
+    let detail = serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.pointer("/error/message")
+                .or_else(|| v.pointer("/message"))
+                .and_then(Value::as_str)
+                .map(|msg| msg.chars().take(160).collect::<String>())
+        })
+        .filter(|msg| !msg.is_empty());
+    match detail {
+        Some(detail) => format!("图片接口 HTTP {status}：{detail}"),
+        None => format!("图片接口 HTTP {status}"),
     }
-    format!("图片接口 HTTP {status}")
 }
 
-pub async fn poll(
+/// One read of an accepted asynchronous image receipt.
+pub(crate) enum ReceiptRead {
+    Pending,
+    /// The provider did not return this receipt (404) or was briefly unavailable.
+    Unseen(u16),
+    Ready(Vec<u8>),
+    /// The provider reported a terminal failure; querying again will not change it.
+    Failed(String),
+}
+
+pub(crate) async fn poll(
     state: &AppState,
     cfg: &ReceiptConfig,
     task_id: &str,
     remote_id: &str,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<ReceiptRead, String> {
     if remote_id.is_empty()
         || !remote_id
             .chars()
@@ -147,37 +146,39 @@ pub async fn poll(
         return Err("远程任务 ID 无效".into());
     }
     let p = provider(state, cfg)?;
-    let v = json_response(
-        request(
-            state,
-            &p,
-            reqwest::Method::GET,
-            &endpoint(&p, &async_poll_path(&p.base_url, &cfg.model, remote_id))?,
-            cfg,
-            task_id,
-        )
-        .send()
-        .await,
+    let response = request(
+        state,
         &p,
+        reqwest::Method::GET,
+        &endpoint(&p, &async_poll_path(&p.base_url, &cfg.model, remote_id))?,
+        cfg,
+        task_id,
     )
-    .await?;
-    match remote_task_status(&v).as_str() {
-        "completed" | "succeeded" | "success" => Ok(Some(extract(state, &v).await?)),
+    .send()
+    .await;
+    if let Ok(r) = &response {
+        let code = r.status().as_u16();
+        if matches!(code, 404 | 408 | 429 | 500..=599) {
+            return Ok(ReceiptRead::Unseen(code));
+        }
+    }
+    let v = json_response(response, &p).await?;
+    Ok(match remote_task_status(&v).as_str() {
+        "completed" | "succeeded" | "success" => ReceiptRead::Ready(extract(&p, &v).await?),
+        "pending" | "queued" | "running" | "processing" | "submitted" | "in_progress" => {
+            ReceiptRead::Pending
+        }
         "failed" | "cancelled" | "canceled" | "error" => {
             let detail = v
                 .pointer("/error/message")
                 .or_else(|| v.pointer("/data/error/message"))
+                .or_else(|| v.pointer("/data/fail_reason"))
                 .and_then(Value::as_str)
-                .unwrap_or("请在供应商后台核对原因");
-            Err(format!("远程图片任务失败：{detail}；可单独重新生成该页。"))
+                .unwrap_or("供应商未说明原因");
+            ReceiptRead::Failed(format!("远程图片任务失败：{detail}"))
         }
-        "pending" | "queued" | "running" | "processing" | "submitted" | "in_progress" => Ok(None),
-        other => Err(if other.is_empty() {
-            "无法识别远程任务状态。已保留任务 ID，可稍后恢复查询。".into()
-        } else {
-            format!("无法识别远程任务状态（{other}）。已保留任务 ID，可稍后恢复查询。")
-        }),
-    }
+        other => ReceiptRead::Failed(format!("远程图片任务返回未识别状态（{other}）")),
+    })
 }
 
 pub(crate) fn remote_task_status(v: &Value) -> String {
@@ -189,7 +190,9 @@ pub(crate) fn remote_task_status(v: &Value) -> String {
         .to_ascii_lowercase()
 }
 
-async fn extract(state: &AppState, v: &Value) -> Result<Vec<u8>, String> {
+const IMAGE_RESULT_LIMIT: usize = 50 * 1024 * 1024;
+
+async fn extract(p: &ModelProvider, v: &Value) -> Result<Vec<u8>, String> {
     if let Some(s) = v.pointer("/data/0/b64_json").and_then(Value::as_str) {
         return STANDARD
             .decode(s)
@@ -230,29 +233,21 @@ async fn extract(state: &AppState, v: &Value) -> Result<Vec<u8>, String> {
         }
     }
     let u = image_download_url(v).ok_or("接口没有返回图片；请核对所选模型是否支持图片生成")?;
-    download(state, u).await
+    download(p, u).await
 }
 
-pub(crate) async fn download(state: &AppState, u: &str) -> Result<Vec<u8>, String> {
-    let url = reqwest::Url::parse(u).map_err(|_| "图片下载 URL 无效")?;
-    if !matches!(url.scheme(), "https" | "http")
-        || !url.username().is_empty()
-        || url.password().is_some()
-    {
-        return Err("图片下载必须使用 HTTP(S) URL".into());
-    }
-    // Deliberately no provider headers / credentials on a CDN download.
-    let client: Client = state.http.clone();
-    let r = client
-        .get(url)
-        .timeout(Duration::from_secs(180))
-        .send()
-        .await
-        .map_err(|_| "图片下载失败；已受理的任务请恢复查询，避免重复提交")?;
-    if !r.status().is_success() {
-        return Err(format!("图片下载 HTTP {}", r.status()));
-    }
-    body(r, 50 * 1024 * 1024).await
+/// Download a gateway image result. CDN results get no provider credentials.
+pub(crate) async fn download(p: &ModelProvider, u: &str) -> Result<Vec<u8>, String> {
+    let origin = reqwest::Url::parse(p.base_url.trim()).map_err(|_| "供应商地址无效")?;
+    let response = crate::media_generation::artifacts::fetch(
+        crate::media_generation::artifacts::download_client(p),
+        &origin,
+        u,
+        crate::media_generation::artifacts::DownloadAuth::None,
+        Duration::from_secs(180),
+    )
+    .await?;
+    crate::media_generation::artifacts::read_bounded(response, IMAGE_RESULT_LIMIT).await
 }
 
 pub(crate) fn image_download_url(v: &Value) -> Option<&str> {
@@ -280,59 +275,7 @@ pub(crate) fn async_poll_path(base_url: &str, model: &str, remote_id: &str) -> S
     }
 }
 
-fn images_size(model: &str, ratio: &str, resolution: &str) -> String {
-    let name = model.to_ascii_lowercase();
-    if name.contains("gpt-image-2") {
-        return gpt_image_size(ratio, resolution);
-    }
-    if name.contains("dall-e-3") {
-        return match ratio {
-            "9:16" => "1024x1792",
-            "16:9" => "1792x1024",
-            _ => "1024x1024",
-        }
-        .into();
-    }
-    match ratio {
-        "2:3" | "3:4" | "4:5" | "9:16" => "1024x1536",
-        "3:2" | "4:3" | "5:4" | "16:9" => "1536x1024",
-        _ => "1024x1024",
-    }
-    .into()
-}
-
-/// Apimart-style gateways take `size` as a ratio. gpt-image / DALL·E on new-api
-/// relays reject that (`size must be 16-multiple... : 1:1`) and want WxH.
-pub(super) fn async_generation_payload(
-    model: &str,
-    prompt: &str,
-    ratio: &str,
-    resolution: &str,
-    image_urls: &[String],
-) -> Value {
-    // Official dsimage sync body for gpt-image / DALL·E is model + prompt + n +
-    // pixel size. It only adds quality when the user passes --quality. Do not
-    // invent quality/high here — ybw-ai / new-api reject extra fields upstream.
-    let mut v = if let Some(size) = async_images_size(model, ratio, resolution) {
-        json!({"model":model,"prompt":prompt,"n":1,"size":size})
-    } else {
-        json!({"model":model,"prompt":prompt,"n":1,"size":ratio,"resolution":resolution})
-    };
-    if !image_urls.is_empty() {
-        v["image_urls"] = json!(image_urls);
-    }
-    v
-}
-
-fn async_images_size(model: &str, ratio: &str, resolution: &str) -> Option<String> {
-    let name = model.to_ascii_lowercase();
-    if name.contains("gpt-image") || name.starts_with("dall-e") {
-        return Some(images_size(model, ratio, resolution));
-    }
-    None
-}
-
-pub(super) fn remote_task_id(v: &Value) -> Option<String> {
+pub(crate) fn remote_task_id(v: &Value) -> Option<String> {
     ["id", "task_id"]
         .into_iter()
         .filter_map(|k| v.get(k).and_then(Value::as_str))
@@ -369,7 +312,7 @@ pub(super) fn openai_edit_image_field(model: &str, image_count: usize) -> &'stat
     }
 }
 
-pub(crate) fn uses_gateway(base: &str, model: &str) -> bool {
+pub(super) fn is_async_gateway(base: &str, model: &str) -> bool {
     let host = reqwest::Url::parse(base)
         .ok()
         .and_then(|u| u.host_str().map(str::to_owned))
@@ -383,26 +326,22 @@ pub(crate) async fn submit(
     state: &AppState,
     p: &ModelProvider,
     id: &str,
-    media: &super::MediaRequest,
+    media: &crate::media_generation::MediaRequest,
 ) -> Result<Value, String> {
-    let images = super::image_inputs(&media.images)?;
+    let images = crate::media_generation::image_inputs(&media.images)?;
     let cfg = ReceiptConfig {
         provider_id: p.id.clone(),
         model: media.model.clone(),
         protocol: "async".into(),
     };
-    let ratio = media
-        .options
-        .get("aspect_ratio")
-        .and_then(Value::as_str)
-        .unwrap_or("1:1");
-    let size = media
-        .options
-        .get("size")
-        .and_then(Value::as_str)
-        .unwrap_or("1K")
-        .to_lowercase();
-    if media.options.get("n").and_then(Value::as_u64).unwrap_or(1) != 1 {
+    // Read the normalized options once; raw keys differ by caller (`aspectRatio` vs `aspect_ratio`).
+    let arguments = crate::media_generation::image_arguments(media)?;
+    let ratio = arguments["aspect_ratio"]
+        .as_str()
+        .unwrap_or("1:1")
+        .to_owned();
+    let size = arguments["size"].as_str().unwrap_or("1K").to_lowercase();
+    if arguments["n"].as_u64().unwrap_or(1) != 1 {
         return Err("异步图片任务每次生成一张，请按任务分别提交".into());
     }
     let mut req = request(
@@ -416,14 +355,20 @@ pub(crate) async fn submit(
         &cfg,
         id,
     );
+    let body = super::image_api_payload(p, &media.model, &arguments, images.len())?;
     if !images.is_empty() && uses_openai_async_task(&p.base_url, &media.model) {
-        let mut form = reqwest::multipart::Form::new()
-            .text("model", media.model.clone())
-            .text("prompt", media.prompt.clone())
-            .text("n", "1")
-            .text("size", images_size(&media.model, ratio, &size))
-            .text("quality", "high")
-            .text("output_format", "png");
+        let mut form = reqwest::multipart::Form::new();
+        for key in ["model", "prompt", "n", "size", "quality"] {
+            if let Some(value) = body.get(key) {
+                form = form.text(
+                    key,
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string()),
+                );
+            }
+        }
         for (i, image) in images.iter().enumerate() {
             let part = reqwest::multipart::Part::bytes(
                 STANDARD.decode(&image.base64).map_err(|_| "无效图片编码")?,
@@ -437,53 +382,22 @@ pub(crate) async fn submit(
     } else {
         let urls = images
             .iter()
-            .map(crate::chat::image_generation::data_url_for_input)
+            .map(super::data_url_for_input)
             .collect::<Vec<_>>();
-        req = req.json(&async_generation_payload(
-            &media.model,
-            &media.prompt,
-            ratio,
-            &size,
-            &urls,
-        ));
+        let mut payload = body;
+        if !uses_openai_async_task(&p.base_url, &media.model) {
+            payload["size"] = json!(ratio);
+            payload["resolution"] = json!(size);
+        }
+        if !urls.is_empty() {
+            payload["image_urls"] = json!(urls);
+        }
+        req = req.json(&payload);
     }
     json_response(req.send().await, p).await
 }
-pub(crate) async fn immediate_image(state: &AppState, value: &Value) -> Result<Vec<u8>, String> {
-    extract(state, value).await
-}
-
-pub(super) fn gpt_image_size(ratio: &str, resolution: &str) -> String {
-    match (ratio, resolution) {
-        ("1:1", "4k") => "2880x2880",
-        ("1:1", "2k") => "2048x2048",
-        ("2:3", "4k") => "2352x3520",
-        ("2:3", "2k") => "1360x2048",
-        ("2:3", _) => "1024x1536",
-        ("3:2", "4k") => "3520x2352",
-        ("3:2", "2k") => "2048x1360",
-        ("3:2", _) => "1536x1024",
-        ("3:4", "4k") => "2480x3312",
-        ("3:4", "2k") => "1536x2048",
-        ("3:4", _) => "1024x1360",
-        ("4:3", "4k") => "3312x2480",
-        ("4:3", "2k") => "2048x1536",
-        ("4:3", _) => "1360x1024",
-        ("4:5", "4k") => "2560x3200",
-        ("4:5", "2k") => "1632x2048",
-        ("4:5", _) => "1024x1280",
-        ("5:4", "4k") => "3200x2560",
-        ("5:4", "2k") => "2048x1632",
-        ("5:4", _) => "1280x1024",
-        ("9:16", "2k") => "1152x2048",
-        ("9:16", "4k") => "2160x3840",
-        ("9:16", _) => "864x1536",
-        ("16:9", "2k") => "2048x1152",
-        ("16:9", "4k") => "3840x2160",
-        ("16:9", _) => "1536x864",
-        _ => "1024x1024",
-    }
-    .into()
+pub(crate) async fn immediate_image(p: &ModelProvider, value: &Value) -> Result<Vec<u8>, String> {
+    extract(p, value).await
 }
 
 #[cfg(test)]
@@ -491,14 +405,17 @@ mod tests {
     use super::*;
     #[test]
     fn gateway_routing_does_not_match_lookalike_hosts() {
-        assert!(uses_gateway("https://api.ybw-ai.com/v1", "gpt-image-1"));
-        assert!(uses_gateway("https://api.apimart.ai/v1", "gemini-image"));
+        assert!(is_async_gateway("https://api.ybw-ai.com/v1", "gpt-image-1"));
+        assert!(is_async_gateway(
+            "https://api.apimart.ai/v1",
+            "gemini-image"
+        ));
         for url in [
             "https://ybw-ai.com.evil.test/v1",
             "https://elsewhere.test/ybw-ai.com",
             "https://api.openai.com/v1",
         ] {
-            assert!(!uses_gateway(url, "gpt-image-1"));
+            assert!(!is_async_gateway(url, "gpt-image-1"));
         }
         assert_eq!(
             async_poll_path("https://ybw-ai.com", "gpt-image-1", "r1"),

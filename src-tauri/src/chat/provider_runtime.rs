@@ -1,6 +1,6 @@
 //! Process-local provider failover and learned endpoint capabilities.
 //! Callers never hold these locks; no operation performs I/O or awaits.
-use crate::{chat::image_generation::ImageRoute, settings::Settings};
+use crate::{media_generation::image_providers::ImageRoute, settings::Settings};
 use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,

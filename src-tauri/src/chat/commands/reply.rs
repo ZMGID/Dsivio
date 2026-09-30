@@ -1025,12 +1025,12 @@ pub(super) fn agent_run_entry_label(entry: crate::chat::agent::AgentRunEntry) ->
 
 /// 把模型原生生成的图片（`GenerateOutput.images`，任务 07-24）转成 assistant 消息级
 /// `ChatToolArtifact`：`data:{mime};base64,{data}` 内联，name `generated-image-{i}.{ext}`
-/// （1 基）。复用 image_generation 的 `extension_for_mime` / `decoded_base64_len`，与 Mixer
+/// （1 基）。复用 media_generation::image_providers 的 `extension_for_mime` / `decoded_base64_len`，与 Mixer
 /// 出图工具的 artifact 形态保持一致。空输入 → 空 Vec（无开销）。
 fn generated_image_artifacts(
     images: &[crate::chat::model::GeneratedImageData],
 ) -> Vec<crate::mcp::types::ChatToolArtifact> {
-    use crate::chat::image_generation::{decoded_base64_len, extension_for_mime};
+    use crate::media_generation::image_providers::{decoded_base64_len, extension_for_mime};
     images
         .iter()
         .enumerate()

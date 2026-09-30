@@ -1,6 +1,9 @@
 //! Image project pages are linked to shared media tasks; this module owns no provider requests.
 use super::{storage, types::*};
-use crate::{media_generation::{self, MediaKind, MediaRequest, MediaStatus}, state::AppState};
+use crate::{
+    media_generation::{self, MediaKind, MediaRequest, MediaStatus},
+    state::AppState,
+};
 use futures::{future::BoxFuture, FutureExt};
 use std::fs;
 use tauri::{AppHandle, Manager};
@@ -31,7 +34,7 @@ impl super::generation::Backend for NativeBackend<'_> {
     }
 
     fn download<'a>(&'a self, url: &'a str) -> BoxFuture<'a, Result<Vec<u8>, String>> {
-        download(self.app, url).boxed()
+        download(self.app, self.cfg, url).boxed()
     }
 
     fn store(&self, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
@@ -40,13 +43,20 @@ impl super::generation::Backend for NativeBackend<'_> {
 }
 
 pub(super) fn validate(cfg: &StudioConfig, _brief: &Brief) -> Result<(), String> {
-    if cfg.provider_id.is_empty() || cfg.model.is_empty() { return Err("请选择工作台图片模型".into()); }
+    if cfg.provider_id.is_empty() || cfg.model.is_empty() {
+        return Err("请选择工作台图片模型".into());
+    }
     Ok(())
 }
 pub(super) fn provider(app: &AppHandle, cfg: &StudioConfig) -> Result<(), String> {
     let state = app.state::<AppState>();
     let settings = state.settings_read();
-    if !settings.workbench_media.image_models.iter().any(|m| m.provider_id == cfg.provider_id && m.model == cfg.model) {
+    if !settings
+        .workbench_media
+        .image_models
+        .iter()
+        .any(|m| m.provider_id == cfg.provider_id && m.model == cfg.model)
+    {
         return Err("请先把模型加入媒体创作图片模型池".into());
     }
     Ok(())
@@ -111,21 +121,60 @@ pub(super) fn resolved_gen_brief(
     Ok(resolved)
 }
 
-pub async fn submit(app: &AppHandle, cfg: &StudioConfig, _task_id: &str, brief: &Brief, plan: &ImagePlan) -> Result<Submission, String> {
+pub async fn submit(
+    app: &AppHandle,
+    cfg: &StudioConfig,
+    _task_id: &str,
+    brief: &Brief,
+    plan: &ImagePlan,
+) -> Result<Submission, String> {
     let output = resolved_gen_brief(cfg, brief, plan)?;
-    let images = plan.refs.iter().map(|path| super::resolve_existing_image(path).map(|p| p.to_string_lossy().into_owned())).collect::<Result<Vec<_>, _>>()?;
-    let origin = match brief.feature.as_str() { "gen" => "free-image", "replace" => "clone", "smart" => "template-set", "design" => "set-design", "client" => "batch-set", "workflow" => "template-builder", _ => return Err("未知图片功能".into()) };
-    let task = media_generation::start_media_generation(app.clone(), MediaRequest {
-        provider_id: cfg.provider_id.clone(), model: cfg.model.clone(), kind: MediaKind::Image,
-        prompt: plan.prompt.clone(), images,
-        options: [("aspect_ratio".into(), serde_json::json!(output.ratio)), ("size".into(), serde_json::json!(output.resolution.to_uppercase())), ("n".into(), serde_json::json!(1))].into(),
-        origin: Some(format!("workbench/{origin}")),
-    }).await?;
+    let images = plan
+        .refs
+        .iter()
+        .map(|path| super::resolve_existing_image(path).map(|p| p.to_string_lossy().into_owned()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let origin = match brief.feature.as_str() {
+        "gen" => "free-image",
+        "replace" => "clone",
+        "smart" => "template-set",
+        "design" => "set-design",
+        "client" => "batch-set",
+        "workflow" => "template-builder",
+        _ => return Err("未知图片功能".into()),
+    };
+    let task = media_generation::start_media_generation(
+        app.clone(),
+        MediaRequest {
+            provider_id: cfg.provider_id.clone(),
+            model: cfg.model.clone(),
+            kind: MediaKind::Image,
+            prompt: plan.prompt.clone(),
+            images,
+            options: [
+                ("aspect_ratio".into(), serde_json::json!(output.ratio)),
+                (
+                    "size".into(),
+                    serde_json::json!(output.resolution.to_uppercase()),
+                ),
+                ("n".into(), serde_json::json!(1)),
+            ]
+            .into(),
+            origin: Some(format!("workbench/{origin}")),
+        },
+    )
+    .await?;
     Ok(Submission::Pending(format!("media:{}", task.id)))
 }
-pub async fn poll(app: &AppHandle, cfg: &StudioConfig, task_id: &str, remote: &str) -> Result<Option<Vec<u8>>, String> {
+pub async fn poll(
+    app: &AppHandle,
+    cfg: &StudioConfig,
+    task_id: &str,
+    remote: &str,
+) -> Result<Option<Vec<u8>>, String> {
     if let Some(id) = remote.strip_prefix("media:") {
-        let task = media_generation::get_media_task(app.clone(), id.into(), Some(true))?;
+        // Automatic polling only reads; an explicit resume happens once when the user resumes.
+        let task = media_generation::get_media_task(app.clone(), id.into(), None)?;
         return match task.status {
             MediaStatus::Running => Ok(None),
             MediaStatus::Failed => Err(task.error.unwrap_or("媒体任务失败；已有回执已保留".into())),
@@ -135,12 +184,28 @@ pub async fn poll(app: &AppHandle, cfg: &StudioConfig, task_id: &str, remote: &s
             }
         };
     }
-    media_generation::image_gateway::poll(&app.state::<AppState>(), &media_generation::image_gateway::ReceiptConfig {
-        provider_id: cfg.provider_id.clone(), model: cfg.model.clone(), protocol: cfg.protocol.clone(),
-    }, task_id, remote).await
+    // Receipts recorded before tasks went through `media_generation`.
+    use media_generation::image_providers::async_task::{self as gateway, ReceiptRead};
+    let receipt = gateway::ReceiptConfig {
+        provider_id: cfg.provider_id.clone(),
+        model: cfg.model.clone(),
+        protocol: cfg.protocol.clone(),
+    };
+    match gateway::poll(&app.state::<AppState>(), &receipt, task_id, remote).await? {
+        ReceiptRead::Ready(bytes) => Ok(Some(bytes)),
+        ReceiptRead::Pending | ReceiptRead::Unseen(_) => Ok(None),
+        ReceiptRead::Failed(error) => Err(error),
+    }
 }
-pub async fn download(app: &AppHandle, url: &str) -> Result<Vec<u8>, String> {
-    media_generation::image_gateway::download(&app.state::<AppState>(), url).await
+/// Download a result URL recorded before tasks went through `media_generation`.
+pub async fn download(app: &AppHandle, cfg: &StudioConfig, url: &str) -> Result<Vec<u8>, String> {
+    let provider = app
+        .state::<AppState>()
+        .settings_read()
+        .get_provider(&cfg.provider_id)
+        .cloned()
+        .ok_or("原任务供应商不存在")?;
+    media_generation::image_providers::async_task::download(&provider, url).await
 }
 pub fn store_image(task_id: &str, result: &mut ImageResult, bytes: &[u8]) -> Result<(), String> {
     store_image_in(&storage::load_task(task_id)?, result, bytes)
