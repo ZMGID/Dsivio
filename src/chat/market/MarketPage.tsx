@@ -1,5 +1,5 @@
 import { marketText, useMarketAction, actionLabel } from './marketActions'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Film, Image, LayoutGrid, Loader2, MoreHorizontal, RefreshCw, Search } from 'lucide-react'
 import { Button, IconButton } from '../../components/Button'
 import type { Lang } from '../../components/i18n'
@@ -68,7 +68,7 @@ function Example({ id, lang, local }: { id: string; lang: Lang; local: boolean }
     return <div className="market-example-attachment" key={i}>{attachment.type === 'image' ? <a href={url} target="_blank" rel="noreferrer"><img loading="lazy" src={url} alt={attachment.label} /></a> : attachment.type === 'video' ? <video controls preload="none" poster={attachment.poster ? `${detail.assetBase}${attachment.poster}` : undefined} src={url} aria-label={attachment.label} /> : <span>{attachment.label}</span>}</div>
   })}<p>{message.text}</p></div></div>)}</div>
 }
-export function MarketPage({ lang, onInstall, onUse, onUninstall }: MarketActions & { lang: Lang }) {
+export function MarketPage({ lang, onInstall, onUse, onUninstall, heading }: MarketActions & { lang: Lang; heading?: ReactNode }) {
   const { snapshot, loading, initialLoading } = useMarket()
   const items = useMemo(() => marketItems(snapshot), [snapshot])
   const [query, setQuery] = useState(viewState.query)
@@ -132,7 +132,7 @@ export function MarketPage({ lang, onInstall, onUse, onUninstall }: MarketAction
         </div>}
       </> : <>
         <header className="market-heading">
-          <div className="min-w-0"><h1>{marketText(lang, '插件市场', 'Plugin market')}</h1><p>{marketText(lang, '用插件扩展对话里的技能与能力。', 'Use plugins to extend what chat can do.')}</p></div>
+          <div className="min-w-0">{heading ?? <h1>{marketText(lang, '插件市场', 'Plugin market')}</h1>}<p>{marketText(lang, '用插件扩展对话里的技能与能力。', 'Use plugins to extend what chat can do.')}</p></div>
           <IconButton label={marketText(lang, '刷新', 'Refresh')} disabled={loading} onClick={() => void marketApi.refresh()}><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></IconButton>
         </header>
         <label className="market-search"><Search size={16} /><Input value={query} onChange={setQuery} placeholder={marketText(lang, '搜索插件', 'Search plugins')} aria-label={marketText(lang, '搜索插件', 'Search plugins')} /></label>

@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import type { ChatAssistant, ChatProject, ChatSet, ConversationListItem, ConversationSearchHit } from './types'
 import { HighlightText } from './searchHighlight'
-import { AgentIcon, KnowledgeIcon, McpIcon, SkillIcon, WorksIcon } from '../settings/public/icons'
+import { AgentIcon, KnowledgeIcon, WorksIcon } from '../settings/public/icons'
 import { ConversationList } from './ConversationList'
 import { ChatSectionMenu } from './ChatSectionMenu'
 import { ProjectContextMenu } from './ProjectContextMenu'
@@ -67,11 +67,8 @@ const extensionSubItems: Array<{
   icon: (props: { size?: number; className?: string }) => React.JSX.Element
 }> = [
   { id: 'assistants', label: (t) => t.chatNavAssistants, icon: AgentIcon },
-  { id: 'skill', label: () => 'Skill', icon: SkillIcon },
-  { id: 'mcp', label: () => 'MCP', icon: McpIcon },
   { id: 'knowledge', label: (t) => t.chatNavKnowledge, icon: KnowledgeIcon },
   { id: 'notes', label: (t) => t.chatNavNotes, icon: (props) => <NotebookPen size={props.size} className={props.className} strokeWidth={1.75} /> },
-  { id: 'automations', label: (t) => t.chatNavAutomations, icon: (props) => <Workflow size={props.size} className={props.className} strokeWidth={1.75} /> },
 ]
 
 const PROJECT_PREVIEW_LIMIT = 5
@@ -1224,6 +1221,12 @@ export const Sidebar = memo(function Sidebar({
           active={extensionsActive === 'artifacts'}
         />
         <NavRow icon={<Store size={17} />} label={t.chatNavMarket} onClick={() => onOpenExtensionsItem('market')} active={extensionsActive === 'market'} />
+        <NavRow
+          icon={<Workflow size={17} strokeWidth={1.75} />}
+          label={t.chatNavAutomations}
+          onClick={() => onOpenExtensionsItem('automations')}
+          active={extensionsActive === 'automations'}
+        />
         <ExtensionsNav
           activeItem={extensionSubItems.some((item) => item.id === extensionsActive) ? extensionsActive : null}
           onSelectItem={onOpenExtensionsItem}

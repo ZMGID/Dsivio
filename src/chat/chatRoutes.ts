@@ -120,8 +120,8 @@ export function extensionsNavItemForView(chatView: string): ChatExtensionsNavIte
   if (chatView === 'images' || chatView === 'videos' || chatView === 'market') return chatView
   if (chatView === 'artifacts') return 'artifacts'
   if (chatView === 'assistants') return 'assistants'
-  if (chatView === 'skill') return 'skill'
-  if (chatView === 'mcp') return 'mcp'
+  if (chatView === 'skill') return 'market'
+  if (chatView === 'mcp') return 'market'
   if (chatView === 'knowledge') return 'knowledge'
   if (chatView === 'notes') return 'notes'
   if (chatView === 'automations') return 'automations'

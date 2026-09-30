@@ -426,11 +426,20 @@ describe('Sidebar extension navigation', () => {
     />
   }
 
-  it.each(['插件', '作品'])('keeps extensions collapsed when selecting %s', async (label) => {
+  it.each(['插件', '作品', '自动化'])('keeps extensions collapsed when selecting %s', async (label) => {
     const user = userEvent.setup()
     render(<Navigation />)
     await user.click(screen.getByRole('button', { name: new RegExp(`^${label}$`) }))
     expect(screen.getByRole('button', { name: /^扩展$/ })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: /^MCP$/ })).not.toBeInTheDocument()
+  })
+
+  it('keeps Skill and MCP out of extensions', async () => {
+    const user = userEvent.setup()
+    render(<Navigation />)
+    await user.click(screen.getByRole('button', { name: /^扩展$/ }))
+    expect(screen.getByRole('button', { name: /^助手$/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Skill$/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^MCP$/ })).not.toBeInTheDocument()
   })
 
@@ -441,7 +450,7 @@ describe('Sidebar extension navigation', () => {
 
   it('expands for an extension route and preserves manual toggling', async () => {
     const user = userEvent.setup()
-    render(<Navigation initial="mcp" />)
+    render(<Navigation initial="assistants" />)
     const toggle = screen.getByRole('button', { name: /^扩展$/ })
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     await user.click(toggle)

@@ -173,10 +173,17 @@ describe('setHash / conversationHash', () => {
 })
 
 describe('extensionsNavItemForView', () => {
+  it('highlights the market for all plugin sections and keeps automations separate', () => {
+    expect(extensionsNavItemForView('market')).toBe('market')
+    expect(extensionsNavItemForView('skill')).toBe('market')
+    expect(extensionsNavItemForView('mcp')).toBe('market')
+    expect(extensionsNavItemForView('automations')).toBe('automations')
+  })
+
   it('maps center views to the extensions nav item and ignores the rest', () => {
     expect(extensionsNavItemForView('assistants')).toBe('assistants')
-    expect(extensionsNavItemForView('skill')).toBe('skill')
-    expect(extensionsNavItemForView('mcp')).toBe('mcp')
+    expect(extensionsNavItemForView('skill')).toBe('market')
+    expect(extensionsNavItemForView('mcp')).toBe('market')
     expect(extensionsNavItemForView('knowledge')).toBe('knowledge')
     expect(extensionsNavItemForView('notes')).toBe('notes')
     expect(extensionsNavItemForView('automations')).toBe('automations')

@@ -197,6 +197,7 @@ const NotesCenter = lazy(() => import('./NotesCenter').then((module) => ({
 })))
 import { StudioPage } from './StudioPage'
 import { MarketPage } from './market/MarketPage'
+import { PluginCenterHeading } from './market/PluginCenterHeading'
 import { marketApi } from './market/api'
 import { isBuiltInMarketId, marketUseTarget, type MarketLocal } from './market/types'
 const ArtifactsCenter = lazy(() => import('./ArtifactsCenter').then((module) => ({ default: module.ArtifactsCenter })))
@@ -2890,23 +2891,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
               />
             </Suspense>
           </div>
-        ) : chatView === 'skill' ? (
-          <div key="center" className={centerPageClass}>
-            {centerPageTopStrip}
-            <Suspense fallback={null}>
-              <SkillCenter
-                onSkillsChanged={() => void loadSkills()}
-                projectCwd={dockWorkdir || undefined}
-              />
-            </Suspense>
-          </div>
-        ) : chatView === 'mcp' ? (
-          <div key="center" className={centerPageClass}>
-            {centerPageTopStrip}
-            <Suspense fallback={null}>
-              <McpCenter />
-            </Suspense>
-          </div>
         ) : chatView === 'knowledge' ? (
           <div key="center" className={centerPageClass}>
             {centerPageTopStrip}
@@ -2926,8 +2910,25 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
               <WorkbenchHome />
             </Suspense>
           </div>
-        ) : chatView === 'market' ? (
-          <StudioPage sidebarCollapsed={sidebarCollapsed} onToggleSidebar={handleTitlebarToggleSidebar} onNewConversation={handleTitlebarNewConversation}><MarketPage lang={uiLang} onUninstall={handleMarketUninstall} onInstall={handleMarketInstall} onUse={handleMarketUse} /></StudioPage>
+        ) : chatView === 'market' || chatView === 'skill' || chatView === 'mcp' ? (
+          <StudioPage sidebarCollapsed={sidebarCollapsed} onToggleSidebar={handleTitlebarToggleSidebar} onNewConversation={handleTitlebarNewConversation}>
+            <Suspense fallback={null}>
+              {chatView === 'skill' ? (
+                <SkillCenter
+                  heading={<PluginCenterHeading value={chatView} onChange={handleSidebarOpenExtensionsItem} lang={uiLang} />}
+                  onSkillsChanged={() => void loadSkills()}
+                  projectCwd={dockWorkdir || undefined}
+                />
+              ) : chatView === 'mcp' ? (
+                <McpCenter heading={<PluginCenterHeading value={chatView} onChange={handleSidebarOpenExtensionsItem} lang={uiLang} />} />
+              ) : (
+                <MarketPage
+                  heading={<PluginCenterHeading value={chatView} onChange={handleSidebarOpenExtensionsItem} lang={uiLang} />}
+                  lang={uiLang} onUninstall={handleMarketUninstall} onInstall={handleMarketInstall} onUse={handleMarketUse}
+                />
+              )}
+            </Suspense>
+          </StudioPage>
         ) : chatView === 'notes' ? (
           <div key="center" className={centerPageClass}>
             {centerPageTopStrip}
