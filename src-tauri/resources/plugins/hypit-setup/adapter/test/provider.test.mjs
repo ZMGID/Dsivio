@@ -435,3 +435,38 @@ test("an auto aspect ratio lets Dsivio use the model default instead of sending 
   const args = imageDsivio.calls[0].args;
   assert.equal(args[args.indexOf("--ratio") + 1], "auto");
 });
+
+test("six Dsivio tasks run at once by default, and a configured concurrency replaces it", () => {
+  const byDefault = providerFor(models, scripted([]).run);
+  assert.equal(byDefault.defaultConcurrency, 6);
+  assert.equal(byDefault.actionLimits.submit.concurrency, 6);
+  const configured = providerFor(models, scripted([]).run, { concurrency: 3 });
+  assert.equal(configured.defaultConcurrency, 3);
+  assert.equal(configured.actionLimits.submit.concurrency, 3);
+});
+
+test("a failed task reported through the real command's exit code is a task failure, not a broken poll", async () => {
+  // `dsivio media status` prints the failed task and exits non-zero (4 failed, 5 uncertain);
+  // the task JSON still decides the failure, so a lost receipt keeps its code and receipt.
+  const fake = join(await mkdtemp(join(tmpdir(), "fake-dsivio-")), "dsivio");
+  const reply = (task, code) => `#!/bin/sh\necho '${JSON.stringify(task)}'\nexit ${code}\n`;
+  const provider = createDsivioProvider({ instance: "d", pool: "d", offers: offersFrom(models), command: fake });
+  const { endpoint } = capabilityOf(provider, "grok-imagine-video-1.5-preview");
+  const poll = () => endpoint.poll({ handle: { id: "t1" }, command: { id: "c" } });
+
+  await writeFile(fake, reply({ id: "t1", status: "failed", canResume: true, remoteId: "remote-1", error: "供应商受理后一直查不到该任务（回执 remote-1），可能已扣费" }, 4), { mode: 0o755 });
+  const lost = await poll();
+  assert.equal(lost.status, "failed");
+  assert.equal(lost.failure.code, "DSIVIO_RECEIPT_LOST");
+  assert.match(lost.failure.message, /remote-1/u);
+  assert.deepEqual(lost.receipt, { id: "t1" });
+
+  await writeFile(fake, reply({ id: "t1", status: "failed", remoteId: "remote-1", error: "内容审核未通过" }, 4), { mode: 0o755 });
+  const failed = await poll();
+  assert.equal(failed.failure.code, "DSIVIO_GENERATION_FAILED");
+  assert.match(failed.failure.message, /内容审核未通过/u);
+
+  // Without a task in the output the command itself failed, and poll still says so.
+  await writeFile(fake, `#!/bin/sh\necho '{"ok":false,"error":"需要一个任务 ID"}'\nexit 2\n`, { mode: 0o755 });
+  await assert.rejects(poll(), /exited 2/u);
+});

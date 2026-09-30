@@ -261,7 +261,7 @@ export function createDsivioProvider(options) {
   const file = resolveCommand(options.command);
   const interval = options.pollIntervalMs ?? 5_000;
   const timeoutMs = options.requestTimeoutMs ?? 120_000;
-  const concurrency = options.concurrency ?? 2;
+  const concurrency = options.concurrency ?? 6;
   const offers = options.offers ?? [];
 
   const media = options.run ?? (async (args, input) => {
@@ -357,7 +357,9 @@ export function createDsivioProvider(options) {
           if (error?.exitCode === 6 || error?.code === "DSIVIO_NOT_RUNNING") {
             return wakeAfter({ id }, interval, Date.now(), { phase: `Dsivio is not running; open Dsivio to continue task ${id}` });
           }
-          throw error;
+          // A failed task exits non-zero but still prints the task; its JSON decides the failure.
+          if (error?.json?.status !== "failed") throw error;
+          task = error.json;
         }
         if (task.status === "running") {
           return wakeAfter({ id }, interval, Date.now(), { phase: task.error || `Dsivio task ${id} is running` });
