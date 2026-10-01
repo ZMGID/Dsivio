@@ -2728,6 +2728,28 @@ mod tests {
         assert_eq!(body["images"].as_array().map(|v| v.len()), Some(3));
     }
     #[test]
+    fn ratio_regression_openai_async_tier_preserves_portrait_dimensions() {
+        let provider = images_provider("https://ybw-ai.com");
+        let body = image_api_payload(
+            &provider,
+            "gpt-image-2.5-flare",
+            &serde_json::json!({
+                "prompt": "A perfume bottle on a windowsill",
+                "size": "1K",
+                "aspect_ratio": "9:16",
+                "quality": "low",
+            }),
+            1,
+        )
+        .unwrap();
+        assert_eq!(body["size"], "864x1536");
+        assert_eq!(body["quality"], "low");
+        // OpenAI-compatible async generations and multipart edits express ratio in size.
+        assert!(body.get("aspect_ratio").is_none());
+        println!("OpenAI async request: {body}");
+    }
+
+    #[test]
     fn every_advertised_gpt_tier_and_ratio_produces_valid_pixels() {
         let provider = images_provider("https://api.openai.com/v1");
         let c = image_capabilities(&provider, "gpt-image-2.5-flare");

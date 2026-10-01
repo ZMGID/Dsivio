@@ -1192,6 +1192,34 @@ mod tests {
         .is_err());
     }
     #[test]
+    fn ratio_regression_xai_image_to_video_sends_explicit_override() {
+        let mut i = input();
+        i.first_frame = Some("https://example.com/square.png".into());
+        i.ratio = Some("9:16".into());
+        let preview = prepare(
+            "xai_video",
+            "https://api.x.ai/v1",
+            "grok-imagine-video-1.5",
+            &i,
+        )
+        .unwrap();
+        assert_eq!(preview.body["aspect_ratio"], "9:16");
+        assert_eq!(preview.body["image"]["url"], "https://example.com/square.png");
+        println!("xAI image-to-video request: {}", preview.body);
+
+        i.ratio = None;
+        let inherited = prepare(
+            "xai_video",
+            "https://api.x.ai/v1",
+            "grok-imagine-video-1.5",
+            &i,
+        )
+        .unwrap();
+        // Only an omitted ratio leaves the output shape to the input image.
+        assert!(inherited.body.get("aspect_ratio").is_none());
+    }
+
+    #[test]
     fn rejects_unsupported_combinations_before_submission() {
         let mut i = input();
         i.duration = Some(10);
