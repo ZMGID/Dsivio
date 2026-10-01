@@ -32,6 +32,7 @@ const builtInMarketIds = new Set(builtInCatalog.plugins.map(plugin => plugin.id)
 export const isBuiltInMarketId = (id: string) => builtInMarketIds.has(id)
 export type MarketEntry = { id: string; version: string; source: MarketSource; manifest?: MarketManifest; error?: string }
 export type MarketLocal = {
+  projectContext?: { id: string; name: string; rootPath: string }
   id: string
   manifest: MarketManifest
   source: MarketSource
@@ -52,7 +53,7 @@ export type MarketSnapshot = {
   error: string | null
   sourceUrl: string
 }
-export type MarketItem = { id: string; manifest?: MarketManifest; entry?: MarketEntry; local?: MarketLocal }
+export type MarketItem = { id: string; manifest?: MarketManifest; entry?: MarketEntry; local?: MarketLocal; bundled?: boolean }
 export function marketItems(snapshot: MarketSnapshot): MarketItem[] {
   const result = new Map<string, MarketItem>()
   for (const entry of snapshot.entries) result.set(entry.id, { id: entry.id, manifest: entry.manifest, entry })

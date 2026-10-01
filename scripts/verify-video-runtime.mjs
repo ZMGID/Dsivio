@@ -86,6 +86,13 @@ async function withMcp(command, args, check) {
 try {
   assert.equal(JSON.parse(readFileSync(join(root, 'runtime.json'))).platform, `${process.platform}-${process.arch}`)
   assert.equal(run(node, [npm, '--version']).trim(), JSON.parse(readFileSync(join(root, 'runtime.json'))).npm)
+  if (!process.argv.includes('--base-runtime-only')) {
+    const dsvideo = join(root, 'dsvideo/node_modules/@dsvideo/dsvideo/bin/dsvideo.mjs')
+    const dsvideoVersion = JSON.parse(readFileSync(join(root, 'dsvideo/runtime.json'))).version
+    assert.equal(run(node, [dsvideo, '--version']).trim(), dsvideoVersion)
+    run(node, [dsvideo, 'runtime', 'init', '--workspace', scratch])
+    assert.ok(existsSync(join(scratch, '.dsvideo/runtime')), 'bundled dsvideo must initialize a local workspace')
+  }
   // Prove explicit setup can install a local dependency (including its native-style
   // postinstall), with an empty HOME/cache and no system Node/npm.
   const dependency = join(scratch, 'local-dependency')

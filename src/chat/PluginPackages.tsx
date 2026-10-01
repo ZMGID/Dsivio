@@ -32,15 +32,15 @@ export function PluginPackages({ lang }: { lang: Lang }) {
       <Button type="submit" disabled={busy || !source.trim()}>{busy ? (zh ? '处理中…' : 'Working…') : (zh ? '导入' : 'Import')}</Button>
       <Button type="button" disabled={busy} onClick={() => void act(refresh)}>{zh ? '刷新' : 'Refresh'}</Button>
     </form>
-    <p className="text-xs text-neutral-500">{zh ? '导入后默认停用。启用会加载包内能力并允许执行其 Hook 脚本；包内依赖不会自动安装。' : 'Imported packages start disabled. Enabling loads their capabilities and permits hook scripts to run. Dependencies are not installed automatically.'}</p>
+    <p className="text-xs text-neutral-500">{zh ? '内置插件由应用提供。导入的插件默认停用。启用会加载包内能力并允许执行其 Hook 脚本；包内依赖不会自动安装。' : 'Built-in plugins ship with the App. Imported packages start disabled. Enabling loads their capabilities and permits hook scripts to run. Dependencies are not installed automatically.'}</p>
     {error && <p role="alert" className="text-xs text-red-500 whitespace-pre-wrap">{error}</p>}
     {!packages.length && <p className="text-xs text-neutral-500">{zh ? '尚未导入通用插件。' : 'No plugin packages imported.'}</p>}
     {packages.map(plugin => <div key={plugin.id} className="border-t border-neutral-200 pt-3 dark:border-neutral-700">
       <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0"><strong className="text-sm">{plugin.name}</strong> <span className="text-xs text-neutral-500">{plugin.version ?? ''} · {plugin.format}</span></div>
+        <div className="min-w-0"><strong className="text-sm">{plugin.name}</strong> <span className="text-xs text-neutral-500">{plugin.source.startsWith('builtin:') ? (zh ? '内置' : 'Built-in') : plugin.format} · {plugin.version ?? ''}</span></div>
         <div className="flex gap-2">
           <Button disabled={busy || (!plugin.enabled && plugin.diagnostics.length > 0)} onClick={() => void act(async () => { await packageApi.setEnabled(plugin.id, !plugin.enabled); await refreshSettings() })}>{plugin.enabled ? (zh ? '停用' : 'Disable') : (zh ? '启用' : 'Enable')}</Button>
-          <Button disabled={busy} onClick={() => void act(async () => { await packageApi.remove(plugin.id); await refreshSettings() })}>{zh ? '移除' : 'Remove'}</Button>
+          {!plugin.source.startsWith('builtin:') && <Button disabled={busy} onClick={() => void act(async () => { await packageApi.remove(plugin.id); await refreshSettings() })}>{zh ? '移除' : 'Remove'}</Button>}
         </div>
       </div>
       <p className="mt-1 text-xs text-neutral-500">{plugin.description}</p>

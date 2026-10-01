@@ -43,6 +43,9 @@ jobs:
       - name: Prepare bundled plugin dependencies
         run: npm run build:video-runtime
 
+      - name: Prepare built-in dsvideo
+        run: npm run build:dsvideo
+
       - name: Verify bundled plugin dependencies
         run: npm run verify:video-runtime
 

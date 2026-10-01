@@ -13,6 +13,10 @@ fn main() -> ExitCode {
             attach_parent_console();
             return kivio::media_generation::cli::run(args);
         }
+        if first == kivio::media_runtime::dsvideo::SUBCOMMAND {
+            attach_parent_console();
+            return kivio::media_runtime::dsvideo::run(args);
+        }
         if first == kivio::media_runtime::cli::SUBCOMMAND {
             attach_parent_console();
             return kivio::media_runtime::cli::run(args);

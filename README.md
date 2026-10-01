@@ -30,7 +30,17 @@ Dsivio Agent 是当前唯一的内置运行时，负责对话、工具执行和�
 
 ## 视频制作插件
 
-内置市场保留 Hypit 等视频制作插件；Dsivio Video 已移出内置目录，其源码继续独立维护在 [ZMGID/dsivio-plugins](https://github.com/ZMGID/dsivio-plugins/tree/main/plugins/dsivio-video)。移除插件入口不删除用户项目、素材、已部署的项目工具或历史输出。
+Dsvideo 随 App 打包并在启动时注册，默认启用；可在「插件」页停用。它包含视频编排、Studio、渲染和 Dsivio 媒体适配器。
+使用 `dsivio dsvideo --help` 查看命令；无需另外安装 Node 或公开 npm 包。图片、视频生成调用运行中的 App，模型在「设置 > 媒体创作」配置。
+
+首次使用 Dsvideo 会选择或创建项目目录，准备 Runtime 并生成 `DSVIDEO_STATE.md`，不重复安装插件，也不执行付费生成测试。
+支持多个目录；Dsvideo 插件的 `data/PROJECTS.md` 登记路径和当前项目（查询命令返回文档绝对路径，插件更新保留数据），项目内状态文档维护创作进度。Agent 可通过
+`dsivio dsvideo projects list` 查询，`projects init --path <绝对目录> --name <名称>` 登记新项目，`projects use --path <绝对目录>` 切换。
+
+开发构建在 `npm run build:video-runtime` 后执行 `npm run build:dsvideo`。独立 dsvideo 项目更新后，运行
+`npm run build:dsvideo -- --source /path/to/dsvideo` 更新发布快照；日常构建只消费仓库中的快照和锁文件，不依赖相邻 checkout。
+
+内置市场保留 Hypit 等视频制作插件；旧 Dsivio Video 插件的打包资源和注册入口已删除。升级会清理旧内置安装，保留用户数据；工作台继续使用 App 自有的模板和视频分析工具。
 
 宿主的媒体生成、语音、本地 ASR、通用模型参数和取消能力独立于插件市场入口，继续由 Dsivio 持有凭证与任务；移除 Dsivio Video 不移除这些共用能力。
 

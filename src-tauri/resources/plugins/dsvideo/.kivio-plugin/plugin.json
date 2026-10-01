@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "name": "dsvideo",
+  "version": "0.1.0",
+  "description": "Dsivio 内置视频创作：编排、素材生成、Studio 预览与渲染。生成使用 App 中的媒体模型。",
+  "skills": "./skills/",
+  "metadata": {
+    "icon": "./logo.svg"
+  }
+}

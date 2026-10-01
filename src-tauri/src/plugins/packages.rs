@@ -47,6 +47,11 @@ fn packages_root() -> Result<PathBuf, String> {
         .ok_or("Application data directory unavailable".into())
 }
 
+pub(crate) fn package_data_dir(id: &str) -> Result<PathBuf, String> {
+    uuid::Uuid::parse_str(id).map_err(|e| e.to_string())?;
+    Ok(packages_root()?.join(id).join("data"))
+}
+
 // Scoped to the test thread so runtime tests can use real package records without
 // touching installed plugins or changing process-wide environment variables.
 #[cfg(test)]
@@ -70,37 +75,62 @@ impl Drop for TestPackagesRoot {
         TEST_PACKAGES_ROOT.with(|slot| slot.replace(self.0.take()));
     }
 }
+/// Remove a retired App-owned installation while preserving the user's data directory.
+pub(crate) fn remove_retired_builtin(id: &str) -> Result<(), String> {
+    let dir = package_dir(id)?;
+    let record = dir.join("record.json");
+    if !record.exists() { return Ok(()); }
+    let value = read_json(&record)?;
+    if value["source"] != "builtin:dsvideo" { return Ok(()); }
+    let content = dir.join("content");
+    if content.exists() { fs::remove_dir_all(content).map_err(|e| e.to_string())?; }
+    fs::remove_file(record).map_err(|e| e.to_string())
+}
+
 /// App-owned package content updates independently of user data and enabled state.
 pub fn ensure_builtin(id: &str, source: &Path) -> Result<Resolved, String> {
     let dir = package_dir(id)?;
     fs::create_dir_all(dir.join("data")).map_err(|e| e.to_string())?;
-    let previous = load(id).ok();
-    // Retired chat/page bridge files must not survive an in-place app upgrade.
-    if id == crate::media_runtime::PACKAGE_ID {
-        for retired in ["STUDIO.md", "scripts/studio.py", "scripts/model_catalog.py"] {
-            let path = dir.join("content").join(retired);
-            if path.exists() {
-                fs::remove_file(path).map_err(|e| e.to_string())?;
-            }
-        }
+    let previous: Option<Package> = read_json(&dir.join("record.json")).ok()
+        .and_then(|value| serde_json::from_value(value).ok());
+    if previous.as_ref().is_some_and(|package| package.source != "builtin:dsvideo") {
+        return Err("Built-in package id is already owned by another source".into());
     }
-    copy_tree(source, &dir.join("content"), &mut (100 * 1024 * 1024), 0)?;
+    let stage = dir.join(format!(".content-{}", uuid::Uuid::new_v4()));
     let package = Package {
-        id: id.into(),
-        name: "dsvideo".into(),
-        description: "内置视频 Skill 与 MCP 插件".into(),
-        version: None,
-        format: "codex".into(),
-        source: "builtin:dsvideo".into(),
-        revision: None,
-        enabled: previous.map(|p| p.package.enabled).unwrap_or(true),
-        components: BTreeMap::new(),
-        diagnostics: vec![],
+        id: id.into(), name: "dsvideo".into(), description: String::new(), version: None,
+        format: "kivio".into(), source: "builtin:dsvideo".into(), revision: None,
+        enabled: previous.map(|package| package.enabled).unwrap_or(true),
+        components: BTreeMap::new(), diagnostics: vec![],
     };
-    let resolved = resolve(&dir.join("content"), package, &dir.join("data"))?;
-    write_json(&dir.join("record.json"), &resolved.package)?;
-    Ok(resolved)
+    // Validate a complete snapshot first. Updating App-owned content must not merge retired files
+    // or replace the last working plugin on a malformed release. Data and enabled state are separate.
+    let prepared = (|| {
+        copy_tree(source, &stage, &mut (100 * 1024 * 1024), 0)?;
+        resolve(&stage, package, &dir.join("data"))
+    })();
+    let prepared = match prepared {
+        Ok(resolved) => resolved,
+        Err(error) => { let _ = fs::remove_dir_all(&stage); return Err(error); }
+    };
+    let content = dir.join("content");
+    let backup = dir.join(format!(".previous-{}", uuid::Uuid::new_v4()));
+    let had_content = content.exists();
+    if had_content { fs::rename(&content, &backup).map_err(|e| e.to_string())?; }
+    let installed = (|| {
+        fs::rename(&stage, &content).map_err(|e| e.to_string())?;
+        let resolved = resolve(&content, prepared.package, &dir.join("data"))?;
+        write_json(&dir.join("record.json"), &resolved.package)?;
+        Ok(resolved)
+    })();
+    if installed.is_err() {
+        let _ = fs::remove_dir_all(&content);
+        if had_content { fs::rename(&backup, &content).map_err(|e| format!("Built-in rollback failed; backup at {}: {e}", backup.display()))?; }
+        let _ = fs::remove_dir_all(&stage);
+    } else if had_content { let _ = fs::remove_dir_all(&backup); }
+    installed
 }
+
 fn package_dir(id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "Invalid package id")?;
     Ok(packages_root()?.join(id))
@@ -386,9 +416,6 @@ pub fn resolve(root: &Path, mut package: Package, data: &Path) -> Result<Resolve
         }
     }
     let mut env: BTreeMap<String, String> = std::env::vars().collect();
-    if package.id == crate::media_runtime::PACKAGE_ID && package.source == "builtin:dsvideo" {
-        env.extend(crate::media_runtime::runtime::environment()?);
-    }
     // Normalize only host-injected paths, before expansion into command/args/env.
     // Keep canonical paths for containment checks and leave arbitrary values intact.
     let cli_root = crate::utils::strip_windows_verbatim_prefix(root.to_path_buf());
@@ -837,6 +864,9 @@ pub async fn plugin_packages_remove(
     id: String,
 ) -> Result<(), String> {
     let _guard = mutation_lock().lock().await;
+    if load(&id)?.package.source.starts_with("builtin:") {
+        return Err("内置插件由应用管理，可以停用，不能移除其应用资源".into());
+    }
     set_enabled(&app, &state, &id, false).await?;
     let dir = package_dir(&id)?;
     let root = fs::canonicalize(packages_root()?).map_err(|e| e.to_string())?;
@@ -1058,6 +1088,63 @@ mod tests {
                 "accepted {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn retired_builtin_removal_keeps_user_data_and_is_repeatable() {
+        let temp = tempfile::tempdir().unwrap();
+        let _scope = TestPackagesRoot::new(temp.path());
+        let id = crate::media_runtime::migration::RETIRED_PACKAGE;
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/plugins/dsvideo");
+        ensure_builtin(id, &source).unwrap();
+        let dir = package_dir(id).unwrap();
+        fs::write(dir.join("data/user-project.txt"), "keep").unwrap();
+        remove_retired_builtin(id).unwrap();
+        remove_retired_builtin(id).unwrap();
+        assert!(!dir.join("content").exists());
+        assert!(!dir.join("record.json").exists());
+        assert_eq!(fs::read_to_string(dir.join("data/user-project.txt")).unwrap(), "keep");
+        assert!(list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn built_in_dsvideo_registers_and_updates_without_resetting_user_state() {
+        let storage = tempfile::tempdir().unwrap();
+        let _scope = TestPackagesRoot::new(storage.path());
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/plugins/dsvideo");
+        let id = "2d8f8e6c-82d1-452e-9eed-fa00c8a00533";
+        let first = ensure_builtin(id, &source).unwrap();
+        assert_eq!(first.package.name, "dsvideo");
+        assert_eq!(first.package.format, "kivio");
+        assert!(first.package.enabled);
+        assert!(first.package.diagnostics.is_empty(), "{:?}", first.package.diagnostics);
+        assert_eq!(first.skills.len(), 1);
+        assert!(first.servers.is_empty(), "Generation remains owned by the App CLI");
+        assert!(fs::read_to_string(first.root.join("skills/dsvideo/SKILL.md")).unwrap().contains("dsivio dsvideo"));
+        let dir = package_dir(id).unwrap();
+        fs::write(dir.join("data/user-project.txt"), "keep").unwrap();
+        fs::write(dir.join("content/obsolete.txt"), "retired release file").unwrap();
+        let mut saved = first.package;
+        saved.enabled = false;
+        write_json(&dir.join("record.json"), &saved).unwrap();
+        let updated = ensure_builtin(id, &source).unwrap();
+        assert!(!updated.package.enabled);
+        assert_eq!(fs::read_to_string(dir.join("data/user-project.txt")).unwrap(), "keep");
+        assert!(!dir.join("content/obsolete.txt").exists());
+    }
+
+    #[test]
+    fn invalid_built_in_update_preserves_the_working_plugin() {
+        let storage = tempfile::tempdir().unwrap();
+        let _scope = TestPackagesRoot::new(storage.path());
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/plugins/dsvideo");
+        let id = "2d8f8e6c-82d1-452e-9eed-fa00c8a00533";
+        ensure_builtin(id, &source).unwrap();
+        let broken = tempfile::tempdir().unwrap();
+        fs::create_dir(broken.path().join(".kivio-plugin")).unwrap();
+        fs::write(broken.path().join(".kivio-plugin/plugin.json"), "broken").unwrap();
+        assert!(ensure_builtin(id, broken.path()).is_err());
+        assert_eq!(load(id).unwrap().package.name, "dsvideo");
     }
 
     #[tokio::test]

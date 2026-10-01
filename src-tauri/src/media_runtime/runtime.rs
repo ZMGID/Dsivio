@@ -56,6 +56,7 @@ pub(crate) fn tools_at(root: &Path) -> Result<BTreeMap<&'static str, PathBuf>, S
         ("python", PYTHON_PATH),
         ("node", NODE_PATH),
         ("npm", NPM_PATH),
+        ("dsvideo", "dsvideo/node_modules/@dsvideo/dsvideo/bin/dsvideo.mjs"),
     ];
     let mut tools = BTreeMap::new();
     for (name, relative) in programs {
@@ -124,7 +125,7 @@ pub(crate) fn environment() -> Result<BTreeMap<String, String>, String> {
     environment_at(&root()?)
 }
 
-fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
+pub(super) fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
     // These paths become Node entry arguments and Python environment values.
     // Keep canonical filesystem paths out of the external-process contract.
     let root = crate::utils::strip_windows_verbatim_prefix(root.to_path_buf());

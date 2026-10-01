@@ -737,6 +737,8 @@ pub fn run() {
             connectors::connector_oauth_cancel,
             connectors::obsidian::list_obsidian_vaults_cmd,
             plugins::plugins_list,
+            media_runtime::projects::dsvideo_projects,
+            media_runtime::projects::dsvideo_project_bind,
             plugins::packages::plugin_packages_list,
             plugins::packages::plugin_packages_import,
             plugins::packages::plugin_packages_set_enabled,

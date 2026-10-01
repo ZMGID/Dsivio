@@ -8,7 +8,7 @@ use std::{
 };
 
 const BUILTIN_ID: &str = "bedroom-ugc-product-presenter-15s";
-const BUILTIN: &str = include_str!("../../resources/plugins/dsvideo-plugin/skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json");
+const BUILTIN: &str = include_str!("../../resources/video-studio/skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json");
 
 #[derive(Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]

@@ -61,6 +61,7 @@ enum Op {
         #[serde(default)]
         resume: bool,
     },
+    Lookup { source: String, idempotency_key: String },
     Cancel { id: String },
     Asrstatus,
     Asrinstall { model: String, languages: Vec<String> },
@@ -262,6 +263,23 @@ async fn dispatch(app: &tauri::AppHandle, op: Op) -> Reply {
                 Err(error) => Reply::err(ErrorCode::Invalid, format!("找不到任务 {id}（{error}）")),
             }
         }
+        Op::Lookup { source, idempotency_key } => {
+            let origin = match origin_for(Some(&source), Some(&idempotency_key)) {
+                Ok(origin) => origin,
+                Err(error) => return Reply::err(ErrorCode::Invalid, error),
+            };
+            // Wait for an in-flight keyed submission to persist its record; never submit here.
+            let _serial = IDEMPOTENT.lock().await;
+            match super::list_media_tasks(app.clone(), super::MediaTaskFilter {
+                origin: Some(origin), ..Default::default()
+            }) {
+                Ok(tasks) => match lookup_task(tasks) {
+                    Some(task) => Reply::ok(json!(task)),
+                    None => Reply::err(ErrorCode::Invalid, "MEDIA_TASK_NOT_FOUND: 尚无此来源和 key 的任务"),
+                },
+                Err(error) => Reply::err(ErrorCode::Invalid, error),
+            }
+        }
         Op::Submit(submit) => match submit_request(app, submit).await {
             Ok(task) => Reply::ok(json!(task)),
             Err(error) => Reply::err(ErrorCode::Invalid, error),
@@ -310,6 +328,12 @@ async fn submit_request(app: &tauri::AppHandle, submit: Submit) -> Result<MediaT
         return Ok(task);
     }
     super::start_configured(app, request).await
+}
+
+// Prefer the paid/uncertain receipt over earlier rejected attempts. A rejected-only record is
+// still evidence: lookup must not turn it into a new submission.
+fn lookup_task(tasks: Vec<MediaTask>) -> Option<MediaTask> {
+    submission_for_key(tasks.clone()).or_else(|| tasks.into_iter().next())
 }
 
 fn validate_existing_hashes(existing: &[MediaTask], hash: &str) -> Result<(), String> {
@@ -608,6 +632,7 @@ dsivio media —— 用 Dsivio「设置 > 媒体创作」里的模型生成图�
   dsivio media asr stop [--json]
   dsivio media cancel <任务ID> [--timeout <秒，默认30>] [--json]
   dsivio media status <任务ID> [--resume]
+  dsivio media status --source <来源> --idempotency-key <key>  (只读找回任务，不重交)
   dsivio media wait   <任务ID> [--timeout <秒>]
 
 image / video / speech / transcribe 通用：
@@ -1130,6 +1155,20 @@ fn task_from(value: Value) -> Result<MediaTask, Failure> {
     })
 }
 
+fn status_operation(args: &Args) -> Result<Op, String> {
+    match (args.one("source")?, args.one("idempotency-key")?) {
+        (None, None) => match args.positional.as_slice() {
+            [id] => Ok(Op::Status { id: id.clone(), resume: args.flag("resume") }),
+            _ => Err("需要一个任务 ID".into()),
+        },
+        (Some(source), Some(key)) if args.positional.is_empty() && !args.flag("resume") => {
+            origin_for(Some(source), Some(key))?;
+            Ok(Op::Lookup { source: source.into(), idempotency_key: key.into() })
+        }
+        _ => Err("status 只能用任务 ID（可 --resume），或同时用 --source 和 --idempotency-key；key 查询不支持 --resume".into()),
+    }
+}
+
 fn status(id: &str, resume: bool) -> Result<MediaTask, Failure> {
     task_from(call(Op::Status {
         id: id.into(),
@@ -1288,8 +1327,9 @@ fn run_command(argv: Vec<String>) -> Result<u8, Failure> {
             Ok(exit::OK)
         }
         "status" => {
-            args.only(&["resume"]).map_err(Failure::invalid)?;
-            let task = status(&single_id(&args)?, args.flag("resume"))?;
+            args.only(&["resume", "source", "idempotency-key"]).map_err(Failure::invalid)?;
+            let op = status_operation(&args).map_err(Failure::invalid)?;
+            let task = task_from(call(op)?)?;
             finish(task, false, None)
         }
         "wait" => {
@@ -1637,6 +1677,33 @@ mod tests {
         ]);
         assert_eq!(found.map(|t| t.id).as_deref(), Some("retry"));
     }
+    #[test]
+    fn status_can_lookup_a_key_without_submitting_or_resuming() {
+        let args = |argv: &[&str]| parse_args(argv.iter().map(|value| value.to_string())).unwrap();
+        assert!(matches!(status_operation(&args(&["id", "--resume"])), Ok(Op::Status { resume: true, .. })));
+        let op = status_operation(&args(&["--source", "dsvideo", "--idempotency-key", "run:1"])).unwrap();
+        assert!(matches!(op, Op::Lookup { source, idempotency_key } if source == "dsvideo" && idempotency_key == "run:1"));
+        for argv in [
+            vec!["--source", "dsvideo"],
+            vec!["--idempotency-key", "run:1"],
+            vec!["id", "--source", "dsvideo", "--idempotency-key", "run:1"],
+            vec!["--resume", "--source", "dsvideo", "--idempotency-key", "run:1"],
+            vec!["--source", "../x", "--idempotency-key", "run:1"],
+        ] { assert!(status_operation(&args(&argv)).is_err()); }
+    }
+
+    #[test]
+    fn lookup_preserves_refused_and_uncertain_records_as_read_only_evidence() {
+        let record = |id: &str, state: &str| -> MediaTask {
+            serde_json::from_value(json!({"id":id,"providerId":"p","model":"m","kind":"video",
+                "status":"failed","createdAt":"now","error":null,"remoteId":null,"outputs":[],
+                "canResume":false,"submissionState":state})).unwrap()
+        };
+        assert!(lookup_task(vec![]).is_none());
+        assert_eq!(lookup_task(vec![record("refused", "rejected")]).unwrap().id, "refused");
+        assert_eq!(lookup_task(vec![record("refused", "rejected"), record("paid", "uncertain")]).unwrap().id, "paid");
+    }
+
     #[test]
     fn requests_need_the_current_token() {
         let line = serde_json::to_string(&Envelope {

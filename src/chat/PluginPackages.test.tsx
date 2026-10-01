@@ -22,6 +22,15 @@ describe('plugin package management', () => {
     fireEvent.click(screen.getByRole('button', { name: '启用' }))
     await waitFor(() => expect(packageApi.setEnabled).toHaveBeenCalledWith('id', true))
   })
+  it('shows the built-in plugin as enabled and allows disabling it', async () => {
+    vi.mocked(packageApi.list).mockResolvedValue([{ ...plugin, name: 'dsvideo', source: 'builtin:dsvideo', enabled: true }])
+    render(<PluginPackages lang="zh" />)
+    await screen.findByText('dsvideo')
+    expect(screen.getByText(/^内置 ·/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '移除' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '停用' }))
+    await waitFor(() => expect(packageApi.setEnabled).toHaveBeenCalledWith('id', false))
+  })
   it('shows unsupported capabilities and keeps enable unavailable', async () => {
     vi.mocked(packageApi.list).mockResolvedValue([{ ...plugin, diagnostics: ['Unsupported hook event: Stop'] }])
     render(<PluginPackages lang="zh" />)

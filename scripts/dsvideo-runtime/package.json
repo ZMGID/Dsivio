@@ -1,0 +1,8 @@
+{
+  "name": "dsivio-bundled-dsvideo",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@dsvideo/dsvideo": "file:../../plugins/dsvideo/distribution.tgz"
+  }
+}

@@ -24,7 +24,7 @@ import {
   type VideoTask,
   type VideoTemplate,
 } from './types'
-import builtin from '../../../../../src-tauri/resources/plugins/dsvideo-plugin/skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json'
+import builtin from '../../../../../src-tauri/resources/video-studio/skills/ecom-h3-video/templates/bedroom-ugc-product-presenter-15s.json'
 import '../../image/projects/workbenchImage.css'
 import '../../image/projects/studioLayout.css'
 import './VideoStudio.css'

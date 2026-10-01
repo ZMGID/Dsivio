@@ -2518,10 +2518,10 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再切换应用。')
     const startingHash = window.location.hash
     if (!item.enabled || item.id === 'ziniao-cli') await marketApi.setEnabled(item.id, true)
-    const target = marketUseTarget(item, await marketApi.setupDone(item.id))
+    const target = marketUseTarget(item, item.manifest.setupSkillId ? await marketApi.setupDone(item.id) : true)
     await loadSkills()
     if (window.location.hash !== startingHash) return
-    const pluginProject = item.manifest.project ? await marketApi.ensureProject(item.id) : null
+    const pluginProject = item.projectContext ?? (item.manifest.project ? await marketApi.ensureProject(item.id) : null)
     const useProject = pluginProject ?? (selectedProject ? { id: selectedProject.id, name: selectedProject.name } : null)
     const reuse = !newChat && currentConversation && (!pluginProject || (currentConversation.project_id ?? currentConversation.projectId) === pluginProject.id)
     let conv = reuse ? currentConversation : await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined, useProject?.name, useProject?.id ?? null)

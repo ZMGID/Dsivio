@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'src-tauri/resources/video-runtime/python-packages'))
-sys.path.insert(0, str(ROOT / 'src-tauri/resources/plugins/dsvideo-plugin/scripts'))
+sys.path.insert(0, str(ROOT / 'src-tauri/resources/video-studio/scripts'))
 from comfy_errors import expose_expected_errors
 from comfy_mcp.errors import ComfyCliError
 from mcp.server.mcpserver import MCPServer
@@ -53,7 +53,7 @@ class ErrorReportingTests(unittest.IsolatedAsyncioTestCase):
                'PYTHONPATH': str(runtime / 'python-packages'), 'PYTHONHOME': '',
                'COMFYUI_URL': f'http://127.0.0.1:{http.server_port}', 'COMFY_LOCAL_URL': 'http://127.0.0.1:1'}
         params = StdioServerParameters(command=sys.executable,
-            args=['-B', str(ROOT / 'src-tauri/resources/plugins/dsvideo-plugin/scripts/mcp_comfy.py')], env=env)
+            args=['-B', str(ROOT / 'src-tauri/resources/video-studio/scripts/mcp_comfy.py')], env=env)
         try:
             async with stdio_client(params) as (read, write):
                 async with ClientSession(read, write) as session:

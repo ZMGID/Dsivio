@@ -3,16 +3,100 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { MarketSnapshot } from './types'
 import { MarketPage } from './MarketPage'
 import { marketApi } from './api'
+import { dsvideoProjectsApi } from '../../api/dsvideoProjects'
+import { packageApi } from '../../api/pluginPackages'
+import { api, type Settings } from '../../api/tauri'
+import { updateSettingsCached } from '../../api/settingsCache'
+vi.mock('../../api/dsvideoProjects', () => ({ dsvideoProjectsApi: { list: vi.fn().mockResolvedValue({ version: 1, current: 'video-1', document: '/app/dsvideo/PROJECTS.md', projects: [{ id: 'video-1', name: '广告片', path: '/videos/ad', available: true, initializedAt: 1, lastUsedAt: 1 }] }), bind: vi.fn().mockResolvedValue({ id: 'chat-project', name: '广告片', rootPath: '/videos/ad' }), init: vi.fn() } }))
+vi.mock('../../api/pluginPackages', () => ({ packageApi: { list: vi.fn().mockResolvedValue([]), setEnabled: vi.fn() } }))
+vi.mock('../../api/tauri', () => ({ api: { chatSkillsList: vi.fn().mockResolvedValue({ success: true, skills: [] }) } }))
+vi.mock('../../api/settingsCache', () => ({ refreshSettings: vi.fn().mockResolvedValue(undefined), getSettingsCached: vi.fn().mockResolvedValue({ chatTools: { disabledSkillIds: [] } }), subscribeSettings: vi.fn(() => () => {}), updateSettingsCached: vi.fn() }))
 
 const state = vi.hoisted(() => ({ snapshot: {} as MarketSnapshot, loading: false, initialLoading: false, discard: vi.fn() }))
 vi.mock('./api', () => ({ useMarket: () => ({ snapshot: state.snapshot, loading: state.loading, initialLoading: state.initialLoading }), marketApi: { refresh: vi.fn(), icon: vi.fn().mockResolvedValue(''), discard: state.discard } }))
 beforeEach(() => {
+  vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [], warnings: [], error: null })
+  vi.mocked(packageApi.list).mockResolvedValue([])
   window.location.hash = '#chat/market'
   state.snapshot = { categories: [], entries: [], installed: [], refreshedAt: null, error: null, sourceUrl: '' }
   state.discard.mockReset().mockResolvedValue(undefined)
 })
 afterEach(cleanup)
 const show = () => render(<MarketPage lang="zh" onInstall={vi.fn()} onUse={vi.fn()} onUninstall={vi.fn()} />)
+
+it('随软件内置的 Dsimage 使用技能开关，并保留其他设置', async () => {
+  vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [{ id: 'dsimage', name: 'dsimage', source: 'builtin', description: '', recommendedTools: [], disableModelInvocation: false, files: [], triggers: [] }], warnings: [], error: null })
+  vi.mocked(updateSettingsCached).mockImplementation(async mutate => mutate({ chatTools: { disabledSkillIds: ['pdf'] }, theme: 'dark' } as Settings))
+  const { container } = show()
+  expect(await screen.findByText('Dsimage')).toBeInTheDocument()
+  expect(container.querySelector('.market-section h2')?.textContent).toBe('内置插件')
+  expect(screen.queryByRole('button', { name: '安装' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Dsimage 停用' }))
+  await screen.findByRole('button', { name: 'Dsimage 启用' })
+  const mutate = vi.mocked(updateSettingsCached).mock.calls.at(-1)![0]
+  const updated = mutate({ chatTools: { disabledSkillIds: ['pdf'] }, theme: 'dark' } as Settings)
+  expect(updated.chatTools.disabledSkillIds).toEqual(['pdf', 'dsimage'])
+  expect(updated.theme).toBe('dark')
+  fireEvent.click(screen.getByRole('button', { name: 'Dsimage 启用' }))
+  await screen.findByRole('button', { name: 'Dsimage 停用' })
+  vi.mocked(updateSettingsCached).mockRejectedValueOnce(new Error('保存失败'))
+  fireEvent.click(screen.getByRole('button', { name: 'Dsimage 停用' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('保存失败')
+  expect(screen.getByRole('button', { name: 'Dsimage 停用' })).toBeInTheDocument()
+})
+
+it('公开页最前面展示真实内置插件，停用直接更新插件包状态', async () => {
+  const plugin = { id: 'builtin-dsvideo', name: 'dsvideo', description: '视频编排与渲染', version: '0.1.0', format: 'kivio', source: 'builtin:dsvideo', revision: null, enabled: true, components: { skills: 1 }, diagnostics: [] }
+  vi.mocked(packageApi.list).mockResolvedValue([plugin])
+  vi.mocked(packageApi.setEnabled).mockResolvedValue({ ...plugin, enabled: false })
+  const manifest = (await import('../../../packages/srt-whiteboard-animation/market.json')).default.manifest
+  state.snapshot.categories = [{ id: manifest.categoryIds[0], name: '视频' }]
+  state.snapshot.entries = [{ id: manifest.id, version: manifest.version, source: { kind: 'built-in' }, manifest: { ...manifest, schemaVersion: 1 } }]
+  const { container } = show()
+  expect(await screen.findByText('Dsvideo')).toBeInTheDocument()
+  expect(container.querySelector('.market-section h2')?.textContent).toBe('内置插件')
+  fireEvent.click(screen.getByRole('button', { name: '停用' }))
+  expect(await screen.findByText('已停用')).toBeInTheDocument()
+  expect(packageApi.setEnabled).toHaveBeenCalledWith(plugin.id, false)
+  fireEvent.click(screen.getByRole('tab', { name: '个人' }))
+  expect(screen.queryByText('Dsvideo')).toBeNull()
+  fireEvent.click(screen.getByRole('tab', { name: '公开' }))
+  fireEvent.change(screen.getByRole('textbox', { name: '搜索插件' }), { target: { value: '不匹配' } })
+  expect(screen.queryByText('Dsvideo')).toBeNull()
+  fireEvent.change(screen.getByRole('textbox', { name: '搜索插件' }), { target: { value: '' } })
+})
+
+it('Dsimage 出现在已安装，能打开详情并从详情使用真实技能', async () => {
+  vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [{ id: 'dsimage', name: 'dsimage', source: 'builtin', description: '', recommendedTools: [], disableModelInvocation: false, files: [], triggers: [] }], warnings: [], error: null })
+  const onUse = vi.fn().mockResolvedValue(undefined)
+  render(<MarketPage lang="zh" onInstall={vi.fn()} onUse={onUse} onUninstall={vi.fn()} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Dsimage' }))
+  expect(await screen.findByRole('heading', { name: 'Dsimage' })).toBeInTheDocument()
+  expect(screen.queryByText('使用示例')).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: '使用' }))
+  await waitFor(() => expect(onUse).toHaveBeenCalledWith(expect.objectContaining({ id: 'dsimage', skillId: 'dsimage', enabled: true }), true))
+  expect(screen.queryByRole('button', { name: /卸载/ })).toBeNull()
+})
+
+it('停用的 Dsvideo 使用前启用并加载包内技能，不走市场安装', async () => {
+  const plugin = { id: '2d8f8e6c-82d1-452e-9eed-fa00c8a00533', name: 'dsvideo', description: '视频编排与渲染', version: '0.1.0', format: 'kivio', source: 'builtin:dsvideo', revision: null, enabled: false, components: { skills: 1 }, diagnostics: [] }
+  const skillId = `pkg-${plugin.id}-dsvideo`
+  vi.mocked(packageApi.list).mockResolvedValue([plugin])
+  vi.mocked(packageApi.setEnabled).mockResolvedValue({ ...plugin, enabled: true })
+  vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [{ id: skillId, name: 'dsvideo:dsvideo', source: 'plugin', description: '', recommendedTools: [], disableModelInvocation: false, files: [], triggers: [] }], warnings: [], error: null })
+  const onUse = vi.fn().mockResolvedValue(undefined)
+  const onInstall = vi.fn()
+  render(<MarketPage lang="zh" onInstall={onInstall} onUse={onUse} onUninstall={vi.fn()} />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Dsvideo 视频编排与渲染' }))
+  await screen.findByRole('heading', { name: 'Dsvideo' })
+  fireEvent.click(screen.getByRole('button', { name: '启用并使用' }))
+  fireEvent.click(await screen.findByRole('button', { name: '继续项目' }))
+  await waitFor(() => expect(onUse).toHaveBeenCalledWith(expect.objectContaining({ skillId, enabled: true }), true))
+  expect(packageApi.setEnabled).toHaveBeenCalledWith(plugin.id, true)
+  expect(onInstall).not.toHaveBeenCalled()
+  expect(dsvideoProjectsApi.bind).toHaveBeenCalledWith('/videos/ad')
+  expect(onUse).toHaveBeenCalledWith(expect.objectContaining({ projectContext: { id: 'chat-project', name: '广告片', rootPath: '/videos/ad' } }), true)
+})
 
 it('空目录显示暂无插件，不显示故障或重试', () => {
   show()

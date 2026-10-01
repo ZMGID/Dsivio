@@ -114,7 +114,7 @@ try {
   writeFileSync(join(staging, '.gitkeep'), '')
   // Fail before replacing an older bundle if relocation, explicit npm setup or
   // either MCP handshake is broken. MCP startup never installs dependencies.
-  run(process.execPath, [join(repo, 'scripts/verify-video-runtime.mjs'), staging, '--relocate'])
+  run(process.execPath, [join(repo, 'scripts/verify-video-runtime.mjs'), staging, '--relocate', '--base-runtime-only'])
   rmSync(destination, { recursive: true, force: true })
   renameSync(staging, destination)
   console.log(`Bundled video runtime written to ${destination}`)

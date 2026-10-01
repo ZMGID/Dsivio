@@ -2,7 +2,7 @@
 mod planning;
 mod storage;
 use crate::{
-    media_runtime::{plugin, runtime},
+    media_runtime::runtime,
     state::AppState,
 };
 use base64::Engine;
@@ -154,32 +154,26 @@ async fn ai(
     };
     serde_json::from_str(text).map_err(|_| "AI 未返回有效的结构化视频方案".into())
 }
-async fn mcp(
-    app: &AppHandle,
-    key: &str,
-    name: &str,
-    input: Value,
-    url: Option<&str>,
-) -> Result<Value, String> {
-    let package = plugin()?;
-    let mut server = package
-        .servers
-        .into_iter()
-        .find(|s| s.name.ends_with(key))
-        .ok_or("内置 MCP 不存在")?;
-    // The task's original endpoint remains authoritative during recovery.
-    if let Some(url) = url {
-        server.env.insert("COMFYUI_URL".into(), url.into());
-        server
-            .env
-            .insert("DSVIDEO_COMFY_TASK_URL".into(), url.into());
-    }
+async fn analyze_video(app: &AppHandle, input: Value) -> Result<Value, String> {
+    let root = crate::utils::strip_windows_verbatim_prefix(runtime::root()?);
+    let tools = runtime::tools_at(&root)?;
+    let node = tools.get("node").ok_or("内置 Node 缺失")?;
+    let entry = root.join("analyzer/node_modules/mcp-video-analyzer/dist/index.js");
+    if !entry.is_file() { return Err("内置视频分析工具缺失".into()); }
+    let mut env = runtime::environment()?;
+    env.remove("PYTHONPATH");
+    env.remove("PYTHONHOME");
+    let server = crate::settings::ChatMcpServer {
+        id: "workbench-video-analyzer".into(), name: "video-analyzer".into(), enabled: true,
+        command: node.to_string_lossy().into_owned(), args: vec![entry.to_string_lossy().into_owned()],
+        env: env.into_iter().collect(), ..Default::default()
+    };
     let result = app
         .state::<AppState>()
-        .mcp_call_tool(Some(app), &server, name, input)
+        .mcp_call_tool(Some(app), &server, "analyze_video", input)
         .await?;
     if result.is_error {
-        return Err(format!("{key} 执行失败：{}", result.content));
+        return Err(format!("video-analyzer 执行失败：{}", result.content));
     }
     Ok(result.raw)
 }
@@ -251,12 +245,9 @@ async fn direct(app: &AppHandle, action: &str, input: Value) -> Result<Value, St
             save["analysis"] = analysis;
             return project(app, "analysis_result", save).await;
         }
-        analysis = mcp(
+        analysis = analyze_video(
             app,
-            "video-analyzer",
-            "analyze_video",
             json!({"url":b["source"],"options":{"detail":"standard"}}),
-            None,
         )
         .await?;
         if let Some(content) = analysis["content"].as_array() {
