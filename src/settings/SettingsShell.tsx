@@ -1207,7 +1207,9 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             )}
 
             {/* ===== 混音器标签页 ===== */}
-            {activeTab === 'media' && <MediaCreationTab settings={settings} lang={lang} onUpdatePool={(kind, models) => setSettings(prev => prev ? { ...prev, workbenchMedia: { ...prev.workbenchMedia, [kind]: models } } : prev)} />}
+            {activeTab === 'media' && <MediaCreationTab settings={settings} lang={lang}
+              onUpdatePool={(kind, models) => setSettings(prev => prev ? { ...prev, workbenchMedia: { ...prev.workbenchMedia, [kind]: models } } : prev)}
+              onUpdateLocalAsr={localAsr => setSettings(prev => prev ? { ...prev, workbenchMedia: { ...prev.workbenchMedia, localAsr } } : prev)} />}
             {activeTab === 'mixer' && (
               <MixerTab
                 settings={settings}

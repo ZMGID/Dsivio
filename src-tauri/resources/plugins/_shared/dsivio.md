@@ -2,9 +2,9 @@
 
 这份文档只是告诉你 Dsivio 有什么，是否用、怎么用，由你根据任务和用户的意思决定。
 
-## 生成图片、视频：用 `dsivio media` 命令
+## 生成图片、视频、语音与转写：用 `dsivio media`
 
-插件需要生图或生视频时，调用 `dsivio media` 命令即可。它使用用户在「设置 > 媒体创作」里开启的模型，由正在运行的 Dsivio 完成请求、等待和下载。
+插件通过 `dsivio media` 调用运行中的 Dsivio 媒体任务负责人。云端模型必须在「设置 > 媒体创作」中显式开启对应产品协议并加入模型池；已有聊天/视频 key 不表示已开通 TTS 或云转写。本地 WhisperX 的安装与服务进程也由宿主监督，插件不另起同模式服务。
 
 - **不要向用户要 URL 和 API Key，也不要去读 Dsivio 的设置文件或密钥**。插件自己的配置里只写这条命令。
 - **不需要按厂商协议自己对接服务**。模型选择、参数换算、任务轮询、结果下载都由 Dsivio 负责。
@@ -14,20 +14,30 @@
 ### 命令
 
 ```sh
-dsivio media models [--kind image|video]
+dsivio media models [--kind image|video|speech|transcribe|matting] [--json]
 dsivio media image --prompt-file prompt.txt [--model 供应商/模型] [--ref a.png]... \
     [--ratio 16:9] [--size 2K] [--quality high] [--n 1] [--out ./outputs]
 dsivio media video --prompt-file prompt.txt [--model 供应商/模型] [--first-frame a.png] [--last-frame b.png] \
     [--ref r.png]... [--ref-video v.mp4]... [--ref-audio a.mp3]... \
-    [--duration 5] [--resolution 720p] [--ratio 9:16] [--audio] [--out ./outputs]
+    [--duration 5|auto] [--resolution 720p] [--ratio 9:16] [--audio|--no-audio] [--out ./outputs]
+dsivio media speech --model 供应商/模型 --mode tts --text-file text.txt --voice 音色ID \
+    [--instruction-file instruction.txt] [--output-format wav] [--out ./outputs]
+dsivio media speech --model 供应商/模型 --mode clone --text-file text.txt \
+    --voice-ref authorized.wav --consent-attestation consent.txt [--output-format wav]
+dsivio media transcribe evidence.wav --language zh [--model local/whisperx-small] \
+    [--sample-frames 正整数] [--timestamps word|segment] [--out ./outputs]
+dsivio media asr status [--json]
+dsivio media asr install [--model small] [--language en] [--language zh] [--json]
+dsivio media asr stop [--json]
+dsivio media cancel <任务ID> [--timeout 秒] [--json]
 dsivio media status <任务ID> [--resume]
 dsivio media wait <任务ID> [--timeout 秒] [--out ./outputs]
 ```
 
 - `models` 列出当前可用的模型（供应商已启用、模型仍在其列表里的才会出现）。`id` 的格式是 `供应商/模型`，可以原样传给 `--model`。列表顺序就是「设置 > 媒体创作」里拖动排好的优先级，不传 `--model` 时用第一个（`default: true`）。
-- 每个模型带 `capabilities`，说明它能做什么，**调用前先看它，不要猜**。`known: false` 表示 Dsivio 没有这个模型的资料（`capabilities` 为 `null`），这时只能只传提示词。
-  - 视频：`modes`、`durations`、`resolutions`、`ratios`、`audioToggle`（能否开关声音）、`firstFrame` / `lastFrame`（首帧、尾帧，尾帧必须同时给首帧）、`maxReferenceImages` / `maxReferenceVideos` / `maxReferenceAudios`（参考素材上限，为 0 表示不支持）、`referenceAudioNeedsVisual`（参考音频必须同时有参考图或视频）、`framesExcludeReferences`（首尾帧和参考素材不能同时用）、`localReferenceMedia`（参考视频和音频能否用本地文件，否则必须是 http(s) 链接）、`maxPromptLength`、`defaults`。
-  - 图片：`maxReferenceImages`、`sizes`（`--size` 可用的档位）、`ratios`、`maxCount`（`--n` 上限）。
+- 每个模型带版本化 `description`，它是参数事实的权威；**调用前先读 `arguments` / `constraints`，不要猜**。保留的 `capabilities` 是同一描述的兼容投影。`known: false` 的未知模型仅使用已声明的基本路线，不接受任意扩展参数。
+- `description.arguments` 按规范参数名列出类型、允许值/范围、默认、长度/媒体数量/位置等事实及公共 transport。`factsComplete:false` / `unknownFacts` 表示事实尚不完整，不代表任意值都可以传；`billingInfo:null` 代表价格未知，不代表免费。`factsRevision` 是规范描述内容的 SHA256。
+- 图像扩展参数如 `background` / `outputFormat` 仅在实现其编码的路线公布。图像参数规范名为 `aspectRatio`；`aspect_ratio` 只是旧输入 alias，两个拼法不能同时传。首帧/尾帧的规范值是单条 `mediaList`，条目为 `{"source":"/abs/a.png","attributes":{}}`；CLI 旧字符串 flags 仍可用。`--duration auto` 只在模型描述的 `specialValues` 真正允许时有效。
 - 提示词可以用 `--prompt "..."` 直接传，也可以用 `--prompt-file 文件`，或 `--prompt-file -` 从标准输入读取。中文或较长的提示词建议用文件或标准输入。
 - 本地路径可以是相对路径，会按当前目录解析。也可以传 `http(s)://` 链接。
 - `image` / `video` 默认会等到生成结束才返回。加 `--no-wait` 则提交后立刻返回任务 ID，之后用 `status` 或 `wait` 查询。等待上限用 `--timeout` 设置，图片默认 600 秒，视频默认 1800 秒。
@@ -37,19 +47,27 @@ dsivio media wait <任务ID> [--timeout 秒] [--out ./outputs]
 - `status` 和 `wait` 只读取状态。只有 `failed` 且 `canResume` 为 `true` 时，才在用户确认后加 `--resume`：它用同一个回执再查一次，不会重新提交。不要因为查询失败重新发起付费生成。
 - `--idempotency-key <key>`：同一个 key 只会提交一次，重复调用返回同一个任务。唯一的例外是服务明确拒绝了请求（退出码 3，没有扣费）：用同一个 key 再调用会重新提交，方便修正原因后重试。可能重试的调用方（例如按节点执行的流水线）都应该传这个参数，避免重复扣费。
 - `--source <名称>`：记录调用来源，例如 `hypit`，便于在 Dsivio 的任务记录里区分。
-- `--options-json '{...}'`：额外的模型参数，原样合并进请求。不能和上面的参数重复。
+- `--options-json '{...}'` / `--options-file 文件`：互斥地传入已声明的通用模型参数对象；不能与普通 flags 或其他 alias 重复。未知参数不是 vendor body 透传，会在任务创建/付费前拒绝。`false` 与 `0` 原样保留。
+- `--description-revision <factsRevision>`：执行计划时传回模型描述版本。版本不匹配返回 `MODEL_DESCRIPTION_CHANGED`、退出 2，不提交；重新获取 models 并重新计划，不能忽略变化继续收费。
 - `--out <目录>`：成功后把结果复制到这个目录。不传时，结果文件留在 Dsivio 的任务目录里，路径见输出。
+- TTS 与 clone 都输出可验证的音频任务产物。clone 只在模型描述明确支持时可用，必须提供用户真实授权的样本与同意声明；不替用户编造声明，不把普通音色选择当作上传克隆。
+- `transcribe` 输入必须是 16kHz/mono/PCM s16 WAV，data 长度与 `sampleFrames` 一致；任意 MP3/视频先由插件素材工具提取标准证据。返回标准 MediaTask，转写数据在 `result` 或 JSON output 中；没有对齐时间的词保留缺省，不估算补齐。
+- `asr install` 返回安装操作状态，退出 0 仅表示开始/复用，不表示 ready；继续查 `asr status`。手动安装与首次识别共用同一 owner，失败保留旧环境；本地失败不自动上传云端。`asr stop` 只停空闲服务，busy 时先明确取消对应 task。
+- `cancel` 返回 `confirmed|requested|unsupported|too-late` 以及作用域/费用事实；退出 0 不等于远端已取消或退款。同步云请求已发出时通常无法确认取消；不删除回执、成功产物或供应商记录。
+- `models --kind matting` 在当前延期范围返回空列表；导入透明素材不等于已实现云端抠像。
 
 ### 输出和退出码
 
 stdout 只输出一行 JSON，进度和错误说明写在 stderr。
+参数描述错误 stdout 为 `{code,argumentPath,ruleId,actual,expected,message,exitCode:2}`，例如 `MODEL_ARGUMENT_UNSUPPORTED`；stderr 仍提供人类诊断。`--json` 显式声明 JSON 输出，不改变结果外形。
+
 
 ```json
 {"id":"…","kind":"video","status":"succeeded","model":"…","providerId":"…","remoteId":"…",
  "outputs":[{"path":"/…/output.mp4","mime":"video/mp4"}],"error":null,"submissionState":null}
 ```
 
-`status` 的取值为 `running`、`succeeded`、`failed`。
+`status` 的取值为 `running`、`succeeded`、`failed`、`cancelled`。speech/transcribe 默认等待 600 秒；超时仍查询原 task。转写 `result` 内联有大小上限，完整证据始终可通过 JSON output 读取。
 
 | 退出码 | 含义 | 怎么办 |
 | --- | --- | --- |
@@ -59,6 +77,7 @@ stdout 只输出一行 JSON，进度和错误说明写在 stderr。
 | 4 | 已提交，但生成失败 | 查看 `error`；`canResume` 为 `true` 时是回执丢失，可能已扣费，先找供应商核实 |
 | 5 | **提交结果不确定** | **不要重新提交**，用 `status` 查询，或请用户确认 |
 | 6 | Dsivio 没在运行 | 请用户打开 Dsivio |
+| 7 | 查询/等待的任务已确认取消 | 不消费产物，不把取消当作可重提失败 |
 | 124 | 等待超时，任务仍在运行 | 用 `wait <任务ID>` 继续等待 |
 
 生成是付费调用。遇到 5 和 124 时不要重新提交同一个请求。
@@ -68,10 +87,12 @@ stdout 只输出一行 JSON，进度和错误说明写在 stderr。
 插件需要本地媒体工具时，运行 `dsivio tools --json`，获取内置运行时中实际存在的程序的绝对路径。这个命令不需要 Dsivio 处于运行状态，也不会启动 App。
 
 ```json
-{"ffmpeg":"/…/ffmpeg","ffprobe":"/…/ffprobe","yt-dlp":"/…/yt-dlp","python":"/…/python3","node":"/…/node"}
+{"ffmpeg":"/…/ffmpeg","ffprobe":"/…/ffprobe","yt-dlp":"/…/yt-dlp","python":"/…/python3","node":"/…/node","npm":"/…/npm-cli.js"}
 ```
 
 缺失的程序不输出对应字段；`ffmpeg` 指向内置 `ffmpeg-static` 二进制。不加 `--json` 时，每行输出 `名称<TAB>路径`。退出码 0 表示成功，2 表示参数错误，1 表示无法定位资源或输出失败。获取路径后直接调用对应程序，不依赖它们在 `PATH` 上。
+
+`npm` 是脚本路径，调用时必须使用同一 `tools.node`：`node npm-cli.js ci --omit=dev --no-audit --no-fund`。不切到 system npm，不重写 release lock；失败不标记 setup 成功，也不替换上一个可用 runtime。
 
 ## Dsivio 自带的工具
 

@@ -177,6 +177,10 @@ export function resolveModelInfo(
   return {
     displayName: override.displayName ?? defaults.displayName,
     videoProtocol: override.videoProtocol ?? defaults.videoProtocol,
+    speechProtocol: override.speechProtocol,
+    speechBaseUrl: override.speechBaseUrl,
+    transcribeProtocol: override.transcribeProtocol,
+    transcribeBaseUrl: override.transcribeBaseUrl,
     contextWindow: override.contextWindow ?? defaults.contextWindow,
     maxOutput: override.maxOutput ?? defaults.maxOutput,
     temperature: override.omitTemperature

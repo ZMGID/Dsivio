@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import type { ModelProvider } from '../../api/tauri'
 import { Button } from '../../components/Button'
 import { useLang } from '../../components/i18n'
-import type { MediaKind, MediaTask } from '../../generated/mediaGeneration'
+import type { MediaTask } from '../../generated/mediaGeneration'
 import { videoModel } from '../../data/videoModels'
 import { FieldBlock, Input, Select, TextArea } from '../../settings/public/controls'
 import { CopyUploadField } from './copy/CopyUploadField'
@@ -40,7 +40,7 @@ export interface MediaImageFieldProps {
 export function MediaGenerationRunner({ provider, model, kind, origin, render, renderImages, onSubmitted }: {
   provider?: ModelProvider
   model: string
-  kind: MediaKind
+  kind: 'image' | 'video'
   /** 记在任务上的来源；不传则按 provider+model 列历史。 */
   origin?: string
   render?: (view: MediaGenerationView) => ReactNode
@@ -96,7 +96,7 @@ export function MediaGenerationRunner({ provider, model, kind, origin, render, r
           }
         }
         if (mode === 'reference') {
-          options.referenceImages = await readImages(images)
+          if (images.length) options.referenceImages = await readImages(images)
           for (const key of ['referenceVideos', 'referenceAudios']) if (values[key]?.trim()) options[key] = values[key].split('\n').map(v => v.trim()).filter(Boolean)
         }
       }

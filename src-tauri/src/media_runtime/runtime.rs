@@ -18,6 +18,12 @@ const NODE_PATH: &str = if cfg!(windows) {
 } else {
     "node/bin/node"
 };
+// npm is a JavaScript entry, not an executable: invoke it with the bundled Node.
+const NPM_PATH: &str = if cfg!(windows) {
+    "node/node_modules/npm/bin/npm-cli.js"
+} else {
+    "node/lib/node_modules/npm/bin/npm-cli.js"
+};
 
 pub(super) fn tools_resource_directory() -> Result<PathBuf, String> {
     // Use Tauri's own bundle lookup without constructing or initializing an App.
@@ -29,7 +35,7 @@ pub(super) fn tools_resource_directory() -> Result<PathBuf, String> {
     )
 }
 
-pub(super) fn tools_at(root: &Path) -> Result<BTreeMap<&'static str, PathBuf>, String> {
+pub(crate) fn tools_at(root: &Path) -> Result<BTreeMap<&'static str, PathBuf>, String> {
     let programs = [
         (
             "ffmpeg",
@@ -49,6 +55,7 @@ pub(super) fn tools_at(root: &Path) -> Result<BTreeMap<&'static str, PathBuf>, S
         ),
         ("python", PYTHON_PATH),
         ("node", NODE_PATH),
+        ("npm", NPM_PATH),
     ];
     let mut tools = BTreeMap::new();
     for (name, relative) in programs {

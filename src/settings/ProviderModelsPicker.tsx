@@ -1,4 +1,5 @@
 import { suggestedVideoModels, videoProvider } from '../data/videoModels'
+import { suggestedSpeechModels } from '../data/speechModels'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Minus, Plus, RefreshCw, Search, X } from 'lucide-react'
@@ -84,7 +85,7 @@ export function ProviderModelsPicker({
   // （上次只刷新了 availableModels，enabledModels 并进去后下线项仍会残留）。
   // 本次弹窗里手动添加的 ID 记在 extraModels，否则加完立刻从列表里消失。
   const allModels = useMemo(
-    () => uniqSortedModels([...provider.availableModels, ...suggestedVideoModels(provider.baseUrl), ...extraModels]),
+    () => uniqSortedModels([...provider.availableModels, ...suggestedVideoModels(provider.baseUrl), ...suggestedSpeechModels(provider.baseUrl), ...extraModels]),
     [provider.availableModels, provider.baseUrl, extraModels],
   )
 

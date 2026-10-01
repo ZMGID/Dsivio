@@ -1,8 +1,9 @@
 import type { DefaultModelSelection, ModelProvider, Settings, WorkbenchMediaConfig } from '../api/tauri'
 import { resolveModelInfo } from './modelMatching'
 import { isVideoGenerationModel } from './videoModels'
+import { isSpeechModelConfigured, LOCAL_TRANSCRIBE_MODEL } from './speechModels'
 
-export type MediaPoolKind = keyof WorkbenchMediaConfig
+export type MediaPoolKind = 'imageModels' | 'videoModels' | 'speechModels' | 'transcribeModels'
 export function mediaModelKey(selection: DefaultModelSelection): string {
   return JSON.stringify([selection.providerId, selection.model])
 }
@@ -10,6 +11,7 @@ export function mediaModelName(provider: ModelProvider | undefined, model: strin
   return provider?.request.comfy?.workflows.find(w => w.id === model)?.name || model
 }
 export function isMediaPoolCandidate(provider: ModelProvider, model: string, kind: MediaPoolKind): boolean {
+  if (kind === 'speechModels' || kind === 'transcribeModels') return provider.enabled !== false && provider.enabledModels.includes(model) && isSpeechModelConfigured(provider, model, kind)
   if (provider.request?.comfy) return provider.enabled !== false && provider.request?.comfy.workflows.some(w => w.id === model && w.kind === (kind === 'imageModels' ? 'image' : 'video'))
   return provider.enabled !== false && provider.enabledModels.includes(model) && (kind === 'videoModels'
     ? isVideoGenerationModel(model, provider)
@@ -22,14 +24,22 @@ export function mediaPoolEntries(settings: Pick<Settings, 'providers' | 'workben
     return {
       ...selection,
       key: mediaModelKey(selection),
-      name: mediaModelName(provider, selection.model),
-      label: `${provider?.name || selection.providerId} / ${mediaModelName(provider, selection.model)}`,
-      available: Boolean(provider && isMediaPoolCandidate(provider, selection.model, kind)),
+      name: selection.providerId === 'local' ? 'WhisperX small' : mediaModelName(provider, selection.model),
+      label: selection.providerId === 'local' ? 'Local / WhisperX small' : `${provider?.name || selection.providerId} / ${mediaModelName(provider, selection.model)}`,
+      available: kind === 'transcribeModels' && selection.providerId === LOCAL_TRANSCRIBE_MODEL.providerId && selection.model === LOCAL_TRANSCRIBE_MODEL.model
+        || Boolean(provider && isMediaPoolCandidate(provider, selection.model, kind)),
     }
   })
 }
 /** Draft cleanup for explicit deletion; backend sanitization is authoritative at persistence. */
-export function removeMediaPoolEntries(config: WorkbenchMediaConfig | undefined, providerId: string, model?: string): WorkbenchMediaConfig {
+export function removeMediaPoolEntries(config: WorkbenchMediaConfig, providerId: string, model?: string): WorkbenchMediaConfig {
   const keep = (entry: DefaultModelSelection) => entry.providerId !== providerId || (model !== undefined && entry.model !== model)
-  return { imageModels: (config?.imageModels ?? []).filter(keep), videoModels: (config?.videoModels ?? []).filter(keep) }
+  return {
+    ...config,
+    imageModels: (config?.imageModels ?? []).filter(keep),
+    videoModels: (config?.videoModels ?? []).filter(keep),
+    speechModels: (config?.speechModels ?? []).filter(keep),
+    transcribeModels: (config?.transcribeModels ?? []).filter(keep),
+    localAsr: config.localAsr,
+  }
 }

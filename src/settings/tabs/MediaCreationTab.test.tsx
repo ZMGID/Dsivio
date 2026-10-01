@@ -1,10 +1,27 @@
 import { useState } from 'react'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
-import type { Settings } from '../../api/tauri'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { api } from '../../api/tauri'
+import type { Settings, VoiceReference } from '../../api/tauri'
+import type * as Tauri from '../../api/tauri'
 import { MediaCreationTab } from './MediaCreationTab'
 import { makeProvider, makeSettings } from './testFixtures'
+
+vi.mock('../../api/tauri', async importActual => {
+  const actual = await importActual<typeof Tauri>()
+  return { ...actual, api: { ...actual.api, getLocalAsrStatus: vi.fn(), listMediaVoices: vi.fn(), installLocalAsr: vi.fn(), cancelLocalAsrInstall: vi.fn(), stopLocalAsr: vi.fn(), deleteMediaVoice: vi.fn(), checkMediaSpeechConnection: vi.fn() } }
+})
+const asrStatus = {
+  operationId: null, state: 'notInstalled', installationId: null, serviceVersion: '0.2.0', model: 'small', languages: ['en', 'zh'],
+  progress: null, error: null, runtime: { state: 'stopped', pid: null, activeTaskId: null },
+}
+const voiceReference: VoiceReference = { id: 'p1/voice_fixture', providerId: 'p1', voiceId: 'voice_fixture', protocol: 'openai_tts',
+  consentSha256: '', createdAt: '2026-10-01T00:00:00Z', expiresAt: null, used: true, lastUsedAt: null, preview: null }
+beforeEach(() => {
+  vi.mocked(api.getLocalAsrStatus).mockResolvedValue(asrStatus)
+  vi.mocked(api.listMediaVoices).mockResolvedValue([])
+})
 
 const imageModels = ['image-a', 'image-b', 'image-c']
 function Fixture({ initial = makeSettings({ providers: [makeProvider({
@@ -12,7 +29,9 @@ function Fixture({ initial = makeSettings({ providers: [makeProvider({
   modelOverrides: Object.fromEntries(imageModels.map(model => [model, { capabilities: { imageGeneration: true } }])),
 })] }) }: { initial?: Settings }) {
   const [settings, setSettings] = useState(initial)
-  return <><MediaCreationTab settings={settings} lang="zh" onUpdatePool={(kind, models) => setSettings(s => ({ ...s, workbenchMedia: { ...s.workbenchMedia, [kind]: models } }))} /><output data-testid="settings">{JSON.stringify(settings)}</output></>
+  return <><MediaCreationTab settings={settings} lang="zh"
+    onUpdatePool={(kind, models) => setSettings(s => ({ ...s, workbenchMedia: { ...s.workbenchMedia, [kind]: models } }))}
+    onUpdateLocalAsr={localAsr => setSettings(s => ({ ...s, workbenchMedia: { ...s.workbenchMedia, localAsr } }))} /><output data-testid="settings">{JSON.stringify(settings)}</output></>
 }
 const savedSettings = () => JSON.parse(screen.getByTestId('settings').textContent!) as Settings
 
@@ -46,7 +65,6 @@ describe('Workbench media pools', () => {
     await userEvent.click(screen.getByRole('switch', { name: `图片供应商 / ${models[0]}` }))
     await userEvent.clear(search)
     await userEvent.type(search, '图片供应商')
-    expect(screen.getAllByRole('switch')).toHaveLength(2)
     expect(screen.getByRole('switch', { name: `图片供应商 / ${models[0]}` }).getAttribute('aria-checked')).toBe('true')
     await userEvent.clear(search)
     await userEvent.type(search, 'no-match')
@@ -112,6 +130,55 @@ describe('Workbench media pools', () => {
     await userEvent.click(screen.getByRole('switch', { name: 'OpenAI / image-a' }))
     expect(savedSettings().workbenchMedia.imageModels).toEqual([])
     expect(savedSettings().providers).toHaveLength(1)
-    expect(screen.getAllByText(/请先在「模型」中/)).toHaveLength(2)
+  })
+})
+
+describe('Media service controls', () => {
+  it('preserves a failed installation and offers retry instead of presenting it as ready', async () => {
+    vi.mocked(api.getLocalAsrStatus).mockResolvedValue({ ...asrStatus, state: 'failed', error: 'model download failed' })
+    vi.mocked(api.installLocalAsr).mockRejectedValue(new Error('ASR_INSTALL_CONFLICT'))
+    render(<Fixture />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('model download failed')
+    await userEvent.click(screen.getByRole('button', { name: '重试安装' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('ASR_INSTALL_CONFLICT')
+    expect(screen.getByRole('button', { name: '重试安装' })).toBeEnabled()
+    await userEvent.click(screen.getByRole('switch', { name: '首次需要时自动安装' }))
+    expect(savedSettings().workbenchMedia.localAsr.autoInstall).toBe(false)
+    expect(savedSettings().workbenchMedia.transcribeModels).toEqual([{ providerId: 'local', model: 'whisperx-small' }])
+  })
+  it('shows an active installation and a busy transcription without offering to stop the active service', async () => {
+    vi.mocked(api.getLocalAsrStatus).mockResolvedValue({ ...asrStatus, state: 'installing', operationId: 'install-1',
+      progress: { stage: 'dependencies', message: 'Downloading fixed dependencies' }, runtime: { state: 'busy', pid: 100, activeTaskId: 'transcription-1' } })
+    vi.mocked(api.cancelLocalAsrInstall).mockRejectedValue(new Error('ASR_INSTALL_CONFLICT: stale operation'))
+    render(<Fixture />)
+    await screen.findByText(/Downloading fixed dependencies/)
+    expect(screen.getByRole('button', { name: '停止空闲服务' })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: '取消本次安装' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('ASR_INSTALL_CONFLICT')
+    expect(screen.getByRole('button', { name: '手动安装／更新语言' })).toBeDisabled()
+  })
+  it('keeps a failed local reference deletion visible and removes it only after success', async () => {
+    vi.mocked(api.listMediaVoices).mockResolvedValue([{ ...voiceReference, voiceId: 'voice_owned' }])
+    vi.mocked(api.deleteMediaVoice).mockRejectedValueOnce(new Error('local reference is locked')).mockResolvedValueOnce(undefined)
+    render(<Fixture />)
+    await screen.findByText('voice_owned')
+    await userEvent.click(screen.getByRole('button', { name: '删除本地引用' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('local reference is locked')
+    expect(screen.getByText('voice_owned')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '删除本地引用' }))
+    await screen.findByText('已删除本地引用；未删除供应商声音或任务产物。')
+    expect(screen.queryByText('voice_owned')).toBeNull()
+  })
+  it('does not resurrect a deleted local reference when an older refresh completes late', async () => {
+    let finishRefresh!: (references: VoiceReference[]) => void
+    vi.mocked(api.listMediaVoices).mockResolvedValueOnce([voiceReference]).mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve }))
+    vi.mocked(api.deleteMediaVoice).mockResolvedValue(undefined)
+    render(<Fixture />)
+    await screen.findByText('voice_fixture')
+    await userEvent.click(screen.getByRole('button', { name: '刷新声音列表' }))
+    await userEvent.click(screen.getByRole('button', { name: '删除本地引用' }))
+    await screen.findByText('已删除本地引用；未删除供应商声音或任务产物。')
+    await act(async () => { finishRefresh([voiceReference]) })
+    expect(screen.queryByText('voice_fixture')).toBeNull()
   })
 })

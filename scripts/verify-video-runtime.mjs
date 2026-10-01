@@ -1,6 +1,6 @@
 // Exercise shipped executables without developer PATH or package caches.
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, renameSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, renameSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,6 +16,7 @@ const scratch = mkdtempSync(join(tmpdir(), 'dsivio-video-smoke-'))
 const win = process.platform === 'win32'
 const python = join(root, win ? 'python/python.exe' : 'python/bin/python3')
 const node = join(root, win ? 'node/node.exe' : 'node/bin/node')
+const npm = join(root, win ? 'node/node_modules/npm/bin/npm-cli.js' : 'node/lib/node_modules/npm/bin/npm-cli.js')
 const ffmpeg = join(root, `analyzer/node_modules/ffmpeg-static/ffmpeg${win ? '.exe' : ''}`)
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !['path', 'pythonpath', 'pythonhome', 'node_options', 'node_path'].includes(k.toLowerCase())))
 Object.assign(env, { PATH: [join(root, 'bin'), dirname(python), dirname(node), dirname(ffmpeg)].join(win ? ';' : ':'),
@@ -23,6 +24,13 @@ Object.assign(env, { PATH: [join(root, 'bin'), dirname(python), dirname(node), d
   PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8',
   GIT_PYTHON_REFRESH: 'quiet', DSVIDEO_CONFIG_PATH: join(scratch, 'providers.json'), DSVIDEO_STUDIO_ROOT: join(scratch, 'studio'),
   npm_config_cache: join(scratch, 'empty-npm-cache'), UV_OFFLINE: '1', PIP_NO_INDEX: '1' })
+Object.assign(env, {
+  HOME: join(scratch, 'clean-home'), USERPROFILE: join(scratch, 'clean-home'),
+  // npm defaults to a bare `sh` on Unix; the smoke PATH intentionally has no OS
+  // tools. Select the OS shell explicitly while keeping Node resolution bundled.
+  npm_config_script_shell: win ? process.env.ComSpec || join(process.env.SystemRoot || 'C:\\Windows', 'System32/cmd.exe') : '/bin/sh',
+})
+mkdirSync(env.HOME)
 
 function run(command, args, input) {
   const result = spawnSync(command, args, { env, cwd: scratch, encoding: 'utf8', timeout: 45000, input })
@@ -77,6 +85,23 @@ async function withMcp(command, args, check) {
 }
 try {
   assert.equal(JSON.parse(readFileSync(join(root, 'runtime.json'))).platform, `${process.platform}-${process.arch}`)
+  assert.equal(run(node, [npm, '--version']).trim(), JSON.parse(readFileSync(join(root, 'runtime.json'))).npm)
+  // Prove explicit setup can install a local dependency (including its native-style
+  // postinstall), with an empty HOME/cache and no system Node/npm.
+  const dependency = join(scratch, 'local-dependency')
+  mkdirSync(dependency)
+  writeFileSync(join(dependency, 'package.json'), JSON.stringify({
+    name: 'dsivio-runtime-smoke-dependency', version: '1.0.0', main: 'index.cjs',
+    scripts: { postinstall: 'node postinstall.cjs' },
+  }))
+  writeFileSync(join(dependency, 'postinstall.cjs'), 'require("node:fs").writeFileSync("node-path.txt", process.execPath)')
+  writeFileSync(join(dependency, 'index.cjs'), 'module.exports = require("node:fs").readFileSync(require("node:path").join(__dirname, "node-path.txt"), "utf8")')
+  writeFileSync(join(scratch, 'package.json'), JSON.stringify({
+    name: 'dsivio-runtime-smoke', version: '1.0.0', private: true,
+    dependencies: { 'dsivio-runtime-smoke-dependency': 'file:./local-dependency' },
+  }))
+  run(node, [npm, 'install', '--omit=dev', '--no-audit', '--no-fund', '--offline'])
+  assert.equal(run(node, ['-p', 'require("dsivio-runtime-smoke-dependency")']).trim(), node)
   const bundledScripts = join(dirname(root), 'video-studio/scripts')
   const scripts = existsSync(bundledScripts) ? bundledScripts : join(repo, 'src-tauri/resources/video-studio/scripts')
   const directImports = `import comfy_mcp, comfy_cli, yt_dlp${win ? ', pywintypes' : ''}`
@@ -102,8 +127,7 @@ try {
     assert.ok(!frame.isError && frame.content.some(item => item.type === 'image'), 'bundled analyzer must decode a local video frame')
     console.log(`Bundled video analyzer: ${result.tools.length} tools; local metadata and frame extraction succeeded`)
   })
-  assert.ok(!existsSync(join(scratch, 'empty-npm-cache')), 'runtime unexpectedly accessed npm')
-  console.log('Bundled runtime verified without system Node/Python/npm/ffmpeg or dependency installation.')
+  console.log('Bundled runtime verified without system Node/Python/npm/ffmpeg; bundled npm installed and loaded a local dependency in a clean HOME.')
 } finally {
   rmSync(scratch, { recursive: true, force: true })
   if (relocate) renameSync(root, original)

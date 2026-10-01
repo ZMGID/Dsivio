@@ -21,7 +21,16 @@ async function upload(data: unknown) {
   Object.defineProperty(file, 'text', { value: async () => JSON.stringify(data) })
   await userEvent.upload(screen.getByLabelText('导入 API 工作流 JSON'), file)
 }
-beforeEach(() => { vi.restoreAllMocks(); vi.spyOn(api, 'validateComfyWorkflow').mockResolvedValue(); vi.spyOn(api, 'testComfyConnection').mockResolvedValue({ devices: ['GPU'], missingNodes: [] }) })
+beforeEach(() => {
+  vi.restoreAllMocks()
+  vi.spyOn(api, 'validateComfyWorkflow').mockResolvedValue()
+  vi.spyOn(api, 'testComfyConnection').mockResolvedValue({ devices: ['GPU'], missingNodes: [] })
+  vi.spyOn(api, 'listMediaVoices').mockResolvedValue([])
+  vi.spyOn(api, 'getLocalAsrStatus').mockResolvedValue({
+    operationId: null, state: 'notInstalled', installationId: null, serviceVersion: '0.2.0', model: 'small', languages: ['en', 'zh'],
+    progress: null, error: null, runtime: { state: 'stopped', pid: null, activeTaskId: null },
+  })
+})
 describe('ComfyUI provider configuration', () => {
   it('imports, maps inputs, and adds named workflows to the independent media pool', async () => {
     render(<Fixture />)

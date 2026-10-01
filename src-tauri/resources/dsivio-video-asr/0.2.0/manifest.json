@@ -1,0 +1,11 @@
+{
+  "pluginRevision": "f6e9fae0bf5fcf21b365690fc7de66a15cb00fda+asr-sha256:ce6fc57f4745674503e8fac2d7eed5cc9bf6923da3076fb9252fff5ba126069e",
+  "protocol": "dsivio-video.asr/1",
+  "serviceVersion": "0.2.0",
+  "whisperxVersion": "3.8.6",
+  "files": {
+    "server.py": "27744191dc74868cb46a99c2da088000bb02b2abd2f74c817c6f584e2f748621",
+    "prepare.py": "e37eb8428ea6918a158022d72dcb3a5c19d5a4b7e23fe2959d12dd58e4bd7b38",
+    "requirements.txt": "241e8bb3931494e014805f8467380d5a8acbb57be257886443441af8c9b6d7ae"
+  }
+}

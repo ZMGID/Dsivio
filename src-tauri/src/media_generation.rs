@@ -6,23 +6,32 @@ use image_providers::async_task as image_gateway;
 use video_providers as providers;
 pub(crate) mod artifacts;
 pub mod cli;
+pub mod model_parameters;
+pub mod speech_providers;
+pub mod voices;
+pub mod local_asr;
+pub mod transcribe_providers;
+mod request_evidence;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 use tauri::{AppHandle, Manager};
 use ts_rs::TS;
+use parking_lot::Mutex;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaKind {
     Image,
     Video,
+    Speech,
+    Transcribe,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
@@ -30,6 +39,7 @@ pub enum MediaStatus {
     Running,
     Succeeded,
     Failed,
+    Cancelled,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
@@ -42,6 +52,33 @@ pub enum MediaSubmissionState {
 pub struct MediaOutput {
     pub path: String,
     pub mime: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "kebab-case")]
+pub enum CancelOutcome { Confirmed, Requested, Unsupported, TooLate }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum CancelScope { Local, Remote, None }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum ChargeFact { No, Maybe, Yes, Unknown }
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaCancellation {
+    pub requested_at: String,
+    pub scope: CancelScope,
+    pub outcome: CancelOutcome,
+    pub confirmed_at: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaCancelResult {
+    pub id: String,
+    pub outcome: CancelOutcome,
+    pub scope: CancelScope,
+    pub charged: ChargeFact,
+    pub task: MediaTask,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +103,13 @@ pub struct MediaTask {
     /// The prompt as submitted; kept so a history row can say what it was for.
     #[serde(default)]
     pub prompt: String,
+    #[serde(default)]
+    #[ts(type = "unknown | null")]
+    pub result: Option<Value>,
+    #[serde(default)]
+    pub request_hash: Option<String>,
+    #[serde(default)]
+    pub cancellation: Option<MediaCancellation>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -81,20 +125,26 @@ pub struct MediaRequest {
     pub options: BTreeMap<String, Value>,
     #[serde(default)]
     pub origin: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub description_revision: Option<String>,
 }
 /// Cloud image options. ComfyUI uses declared workflow inputs instead.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaImageOptions {
     #[ts(optional)]
     pub size: Option<String>,
-    #[serde(alias = "aspectRatio")]
+    #[serde(alias = "aspect_ratio")]
     #[ts(optional)]
     pub aspect_ratio: Option<String>,
     #[ts(optional)]
     pub quality: Option<String>,
     #[ts(optional)]
     pub n: Option<u32>,
+    #[serde(flatten)]
+    #[ts(skip)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// Which saved tasks to list. Empty filter lists everything.
@@ -134,19 +184,26 @@ struct StoredTask {
     accepted_at: Option<String>,
 }
 static ACTIVE: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static TASK_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+#[derive(Clone, Copy, PartialEq)]
+enum ControlPhase { Pending, Local, Remote }
+struct TaskControl {
+    phase: ControlPhase,
+    cancel: Arc<tokio::sync::Notify>,
+    finished: Arc<tokio::sync::Notify>,
+}
+static CONTROLS: LazyLock<Mutex<BTreeMap<String, TaskControl>>> = LazyLock::new(|| Mutex::new(BTreeMap::new()));
 struct Active(String);
 impl Drop for Active {
     fn drop(&mut self) {
         ACTIVE
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
             .remove(&self.0);
     }
 }
 fn claim(id: &str) -> Option<Active> {
     ACTIVE
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
         .insert(id.into())
         .then(|| Active(id.into()))
 }
@@ -160,6 +217,18 @@ fn directory(root: &Path, id: &str) -> Result<PathBuf, String> {
     Ok(root.join(id))
 }
 fn save(root: &Path, task: &StoredTask) -> Result<(), String> {
+    let _lock = TASK_LOCK.lock();
+    if let Ok(existing) = read(root, &task.task.id) {
+        if existing.task.status == MediaStatus::Cancelled { return Ok(()); }
+        if task.task.cancellation.is_none() && existing.task.cancellation.is_some() {
+            let mut merged = task.clone();
+            merged.task.cancellation = existing.task.cancellation;
+            return save_locked(root, &merged);
+        }
+    }
+    save_locked(root, task)
+}
+fn save_locked(root: &Path, task: &StoredTask) -> Result<(), String> {
     let dir = directory(root, &task.task.id)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     crate::chat::storage::atomic_write(
@@ -194,6 +263,7 @@ fn mime(path: &str) -> String {
 }
 fn from_comfy(task: comfyui::ComfyTask) -> MediaTask {
     use comfyui::ComfyTaskStatus as S;
+    let request_hash = comfyui::root().ok().and_then(|root| std::fs::read_to_string(root.join(&task.id).join("request-hash.txt")).ok());
     MediaTask {
         id: task.id,
         provider_id: task.provider_id,
@@ -229,6 +299,9 @@ fn from_comfy(task: comfyui::ComfyTask) -> MediaTask {
         },
         origin: task.origin,
         prompt: task.prompt,
+        result: None,
+        request_hash,
+        cancellation: None,
     }
 }
 
@@ -383,6 +456,9 @@ pub(crate) fn import_legacy_at(
                     submission_state: None,
                     origin: None,
                     prompt: String::new(),
+                    result: None,
+                    request_hash: None,
+                    cancellation: None,
                 },
                 base_url: if base.is_empty() {
                     provider.base_url.clone()
@@ -429,6 +505,20 @@ fn provider(state: &AppState, id: &str) -> Result<ModelProvider, String> {
 }
 fn video_input(request: &MediaRequest) -> Result<providers::VideoInput, String> {
     let mut value = serde_json::to_value(&request.options).map_err(|e| e.to_string())?;
+    for name in ["firstFrame", "lastFrame"] {
+        if let Some(value) = value.get_mut(name) {
+            if value.is_array() {
+                let sources = model_parameters::media_sources(value)?;
+                if sources.len() != 1 { return Err(format!("{name} requires exactly one image")); }
+                *value = json!(sources[0]);
+            }
+        }
+    }
+    for name in ["referenceImages", "referenceVideos", "referenceAudios", "voiceIds"] {
+        if let Some(value) = value.get_mut(name) {
+            *value = json!(model_parameters::media_sources(value)?);
+        }
+    }
     value["prompt"] = json!(request.prompt);
     // Images are explicit references; a caller chooses firstFrame/referenceImages for video.
     if !request.images.is_empty() {
@@ -453,7 +543,7 @@ fn video_input(request: &MediaRequest) -> Result<providers::VideoInput, String> 
         .iter()
         .map(|v| video_reference(v, true))
         .collect::<Result<_, _>>()?;
-    Ok(providers::input_with_defaults(&request.model, input))
+    Ok(input)
 }
 fn video_reference(value: &str, audio: bool) -> Result<String, String> {
     if value.starts_with("https://")
@@ -497,18 +587,16 @@ fn video_image(value: &str) -> Result<String, String> {
         &image_inputs(&[value.into()])?.remove(0),
     ))
 }
-fn image_arguments(request: &MediaRequest) -> Result<Value, String> {
-    let options: MediaImageOptions =
-        serde_json::from_value(json!(request.options)).map_err(|e| format!("图片参数无效：{e}"))?;
-    if options.n.is_some_and(|n| !(1..=4).contains(&n)) {
-        return Err("图片数量必须在 1 到 4 之间".into());
+fn image_arguments(provider: &ModelProvider, request: &MediaRequest) -> Result<Value, String> {
+    let mut args = request.options.clone();
+    if args.insert("prompt".into(), json!(request.prompt)).is_some() {
+        return Err("prompt must be supplied only at the request boundary".into());
     }
-    let mut args = serde_json::to_value(options).map_err(|e| e.to_string())?;
-    args["prompt"] = json!(request.prompt);
-    Ok(args)
+    Ok(json!(model_parameters::validate_and_resolve(provider, &request.model, &MediaKind::Image, args, request.description_revision.as_deref())?))
 }
 /// Bind standard media fields once, at the workflow boundary. Never guess positive/negative prompts.
 fn comfy_values(
+    provider: &ModelProvider,
     flow: &comfyui::ComfyWorkflow,
     request: &MediaRequest,
 ) -> Result<BTreeMap<String, Value>, String> {
@@ -588,12 +676,45 @@ fn comfy_values(
     for name in parameters_used {
         values.remove(&name);
     }
+    let description = model_parameters::workflow_description(provider, flow, &request.kind);
+    values = model_parameters::resolve(&description, values, request.description_revision.as_deref())?;
     comfyui::prepare(flow, &values)?;
     Ok(values)
 }
 
+/// Every caller enters here before a task exists or a paid request can be sent.
+fn validate_request(provider: &ModelProvider, request: &mut MediaRequest) -> Result<(), String> {
+    let mut args = model_parameters::normalize(std::mem::take(&mut request.options))?;
+    let supplied: HashSet<String> = args.keys().cloned().collect();
+    if args.insert("prompt".into(), json!(request.prompt)).is_some() {
+        return Err("prompt must be supplied only at the request boundary".into());
+    }
+    if request.kind == MediaKind::Image {
+        if args.insert("images".into(), json!(request.images)).is_some() {
+            return Err("images must be supplied only at the request boundary".into());
+        }
+    } else {
+        for name in ["firstFrame", "lastFrame"] {
+            if let Some(value) = args.get_mut(name) {
+                if value.is_string() { *value = json!([value.clone()]); }
+            }
+        }
+    }
+    let mut resolved = model_parameters::validate_and_resolve(provider, &request.model, &request.kind, args, request.description_revision.as_deref())?;
+    resolved.remove("prompt");
+    resolved.remove("images");
+    // Keep supplied presence intact for the route's final validation/encoding. Defaults are
+    // resolved there; serializing them here would turn an omitted field into user input.
+    resolved.retain(|name, _| supplied.contains(name));
+    request.options = resolved;
+    Ok(())
+}
 pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<MediaTask, String> {
     let state = app.state::<AppState>();
+    if matches!(request.kind, MediaKind::Speech | MediaKind::Transcribe) {
+        return start_audio_task(app, request).await;
+    }
+    let request_hash = Some(request_hash(&request)?);
     let p = provider(&state, &request.provider_id)?;
     if !p.enabled_models.contains(&request.model) {
         return Err("模型尚未启用".into());
@@ -608,9 +729,12 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
         if (flow.kind == comfyui::ComfyMediaKind::Image) != (request.kind == MediaKind::Image) {
             return Err("工作流媒体类型不匹配".into());
         }
-        let values = comfy_values(&flow, &request)?;
+        let values = comfy_values(&p, &flow, &request)?;
         let id = uuid::Uuid::new_v4().to_string();
         let guard = claim(&id).ok_or("任务已运行")?;
+        if let Some(hash) = &request_hash {
+            voices::atomic_bytes(&comfyui::root()?.join(&id).join("request-hash.txt"),hash.as_bytes())?;
+        }
         let task = from_comfy(
             comfyui::submit_to_store(
                 &comfyui::root()?,
@@ -628,6 +752,7 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
         }
         return Ok(task);
     }
+    validate_request(&p, &mut request)?;
     if request.prompt.trim().is_empty() {
         return Err("请填写提示词".into());
     }
@@ -648,7 +773,7 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
         image_providers::validate_generation(
             &p,
             &request.model,
-            &image_arguments(&request)?,
+            &image_arguments(&p, &request)?,
             images.len(),
         )?;
         request.images = images
@@ -672,6 +797,9 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
             submission_state: None,
             origin: request.origin.clone(),
             prompt: request.prompt.clone(),
+            result: None,
+            request_hash,
+            cancellation: None,
         },
         base_url: p.base_url,
         protocol,
@@ -681,21 +809,22 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
     };
     let guard = claim(&task.task.id).ok_or("任务已运行")?;
     save(&root()?, &task)?;
+    register_control(&task.task.id);
     spawn_background(app.clone(), task.task.id.clone(), Some(request), guard);
     Ok(task.task)
 }
-#[tauri::command]
-pub async fn start_media_generation(
-    app: AppHandle,
+pub(crate) async fn start_configured(
+    app: &AppHandle,
     request: MediaRequest,
 ) -> Result<MediaTask, String> {
     let allowed = {
         let state = app.state::<AppState>();
         let settings = state.settings_read();
-        let pool = if request.kind == MediaKind::Image {
-            &settings.workbench_media.image_models
-        } else {
-            &settings.workbench_media.video_models
+        let pool = match request.kind {
+            MediaKind::Image => &settings.workbench_media.image_models,
+            MediaKind::Video => &settings.workbench_media.video_models,
+            MediaKind::Speech => &settings.workbench_media.speech_models,
+            MediaKind::Transcribe => &settings.workbench_media.transcribe_models,
         };
         pool.iter()
             .any(|m| m.provider_id == request.provider_id && m.model == request.model)
@@ -703,7 +832,310 @@ pub async fn start_media_generation(
     if !allowed {
         return Err("请先把模型加入媒体创作模型池".into());
     }
-    start(&app, request).await
+    start(app, request).await
+}
+
+pub fn request_hash(request: &MediaRequest) -> Result<String, String> {
+    request_evidence::hash(request, &BTreeMap::new())
+}
+
+pub fn local_provider() -> ModelProvider {
+    serde_json::from_value(json!({"id":"local","name":"本地 WhisperX","baseUrl":"","enabled":true,
+        "availableModels":["whisperx-small"],"enabledModels":["whisperx-small"],"apiKeys":[]})).expect("local model provider")
+}
+
+pub(crate) fn transcribe_configured(provider: &ModelProvider, model: &str) -> bool {
+    if provider.id == "local" { return model == "whisperx-small"; }
+    model == "whisper-1" && provider.preferred_api_key().is_some() && provider.model_overrides.get(model).is_some_and(|m|
+        m.transcribe_protocol.as_deref() == Some("openai_transcribe") && m.transcribe_base_url.as_deref().is_some_and(|s|
+            reqwest::Url::parse(s).is_ok_and(|u|u.scheme()=="https" && u.host_str().is_some() && u.username().is_empty() && u.password().is_none() && u.query().is_none() && u.fragment().is_none())))
+}
+
+pub(crate) fn transcribe_description(provider: &ModelProvider, model: &str) -> model_parameters::ModelDescription {
+    use model_parameters::{argument, DataType};
+    let mut args = BTreeMap::new();
+    let mut audio = argument(DataType::String, Some("--audio-file"), json!({"minLength":1,"resource":true,"locations":["local"]}));
+    audio.required = true;
+    args.insert("audioFile".into(), audio);
+    let mut language = argument(DataType::String, Some("--language"), json!({"minLength":2,"maxLength":3,"lengthUnit":"unicodeCodePoint"}));
+    language.required = true;
+    args.insert("language".into(), language);
+    args.insert("sampleFrames".into(), argument(DataType::Integer, Some("--sample-frames"), json!({"minimum":1,"maximum":9007199254740991u64})));
+    args.insert("timestamps".into(), argument(DataType::String, Some("--timestamps"), json!({"allowed":["word","segment"],"defaultValue":"word"})));
+    let mut description = model_parameters::finish(provider, model, MediaKind::Transcribe, args, vec![], true, Some(1), false);
+    description.products["schema"] = json!("dsivio.media.transcript/1");
+    description.products["wordAlignment"] = json!(true);
+    description.arguments.get_mut("audioFile").unwrap().facts.insert("wavEvidence".into(), json!({"sampleRate":16000,"channels":1,"encoding":"pcm_s16le","maxBytes":if provider.id == "local" {512*1024*1024} else {25_000_000}}));
+    model_parameters::rehash(&mut description);
+    description
+}
+
+fn register_control(id: &str) {
+    register_control_in_phase(id,ControlPhase::Pending);
+}
+
+fn register_control_in_phase(id:&str,phase:ControlPhase) {
+    CONTROLS.lock().insert(id.into(), TaskControl {
+        phase, cancel: Arc::new(tokio::sync::Notify::new()), finished: Arc::new(tokio::sync::Notify::new()),
+    });
+}
+
+fn restore_speech_control(id:&str,task_dir:&Path,mode:&str)->Result<(),String> {
+    let phase = match std::fs::read(task_dir.join("speech-state.json")) {
+        Ok(bytes) => {
+            let journal:voices::Journal = serde_json::from_slice(&bytes).map_err(|e|e.to_string())?;
+            let submitted = journal.file_id.is_some() || journal.cloned_at.is_some()
+                || journal.in_flight.is_some() || journal.rejected.is_some()
+                || matches!(journal.step,voices::Step::Uploaded|voices::Step::Synthesized|voices::Step::Downloaded)
+                || journal.step == voices::Step::Cloned && mode == "clone";
+            if submitted {ControlPhase::Remote}else{ControlPhase::Pending}
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => ControlPhase::Pending,
+        Err(error) => return Err(error.to_string()),
+    };
+    register_control_in_phase(id,phase);
+    Ok(())
+}
+
+/// The send boundary and cancellation compete under the same lock.
+fn begin_execution(root: &Path, id: &str, phase: ControlPhase) -> Result<bool, String> {
+    let _lock = TASK_LOCK.lock();
+    if read(root, id)?.task.status != MediaStatus::Running { return Ok(false); }
+    if let Some(control) = CONTROLS.lock().get_mut(id) {
+        // Durable remote activity is irreversible; local preparation cannot make it unsent.
+        if control.phase != ControlPhase::Remote {control.phase = phase;}
+    }
+    Ok(true)
+}
+
+enum AudioWork {
+    Speech(speech_providers::SpeechInput),
+    Transcribe(transcribe_providers::TranscribeInput, local_asr::LocalAsrConfig),
+}
+
+async fn start_audio_task(app: &AppHandle, mut request: MediaRequest) -> Result<MediaTask, String> {
+    if !request.prompt.is_empty() || !request.images.is_empty() { return Err("语音/转写只接收 options 中声明的输入".into()); }
+    let state = app.state::<AppState>();
+    let provider = if request.provider_id == "local" && request.kind == MediaKind::Transcribe { local_provider() } else { provider(&state, &request.provider_id)? };
+    if !provider.enabled_models.contains(&request.model) { return Err("模型尚未启用".into()); }
+    let original = request.clone();
+    request.options = model_parameters::validate_and_resolve(&provider, &request.model, &request.kind, request.options, request.description_revision.as_deref())?;
+    let data = crate::app_data::app_data_dir().ok_or("无法定位应用数据目录")?;
+    let root = root()?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = directory(&root, &id)?;
+    let mut snapshots = BTreeMap::new();
+    let work = if request.kind == MediaKind::Speech {
+        let input = speech_providers::validate_input(&provider, &request.model, &request.options, &data)?;
+        snapshots = input.fingerprint();
+        speech_providers::persist_input(&input,&dir)?;
+        AudioWork::Speech(input)
+    } else {
+        if !transcribe_configured(&provider, &request.model) { return Err("转写协议/产品地址尚未显式配置".into()); }
+        let mut input = transcribe_providers::validate_input(&request.options)?;
+        let evidence = transcribe_providers::validate_wav(&input.audio_file, Some(input.sample_frames))?;
+        if provider.id != "local" && evidence.bytes.len() > 25_000_000 {return Err("ASR_UPLOAD_TOO_LARGE: whisper-1 allows 25MB".into());}
+        snapshots.insert(input.audio_file.to_string_lossy().into_owned(), request_evidence::bytes_hash(&evidence.bytes));
+        std::fs::create_dir_all(dir.join("evidence")).map_err(|e| e.to_string())?;
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+        }
+        input.audio_file = dir.join("evidence/audio.wav");
+        cli::write_private(&input.audio_file, &evidence.bytes)?;
+        let config = state.settings_read().workbench_media.local_asr.clone();
+        AudioWork::Transcribe(input, config)
+    };
+    let protocol = if request.kind == MediaKind::Speech {
+        provider.model_overrides.get(&request.model).and_then(|m|m.speech_protocol.as_deref()).ok_or("缺少语音协议")?
+    } else if provider.id == "local" { "whisperx" } else { "openai_transcribe" };
+    let base_url = if request.kind == MediaKind::Speech {
+        provider.model_overrides.get(&request.model).and_then(|m|m.speech_base_url.clone()).ok_or("缺少语音产品地址")?
+    } else if provider.id == "local" {String::new()} else {
+        provider.model_overrides.get(&request.model).and_then(|m|m.transcribe_base_url.clone()).ok_or("缺少转写产品地址")?
+    };
+    let saved = StoredTask { task: MediaTask { id:id.clone(), provider_id:provider.id.clone(), model:request.model.clone(),kind:request.kind.clone(),
+        status:MediaStatus::Running,created_at:chrono::Utc::now().to_rfc3339(),error:None,remote_id:None,outputs:vec![],can_resume:false,
+        submission_state:None,origin:request.origin,prompt:String::new(),result:None,
+        request_hash:Some(request_evidence::hash(&original,&snapshots)?),cancellation:None },
+        base_url,protocol:protocol.into(),download_url:None,download_requires_auth:false,accepted_at:None };
+    let guard = claim(&id).ok_or("任务已运行")?;
+    save(&root, &saved)?;
+    register_control(&id);
+    spawn_audio_task(root, data, provider, saved.clone(), work, guard);
+    Ok(saved.task)
+}
+
+fn spawn_audio_task(root: PathBuf, data: PathBuf, provider: ModelProvider, mut saved: StoredTask, work: AudioWork, guard: Active) {
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let id = saved.task.id.clone();
+        let local = saved.protocol == "whisperx";
+        let phase = if local { ControlPhase::Local } else { ControlPhase::Pending };
+        let control = CONTROLS.lock().get(&id).map(|c|(c.cancel.clone(),c.finished.clone()));
+        let Some((cancel, finished)) = control else { return; };
+        let result: Result<(), String> = async {
+            if !begin_execution(&root,&id,phase)? { return Ok(()); }
+            let before_send = || {
+                if begin_execution(&root,&id,ControlPhase::Remote)? {Ok(())} else {Err("MEDIA_CANCELLED: 请求发送前已取消".into())}
+            };
+            let future = async {
+                match work {
+                    AudioWork::Speech(input) => {
+                        let outputs = speech_providers::execute(artifacts::download_client(&provider),&provider,&saved.task.model,&input,&id,&directory(&root,&id)?,&data,&before_send)
+                            .await.map_err(|e| {
+                                saved.task.submission_state = if speech_providers::is_resumable(&directory(&root,&id).unwrap_or_default()) {None}
+                                    else {Some(if e.uncertain || input.mode == "clone" {MediaSubmissionState::Uncertain} else {MediaSubmissionState::Rejected})};
+                                let _ = save(&root,&saved);
+                                e.message
+                            })?;
+                        saved.task.outputs = outputs;
+                    },
+                    AudioWork::Transcribe(input,config) => {
+                        let value = if local {
+                            local_asr::transcribe(&id,&input.audio_file,&input.language,input.sample_frames,&input.timestamps,config).await?
+                        } else {
+                            let info = provider.model_overrides.get(&saved.task.model).ok_or("缺少转写配置")?;
+                            let base = info.transcribe_base_url.as_deref().ok_or("缺少转写产品地址")?;
+                            let key = provider.api_keys.get(provider.active_key_index).or_else(||provider.api_keys.first()).filter(|s|!s.trim().is_empty()).ok_or("缺少语音产品 API key")?;
+                            transcribe_providers::transcribe_openai(artifacts::download_client(&provider),base,key,&input,&before_send).await.map_err(|error| {
+                                saved.task.submission_state = Some(image_submission_state(&error));
+                                let _ = save(&root,&saved);
+                                error
+                            })?
+                        };
+                        saved.task.outputs = vec![artifacts::save_transcript(&value,&directory(&root,&id)?.join("transcript.json"))?];
+                        if serde_json::to_vec(&value).map_err(|e|e.to_string())?.len() <= 3*1024*1024 { saved.task.result = Some(value); }
+                    },
+                }
+                saved.task.status = MediaStatus::Succeeded;
+                save(&root,&saved)
+            };
+            if local {
+                tokio::pin!(future);
+                tokio::select! {
+                    biased;
+                    _ = cancel.notified() => {
+                        local_asr::cancel(&id).await?;
+                        Ok(())
+                    },
+                    result = &mut future => result,
+                }
+            } else { future.await }
+        }.await;
+        if let Err(error) = result {
+            if let Ok(mut current) = read(&root,&id) {
+                record_background_error(&mut current,error);
+                if current.task.kind == MediaKind::Speech && speech_providers::is_resumable(&directory(&root,&id).unwrap_or_default()) {
+                    current.task.status = MediaStatus::Failed;
+                    current.task.can_resume = true;
+                } else if !local && current.task.submission_state.is_none() { current.task.submission_state = Some(MediaSubmissionState::Uncertain); }
+                let _ = save(&root,&current);
+            }
+        }
+        if local {
+            let _lock = TASK_LOCK.lock();
+            if let Ok(mut current) = read(&root,&id) {
+                if current.task.status == MediaStatus::Running && current.task.cancellation.as_ref().is_some_and(|c|c.outcome == CancelOutcome::Requested) {
+                    current.task.status = MediaStatus::Cancelled;
+                    current.task.can_resume = false;
+                    if let Some(c) = &mut current.task.cancellation { c.outcome = CancelOutcome::Confirmed;c.confirmed_at=Some(chrono::Utc::now().to_rfc3339()); }
+                    let _ = save_locked(&root,&current);
+                }
+            }
+        }
+        finished.notify_waiters();
+        CONTROLS.lock().remove(&id);
+    });
+}
+
+#[tauri::command]
+pub async fn cancel_media_task(app: AppHandle, id: String) -> Result<MediaCancelResult, String> {
+    let root = root()?;
+    directory(&root,&id)?;
+    if !directory(&root,&id)?.join("task.json").exists() {
+        let task = from_comfy(comfyui::read_task(&comfyui::root()?,&id)?);
+        return Ok(MediaCancelResult {id,outcome:if task.status == MediaStatus::Running {CancelOutcome::Unsupported}else{CancelOutcome::TooLate},
+            scope:CancelScope::None,charged:ChargeFact::Unknown,task});
+    }
+    let (signal, finished, immediate) = cancel_at(&root,&id)?;
+    if immediate.outcome != CancelOutcome::Requested {return Ok(immediate);}
+    if let (Some(signal),Some(finished)) = (signal,finished) {
+        let notified = finished.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        signal.notify_one();
+        let _ = tokio::time::timeout(Duration::from_secs(30),notified).await;
+    }
+    let task = get_media_task(app,id.clone(),None)?;
+    let outcome = if task.status == MediaStatus::Cancelled {CancelOutcome::Confirmed} else if task.status == MediaStatus::Running {CancelOutcome::Requested} else {CancelOutcome::TooLate};
+    Ok(MediaCancelResult {id,outcome,scope:CancelScope::Local,charged:ChargeFact::No,task})
+}
+
+type CancelDecision = (Option<Arc<tokio::sync::Notify>>, Option<Arc<tokio::sync::Notify>>, MediaCancelResult);
+fn cancel_at(root:&Path,id:&str)->Result<CancelDecision,String> {
+    let _lock = TASK_LOCK.lock();
+    let mut saved = read(root,id)?;
+    if saved.task.status == MediaStatus::Cancelled {
+        return Ok((None,None,MediaCancelResult {id:id.into(),outcome:CancelOutcome::Confirmed,scope:CancelScope::Local,charged:ChargeFact::No,task:saved.task}));
+    }
+    if saved.task.status != MediaStatus::Running {
+        return Ok((None,None,MediaCancelResult {id:id.into(),outcome:CancelOutcome::TooLate,scope:CancelScope::None,charged:ChargeFact::Unknown,task:saved.task}));
+    }
+    let controls = CONTROLS.lock();
+    let phase = controls.get(id).map(|c|c.phase).unwrap_or(ControlPhase::Remote);
+    let outcome = match phase {ControlPhase::Pending=>CancelOutcome::Confirmed,ControlPhase::Local=>CancelOutcome::Requested,ControlPhase::Remote=>CancelOutcome::Unsupported};
+    let scope = if phase == ControlPhase::Remote {CancelScope::Remote}else{CancelScope::Local};
+    let now = chrono::Utc::now().to_rfc3339();
+    let requested_at = saved.task.cancellation.as_ref().map(|c|c.requested_at.clone()).unwrap_or_else(||now.clone());
+    saved.task.cancellation = Some(MediaCancellation {requested_at,scope:scope.clone(),outcome:outcome.clone(),confirmed_at:if outcome == CancelOutcome::Confirmed {Some(now)}else{None}});
+    if outcome == CancelOutcome::Confirmed {saved.task.status=MediaStatus::Cancelled;saved.task.can_resume=false;}
+    save_locked(root,&saved)?;
+    let control = controls.get(id);
+    let result = MediaCancelResult {id:id.into(),outcome,scope,charged:if phase == ControlPhase::Remote {ChargeFact::Maybe}else{ChargeFact::No},task:saved.task};
+    Ok((control.map(|c|c.cancel.clone()),control.map(|c|c.finished.clone()),result))
+}
+
+#[tauri::command]
+pub fn list_media_voices() -> Result<Vec<voices::VoiceReference>,String> {
+    voices::list(&crate::app_data::app_data_dir().ok_or("无法定位声音引用")?)
+}
+#[tauri::command]
+pub fn delete_media_voice(id:String) -> Result<(),String> {
+    voices::delete(&crate::app_data::app_data_dir().ok_or("无法定位声音引用")?,&id)
+}
+#[tauri::command]
+pub fn register_media_voice(app:AppHandle,provider_id:String,model:String,voice_id:String,consent_attestation:String) -> Result<voices::VoiceReference,String> {
+    if consent_attestation.trim().is_empty() {return Err("VOICE_CONSENT_REQUIRED: 必须提供用户对既有合法声音的明确授权声明".into());}
+    let provider = provider(&app.state::<AppState>(),&provider_id)?;
+    if !speech_providers::configured(&provider,&model) || provider.model_overrides.get(&model).and_then(|m|m.speech_protocol.as_deref()) != Some("openai_tts") {return Err("只有显式配置的 OpenAI TTS 可登记既有 custom voice；不会上传或克隆".into());}
+    voices::register_custom(&crate::app_data::app_data_dir().ok_or("无法定位声音引用")?,&provider_id,&voice_id,&request_evidence::bytes_hash(consent_attestation.as_bytes()))
+}
+#[tauri::command]
+pub async fn check_media_speech_connection(app:AppHandle,provider_id:String,model:String)->Result<Value,String> {
+    let provider = provider(&app.state::<AppState>(),&provider_id)?;
+    speech_providers::connection_check(&provider,&model).await
+}
+#[tauri::command]
+pub async fn get_local_asr_status()->Result<local_asr::LocalAsrStatus,String> {local_asr::status().await}
+#[tauri::command]
+pub async fn install_local_asr(config:local_asr::LocalAsrConfig)->Result<local_asr::LocalAsrStatus,String> {local_asr::install(config).await}
+#[tauri::command]
+pub async fn cancel_local_asr_install(operation_id:String)->Result<local_asr::LocalAsrStatus,String> {local_asr::cancel_install(&operation_id).await}
+#[tauri::command]
+pub async fn stop_local_asr()->Result<local_asr::LocalAsrStopResult,String> {local_asr::stop().await}
+#[tauri::command]
+pub async fn start_media_generation(
+    app: AppHandle,
+    request: MediaRequest,
+) -> Result<MediaTask, String> {
+    start_configured(&app, request).await.map_err(|error| {
+        // IPC keeps the existing human-readable String error; CLI retains the structured error.
+        serde_json::from_str::<Value>(&error).ok()
+            .filter(|value| value.get("code").and_then(Value::as_str).is_some_and(|code| code.starts_with("MODEL_")))
+            .and_then(|value| value.get("message").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or(error)
+    })
 }
 fn image_inputs(images: &[String]) -> Result<Vec<image_providers::InputImage>, String> {
     if images.len() > 16 {
@@ -784,6 +1216,7 @@ fn spawn_background(app: AppHandle, id: String, request: Option<MediaRequest>, g
                 }
             }
         }
+        if let Some(control) = CONTROLS.lock().remove(&id) { control.finished.notify_waiters(); }
     });
 }
 fn record_background_error(saved: &mut StoredTask, error: String) {
@@ -832,6 +1265,7 @@ async fn submit_cloud_at(
     id: &str,
     request: MediaRequest,
 ) -> Result<(), String> {
+    if !begin_execution(root,id,ControlPhase::Remote)? {return Ok(());}
     let mut saved = read(root, id)?;
     let p = provider(state, &request.provider_id)?;
     if p.base_url != saved.base_url {
@@ -933,7 +1367,7 @@ async fn submit_image(
         saved.task.outputs =
             vec![artifacts::save_image(&bytes, &directory(root, &id)?.join("output-0")).await?];
     } else {
-        let args = image_arguments(request)?;
+        let args = image_arguments(p, request)?;
         let batch = image_providers::generate_image_with_provider(
             state,
             p,
@@ -1135,7 +1569,6 @@ pub fn get_media_task(
         }
         if ACTIVE
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
             .contains(&id)
             && (task.status == MediaStatus::Running || task.can_resume)
         {
@@ -1151,12 +1584,52 @@ pub fn get_media_task(
     let mut saved = read(&root, &id)?;
     recover_task(&root, &mut saved, resume == Some(true))?;
     if saved.task.status == MediaStatus::Running {
-        spawn_background(app, id, None, guard);
+        if saved.task.kind == MediaKind::Speech {
+            let prepared = (|| {
+                let data = crate::app_data::app_data_dir().ok_or("无法定位声音引用")?;
+                let provider = provider(&app.state::<AppState>(),&saved.task.provider_id)?;
+                let info = provider.model_overrides.get(&saved.task.model).ok_or("语音连接已移除")?;
+                if info.speech_base_url.as_deref() != Some(saved.base_url.as_str()) || info.speech_protocol.as_deref() != Some(saved.protocol.as_str()) {
+                    return Err("语音连接已变更；恢复原产品连接后可恢复同一任务".to_owned());
+                }
+                let input = speech_providers::load_input(&directory(&root,&id)?)?;
+                Ok((data,provider,input))
+            })();
+            let (data,provider,input) = match prepared {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    saved.task.status = MediaStatus::Failed;
+                    saved.task.can_resume = speech_providers::is_resumable(&directory(&root,&id)?);
+                    saved.task.error = Some(error);
+                    save(&root,&saved)?;
+                    return Ok(saved.task);
+                },
+            };
+            restore_speech_control(&id,&directory(&root,&id)?,&input.mode)?;
+            spawn_audio_task(root,data,provider,saved.clone(),AudioWork::Speech(input),guard);
+        } else {
+            spawn_background(app, id, None, guard);
+        }
     }
     Ok(saved.task)
 }
-// Caller holds the task claim, including the read. Recovery never submits another POST.
+// Caller holds the task claim. Recovery never repeats an uncertain or completed paid POST.
 fn recover_task(root: &Path, saved: &mut StoredTask, resume: bool) -> Result<(), String> {
+    if saved.task.kind == MediaKind::Speech && saved.task.status != MediaStatus::Succeeded && saved.task.status != MediaStatus::Cancelled {
+        let can_resume = speech_providers::is_resumable(&directory(root,&saved.task.id)?);
+        saved.task.can_resume = can_resume;
+        if resume && can_resume {
+            saved.task.status = MediaStatus::Running;
+            saved.task.error = None;
+            saved.task.can_resume = false;
+        } else if saved.task.status == MediaStatus::Running {
+            saved.task.status = MediaStatus::Failed;
+            saved.task.error = Some(if can_resume {"语音步骤已保存；可恢复同一任务，不会重复已完成步骤"} else {"语音步骤结果不确定；只能核实，不能重复提交"}.into());
+            if !can_resume {saved.task.submission_state=Some(MediaSubmissionState::Uncertain);}
+        }
+        save(root,saved)?;
+        return Ok(());
+    }
     if saved.task.status == MediaStatus::Running
         && saved.task.remote_id.is_none()
         && saved.download_url.is_none()
@@ -1299,6 +1772,7 @@ pub(crate) async fn tool_call(
             images: vec![],
             options,
             origin: Some("chat".into()),
+            description_revision: None,
         },
     )
     .await?;
@@ -1309,6 +1783,152 @@ pub(crate) async fn tool_call(
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+    #[test]
+    fn resumed_synthesized_speech_cannot_be_cancelled_as_unsent_or_lose_paid_output() {
+        let data=tempfile::tempdir().unwrap();
+        let root=data.path().join("media-tasks");
+        let (_,mut saved,_)=fixture("https://example.invalid",MediaKind::Speech);
+        saved.task.model="gpt-4o-mini-tts".into();
+        saved.protocol="openai_tts".into();
+        let provider:ModelProvider=serde_json::from_value(json!({"id":"p","name":"speech","baseUrl":"https://example.invalid",
+            "apiKeys":["synthetic-test-key"],"modelOverrides":{"gpt-4o-mini-tts":{"speechProtocol":"openai_tts","speechBaseUrl":"https://example.invalid/v1"}}})).unwrap();
+        let input=speech_providers::validate_input(&provider,&saved.task.model,&BTreeMap::from([("text".into(),json!("paid speech")),("voice".into(),json!("alloy"))]),data.path()).unwrap();
+        let directory=directory(&root,&saved.task.id).unwrap();
+        speech_providers::persist_input(&input,&directory).unwrap();
+        let mut journal=voices::Journal::load_or_new(&directory,&saved.task.id,"captured","alloy",false).unwrap();
+        journal.step=voices::Step::Synthesized;
+        journal.save(&directory).unwrap();
+        saved.task.status=MediaStatus::Failed;
+        save(&root,&saved).unwrap();
+        recover_task(&root,&mut saved,true).unwrap();
+        restore_speech_control(&saved.task.id,&directory,&input.mode).unwrap();
+        assert!(begin_execution(&root,&saved.task.id,ControlPhase::Pending).unwrap());
+        let cancelled=cancel_at(&root,&saved.task.id).unwrap().2;
+        assert_eq!(cancelled.outcome,CancelOutcome::Unsupported);
+        assert_eq!(cancelled.charged,ChargeFact::Maybe);
+        assert_eq!(cancelled.task.status,MediaStatus::Running);
+        saved.task.status=MediaStatus::Succeeded;
+        saved.task.outputs=vec![MediaOutput {path:"paid.wav".into(),mime:"audio/wav".into()}];
+        save(&root,&saved).unwrap();
+        let completed=read(&root,&saved.task.id).unwrap().task;
+        assert_eq!(completed.status,MediaStatus::Succeeded);
+        assert_eq!(completed.outputs[0].path,"paid.wav");
+        CONTROLS.lock().remove(&saved.task.id);
+    }
+    #[test]
+    fn resumed_tts_without_a_submission_receipt_remains_safely_cancellable() {
+        let root=tempfile::tempdir().unwrap();
+        let (_,saved,_)=fixture("https://example.invalid",MediaKind::Speech);
+        save(root.path(),&saved).unwrap();
+        restore_speech_control(&saved.task.id,&directory(root.path(),&saved.task.id).unwrap(),"tts").unwrap();
+        assert!(begin_execution(root.path(),&saved.task.id,ControlPhase::Pending).unwrap());
+        let cancelled=cancel_at(root.path(),&saved.task.id).unwrap().2;
+        assert_eq!(cancelled.outcome,CancelOutcome::Confirmed);
+        assert_eq!(cancelled.charged,ChargeFact::No);
+        assert_eq!(cancelled.task.status,MediaStatus::Cancelled);
+        assert!(!begin_execution(root.path(),&saved.task.id,ControlPhase::Remote).unwrap());
+        CONTROLS.lock().remove(&saved.task.id);
+    }
+    #[test]
+    fn speech_recovery_requires_explicit_resume_and_never_repeats_uncertain_step() {
+        let data=tempfile::tempdir().unwrap();
+        let root=data.path().join("media-tasks");
+        let (_,mut saved,_)=fixture("https://example.invalid",MediaKind::Speech);
+        saved.task.model="gpt-4o-mini-tts".into();
+        saved.protocol="openai_tts".into();
+        let provider:ModelProvider=serde_json::from_value(json!({"id":"p","name":"speech","baseUrl":"https://example.invalid",
+            "apiKeys":["synthetic-test-key"],"modelOverrides":{"gpt-4o-mini-tts":{"speechProtocol":"openai_tts","speechBaseUrl":"https://example.invalid/v1"}}})).unwrap();
+        let input=speech_providers::validate_input(&provider,&saved.task.model,&BTreeMap::from([("text".into(),json!("test")),("voice".into(),json!("alloy"))]),data.path()).unwrap();
+        let directory=directory(&root,&saved.task.id).unwrap();
+        speech_providers::persist_input(&input,&directory).unwrap();
+        save(&root,&saved).unwrap();
+        recover_task(&root,&mut saved,false).unwrap();
+        assert_eq!(saved.task.status,MediaStatus::Failed);
+        assert!(saved.task.can_resume);
+        recover_task(&root,&mut saved,true).unwrap();
+        assert_eq!(saved.task.status,MediaStatus::Running);
+        let mut journal=voices::Journal::load_or_new(&directory,&saved.task.id,"captured","alloy",false).unwrap();
+        journal.begin(&directory,"tts").unwrap();
+        recover_task(&root,&mut saved,false).unwrap();
+        assert_eq!(saved.task.status,MediaStatus::Failed);
+        assert!(!saved.task.can_resume);
+        assert_eq!(saved.task.submission_state,Some(MediaSubmissionState::Uncertain));
+        recover_task(&root,&mut saved,true).unwrap();
+        assert_eq!(saved.task.status,MediaStatus::Failed);
+    }
+    #[test]
+    fn pending_cancel_blocks_send_and_late_success_cannot_overwrite_terminal_record() {
+        let root = tempfile::tempdir().unwrap();
+        let (_,saved,_) = fixture("https://example.invalid",MediaKind::Video);
+        save(root.path(),&saved).unwrap();
+        register_control(&saved.task.id);
+        let first = cancel_at(root.path(),&saved.task.id).unwrap().2;
+        assert_eq!(first.outcome,CancelOutcome::Confirmed);
+        assert_eq!(first.charged,ChargeFact::No);
+        assert!(!begin_execution(root.path(),&saved.task.id,ControlPhase::Remote).unwrap());
+        let mut late = saved.clone();
+        late.task.status=MediaStatus::Succeeded;
+        late.task.outputs=vec![MediaOutput {path:"retained.mp4".into(),mime:"video/mp4".into()}];
+        save(root.path(),&late).unwrap();
+        let terminal=read(root.path(),&saved.task.id).unwrap();
+        assert_eq!(terminal.task.status,MediaStatus::Cancelled);
+        assert!(terminal.task.outputs.is_empty());
+        let second=cancel_at(root.path(),&saved.task.id).unwrap().2;
+        assert_eq!(second.outcome,CancelOutcome::Confirmed);
+        assert_eq!(first.task.cancellation.unwrap().confirmed_at,second.task.cancellation.unwrap().confirmed_at);
+        CONTROLS.lock().remove(&saved.task.id);
+    }
+
+    #[test]
+    fn issued_cloud_cancel_is_unsupported_and_completion_becomes_too_late_without_deleting_outputs() {
+        let root=tempfile::tempdir().unwrap();
+        let (_,mut saved,_)=fixture("https://example.invalid",MediaKind::Video);
+        saved.task.remote_id=Some("paid-receipt".into());
+        save(root.path(),&saved).unwrap();
+        register_control(&saved.task.id);
+        assert!(begin_execution(root.path(),&saved.task.id,ControlPhase::Remote).unwrap());
+        let unsupported=cancel_at(root.path(),&saved.task.id).unwrap().2;
+        assert_eq!(unsupported.outcome,CancelOutcome::Unsupported);
+        assert_eq!(unsupported.charged,ChargeFact::Maybe);
+        assert_eq!(unsupported.task.status,MediaStatus::Running);
+        assert_eq!(unsupported.task.remote_id.as_deref(),Some("paid-receipt"));
+        saved.task.status=MediaStatus::Succeeded;
+        saved.task.outputs=vec![MediaOutput {path:"paid.mp4".into(),mime:"video/mp4".into()}];
+        save(root.path(),&saved).unwrap();
+        let late=cancel_at(root.path(),&saved.task.id).unwrap().2;
+        assert_eq!(late.outcome,CancelOutcome::TooLate);
+        assert_eq!(late.task.outputs[0].path,"paid.mp4");
+        assert_eq!(read(root.path(),&saved.task.id).unwrap().task.remote_id.as_deref(),Some("paid-receipt"));
+        CONTROLS.lock().remove(&saved.task.id);
+    }
+
+    #[test]
+    fn completion_races_cancel_at_a_single_durable_boundary() {
+        for _ in 0..12 {
+            let root=tempfile::tempdir().unwrap();
+            let (_,saved,_)=fixture("https://example.invalid",MediaKind::Image);
+            save(root.path(),&saved).unwrap();
+            register_control(&saved.task.id);
+            let barrier=Arc::new(std::sync::Barrier::new(2));
+            let path=root.path().to_owned();
+            let id=saved.task.id.clone();
+            let gate=barrier.clone();
+            let cancellation=std::thread::spawn(move|| {gate.wait();cancel_at(&path,&id).unwrap().2.outcome});
+            barrier.wait();
+            let mut completed=saved.clone();
+            completed.task.status=MediaStatus::Succeeded;
+            completed.task.outputs=vec![MediaOutput {path:"result.png".into(),mime:"image/png".into()}];
+            save(root.path(),&completed).unwrap();
+            let outcome=cancellation.join().unwrap();
+            let final_task=read(root.path(),&saved.task.id).unwrap().task;
+            match outcome {
+                CancelOutcome::Confirmed=>assert_eq!(final_task.status,MediaStatus::Cancelled),
+                CancelOutcome::TooLate=>{assert_eq!(final_task.status,MediaStatus::Succeeded);assert_eq!(final_task.outputs[0].path,"result.png");},
+                other=>panic!("unexpected {other:?}"),
+            }
+            CONTROLS.lock().remove(&saved.task.id);
+        }
+    }
     fn fixture(
         base: &str,
         kind: MediaKind,
@@ -1335,6 +1955,9 @@ mod tests {
                 submission_state: None,
                 origin: None,
                 prompt: String::new(),
+                result: None,
+                request_hash: None,
+                cancellation: None,
             },
             base_url: base.into(),
             protocol: if kind == MediaKind::Video {
@@ -1355,6 +1978,7 @@ mod tests {
             images: vec![],
             options: BTreeMap::new(),
             origin: None,
+            description_revision: None,
         };
         (settings, task, request)
     }
@@ -2119,36 +2743,29 @@ mod tests {
             json!({"size": 1024}),
         ] {
             request.options = serde_json::from_value(invalid).unwrap();
-            assert!(image_arguments(&request).is_err());
+            assert!(image_arguments(&settings.providers[0], &request).is_err());
         }
         request.options = serde_json::from_value(json!({"aspectRatio":"3:2", "n":2})).unwrap();
-        let args = image_arguments(&request).unwrap();
-        assert_eq!(args["aspect_ratio"], "3:2");
+        let args = image_arguments(&settings.providers[0], &request).unwrap();
         image_providers::validate_generation(&settings.providers[0], &request.model, &args, 0)
             .unwrap();
         request.options.insert("size".into(), json!("not-a-size"));
-        assert!(image_providers::validate_generation(
-            &settings.providers[0],
-            &request.model,
-            &image_arguments(&request).unwrap(),
-            0
-        )
-        .is_err());
+        assert!(image_arguments(&settings.providers[0], &request).is_err());
     }
 
     #[test]
     fn comfy_standard_fields_require_explicit_bindings_and_preserve_node_options() {
-        let (_, _, mut request) = fixture("http://localhost:8188", MediaKind::Image);
+        let (settings, _, mut request) = fixture("http://localhost:8188", MediaKind::Image);
         let mut flow: comfyui::ComfyWorkflow = serde_json::from_value(json!({
             "id":"wf", "name":"image", "kind":"image",
             "graph":{"1":{"class_type":"CLIPTextEncode","inputs":{"text":"original"}},"2":{"class_type":"SaveImage","inputs":{"images":["1",0]}}},
             "inputs":[{"nodeId":"1","input":"text","label":"Prompt","kind":"text"}],"outputNodes":["2"]
         })).unwrap();
-        assert!(comfy_values(&flow, &request)
+        assert!(comfy_values(&settings.providers[0], &flow, &request)
             .unwrap_err()
             .contains("尚未绑定"));
         flow.inputs[0].source = Some(comfyui::ComfyInputSource::Prompt);
-        let values = comfy_values(&flow, &request).unwrap();
+        let values = comfy_values(&settings.providers[0], &flow, &request).unwrap();
         assert_eq!(
             comfyui::prepare(&flow, &values).unwrap()["1"]["inputs"]["text"],
             request.prompt
@@ -2157,17 +2774,17 @@ mod tests {
         request
             .options
             .insert("1:text".into(), json!("conflicting"));
-        assert!(comfy_values(&flow, &request).is_err());
+        assert!(comfy_values(&settings.providers[0], &flow, &request).is_err());
         request.prompt.clear();
         assert_eq!(
-            comfy_values(&flow, &request).unwrap()["1:text"],
+            comfy_values(&settings.providers[0], &flow, &request).unwrap()["1:text"],
             "conflicting"
         );
     }
 
     #[test]
     fn comfy_video_options_map_once_in_the_workflow_instead_of_each_feature() {
-        let (_, _, mut request) = fixture("http://localhost:8188", MediaKind::Video);
+        let (settings, _, mut request) = fixture("http://localhost:8188", MediaKind::Video);
         request.prompt.clear();
         request.options = serde_json::from_value(
             json!({"duration":5,"firstFrame":"data:image/png;base64,aW1hZ2U="}),
@@ -2178,14 +2795,14 @@ mod tests {
             "graph":{"1":{"class_type":"VideoNode","inputs":{"seconds":1,"image":"old.png"}}},
             "inputs":[{"nodeId":"1","input":"seconds","label":"Duration","kind":"number","source":{"type":"parameter","name":"duration"}}, {"nodeId":"1","input":"image","label":"First frame","kind":"image","source":{"type":"parameter","name":"firstFrame"}}],"outputNodes":["1"]
         })).unwrap();
-        let graph = comfyui::prepare(&flow, &comfy_values(&flow, &request).unwrap()).unwrap();
+        let graph = comfyui::prepare(&flow, &comfy_values(&settings.providers[0], &flow, &request).unwrap()).unwrap();
         assert_eq!(graph["1"]["inputs"]["seconds"], 5);
         assert!(graph["1"]["inputs"]["image"]
             .as_str()
             .unwrap()
             .starts_with("data:image/png;base64,"));
         request.options.insert("unsupported".into(), json!(true));
-        assert!(comfy_values(&flow, &request).is_err());
+        assert!(comfy_values(&settings.providers[0], &flow, &request).is_err());
     }
 
     #[tokio::test]
@@ -2207,7 +2824,7 @@ mod tests {
             "graph":{"1":{"class_type":"CLIPTextEncode","inputs":{"text":"original"}},"2":{"class_type":"LoadImage","inputs":{"image":"old.png"}},"3":{"class_type":"SaveImage","inputs":{"images":["2",0]}}},
             "inputs":[{"nodeId":"1","input":"text","label":"Prompt","kind":"text","source":{"type":"prompt"}}, {"nodeId":"2","input":"image","label":"Reference","kind":"image","source":{"type":"image","index":0}}],"outputNodes":["3"]
         })).unwrap();
-        let values = comfy_values(&flow, &request).unwrap();
+        let values = comfy_values(&settings.providers[0], &flow, &request).unwrap();
         let task = comfyui::submit_to_store(
             root.path(),
             uuid::Uuid::new_v4().to_string(),
@@ -2311,12 +2928,8 @@ mod tests {
     }
 
     #[test]
-    fn shared_defaults_and_receipt_storage_do_not_include_credentials() {
-        let (settings, task, mut request) = fixture("https://example.test", MediaKind::Video);
-        request.model = "MiniMax-H3".into();
-        let input = video_input(&request).unwrap();
-        assert_eq!(input.duration, Some(5));
-        assert_eq!(input.resolution.as_deref(), Some("768P"));
+    fn receipt_storage_does_not_include_credentials() {
+        let (settings, task, _) = fixture("https://example.test", MediaKind::Video);
         let json = serde_json::to_string(&task).unwrap();
         assert!(!json.contains(&settings.providers[0].api_keys[0]));
         assert!(directory(Path::new("/tmp"), "../bad").is_err());

@@ -423,6 +423,7 @@ fn generation_request(t: &Value) -> Result<crate::media_generation::MediaRequest
             "workbench/video-project/{}",
             t["id"].as_str().ok_or("缺少项目编号")?
         )),
+        description_revision: None,
     })
 }
 fn merge_media(mut project: Value, media: crate::media_generation::MediaTask) -> Value {
@@ -433,6 +434,7 @@ fn merge_media(mut project: Value, media: crate::media_generation::MediaTask) ->
     project["status"] = json!(match media.status {
         MediaStatus::Running => "running",
         MediaStatus::Succeeded => "succeeded",
+        MediaStatus::Cancelled => "cancelled",
         MediaStatus::Failed if media.can_resume => "running",
         MediaStatus::Failed if media.submission_state == Some(MediaSubmissionState::Rejected) => "failed",
         MediaStatus::Failed if missing_receipt => "uncertain",

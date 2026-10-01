@@ -1,4 +1,4 @@
-import type { ChatToolsConfig, Settings as SettingsData, ModelProvider, ProviderRequestConfig } from '../../api/tauri'
+import type { ChatToolsConfig, Settings as SettingsData, ModelProvider, ProviderRequestConfig, WorkbenchMediaConfig } from '../../api/tauri'
 import { createProviderRequestDraft } from '../public/providerDraft'
 
 /** Representative component input; not a persistence-default implementation. */
@@ -41,7 +41,7 @@ export function makeChatToolsFixture(overrides: Partial<ChatToolsConfig> = {}): 
  * 这里只给被测 tab 真正读到的字段，其余按 Partial 断言掉 —— 组件只读自己那几个键，
  * 缺失字段若被误读会立刻 undefined 报错，反而比填假值更能暴露问题。
  */
-export function makeSettings(overrides: Partial<SettingsData> = {}): SettingsData {
+export function makeSettings(overrides: Omit<Partial<SettingsData>, 'workbenchMedia'> & { workbenchMedia?: Partial<WorkbenchMediaConfig> } = {}): SettingsData {
   return {
     hotkey: 'CommandOrControl+Shift+K',
     chatHotkey: 'CommandOrControl+Shift+J',
@@ -62,7 +62,6 @@ export function makeSettings(overrides: Partial<SettingsData> = {}): SettingsDat
     retryEnabled: true,
     retryAttempts: 3,
     providers: [],
-    workbenchMedia: { imageModels: [], videoModels: [] },
     defaultModels: {
       chat: { providerId: '', model: '' },
       vision: { providerId: '', model: '' },
@@ -91,6 +90,12 @@ export function makeSettings(overrides: Partial<SettingsData> = {}): SettingsDat
       hotkey: 'CommandOrControl+Shift+G',
     },
     ...overrides,
+    workbenchMedia: {
+      imageModels: [], videoModels: [], speechModels: [],
+      transcribeModels: [{ providerId: 'local', model: 'whisperx-small' }],
+      localAsr: { model: 'small', languages: ['en', 'zh'], autoInstall: true },
+      ...overrides.workbenchMedia,
+    },
   } as SettingsData
 }
 

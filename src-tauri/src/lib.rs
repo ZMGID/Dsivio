@@ -263,6 +263,7 @@ pub fn run() {
         .setup(|app| {
             if let Err(error) = media_runtime::initialize(app.handle()) { eprintln!("Video initialization failed: {error}"); }
             if let Err(error) = workbench::image_projects::initialize_skill_workspace(app.handle()) { eprintln!("Image initialization failed: {error}"); }
+            if let Err(error) = media_generation::local_asr::initialize(app.handle()) { eprintln!("Local ASR initialization failed: {error}"); }
             media_generation::cli::serve(app.handle().clone());
             let launched_from_autostart = std::env::args().any(|arg| arg == AUTOSTART_ARG);
 
@@ -524,6 +525,15 @@ pub fn run() {
             media_generation::start_media_generation,
             media_generation::get_media_task,
             media_generation::list_media_tasks,
+            media_generation::cancel_media_task,
+            media_generation::list_media_voices,
+            media_generation::delete_media_voice,
+            media_generation::register_media_voice,
+            media_generation::check_media_speech_connection,
+            media_generation::get_local_asr_status,
+            media_generation::install_local_asr,
+            media_generation::stop_local_asr,
+            media_generation::cancel_local_asr_install,
             workbench::image_projects::workbench_image_bootstrap,
             workbench::image_projects::workbench_image_get,
             workbench::image_projects::workbench_image_save,
@@ -835,6 +845,7 @@ pub fn run() {
                             return;
                         }
                     }
+                    tauri::async_runtime::block_on(media_generation::local_asr::shutdown());
                     // 自动化先于 MCP：运行中的图可能正跑 agent loop（依赖 MCP/供应商）或
                     // 命令节点（Child 靠 kill_on_drop 收尸）。先标记取消、限时等收尾，
                     // 此时运行时还活着，select! 的取消分支才来得及 drop 掉 Child。

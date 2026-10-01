@@ -24,7 +24,7 @@ describe('Workbench pool selection',()=>{
     view.unmount()
     render(<WorkbenchMediaModelSelect kind="videoModels" />)
     expect(await screen.findByRole('button',{name:'视频模型'})).toHaveTextContent('grok-imagine-video')
-    act(()=>listener({...settings,workbenchMedia:{imageModels:[],videoModels:[{providerId:'p1',model:'MiniMax-H3'}]}}))
+    act(()=>listener({...settings,workbenchMedia:{...settings.workbenchMedia,imageModels:[],videoModels:[{providerId:'p1',model:'MiniMax-H3'}]}}))
     expect(screen.getByRole('button',{name:'视频模型'})).toHaveTextContent('请选择本次使用的模型')
     expect(screen.getByText('上次选择的模型已不可用，请重新选择。')).toBeInTheDocument()
   })

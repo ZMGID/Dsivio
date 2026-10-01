@@ -1,10 +1,11 @@
 import type { SourcingConfig, LookalikeRequest, SourcingSearch, SourcingSearchSummary, PickFilter, PickPage, SavePickRequest, PickItem } from '../generated/sourcing'
 import type { GenerationWorkflow, WorkflowRun } from '../generated/generationWorkflow'
 import type { AiTaskRequest, AiTaskResult } from '../generated/aiTask'
-import type { MediaRequest, MediaTask, MediaTaskFilter } from '../generated/mediaGeneration'
+import type { MediaRequest, MediaTask, MediaTaskFilter, MediaCancelResult, VoiceReference, LocalAsrStatus, LocalAsrStopResult } from '../generated/mediaGeneration'
+export type { MediaCancelResult, VoiceReference, LocalAsrStatus, LocalAsrStopResult } from '../generated/mediaGeneration'
 import type { ComfyConfig, ComfyWorkflow, ComfyConnection } from '../generated/comfyui'
-import type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
-export type { DefaultModelSelection, WorkbenchMediaConfig } from '../generated/workbenchMedia'
+import type { DefaultModelSelection, WorkbenchMediaConfig, LocalAsrConfig } from '../generated/workbenchMedia'
+export type { DefaultModelSelection, WorkbenchMediaConfig, LocalAsrConfig } from '../generated/workbenchMedia'
 import type { VideoRequestPreview } from '../generated/videoGeneration'
 import type { VideoProtocol } from '../generated/videoGeneration'
 // Tauri 前端与 Rust 后端的桥接模块
@@ -906,6 +907,11 @@ export type ModelInfo = {
   advertisedVideoInput?: boolean
   /** Native video protocol; independent of the provider chat protocol. */
   videoProtocol?: VideoProtocol
+  /** Explicit product protocols/endpoints; never inferred from the chat connection. */
+  speechProtocol?: 'openai_tts' | 'minimax_tts'
+  speechBaseUrl?: string
+  transcribeProtocol?: 'openai_transcribe'
+  transcribeBaseUrl?: string
   contextWindow?: number
   maxOutput?: number
   /** 模型级采样温度；未设置时请求不发送 temperature。 */
@@ -1822,6 +1828,17 @@ export const api = {
   cancelAiTask: (taskId: string) => invoke<void>('cancel_ai_task', { taskId }),
   listMediaTasks: (filter: Partial<MediaTaskFilter>) => invoke<MediaTask[]>('list_media_tasks', { filter: { providerId: null, model: null, origin: null, ...filter } }),
   getMediaTask: (id: string, resume = false) => invoke<MediaTask>('get_media_task', { id, resume }),
+  cancelMediaTask: (id: string) => invoke<MediaCancelResult>('cancel_media_task', { id }),
+  listMediaVoices: () => invoke<VoiceReference[]>('list_media_voices'),
+  deleteMediaVoice: (id: string) => invoke<void>('delete_media_voice', { id }),
+  registerMediaVoice: (providerId: string, model: string, voiceId: string, consentAttestation: string) =>
+    invoke<VoiceReference>('register_media_voice', { providerId, model, voiceId, consentAttestation }),
+  checkMediaSpeechConnection: (providerId: string, model: string) =>
+    invoke<{ configured: boolean; authenticated: boolean; speechAuthorization: 'notVerified'; message: string }>('check_media_speech_connection', { providerId, model }),
+  getLocalAsrStatus: () => invoke<LocalAsrStatus>('get_local_asr_status'),
+  installLocalAsr: (config: LocalAsrConfig) => invoke<LocalAsrStatus>('install_local_asr', { config }),
+  cancelLocalAsrInstall: (operationId: string) => invoke<LocalAsrStatus>('cancel_local_asr_install', { operationId }),
+  stopLocalAsr: () => invoke<LocalAsrStopResult>('stop_local_asr'),
   previewVideoModelRequest: (input: { model: string; protocol: VideoProtocol; baseUrl: string }) =>
     invoke<VideoRequestPreview>('preview_video_model_request', input),
   chatArtifactsList: (importHistory = true) => invoke<ArtifactLibraryPage>('chat_artifacts_list', { importHistory }),

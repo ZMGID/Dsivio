@@ -113,6 +113,7 @@ export const videoStatus: Record<string, string> = {
   submitting: '提交中',
   running: '生成中',
   succeeded: '已完成',
+  cancelled: '已取消',
   failed: '生成失败',
   uncertain: '提交失败',
 }

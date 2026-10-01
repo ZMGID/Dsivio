@@ -161,6 +161,7 @@ pub async fn submit(
             ]
             .into(),
             origin: Some(format!("workbench/{origin}")),
+            description_revision: None,
         },
     )
     .await?;
@@ -178,6 +179,7 @@ pub async fn poll(
         return match task.status {
             MediaStatus::Running => Ok(None),
             MediaStatus::Failed => Err(task.error.unwrap_or("媒体任务失败；已有回执已保留".into())),
+            MediaStatus::Cancelled => Err("媒体任务已取消".into()),
             MediaStatus::Succeeded => {
                 let output = task.outputs.first().ok_or("媒体任务没有输出图片")?;
                 fs::read(&output.path).map(Some).map_err(|e| e.to_string())

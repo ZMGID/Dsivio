@@ -16,7 +16,7 @@ vi.mock('../../../api/settingsCache', () => ({ getSettingsCached: vi.fn(), subsc
 
 const provider = makeProvider({ enabledModels: ['gpt-image-1'], modelOverrides: { 'gpt-image-1': { capabilities: { imageGeneration: true } } } })
 const configured = () => makeSettings({ providers: [provider], workbenchMedia: { imageModels: [{ providerId: provider.id, model: 'gpt-image-1' }], videoModels: [] } })
-const done: MediaTask = { id: 'img-1', providerId: provider.id, model: 'gpt-image-1', kind: 'image', status: 'succeeded', createdAt: '2026-09-22T01:00:00Z', remoteId: null, canResume: false, error: null, outputs: [{ path: '/tmp/main-0.png', mime: 'image/png' }], origin: 'workbench/main', prompt: '白底' }
+const done: MediaTask = { id: 'img-1', providerId: provider.id, model: 'gpt-image-1', kind: 'image', status: 'succeeded', createdAt: '2026-09-22T01:00:00Z', remoteId: null, canResume: false, error: null, outputs: [{ path: '/tmp/main-0.png', mime: 'image/png' }], origin: 'workbench/main', prompt: '白底', result: null, requestHash: null, cancellation: null }
 
 beforeEach(() => {
   vi.restoreAllMocks(); localStorage.clear()

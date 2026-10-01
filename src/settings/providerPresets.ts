@@ -21,6 +21,7 @@ export type ProviderPreset = {
 /** 媒体预设统一来自目录；随后保留聊天、套餐与本地供应商。 */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   { name: 'ComfyUI 本地', baseUrl: 'http://127.0.0.1:8188', comfy: true },
+  { name: 'MiniMax Speech · Pay-as-you-go', baseUrl: 'https://api.minimax.io/v1', apiKeyUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key' },
   ...VIDEO_PROVIDER_PRESETS.map(p => ({
     name: p.name, baseUrl: p.baseUrl, apiKeyUrl: p.apiKeyUrl, apiFormat: p.apiFormat as ProviderApiFormat,
   })),

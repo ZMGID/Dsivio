@@ -334,9 +334,9 @@ pub(crate) async fn submit(
         model: media.model.clone(),
         protocol: "async".into(),
     };
-    // Read the normalized options once; raw keys differ by caller (`aspectRatio` vs `aspect_ratio`).
-    let arguments = crate::media_generation::image_arguments(media)?;
-    let ratio = arguments["aspect_ratio"]
+    // Public arguments are canonical; only the adapter translates vendor field names.
+    let arguments = crate::media_generation::image_arguments(p, media)?;
+    let ratio = arguments["aspectRatio"]
         .as_str()
         .unwrap_or("1:1")
         .to_owned();
@@ -358,7 +358,7 @@ pub(crate) async fn submit(
     let body = super::image_api_payload(p, &media.model, &arguments, images.len())?;
     if !images.is_empty() && uses_openai_async_task(&p.base_url, &media.model) {
         let mut form = reqwest::multipart::Form::new();
-        for key in ["model", "prompt", "n", "size", "quality"] {
+        for key in ["model", "prompt", "n", "size", "quality", "background", "output_format"] {
             if let Some(value) = body.get(key) {
                 form = form.text(
                     key,

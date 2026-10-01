@@ -30,7 +30,8 @@
       "resources/image-studio": "image-studio",
       "resources/video-studio": "video-studio",
       "resources/plugins": "plugins",
-      "resources/video-runtime": "video-runtime"
+      "resources/video-runtime": "video-runtime",
+      "resources/dsivio-video-asr": "dsivio-video-asr"
     },
     "windows": {
       "nsis": {

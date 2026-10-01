@@ -28,6 +28,12 @@ Dsivio Agent 是当前唯一的内置运行时，负责对话、工具执行和�
 | 内容管理 | 图片模板、视频模板、角色库、素材库 |
 | 统计管理 | 使用记录 |
 
+## 视频制作插件
+
+内置市场保留 Hypit 等视频制作插件；Dsivio Video 已移出内置目录，其源码继续独立维护在 [ZMGID/dsivio-plugins](https://github.com/ZMGID/dsivio-plugins/tree/main/plugins/dsivio-video)。移除插件入口不删除用户项目、素材、已部署的项目工具或历史输出。
+
+宿主的媒体生成、语音、本地 ASR、通用模型参数和取消能力独立于插件市场入口，继续由 Dsivio 持有凭证与任务；移除 Dsivio Video 不移除这些共用能力。
+
 ## 开发
 
 需要 Node.js、npm、Rust，以及 [Tauri 2](https://tauri.app/) 在当前系统上的依赖。macOS 上 OCR 辅助程序还需要 Swift。

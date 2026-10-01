@@ -13,6 +13,6 @@ describe('workflow model capability validation', () => {
     expect(modelProblems(flow, settings)).toEqual([])
     flow.nodes[0].config.options.output = 'not-supported'
     expect(modelProblems(flow, settings).join()).toContain('尺寸参数')
-    expect(modelProblems(flow, { ...settings, workbenchMedia: { imageModels: [], videoModels: [] } }).join()).toContain('模型池')
+    expect(modelProblems(flow, { ...settings, workbenchMedia: { ...settings.workbenchMedia, imageModels: [], videoModels: [] } }).join()).toContain('模型池')
   })
 })

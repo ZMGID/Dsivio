@@ -1,4 +1,5 @@
 //! `dsivio tools [--json]`: discover bundled programs without a running App.
+//! The `npm` path is a JS script; execute `<node> <npm> ...`, never npm directly.
 use super::runtime;
 use std::{collections::BTreeMap, ffi::OsString, io::Write, path::PathBuf, process::ExitCode};
 
@@ -56,14 +57,15 @@ mod tests {
             "analyzer/node_modules/ffmpeg-static/ffmpeg"
         });
         let node = root.join(if cfg!(windows) { "node/node.exe" } else { "node/bin/node" });
-        for program in [&ffmpeg, &node] {
+        let npm = root.join(if cfg!(windows) { "node/node_modules/npm/bin/npm-cli.js" } else { "node/lib/node_modules/npm/bin/npm-cli.js" });
+        for program in [&ffmpeg, &node, &npm] {
             std::fs::create_dir_all(program.parent().unwrap()).unwrap();
             std::fs::write(program, "fixture").unwrap();
         }
         // A directory named like a program is not a discovered executable file.
         std::fs::create_dir_all(root.join(if cfg!(windows) { "bin/ffprobe.exe" } else { "bin/ffprobe" })).unwrap();
         let tools = runtime::tools_at(&root).unwrap();
-        let expected = serde_json::json!({"ffmpeg": ffmpeg, "node": node});
+        let expected = serde_json::json!({"ffmpeg": ffmpeg, "node": node, "npm": npm});
         let mut json = Vec::new();
         print_tools(&tools, true, &mut json).unwrap();
         assert_eq!(serde_json::from_slice::<serde_json::Value>(&json).unwrap(), expected);
@@ -74,7 +76,7 @@ mod tests {
         print_tools(&tools, false, &mut human).unwrap();
         assert_eq!(
             String::from_utf8(human).unwrap(),
-            format!("ffmpeg\t{}\nnode\t{}\n", ffmpeg.display(), node.display())
+            format!("ffmpeg\t{}\nnode\t{}\nnpm\t{}\n", ffmpeg.display(), node.display(), npm.display())
         );
     }
 

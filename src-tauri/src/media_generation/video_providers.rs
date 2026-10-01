@@ -105,7 +105,7 @@ pub struct VideoCapabilities {
     pub max_prompt_length: Option<usize>,
     pub defaults: Value,
 }
-pub(crate) fn capabilities(provider: &ModelProvider, model: &str) -> Option<VideoCapabilities> {
+fn route_capabilities(provider: &ModelProvider, model: &str) -> Option<VideoCapabilities> {
     let profile = model_profile(model)?;
     // A user-chosen protocol wins in `selected`, so describe the model as it would actually be sent.
     let protocol = provider
@@ -138,22 +138,122 @@ pub(crate) fn capabilities(provider: &ModelProvider, model: &str) -> Option<Vide
         protocol,
     })
 }
-pub(crate) fn supports_mode(model: &str, mode: &str) -> bool {
-    model_profile(model).is_none_or(|profile| profile.modes.iter().any(|value| value == mode))
-}
-pub(crate) fn input_with_defaults(model: &str, mut input: VideoInput) -> VideoInput {
-    if let Some(profile) = model_profile(model) {
-        if input.duration.is_none() {
-            input.duration = profile.defaults["duration"].as_u64().map(|n| n as u32);
+
+pub(crate) fn model_description(provider: &ModelProvider, model: &str) -> super::model_parameters::ModelDescription {
+    use super::model_parameters::{argument, finish, DataType};
+    let mut args = BTreeMap::new();
+    let c = route_capabilities(provider, model);
+    let protocol = selected(provider, model).unwrap_or("");
+    let profile = model_profile(model);
+    let mut prompt = argument(DataType::String, Some("--prompt-file"), json!({"minLength":1,"lengthUnit":if protocol == "runway" {"utf16CodeUnit"} else {"unicodeCodePoint"}}));
+    prompt.required = true;
+    prompt.transport = json!({"flag":"--prompt-file","encoding":"utf8-file"});
+    if let Some(max) = c.as_ref().and_then(|c| c.max_prompt_length) { prompt.facts.insert("maxLength".into(), json!(max)); }
+    args.insert("prompt".into(), prompt);
+    let mut rules = vec![];
+    if let Some(c) = &c {
+        if !c.durations.is_empty() {
+            args.insert("duration".into(), argument(DataType::Integer, Some("--duration"), json!({"allowed":c.durations})));
         }
-        if input.resolution.is_none() {
-            input.resolution = profile.defaults["resolution"].as_str().map(str::to_owned);
+        for (name, flag, allowed) in [("resolution","--resolution",&c.resolutions),("ratio","--ratio",&c.ratios)] {
+            if !allowed.is_empty() && !(name == "ratio" && protocol == "minimax_hailuo" || name == "resolution" && protocol == "runway") {
+                args.insert(name.into(), argument(DataType::String, Some(flag), json!({"allowed":allowed})));
+            }
         }
-        if input.ratio.is_none() {
-            input.ratio = profile.defaults["ratio"].as_str().map(str::to_owned);
+        for (name, flag, max, mime, bytes) in [
+            ("firstFrame","--first-frame",usize::from(c.first_frame && protocol != "wan"),"image/*",24*1024*1024),
+            ("lastFrame","--last-frame",usize::from(c.last_frame),"image/*",24*1024*1024),
+            ("referenceImages","--ref",c.max_reference_images,"image/*",24*1024*1024),
+            ("referenceVideos","--ref-video",c.max_reference_videos,"video/*",50*1024*1024),
+            ("referenceAudios","--ref-audio",c.max_reference_audios,"audio/*",15*1024*1024),
+        ] {
+            if max > 0 {
+                let locations = if mime == "image/*" || c.local_reference_media { vec!["local","https","http","inline"] } else { vec!["https","http"] };
+                args.insert(name.into(), argument(DataType::MediaList, Some(flag), json!({"minCount":1,"maxCount":max,"maxBytes":bytes,"mimePatterns":[mime],"locations":locations})));
+            }
+        }
+        if c.audio_toggle { args.insert("generateAudio".into(), argument(DataType::Boolean, None, json!({}))); }
+        for (name, value) in c.defaults.as_object().into_iter().flatten() {
+            // xAI inherits an image's ratio when omitted; a universal text default would
+            // overwrite that consumer-visible behavior.
+            if protocol == "xai_video" && name == "ratio" { continue; }
+            if let Some(arg) = args.get_mut(name) { arg.facts.insert("defaultValue".into(), value.clone()); }
+        }
+        if c.last_frame_needs_first && args.contains_key("lastFrame") && args.contains_key("firstFrame") {
+            rules.push(json!({"ruleId":"last-frame-needs-first","when":{"provided":"lastFrame"},"check":"require","arguments":["firstFrame"]}));
+        }
+        let visuals: Vec<_> = ["referenceImages","referenceVideos"].into_iter().filter(|n| args.contains_key(*n)).collect();
+        if c.reference_audio_needs_visual && args.contains_key("referenceAudios") && !visuals.is_empty() {
+            rules.push(json!({"ruleId":"reference-audio-needs-visual","when":{"all":[{"provided":"referenceAudios"},{"not":{"any":visuals.iter().map(|n| json!({"provided":n})).collect::<Vec<_>>()}}]},"check":"require","arguments":visuals}));
+        }
+        if c.frames_exclude_references {
+            for frame in ["firstFrame","lastFrame"] {
+                for reference in ["referenceImages","referenceVideos","referenceAudios"] {
+                    if args.contains_key(frame) && args.contains_key(reference) {
+                        rules.push(json!({"ruleId":format!("{frame}-excludes-{reference}"),"check":"excludeTogether","arguments":[frame,reference]}));
+                    }
+                }
+            }
+        }
+        if let Some(p) = profile {
+            if !p.modes.iter().any(|m| m == "text") {
+                let media: Vec<_> = ["firstFrame","lastFrame","referenceImages","referenceVideos","referenceAudios"].into_iter().filter(|n| args.contains_key(*n)).collect();
+                if let Some(first) = media.first() {
+                    rules.push(json!({"ruleId":"visual-input-required","when":{"not":{"any":media.iter().map(|n|json!({"provided":n})).collect::<Vec<_>>()}},"check":"require","arguments":[first]}));
+                }
+            }
+            let frames: Vec<_> = ["firstFrame","lastFrame"].into_iter().filter(|n| args.contains_key(*n)).map(|n| json!({"provided":n})).collect();
+            for (name, allowed) in [("duration",p.frame_duration.map(|n|json!(n))),("ratio",p.frame_ratio.as_ref().map(|r|json!(r)))] {
+                if let Some(value) = allowed {
+                    if args.contains_key(name) && !frames.is_empty() { rules.push(json!({"ruleId":format!("frame-{name}"),"when":{"any":frames},"check":"restrictAllowed","arguments":[name],"allowed":[value]})); }
+                }
+            }
+        }
+        if protocol == "kling" && args.contains_key("firstFrame") && args.contains_key("ratio") {
+            rules.push(json!({"ruleId":"kling-frame-ratio","when":{"provided":"firstFrame"},"check":"excludeTogether","arguments":["firstFrame","ratio"]}));
+        }
+        if protocol == "minimax_hailuo" && args.contains_key("resolution") && args.contains_key("duration") {
+            rules.push(json!({"ruleId":"hailuo-1080-duration","when":{"equals":{"argument":"resolution","value":"1080P"}},"check":"restrictAllowed","arguments":["duration"],"allowed":[6]}));
+        }
+        if protocol == "veo" && args.contains_key("resolution") && args.contains_key("duration") {
+            rules.push(json!({"ruleId":"veo-high-resolution-duration","when":{"all":[{"provided":"resolution"},{"not":{"equals":{"argument":"resolution","value":"720p"}}}]},"check":"restrictAllowed","arguments":["duration"],"allowed":[8]}));
+        }
+        if protocol == "xai_video" {
+            let refs: Vec<_> = ["referenceImages","lastFrame"].into_iter().filter(|n| args.contains_key(*n)).map(|n|json!({"provided":n})).collect();
+            if args.contains_key("resolution") && !refs.is_empty() { rules.push(json!({"ruleId":"xai-reference-resolution","when":{"any":refs},"check":"restrictAllowed","arguments":["resolution"],"allowed":["480p","720p"]})); }
+        }
+        if protocol == "xai_video" && c.max_reference_images > 0 {
+            args.insert("voiceIds".into(), argument(DataType::MediaList, None, json!({"minCount":1,"maxCount":3,"entryAttributes":{},"opaqueSources":true})));
+            if args.contains_key("generateAudio") {
+                rules.push(json!({"ruleId":"voice-ids-need-audio","when":{"provided":"voiceIds"},"check":"restrictAllowed","arguments":["generateAudio"],"allowed":[true]}));
+            }
         }
     }
-    input
+    finish(provider, model, super::MediaKind::Video, args, rules, false, Some(1), true)
+}
+
+pub(crate) fn capabilities(provider: &ModelProvider, model: &str) -> Option<VideoCapabilities> {
+    let mut c = route_capabilities(provider, model)?;
+    let d = model_description(provider, model);
+    c.audio_toggle = d.arguments.contains_key("generateAudio");
+    c.first_frame = d.arguments.contains_key("firstFrame");
+    c.last_frame = d.arguments.contains_key("lastFrame");
+    c.durations = d.arguments.get("duration").and_then(|a| a.facts.get("allowed")).and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_u64().map(|n| n as u32)).collect();
+    c.resolutions = d.arguments.get("resolution").and_then(|a| a.facts.get("allowed")).and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+    c.ratios = d.arguments.get("ratio").and_then(|a| a.facts.get("allowed")).and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_str().map(str::to_owned)).collect();
+    c.modes.retain(|mode| match mode.as_str() {
+        "image" => c.first_frame, "frames" => c.last_frame,
+        "reference" => d.arguments.contains_key("referenceImages") || d.arguments.contains_key("referenceVideos") || d.arguments.contains_key("referenceAudios"),
+        _ => true,
+    });
+    for (key, count) in [("referenceImages",&mut c.max_reference_images),("referenceVideos",&mut c.max_reference_videos),("referenceAudios",&mut c.max_reference_audios)] {
+        *count = d.arguments.get(key).and_then(|a|a.facts.get("maxCount")).and_then(Value::as_u64).unwrap_or(0) as usize;
+    }
+    c.defaults = json!(d.arguments.iter().filter_map(|(name,arg)|arg.facts.get("defaultValue").map(|v|(name.clone(),v.clone()))).collect::<BTreeMap<_,_>>());
+    Some(c)
+}
+pub(crate) fn supports_mode(model: &str, mode: &str) -> bool {
+    model_profile(model).is_none_or(|profile| profile.modes.iter().any(|value| value == mode))
 }
 pub(crate) fn is_video_model(provider: &ModelProvider, model: &str) -> bool {
     let info = provider.model_overrides.get(model);
@@ -164,31 +264,57 @@ pub(crate) fn is_video_model(provider: &ModelProvider, model: &str) -> bool {
         })
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[serde(untagged)]
+pub enum VideoDuration {
+    Seconds(u32),
+    Auto(AutoDuration),
+}
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+pub enum AutoDuration {
+    #[serde(rename = "auto")]
+    Auto,
+}
+impl std::fmt::Display for VideoDuration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { Self::Seconds(n) => n.fmt(f), Self::Auto(_) => f.write_str("auto") }
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[ts(rename = "VideoGenerationInput")]
 pub struct VideoInput {
     pub prompt: String,
     #[ts(optional)]
-    pub duration: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<VideoDuration>,
     #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub resolution: Option<String>,
     #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ratio: Option<String>,
     #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub first_frame: Option<String>,
     #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_frame: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_images: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_videos: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_audios: Vec<String>,
     #[ts(optional)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub generate_audio: Option<bool>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub voice_ids: Vec<String>,
+    #[serde(flatten)]
+    #[ts(skip)]
+    pub extra: BTreeMap<String, Value>,
 }
 #[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -245,191 +371,30 @@ fn valid_media(value: &str) -> bool {
         || value.starts_with("http://")
         || value.starts_with("data:image/")
 }
-fn validate(protocol: &str, model: &str, input: &VideoInput) -> Result<(), String> {
-    if model.trim().is_empty() || model.contains(['/', '?', '#']) {
-        return Err("视频模型 ID 无效".into());
+fn validate(protocol: &str, model: &str, input: &VideoInput) -> Result<VideoInput, String> {
+    if model.trim().is_empty() || model.contains(['/', '?', '#']) { return Err("视频模型 ID 无效".into()); }
+    let provider: ModelProvider = serde_json::from_value(json!({"id":"preview","name":"preview","baseUrl":"https://example.test","enabled":true,"enabledModels":[model],"modelOverrides":{model:{"videoProtocol":protocol}}})).map_err(|e| e.to_string())?;
+    let mut args: BTreeMap<String, Value> = serde_json::from_value(json!(input)).map_err(|e| e.to_string())?;
+    for name in ["firstFrame","lastFrame"] {
+        if let Some(source) = args.get_mut(name) { *source = json!([source.clone()]); }
     }
-    if input.prompt.trim().is_empty() {
-        return Err("请填写视频提示词".into());
+    let mut resolved = super::model_parameters::validate_and_resolve(&provider, model, &super::MediaKind::Video, args, None)?;
+    for name in ["firstFrame", "lastFrame"] {
+        if let Some(value) = resolved.get_mut(name) {
+            let sources = super::model_parameters::media_sources(value)?;
+            *value = json!(sources[0]);
+        }
     }
-    let profile = model_profile(model).filter(|p| p.protocol == protocol);
-    if input.last_frame.is_some()
-        && input.first_frame.is_none()
-        && profile.is_none_or(|p| p.last_frame_needs_first.unwrap_or(true))
-    {
-        return Err("尾帧模式必须同时提供首帧".into());
-    }
-    if input.duration == Some(0) {
-        return Err("视频时长必须大于 0".into());
-    }
-    let reference = !input.reference_images.is_empty()
-        || !input.reference_videos.is_empty()
-        || !input.reference_audios.is_empty()
-        || !input.voice_ids.is_empty();
-    let mode = if reference {
-        "reference"
-    } else if input.last_frame.is_some() {
-        "frames"
-    } else if input.first_frame.is_some() {
-        "image"
-    } else {
-        "text"
-    };
-    if let Some(profile) = model_profile(model).filter(|p| p.protocol == protocol) {
-        if !profile.modes.iter().any(|m| m == mode) {
-            return Err(format!("此模型当前适配入口不支持 {mode} 模式"));
-        }
-        if input
-            .duration
-            .is_some_and(|d| !profile.durations.is_empty() && !profile.durations.contains(&d))
-        {
-            return Err("此模型不支持所选时长".into());
-        }
-        for (value, allowed, name) in [
-            (&input.resolution, &profile.resolutions, "分辨率"),
-            (&input.ratio, &profile.ratios, "比例"),
-        ] {
-            if value
-                .as_ref()
-                .is_some_and(|v| !allowed.is_empty() && !allowed.contains(v))
-            {
-                return Err(format!("此模型不支持所选{name}"));
-            }
-        }
-        if input.first_frame.is_some() || input.last_frame.is_some() {
-            if profile
-                .frame_duration
-                .is_some_and(|d| input.duration.unwrap_or(d) != d)
-            {
-                return Err("此模型首尾帧模式不支持所选时长".into());
-            }
-            if profile
-                .frame_ratio
-                .as_ref()
-                .is_some_and(|r| input.ratio.as_ref().is_some_and(|v| v != r))
-            {
-                return Err("此模型首尾帧模式只支持自适应比例".into());
-            }
-        }
-        if let Some(limits) = &profile.reference_limits {
-            if input.reference_images.len() > limits.images
-                || input.reference_videos.len() > limits.videos
-                || input.reference_audios.len() > limits.audios
-            {
-                return Err("参考素材数量超过模型限制".into());
-            }
-            if !limits.audio_only
-                && !input.reference_audios.is_empty()
-                && input.reference_images.is_empty()
-                && input.reference_videos.is_empty()
-            {
-                return Err("此模型参考音频必须同时提供图片或视频".into());
-            }
-        }
-        let length = if protocol == "runway" {
-            input.prompt.encode_utf16().count()
-        } else {
-            input.prompt.chars().count()
-        };
-        if profile
-            .max_prompt_length
-            .is_some_and(|max| max > 0 && length > max)
-        {
-            return Err("提示词超过该模型长度限制".into());
-        }
-        if input.generate_audio.is_some() && !profile.audio_toggle {
-            return Err("此模型入口不支持声音开关".into());
-        }
+    for name in ["referenceImages", "referenceVideos", "referenceAudios", "voiceIds"] {
+        if let Some(value) = resolved.get_mut(name) { *value = json!(super::model_parameters::media_sources(value)?); }
     }
     let entry = protocol_capabilities(protocol).ok_or("未知视频协议")?;
-    if reference && !entry.references {
-        return Err("此协议入口不支持多模态参考，请使用其专用接口".into());
-    }
-    if reference && profile.is_none_or(|p| p.frames_exclude_references.unwrap_or(true)) {
-        if input.first_frame.is_some() || input.last_frame.is_some() {
-            return Err("首尾帧和多模态参考不能混用".into());
+    for media in input.first_frame.iter().chain(input.last_frame.iter()).chain(input.reference_images.iter()).chain(input.reference_videos.iter()).chain(input.reference_audios.iter()) {
+        if !valid_media(media) && !(entry.inline_reference_media && (media.starts_with("data:video/") || media.starts_with("data:audio/") || media.starts_with("mm_file://"))) {
+            return Err("素材须为可访问的 HTTP(S) URL 或协议支持的 data URL".into());
         }
     }
-    if !input.voice_ids.is_empty()
-        && (protocol != "xai_video"
-            || input.voice_ids.len() > 3
-            || input.generate_audio == Some(false))
-    {
-        return Err("音色仅支持有声 xAI 参考生成，最多 3 个".into());
-    }
-    if protocol == "xai_video"
-        && (reference || input.last_frame.is_some())
-        && (input.reference_images.len() > 7
-            || input.resolution.as_deref() == Some("1080p")
-            || !input.reference_videos.is_empty()
-            || !input.reference_audios.is_empty())
-    {
-        return Err("xAI 参考生成最多 7 张图片，最高 720p；不支持参考音视频文件".into());
-    }
-    if input.last_frame.is_some() && !entry.last_frame {
-        return Err("此协议入口未支持尾帧".into());
-    }
-    if input.generate_audio.is_some() && !entry.audio_toggle {
-        return Err("此协议不支持声音开关".into());
-    }
-    if protocol == "minimax_hailuo" && input.ratio.is_some() {
-        return Err("Hailuo V1 不接受 ratio 参数".into());
-    }
-    if protocol == "runway" && input.resolution.is_some() {
-        return Err("Runway 使用像素 ratio，不接受独立 resolution".into());
-    }
-    if protocol == "wan" && input.first_frame.is_some() {
-        return Err("当前模型入口仅支持文生视频".into());
-    }
-    if protocol == "kling" && input.first_frame.is_some() && input.ratio.is_some() {
-        return Err("Kling 图生视频输出跟随首帧，不接受独立比例".into());
-    }
-    for media in input
-        .reference_videos
-        .iter()
-        .chain(input.reference_audios.iter())
-    {
-        if !(media.starts_with("https://")
-            || media.starts_with("http://")
-            || entry.inline_reference_media
-                && (media.starts_with("data:") || media.starts_with("mm_file://")))
-        {
-            return Err("参考视频和音频需要可访问的 HTTP(S) URL".into());
-        }
-    }
-    for media in input
-        .first_frame
-        .iter()
-        .chain(input.last_frame.iter())
-        .chain(input.reference_images.iter())
-        .chain(input.reference_videos.iter())
-        .chain(input.reference_audios.iter())
-    {
-        if !valid_media(media)
-            && !(entry.inline_reference_media
-                && (media.starts_with("data:video/")
-                    || media.starts_with("data:audio/")
-                    || media.starts_with("mm_file://")))
-        {
-            return Err(
-                "素材须为可访问的 HTTP(S) URL 或协议支持的图片 data URL，不能直接发送本地路径"
-                    .into(),
-            );
-        }
-    }
-    if protocol == "minimax_hailuo"
-        && input.resolution.as_deref() == Some("1080P")
-        && input.duration.is_some_and(|d| d != 6)
-    {
-        return Err("Hailuo 1080P 只支持 6 秒".into());
-    }
-    if protocol == "veo"
-        && input.resolution.as_deref().is_some_and(|r| r != "720p")
-        && input.duration.is_some_and(|d| d != 8)
-    {
-        return Err("Veo 高分辨率需要 8 秒".into());
-    }
-    Ok(())
+    serde_json::from_value(json!(resolved)).map_err(|e| e.to_string())
 }
 fn put(body: &mut Value, key: &str, value: impl Serialize) {
     body[key] = serde_json::to_value(value).expect("serializable video input");
@@ -488,7 +453,8 @@ pub(crate) fn prepare(
     input: &VideoInput,
 ) -> Result<RequestPreview, String> {
     let definition = protocol_definition(protocol)?;
-    validate(protocol, model, input)?;
+    let input = validate(protocol, model, input)?;
+    let input = &input;
     let profile = model_profile(model).filter(|p| p.protocol == protocol);
     let mut path = profile
         .and_then(|p| p.create_path.as_deref())
@@ -642,8 +608,8 @@ pub(crate) fn prepare(
             if let Some(v) = &input.resolution {
                 put(p, "resolution", v);
             }
-            if let Some(v) = &input.ratio {
-                put(p, "aspect_ratio", v);
+            if input.first_frame.is_none() {
+                if let Some(v) = &input.ratio { put(p, "aspect_ratio", v); }
             }
             if let Some(v) = input.generate_audio {
                 put(p, "audio", if v { "native" } else { "off" });
@@ -698,17 +664,12 @@ pub fn preview_video_model_request(
     protocol: String,
     base_url: String,
 ) -> Result<RequestPreview, String> {
-    let profile = model_profile(&model)
-        .filter(|p| p.protocol == protocol)
-        .or_else(|| CATALOG.models.iter().find(|p| p.protocol == protocol));
+    let profile = model_profile(&model);
     let mut input = VideoInput {
         prompt: "A paper boat floating on a quiet pond".into(),
         ..Default::default()
     };
     if let Some(profile) = profile {
-        input.duration = profile.defaults["duration"].as_u64().map(|n| n as u32);
-        input.resolution = profile.defaults["resolution"].as_str().map(str::to_owned);
-        input.ratio = profile.defaults["ratio"].as_str().map(str::to_owned);
         if !profile.modes.iter().any(|m| m == "text") {
             input.first_frame = Some("https://example.com/first-frame.png".into());
         }
@@ -1108,7 +1069,7 @@ mod tests {
     fn input() -> VideoInput {
         VideoInput {
             prompt: "A paper boat".into(),
-            duration: Some(6),
+            duration: Some(VideoDuration::Seconds(6)),
             ..Default::default()
         }
     }
@@ -1222,7 +1183,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_combinations_before_submission() {
         let mut i = input();
-        i.duration = Some(10);
+        i.duration = Some(VideoDuration::Seconds(10));
         i.resolution = Some("1080P".into());
         assert!(prepare(
             "minimax_hailuo",
@@ -1361,13 +1322,13 @@ mod tests {
     fn model_specific_constraints_and_image_formats_are_enforced() {
         let mut i = input();
         i.first_frame = Some("data:image/png;base64,aGVsbG8=".into());
-        i.duration = Some(5);
+        i.duration = Some(VideoDuration::Seconds(5));
         let luma = prepare("luma", "https://agents.lumalabs.ai/v1", "ray-3.2", &i).unwrap();
         assert_eq!(
             luma.body["video"]["start_frame"],
             json!({"data":"aGVsbG8=","media_type":"image/png"})
         );
-        i.duration = Some(10);
+        i.duration = Some(VideoDuration::Seconds(10));
         assert!(prepare("luma", "https://agents.lumalabs.ai/v1", "ray-3.2", &i).is_err());
         i.ratio = Some("16:9".into());
         assert!(prepare(
@@ -1531,7 +1492,7 @@ mod tests {
         i.resolution = Some("768P".into());
         assert!(prepare("minimax_h3", "https://api.minimax.cn", "MiniMax-H3", &i).is_ok());
         i.resolution = Some("720p".into());
-        i.duration = Some(5);
+        i.duration = Some(VideoDuration::Seconds(5));
         assert!(prepare("luma", "https://agents.lumalabs.ai/v1", "ray-3.2", &i).is_ok());
         assert!(prepare(
             "seedance",

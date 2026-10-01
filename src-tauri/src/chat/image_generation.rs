@@ -68,6 +68,7 @@ pub(crate) async fn generate_shared(
             images: images.iter().map(data_url_for_input).collect(),
             options,
             origin: Some("chat".into()),
+            description_revision: None,
         },
     )
     .await?;

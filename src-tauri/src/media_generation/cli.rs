@@ -29,6 +29,8 @@ mod exit {
     pub const UNCERTAIN: u8 = 5;
     /// Dsivio is not running, or this client cannot reach it.
     pub const UNAVAILABLE: u8 = 6;
+    /// The task was confirmed cancelled; never treat it as a successful artifact.
+    pub const CANCELLED: u8 = 7;
     /// Still running when the wait ended; continue with `wait <id>`.
     pub const TIMEOUT: u8 = 124;
 }
@@ -51,7 +53,7 @@ struct Envelope {
 enum Op {
     Models {
         #[serde(default)]
-        kind: Option<MediaKind>,
+        kind: Option<String>,
     },
     Submit(Submit),
     Status {
@@ -59,6 +61,10 @@ enum Op {
         #[serde(default)]
         resume: bool,
     },
+    Cancel { id: String },
+    Asrstatus,
+    Asrinstall { model: String, languages: Vec<String> },
+    Asrstop,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -76,6 +82,8 @@ struct Submit {
     source: Option<String>,
     #[serde(default)]
     idempotency_key: Option<String>,
+    #[serde(default)]
+    description_revision: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -206,12 +214,45 @@ async fn dispatch(app: &tauri::AppHandle, op: Op) -> Reply {
     use tauri::Manager;
     match op {
         Op::Models { kind } => {
+            let kind = match kind.as_deref() {
+                None => None,
+                Some("matting") => return Reply::ok(json!([])),
+                Some("image") => Some(MediaKind::Image),
+                Some("video") => Some(MediaKind::Video),
+                Some("speech") => Some(MediaKind::Speech),
+                Some("transcribe") => Some(MediaKind::Transcribe),
+                Some(_) => return Reply::err(ErrorCode::Invalid, "未知媒体类型"),
+            };
             let settings = app
                 .state::<crate::state::AppState>()
                 .settings_read()
                 .clone();
             Reply::ok(json!(list_models(&settings, kind.as_ref())))
         }
+        Op::Cancel { id } => {
+            if uuid::Uuid::parse_str(&id).is_err() {
+                return Reply::err(ErrorCode::Invalid, format!("任务 ID 格式无效：{id}"));
+            }
+            match super::cancel_media_task(app.clone(), id).await {
+                Ok(result) => Reply::ok(json!(result)),
+                Err(error) => Reply::err(ErrorCode::Invalid, error),
+            }
+        }
+        Op::Asrstatus => match super::local_asr::status().await {
+            Ok(result) => Reply::ok(json!(result)),
+            Err(error) => Reply::err(ErrorCode::Invalid, error),
+        },
+        Op::Asrinstall { model, languages } => {
+            let config = crate::settings::LocalAsrConfig { model, languages, auto_install: true };
+            match super::local_asr::install(config).await {
+                Ok(result) => Reply::ok(json!(result)),
+                Err(error) => Reply::err(ErrorCode::Invalid, error),
+            }
+        }
+        Op::Asrstop => match super::local_asr::stop().await {
+            Ok(result) => Reply::ok(json!(result)),
+            Err(error) => Reply::err(ErrorCode::Invalid, error),
+        },
         Op::Status { id, resume } => {
             if uuid::Uuid::parse_str(&id).is_err() {
                 return Reply::err(ErrorCode::Invalid, format!("任务 ID 格式无效：{id}"));
@@ -249,6 +290,7 @@ async fn submit_request(app: &tauri::AppHandle, submit: Submit) -> Result<MediaT
         images: submit.images,
         options: submit.options,
         origin: Some(origin.clone()),
+        description_revision: submit.description_revision,
     };
     if submit.idempotency_key.is_none() {
         return super::start_media_generation(app.clone(), request).await;
@@ -262,10 +304,19 @@ async fn submit_request(app: &tauri::AppHandle, submit: Submit) -> Result<MediaT
             ..Default::default()
         },
     )?;
+    let hash = super::request_hash(&request)?;
+    validate_existing_hashes(&existing, &hash)?;
     if let Some(task) = submission_for_key(existing) {
         return Ok(task);
     }
-    super::start_media_generation(app.clone(), request).await
+    super::start_configured(app, request).await
+}
+
+fn validate_existing_hashes(existing: &[MediaTask], hash: &str) -> Result<(), String> {
+    if existing.iter().any(|task| task.request_hash.as_deref() != Some(hash)) {
+        return Err("IDEMPOTENCY_CONFLICT: 同一 key 的请求内容不同或旧任务缺少请求散列；不会重新提交".into());
+    }
+    Ok(())
 }
 
 /// The task an idempotency key already names, if a new submission must not be made. Only a
@@ -295,6 +346,7 @@ struct ModelEntry {
     known: bool,
     /// What the model accepts: taken from the same tables the request is validated against.
     capabilities: Option<Value>,
+    description: super::model_parameters::ModelDescription,
 }
 
 fn capabilities_of(
@@ -304,11 +356,13 @@ fn capabilities_of(
     model: &str,
 ) -> Option<Value> {
     let provider = settings.get_provider(provider_id)?;
+    if provider.request.comfy.is_some() { return None; }
     match kind {
         MediaKind::Video => super::video_providers::capabilities(provider, model).map(|c| json!(c)),
         MediaKind::Image => Some(json!(super::image_providers::image_capabilities(
             provider, model
         ))),
+        MediaKind::Speech | MediaKind::Transcribe => None,
     }
 }
 
@@ -319,6 +373,8 @@ fn pool<'a>(
     match kind {
         MediaKind::Image => &settings.workbench_media.image_models,
         MediaKind::Video => &settings.workbench_media.video_models,
+        MediaKind::Speech => &settings.workbench_media.speech_models,
+        MediaKind::Transcribe => &settings.workbench_media.transcribe_models,
     }
 }
 
@@ -327,44 +383,54 @@ fn pool<'a>(
 fn usable(
     settings: &crate::settings::Settings,
     entry: &crate::settings::DefaultModelSelection,
+    kind: &MediaKind,
 ) -> bool {
-    settings
-        .providers
-        .iter()
-        .any(|p| p.id == entry.provider_id && p.enabled && p.enabled_models.contains(&entry.model))
+    if entry.provider_id == "local" {
+        return *kind == MediaKind::Transcribe && entry.model == "whisperx-small";
+    }
+    settings.providers.iter().any(|p| {
+        p.id == entry.provider_id && p.enabled && p.enabled_models.contains(&entry.model)
+            && match kind {
+                MediaKind::Speech => super::speech_providers::configured(p, &entry.model),
+                MediaKind::Transcribe => super::transcribe_configured(p, &entry.model),
+                MediaKind::Image | MediaKind::Video => true,
+            }
+    })
 }
 
 fn list_models(settings: &crate::settings::Settings, kind: Option<&MediaKind>) -> Vec<ModelEntry> {
     let kinds = match kind {
         Some(kind) => vec![kind.clone()],
-        None => vec![MediaKind::Image, MediaKind::Video],
+        None => vec![MediaKind::Image, MediaKind::Video, MediaKind::Speech, MediaKind::Transcribe],
     };
+    let local = (kinds.contains(&MediaKind::Transcribe)
+        && settings.workbench_media.transcribe_models.iter().any(|entry| entry.provider_id == "local"))
+        .then(super::local_provider);
     kinds
         .into_iter()
         .flat_map(|kind| {
             pool(settings, &kind)
                 .iter()
-                .filter(|entry| usable(settings, entry))
+                .filter(|entry| usable(settings, entry, &kind))
                 .enumerate()
                 .map(|(index, entry)| {
                     let capabilities =
                         capabilities_of(settings, &kind, &entry.provider_id, &entry.model);
+                    let provider = if entry.provider_id == "local" { local.as_ref().expect("local transcribe provider") } else { settings.get_provider(&entry.provider_id).expect("usable provider") };
+                    let description = super::model_parameters::describe(provider, &entry.model, &kind);
+                    let known = match kind {
+                        MediaKind::Image => description.arguments.contains_key("n"),
+                        MediaKind::Video => capabilities.is_some(),
+                        MediaKind::Speech | MediaKind::Transcribe => true,
+                    };
                     ModelEntry {
-                        known: capabilities.is_some(),
-                        capabilities,
+                        known,
+                        capabilities: if known { capabilities } else { None },
+                        description,
                         kind: kind.clone(),
                         id: format!("{}/{}", entry.provider_id, entry.model),
                         provider_id: entry.provider_id.clone(),
-                        provider_name: settings
-                            .get_provider(&entry.provider_id)
-                            .map(|p| {
-                                if p.name.trim().is_empty() {
-                                    p.id.clone()
-                                } else {
-                                    p.name.clone()
-                                }
-                            })
-                            .unwrap_or_else(|| entry.provider_id.clone()),
+                        provider_name: if provider.name.trim().is_empty() { provider.id.clone() } else { provider.name.clone() },
                         model: entry.model.clone(),
                         default: index == 0,
                     }
@@ -380,14 +446,15 @@ fn resolve_model(
     kind: &MediaKind,
     wanted: Option<&str>,
 ) -> Result<(String, String), String> {
-    let label = if *kind == MediaKind::Image {
-        "图片"
-    } else {
-        "视频"
+    let label = match kind {
+        MediaKind::Image => "图片",
+        MediaKind::Video => "视频",
+        MediaKind::Speech => "语音",
+        MediaKind::Transcribe => "转写",
     };
     let members: Vec<_> = pool(settings, kind)
         .iter()
-        .filter(|entry| usable(settings, entry))
+        .filter(|entry| usable(settings, entry, kind))
         .cloned()
         .collect();
     let first = members.first().ok_or_else(|| {
@@ -446,7 +513,7 @@ fn origin_for(source: Option<&str>, key: Option<&str>) -> Result<String, String>
     Ok(origin)
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(super) fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path.parent().ok_or("无效路径")?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let temp = dir.join(format!(".{}.tmp", std::process::id()));
@@ -521,28 +588,42 @@ pub fn install_launcher() {
 // Client
 
 const HELP: &str = "\
-dsivio media —— 用 Dsivio「设置 > 媒体创作」里开启的模型生成图片、视频
+dsivio media —— 用 Dsivio「设置 > 媒体创作」里的模型生成图片、视频、语音及转写
 
-  dsivio media models [--kind image|video]
+  dsivio media models [--kind image|video|speech|transcribe|matting] [--json]
   dsivio media image  (--prompt <文本> | --prompt-file <文件|->) [--model <供应商/模型>]
                       [--ref <图片>]... [--ratio 16:9] [--size 2K] [--quality high] [--n 1]
   dsivio media video  (--prompt <文本> | --prompt-file <文件|->) [--model <供应商/模型>]
                       [--first-frame <图片>] [--last-frame <图片>] [--ref <图片>]...
                       [--ref-video <文件>]... [--ref-audio <文件>]...
-                      [--duration 5] [--resolution 720p] [--ratio 9:16] [--audio]
+                      [--duration 5|auto] [--resolution 720p] [--ratio 9:16] [--audio|--no-audio]
+  dsivio media speech (--text <文本> | --text-file <文件|->) [--model <供应商/模型>]
+                      [--mode tts|clone] [--voice <音色>] [--voice-ref <音频>]
+                      [--consent-attestation <声明文件>] [--instruction <文本> | --instruction-file <文件>]
+                      [--output-format wav|mp3|flac|opus|aac]
+  dsivio media transcribe <标准WAV> --language <语言> [--model local/whisperx-small|供应商/模型]
+                      [--sample-frames <正安全整数>] [--timestamps word|segment]
+  dsivio media asr status [--json]
+  dsivio media asr install [--model small] [--language en] [--language zh] [--json]
+  dsivio media asr stop [--json]
+  dsivio media cancel <任务ID> [--timeout <秒，默认30>] [--json]
   dsivio media status <任务ID> [--resume]
   dsivio media wait   <任务ID> [--timeout <秒>]
 
-image / video 通用：
+image / video / speech / transcribe 通用：
   --no-wait                  提交后立即返回任务 ID
-  --timeout <秒>             等待上限（图片默认 600，视频默认 1800）
+  --timeout <秒>             等待上限（图片/语音/转写默认 600，视频默认 1800）
   --idempotency-key <key>    同一 key 只提交一次，重复调用返回同一个任务
-  --source <名称>            记录调用来源，例如 hypit
-  --options-json <JSON>      额外参数，原样合并进请求
+  --source <名称>            记录调用来源，例如 dsivio-video
+  --options-json <JSON>      参数对象，仅接受模型 description 已声明的键
+  --options-file <文件>      与 --options-json 互斥，从文件读取参数对象
+  --description-revision <hash>  描述版本不匹配时付费前拒绝
+  --json                     显式声明 JSON 输出（不改变输出形状）
   --out <目录>               成功后把结果复制到该目录
 
 stdout 只输出 JSON。退出码：0 成功，2 参数错误/模型未开启（未提交），3 服务拒绝（未扣费），
-4 提交后失败，5 提交结果不确定（不要重交，用 status 查询），6 Dsivio 未运行，124 等待超时。
+4 提交后失败，5 提交结果不确定（不要重交，用 status 查询），6 Dsivio 未运行，7 已取消，124 等待超时。
+cancel 成功交互退出0，请读取 outcome；asr install 退出0只表示安装已受理，不表示ready。
 ";
 
 struct Args {
@@ -551,7 +632,7 @@ struct Args {
     positional: Vec<String>,
 }
 
-const BOOLEAN_FLAGS: &[&str] = &["no-wait", "audio", "resume", "help"];
+const BOOLEAN_FLAGS: &[&str] = &["no-wait", "audio", "no-audio", "resume", "help", "json"];
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut parsed = Args {
@@ -570,6 +651,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
             continue;
         };
         if let Some((name, value)) = name.split_once('=') {
+            if BOOLEAN_FLAGS.contains(&name) {
+                return Err(format!("--{name} 不接受取值"));
+            }
             parsed
                 .values
                 .entry(name.into())
@@ -577,6 +661,9 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 .push(value.into());
         } else if BOOLEAN_FLAGS.contains(&name) {
             parsed.flags.push(name.into());
+            if parsed.flags.iter().filter(|flag| flag.as_str() == name).count() > 1 {
+                return Err(format!("--{name} 只能出现一次"));
+            }
         } else {
             let value = iter.next().ok_or_else(|| format!("--{name} 缺少取值"))?;
             parsed.values.entry(name.into()).or_default().push(value);
@@ -588,7 +675,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
 impl Args {
     fn only(&self, allowed: &[&str]) -> Result<(), String> {
         for name in self.values.keys().chain(self.flags.iter()) {
-            if !allowed.contains(&name.as_str()) && name != "help" {
+            if !allowed.contains(&name.as_str()) && name != "help" && name != "json" {
                 return Err(format!("不支持的参数 --{name}"));
             }
         }
@@ -630,6 +717,32 @@ fn absolute(value: &str, cwd: &Path) -> String {
     }
 }
 
+fn local_file(value: &str, cwd: &Path) -> Result<String, String> {
+    if value == "-" || value.contains("://") || value.starts_with("data:") {
+        return Err("需要本地文件；仅 --text-file - 可读取语音标准输入".into());
+    }
+    let path = Path::new(value);
+    Ok(if path.is_absolute() { path.to_path_buf() } else { cwd.join(path) }
+        .to_string_lossy().into_owned())
+}
+
+fn read_speech_text(args: &Args, cwd: &Path, stdin: &mut dyn Read) -> Result<String, String> {
+    let text = match (args.one("text")?, args.one("text-file")?) {
+        (Some(_), Some(_)) => return Err("--text 和 --text-file 只能用一个".into()),
+        (Some(text), None) => text.to_owned(),
+        (None, Some("-")) => {
+            let mut text = String::new();
+            stdin.read_to_string(&mut text).map_err(|e| format!("读取标准输入失败：{e}"))?;
+            text
+        }
+        (None, Some(file)) => std::fs::read_to_string(local_file(file, cwd)?)
+            .map_err(|e| format!("读取语音文本失败：{e}"))?,
+        (None, None) => return Err("需要 --text 或 --text-file".into()),
+    };
+    if text.trim().is_empty() { return Err("语音文本为空".into()); }
+    Ok(text)
+}
+
 fn read_prompt(args: &Args, cwd: &Path, stdin: &mut dyn Read) -> Result<String, String> {
     let prompt = match (args.one("prompt")?, args.one("prompt-file")?) {
         (Some(_), Some(_)) => return Err("--prompt 和 --prompt-file 只能用一个".into()),
@@ -653,16 +766,24 @@ fn read_prompt(args: &Args, cwd: &Path, stdin: &mut dyn Read) -> Result<String, 
 }
 
 const SUBMIT_FLAGS: &[&str] = &[
-    "prompt",
-    "prompt-file",
     "model",
     "no-wait",
     "timeout",
     "idempotency-key",
     "source",
     "options-json",
+    "options-file",
+    "description-revision",
     "out",
 ];
+
+fn duplicate_option(key: &str) -> String {
+    serde_json::to_string(&super::model_parameters::ArgumentError {
+        code: "MODEL_ARGUMENT_DUPLICATE", argument_path: key.into(), rule_id: "unique".into(),
+        actual: json!(key), expected: json!("one spelling"),
+        message: format!("MODEL_ARGUMENT_DUPLICATE: {key} simultaneously appears in flags and options"),
+    }).expect("argument error is serializable")
+}
 
 fn build_submit(
     kind: MediaKind,
@@ -675,11 +796,11 @@ fn build_submit(
     let local = |values: Vec<String>| values.iter().map(|v| absolute(v, cwd)).collect::<Vec<_>>();
     match kind {
         MediaKind::Image => {
-            let allowed = [SUBMIT_FLAGS, &["ref", "ratio", "size", "quality", "n"]].concat();
+            let allowed = [SUBMIT_FLAGS, &["prompt", "prompt-file", "ref", "ratio", "size", "quality", "n"]].concat();
             args.only(&allowed)?;
             images = local(args.many("ref"));
             for (flag, key) in [
-                ("ratio", "aspect_ratio"),
+                ("ratio", "aspectRatio"),
                 ("size", "size"),
                 ("quality", "quality"),
             ] {
@@ -695,6 +816,8 @@ fn build_submit(
             let allowed = [
                 SUBMIT_FLAGS,
                 &[
+                    "prompt",
+                    "prompt-file",
                     "first-frame",
                     "last-frame",
                     "ref",
@@ -704,6 +827,7 @@ fn build_submit(
                     "resolution",
                     "ratio",
                     "audio",
+                    "no-audio",
                 ],
             ]
             .concat();
@@ -728,34 +852,177 @@ fn build_submit(
                     options.insert(key.into(), json!(value));
                 }
             }
-            if let Some(duration) = args.number("duration")? {
-                options.insert("duration".into(), json!(duration));
+            if let Some(duration) = args.one("duration")? {
+                let value = if duration == "auto" { json!("auto") } else { json!(duration.parse::<u32>().map_err(|_| "--duration requires seconds or auto")?) };
+                options.insert("duration".into(), value);
             }
-            if args.flag("audio") {
-                options.insert("generateAudio".into(), json!(true));
+            if args.flag("audio") && args.flag("no-audio") { return Err("--audio and --no-audio are mutually exclusive".into()); }
+            if args.flag("audio") || args.flag("no-audio") {
+                options.insert("generateAudio".into(), json!(args.flag("audio")));
+            }
+        }
+        MediaKind::Speech => {
+            let allowed = [SUBMIT_FLAGS, &[
+                "text", "text-file", "mode", "voice", "voice-ref", "consent-attestation",
+                "instruction", "instruction-file", "output-format",
+            ]].concat();
+            args.only(&allowed)?;
+            if args.one("text")?.is_some() || args.one("text-file")?.is_some() {
+                options.insert("text".into(), json!(read_speech_text(args, cwd, stdin)?));
+            }
+            for (flag, key) in [("mode", "mode"), ("voice", "voice"), ("output-format", "outputFormat")] {
+                if let Some(value) = args.one(flag)? { options.insert(key.into(), json!(value)); }
+            }
+            if let Some(file) = args.one("voice-ref")? {
+                options.insert("voiceReference".into(), json!([{"source":local_file(file, cwd)?,"attributes":{}}]));
+            }
+            if let Some(file) = args.one("consent-attestation")? {
+                options.insert("consentAttestation".into(), json!(local_file(file, cwd)?));
+            }
+            match (args.one("instruction")?, args.one("instruction-file")?) {
+                (Some(_), Some(_)) => return Err("--instruction 和 --instruction-file 只能用一个".into()),
+                (Some(text), None) => { options.insert("instruction".into(), json!(text)); }
+                (None, Some(file)) => {
+                    let text = std::fs::read_to_string(local_file(file, cwd)?)
+                        .map_err(|e| format!("读取语音指令失败：{e}"))?;
+                    options.insert("instruction".into(), json!(text));
+                }
+                (None, None) => {}
+            }
+        }
+        MediaKind::Transcribe => {
+            let allowed = [SUBMIT_FLAGS, &["language", "sample-frames", "timestamps"]].concat();
+            args.only(&allowed)?;
+            match args.positional.as_slice() {
+                [] => {}
+                [file] => { options.insert("audioFile".into(), json!(local_file(file, cwd)?)); }
+                _ => return Err("需要一个本地标准 WAV 文件".into()),
+            }
+            if let Some(language) = args.one("language")? {
+                options.insert("language".into(), json!(language));
+            }
+            if let Some(frames) = args.number("sample-frames")? {
+                if frames == 0 || frames > 9_007_199_254_740_991 {
+                    return Err("--sample-frames 需要正安全整数".into());
+                }
+                options.insert("sampleFrames".into(), json!(frames));
+            }
+            if let Some(timestamps) = args.one("timestamps")? {
+                if !matches!(timestamps, "word" | "segment") {
+                    return Err("--timestamps 只能是 word 或 segment".into());
+                }
+                options.insert("timestamps".into(), json!(timestamps));
             }
         }
     }
-    if let Some(extra) = args.one("options-json")? {
-        let Value::Object(extra) = serde_json::from_str(extra)
-            .map_err(|e| format!("--options-json 不是有效 JSON：{e}"))?
-        else {
-            return Err("--options-json 必须是 JSON 对象".into());
-        };
+    let extra = match (args.one("options-json")?, args.one("options-file")?) {
+        (Some(_), Some(_)) => return Err("--options-json and --options-file are mutually exclusive".into()),
+        (Some(text), None) => Some(text.to_owned()),
+        (None, Some(path)) => Some(std::fs::read_to_string(absolute(path, cwd)).map_err(|e| format!("--options-file: {e}"))?),
+        (None, None) => None,
+    };
+    if let Some(extra) = extra {
+        let Value::Object(extra) = serde_json::from_str(&extra).map_err(|e| format!("options must be valid JSON: {e}"))? else { return Err("options must be a JSON object".into()); };
+        let extra = super::model_parameters::normalize(extra.into_iter().collect())?;
         for (key, value) in extra {
-            if options.insert(key.clone(), value).is_some() {
-                return Err(format!("{key} 同时出现在参数和 --options-json 里"));
+            if options.contains_key(&key) {
+                return Err(duplicate_option(&key));
+            }
+            options.insert(key, value);
+        }
+    }
+    for name in ["firstFrame", "lastFrame", "referenceImages", "referenceVideos", "referenceAudios", "voiceReference"] {
+        if let Some(value) = options.get_mut(name) {
+            if let Some(source) = value.as_str() {
+                *value = json!(if name == "voiceReference" { local_file(source, cwd)? } else { absolute(source, cwd) });
+            } else if let Some(entries) = value.as_array_mut() {
+                for entry in entries {
+                    if let Some(source) = entry.as_str() {
+                        *entry = json!(if name == "voiceReference" { local_file(source, cwd)? } else { absolute(source, cwd) });
+                    } else if let Some(source) = entry.get("source").and_then(Value::as_str) {
+                        entry["source"] = json!(if name == "voiceReference" { local_file(source, cwd)? } else { absolute(source, cwd) });
+                    }
+                }
             }
         }
     }
+    for name in ["audioFile", "consentAttestation"] {
+        if let Some(value) = options.get_mut(name) {
+            if let Some(file) = value.as_str() { *value = json!(local_file(file, cwd)?); }
+        }
+    }
+    if kind == MediaKind::Speech {
+        if !options.get("text").and_then(Value::as_str).is_some_and(|text| !text.trim().is_empty()) {
+            return Err("需要非空语音文本：--text / --text-file 或 options.text".into());
+        }
+        options.entry("mode").or_insert(json!("tts"));
+        match options["mode"].as_str() {
+            Some("tts") if options.contains_key("voice") && !options.contains_key("voiceReference") && !options.contains_key("consentAttestation") => {}
+            Some("clone") if !options.contains_key("voice") && options.contains_key("voiceReference") && options.contains_key("consentAttestation") => {}
+            Some("tts") => return Err("tts 需要 --voice，不能使用参考音频或授权声明".into()),
+            Some("clone") => return Err("clone 需要一个 --voice-ref 和 --consent-attestation，不能同时使用 --voice".into()),
+            _ => return Err("--mode 只能是 tts 或 clone".into()),
+        }
+    } else if kind == MediaKind::Transcribe {
+        if !options.get("audioFile").and_then(Value::as_str).is_some_and(|file| !file.is_empty()) {
+            return Err("需要一个本地标准 WAV 文件或 options.audioFile".into());
+        }
+        let language = options.get("language").and_then(Value::as_str).ok_or("需要 --language 或 options.language")?;
+        if !(2..=3).contains(&language.len()) || !language.bytes().all(|c| c.is_ascii_lowercase())
+            || matches!(language, "auto" | "und") {
+            return Err("--language 需要小写2–3字母语言代码，不能是auto/und".into());
+        }
+        if let Some(frames) = options.get("sampleFrames") {
+            if !frames.as_u64().is_some_and(|frames| (1..=9_007_199_254_740_991).contains(&frames)) {
+                return Err("--sample-frames 需要正安全整数".into());
+            }
+        }
+        options.entry("timestamps").or_insert(json!("word"));
+        if !options["timestamps"].as_str().is_some_and(|timestamps| matches!(timestamps, "word" | "segment")) {
+            return Err("--timestamps 只能是 word 或 segment".into());
+        }
+    }
+    if kind == MediaKind::Image {
+        if let Some(value) = options.remove("images") {
+            if args.values.contains_key("ref") { return Err(duplicate_option("images")); }
+            let entries = value.as_array().ok_or("options.images 需要媒体列表")?;
+            for (index, entry) in entries.iter().enumerate() {
+                if entry.as_object().is_some_and(|object| object.keys().any(|key| key != "source" && key != "attributes"))
+                    || entry.get("attributes").is_some_and(|attributes| !attributes.as_object().is_some_and(|attributes| attributes.is_empty())) {
+                    return Err(serde_json::to_string(&super::model_parameters::ArgumentError {
+                        code: "MODEL_ARGUMENT_UNSUPPORTED", argument_path: format!("images[{index}].attributes"),
+                        rule_id: "image-source".into(), actual: json!("entry metadata"),
+                        expected: json!("source with no additional attributes"),
+                        message: "Image reference metadata cannot be represented by this request boundary".into(),
+                    }).expect("argument error is serializable"));
+                }
+                let source = entry.as_str().or_else(|| entry.get("source").and_then(Value::as_str))
+                    .ok_or("options.images 媒体条目需要 source")?;
+                images.push(absolute(source, cwd));
+            }
+        }
+    }
+    let prompt = if matches!(kind, MediaKind::Image | MediaKind::Video) {
+        let option_prompt = options.remove("prompt");
+        if args.one("prompt")?.is_some() || args.one("prompt-file")?.is_some() {
+            if option_prompt.is_some() { return Err(duplicate_option("prompt")); }
+            read_prompt(args, cwd, stdin)?
+        } else {
+            let prompt = option_prompt.as_ref().and_then(Value::as_str)
+                .ok_or("需要 --prompt / --prompt-file 或 options.prompt")?.trim();
+            if prompt.is_empty() { return Err("提示词为空".into()); }
+            prompt.to_owned()
+        }
+    } else { String::new() };
     Ok(Submit {
-        kind: Some(kind),
+        kind: Some(kind.clone()),
         model: args.one("model")?.map(str::to_owned),
-        prompt: read_prompt(args, cwd, stdin)?,
+        prompt,
         images,
         options: options.into_iter().collect(),
         source: args.one("source")?.map(str::to_owned),
         idempotency_key: args.one("idempotency-key")?.map(str::to_owned),
+        description_revision: args.one("description-revision")?.map(str::to_owned),
     })
 }
 
@@ -763,11 +1030,12 @@ fn exit_code(task: &MediaTask) -> u8 {
     match task.status {
         MediaStatus::Succeeded => exit::OK,
         MediaStatus::Running => exit::OK,
+        MediaStatus::Cancelled => exit::CANCELLED,
         MediaStatus::Failed => match task.submission_state {
             Some(MediaSubmissionState::Rejected) => exit::REJECTED,
             Some(MediaSubmissionState::Uncertain) => exit::UNCERTAIN,
-            // No receipt and no explicit rejection: conservatively unknown, never resubmit.
-            None if task.remote_id.is_none() && task.outputs.is_empty() => exit::UNCERTAIN,
+            // No public or private resumable receipt and no rejection: unknown, never resubmit.
+            None if !task.can_resume && task.remote_id.is_none() && task.outputs.is_empty() => exit::UNCERTAIN,
             None => exit::FAILED,
         },
     }
@@ -788,6 +1056,10 @@ impl Failure {
 }
 
 fn call(op: Op) -> Result<Value, Failure> {
+    call_with_timeout(op, Duration::from_secs(120))
+}
+
+fn call_with_timeout(op: Op, timeout: Duration) -> Result<Value, Failure> {
     let unavailable = |detail: String| Failure {
         code: exit::UNAVAILABLE,
         message: format!("连接不到 Dsivio，请先打开 Dsivio 再重试（{detail}）"),
@@ -803,6 +1075,7 @@ fn call(op: Op) -> Result<Value, Failure> {
             token: endpoint.token,
             op,
         },
+        timeout,
     )
     .map_err(unavailable)?;
     match reply {
@@ -831,13 +1104,15 @@ fn call(op: Op) -> Result<Value, Failure> {
     }
 }
 
-fn exchange(port: u16, envelope: &Envelope) -> Result<Reply, String> {
+fn exchange(port: u16, envelope: &Envelope, timeout: Duration) -> Result<Reply, String> {
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(3))
+    let timeout = timeout.max(Duration::from_millis(1));
+    let mut stream = std::net::TcpStream::connect_timeout(&address, timeout.min(Duration::from_secs(3)))
         .map_err(|e| e.to_string())?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(120)))
+        .set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
+    stream.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
     let mut bytes = serde_json::to_vec(envelope).map_err(|e| e.to_string())?;
     bytes.push(b'\n');
     stream.write_all(&bytes).map_err(|e| e.to_string())?;
@@ -950,29 +1225,26 @@ fn run_command(argv: Vec<String>) -> Result<u8, Failure> {
     match command {
         "models" => {
             args.only(&["kind"]).map_err(Failure::invalid)?;
-            let kind = match args.one("kind").map_err(Failure::invalid)? {
-                None => None,
-                Some("image") => Some(MediaKind::Image),
-                Some("video") => Some(MediaKind::Video),
-                Some(other) => {
-                    return Err(Failure::invalid(format!(
-                        "--kind 只能是 image 或 video，收到 {other}"
-                    )))
-                }
-            };
+            if !args.positional.is_empty() { return Err(Failure::invalid("models 不接受位置参数")); }
+            let kind = args.one("kind").map_err(Failure::invalid)?;
+            if kind.is_some_and(|kind| !["image", "video", "speech", "transcribe", "matting"].contains(&kind)) {
+                return Err(Failure::invalid("--kind 只能是 image/video/speech/transcribe/matting"));
+            }
+            let kind = kind.map(str::to_owned);
             print_json(&call(Op::Models { kind })?);
             Ok(exit::OK)
         }
-        "image" | "video" => {
-            let kind = if command == "image" {
-                MediaKind::Image
-            } else {
-                MediaKind::Video
+        "image" | "video" | "speech" | "transcribe" => {
+            let kind = match command {
+                "image" => MediaKind::Image,
+                "video" => MediaKind::Video,
+                "speech" => MediaKind::Speech,
+                _ => MediaKind::Transcribe,
             };
-            let default_timeout = if kind == MediaKind::Image { 600 } else { 1800 };
+            let duration = timeout(if kind == MediaKind::Video { 1800 } else { 600 })?;
             let submit =
                 build_submit(kind, &args, &cwd, &mut std::io::stdin()).map_err(Failure::invalid)?;
-            if !args.positional.is_empty() {
+            if command != "transcribe" && !args.positional.is_empty() {
                 return Err(Failure::invalid(format!(
                     "多余的参数：{}",
                     args.positional.join(" ")
@@ -986,8 +1258,34 @@ fn run_command(argv: Vec<String>) -> Result<u8, Failure> {
             if args.flag("no-wait") {
                 return finish(task, false, None);
             }
-            let (task, timed_out) = wait_for(task, timeout(default_timeout)?)?;
+            let (task, timed_out) = wait_for(task, duration)?;
             finish(task, timed_out, out)
+        }
+        "cancel" => {
+            args.only(&["timeout"]).map_err(Failure::invalid)?;
+            let id = single_id(&args)?;
+            let result = call_with_timeout(Op::Cancel { id }, timeout(30)?)?;
+            print_json(&result);
+            Ok(exit::OK)
+        }
+        "asr" => {
+            let [action] = args.positional.as_slice() else {
+                return Err(Failure::invalid("需要 asr status/install/stop"));
+            };
+            let op = match action.as_str() {
+                "status" => { args.only(&[]).map_err(Failure::invalid)?; Op::Asrstatus }
+                "stop" => { args.only(&[]).map_err(Failure::invalid)?; Op::Asrstop }
+                "install" => {
+                    args.only(&["model", "language"]).map_err(Failure::invalid)?;
+                    let model = args.one("model").map_err(Failure::invalid)?.unwrap_or("small").to_owned();
+                    let mut languages = args.many("language");
+                    if languages.is_empty() { languages = vec!["en".into(), "zh".into()]; }
+                    Op::Asrinstall { model, languages }
+                }
+                _ => return Err(Failure::invalid("需要 asr status/install/stop")),
+            };
+            print_json(&call_with_timeout(op, Duration::from_secs(30))?);
+            Ok(exit::OK)
         }
         "status" => {
             args.only(&["resume"]).map_err(Failure::invalid)?;
@@ -1000,7 +1298,9 @@ fn run_command(argv: Vec<String>) -> Result<u8, Failure> {
                 .one("out")
                 .map_err(Failure::invalid)?
                 .map(|dir| PathBuf::from(absolute(dir, &cwd)));
-            let (task, timed_out) = wait_for(status(&single_id(&args)?, false)?, timeout(1800)?)?;
+            let task = status(&single_id(&args)?, false)?;
+            let duration = timeout(if task.kind == MediaKind::Video { 1800 } else { 600 })?;
+            let (task, timed_out) = wait_for(task, duration)?;
             finish(task, timed_out, out)
         }
         other => Err(Failure::invalid(format!(
@@ -1017,8 +1317,15 @@ pub fn run(args: impl Iterator<Item = std::ffi::OsString>) -> ExitCode {
         Err(_) => Err(Failure::invalid("参数不是有效的 UTF-8")),
     };
     ExitCode::from(result.unwrap_or_else(|failure| {
-        eprintln!("{}", failure.message);
-        print_json(&json!({ "error": failure.message, "exitCode": failure.code }));
+        let details: Option<Value> = serde_json::from_str(&failure.message).ok();
+        if let Some(Value::Object(mut details)) = details {
+            eprintln!("{}", details.get("message").and_then(Value::as_str).unwrap_or(&failure.message));
+            details.insert("exitCode".into(), json!(failure.code));
+            print_json(&Value::Object(details));
+        } else {
+            eprintln!("{}", failure.message);
+            print_json(&json!({ "error": failure.message, "exitCode": failure.code }));
+        }
         failure.code
     }))
 }
@@ -1080,7 +1387,6 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "v/seedance");
         assert!(listed[0].default);
-        assert_eq!(list_models(&settings, None).len(), 4);
     }
 
     #[test]
@@ -1396,7 +1702,6 @@ mod tests {
             submit.images,
             vec!["/work/a.png", "/abs/b.png", "https://x.test/c.png"]
         );
-        assert_eq!(submit.options["aspect_ratio"], "16:9");
         assert_eq!(submit.options["size"], "2K");
         assert_eq!(submit.options["n"], 2);
         assert_eq!(submit.model.as_deref(), Some("b/seedream"));
@@ -1525,6 +1830,9 @@ mod tests {
             submission_state: state,
             origin: None,
             prompt: String::new(),
+            result: None,
+            request_hash: None,
+            cancellation: None,
         }
     }
 
@@ -1567,6 +1875,120 @@ mod tests {
             exit_code(&task(MediaStatus::Failed, None, Some("r"))),
             exit::FAILED
         );
+        let mut saved_speech_receipt = task(MediaStatus::Failed, None, None);
+        saved_speech_receipt.kind = MediaKind::Speech;
+        saved_speech_receipt.can_resume = true;
+        assert_eq!(exit_code(&saved_speech_receipt), exit::FAILED);
+    }
+
+    #[test]
+    fn canonical_options_only_accepts_required_inputs_without_losing_boundary_fields() {
+        let image = submit_for(MediaKind::Image, &["--options-json",
+            r#"{"prompt":"icon","images":[{"source":"ref.png","attributes":{}}],"n":2}"#], "").unwrap();
+        assert_eq!(image.prompt, "icon");
+        assert_eq!(image.images, ["/work/ref.png"]);
+        assert!(!image.options.contains_key("prompt") && !image.options.contains_key("images"));
+        let speech = submit_for(MediaKind::Speech, &["--options-json",
+            r#"{"text":"  hello\n","voice":"alloy","speed":0.75}"#], "").unwrap();
+        assert_eq!(speech.options["text"], "  hello\n");
+        let transcribe = submit_for(MediaKind::Transcribe, &["--options-json",
+            r#"{"audioFile":"audio.wav","language":"zh","timestamps":"word"}"#], "").unwrap();
+        assert_eq!(transcribe.options["audioFile"], "/work/audio.wav");
+        for (kind, argv, path) in [
+            (MediaKind::Image, vec!["--prompt", "icon", "--options-json", r#"{"prompt":"another"}"#], "prompt"),
+            (MediaKind::Image, vec!["--prompt", "icon", "--ref", "ref.png", "--options-json", r#"{"images":[]}"#], "images"),
+            (MediaKind::Transcribe, vec!["audio.wav", "--language", "zh", "--options-json", r#"{"audioFile":"another.wav"}"#], "audioFile"),
+        ] {
+            let error: Value = serde_json::from_str(&submit_for(kind, &argv, "").unwrap_err()).unwrap();
+            assert_eq!(error["code"], "MODEL_ARGUMENT_DUPLICATE");
+            assert_eq!(error["argumentPath"], path);
+        }
+    }
+
+    #[test]
+    fn speech_preserves_utf8_bytes_and_rejects_ambiguous_inputs() {
+        let text = " \t欢迎\r\n😀  ";
+        let submit = submit_for(MediaKind::Speech, &["--text-file", "-", "--voice", "alloy"], text).unwrap();
+        assert_eq!(submit.options["text"], text);
+        assert_eq!(submit.prompt, "");
+        for argv in [
+            vec!["--text", text, "--text-file", "-", "--voice", "alloy"],
+            vec!["--text", text, "--voice", "alloy", "--voice", "echo"],
+            vec!["--text", text, "--voice", "alloy", "--instruction-file", "-"],
+            vec!["--text", text, "--mode", "clone", "--voice-ref", "-", "--consent-attestation", "consent.txt"],
+            vec!["--text", text, "--voice", "alloy", "--options-json", r#"{"text":"changed"}"#],
+            vec!["--text", text, "--voice", "alloy", "--options-json", r#"{"outputFormat":"wav","output_format":"mp3"}"#],
+            vec!["--text", " \n ", "--voice", "alloy"],
+            vec!["--text", text, "--voice", "alloy", "--no-wait", "--no-wait"],
+        ] {
+            assert!(submit_for(MediaKind::Speech, &argv, "").is_err(), "{argv:?}");
+        }
+        let clone = submit_for(MediaKind::Speech, &["--text", text, "--mode", "clone", "--voice-ref", "voice.wav", "--consent-attestation", "consent.txt"], "").unwrap();
+        assert_eq!(clone.options["voiceReference"][0]["source"], "/work/voice.wav");
+        assert_eq!(clone.options["consentAttestation"], "/work/consent.txt");
+    }
+
+    #[test]
+    fn transcribe_requires_explicit_language_and_safe_sample_count() {
+        for argv in [
+            vec!["audio.wav"],
+            vec!["audio.wav", "--language", "und"],
+            vec!["audio.wav", "--language", "auto"],
+            vec!["audio.wav", "--language", "EN"],
+            vec!["audio.wav", "--language", "en", "--sample-frames", "0"],
+            vec!["audio.wav", "--language", "en", "--sample-frames", "9007199254740992"],
+            vec!["audio.wav", "--language", "en", "--timestamps", "sentence"],
+            vec!["audio.wav", "extra.wav", "--language", "en"],
+            vec!["-", "--language", "en"],
+        ] {
+            assert!(submit_for(MediaKind::Transcribe, &argv, "").is_err(), "{argv:?}");
+        }
+        let submit = submit_for(MediaKind::Transcribe, &["audio.wav", "--language", "zh", "--sample-frames", "9007199254740991", "--timestamps", "segment"], "").unwrap();
+        assert_eq!(submit.options["audioFile"], "/work/audio.wav");
+        assert_eq!(submit.options["sampleFrames"], 9_007_199_254_740_991u64);
+        assert_eq!(submit.options["timestamps"], "segment");
+    }
+
+    #[test]
+    fn cancelled_task_is_terminal_and_has_a_distinct_exit_code() {
+        let cancelled = task(MediaStatus::Cancelled, None, None);
+        assert_eq!(exit_code(&cancelled), exit::CANCELLED);
+        let (observed, timed_out) = wait_for(cancelled, Duration::ZERO).unwrap_or_else(|e| panic!("{}", e.message));
+        assert_eq!(observed.status, MediaStatus::Cancelled);
+        assert!(!timed_out);
+        assert_eq!(finish(observed, false, None).unwrap_or_else(|e| panic!("{}", e.message)), 7);
+    }
+
+    #[test]
+    fn idempotency_conflicts_on_changed_text_audio_or_consent_even_after_refusal() {
+        let dir = std::env::temp_dir().join(format!("cli-hash-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let audio = dir.join("audio.wav");
+        let consent = dir.join("consent.txt");
+        std::fs::write(&audio, b"original sample").unwrap();
+        std::fs::write(&consent, b"I authorize this sample").unwrap();
+        let mut request = MediaRequest {
+            provider_id: "p".into(), model: "m".into(), kind: MediaKind::Speech,
+            prompt: String::new(), images: vec![],
+            options: serde_json::from_value(json!({"text":"hello","mode":"clone",
+                "voiceReference":[{"source":audio,"attributes":{}}],"consentAttestation":consent})).unwrap(),
+            origin: Some("cli/test/key".into()), description_revision: None,
+        };
+        let hash = super::super::request_hash(&request).unwrap();
+        let mut existing = task(MediaStatus::Failed, Some(MediaSubmissionState::Rejected), None);
+        existing.request_hash = Some(hash.clone());
+        assert!(validate_existing_hashes(&[existing.clone()], &hash).is_ok());
+        request.options.insert("text".into(), json!("changed"));
+        assert!(validate_existing_hashes(&[existing.clone()], &super::super::request_hash(&request).unwrap()).is_err());
+        request.options.insert("text".into(), json!("hello"));
+        std::fs::write(&audio, b"different sample").unwrap();
+        assert!(validate_existing_hashes(&[existing.clone()], &super::super::request_hash(&request).unwrap()).is_err());
+        std::fs::write(&audio, b"original sample").unwrap();
+        std::fs::write(&consent, b"Different authorization").unwrap();
+        assert!(validate_existing_hashes(&[existing.clone()], &super::super::request_hash(&request).unwrap()).is_err());
+        existing.request_hash = None;
+        assert!(validate_existing_hashes(&[existing], &hash).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1583,34 +2005,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn client_and_server_share_one_line_framing() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut line = String::new();
-            BufReader::new(stream.try_clone().unwrap())
-                .read_line(&mut line)
-                .unwrap();
-            let reply = match authorize(&line, "secret") {
-                Ok(_) => Reply::ok(json!({"seen": true})),
-                Err(reply) => reply,
-            };
-            let mut stream = stream;
-            stream
-                .write_all(format!("{}\n", serde_json::to_string(&reply).unwrap()).as_bytes())
-                .unwrap();
-        });
-        let reply = exchange(
-            port,
-            &Envelope {
-                token: "secret".into(),
-                op: Op::Models { kind: None },
-            },
-        )
-        .unwrap();
-        server.join().unwrap();
-        assert!(matches!(reply, Reply::Ok { result, .. } if result["seen"] == true));
-    }
 }

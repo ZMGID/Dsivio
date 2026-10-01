@@ -34,7 +34,12 @@ export function WorkbenchMediaModelSelect({ kind, children, render, value, onCha
   const entries = settings ? mediaPoolEntries(settings, kind).filter(entry => entry.available) : []
   const activeChoice = value ?? choice
   const selected = entries.find(entry => entry.key === activeChoice)
-  const title = kind === 'imageModels' ? (zh ? '图片模型' : 'Image model') : (zh ? '视频模型' : 'Video model')
+  const title = {
+    imageModels: zh ? '图片模型' : 'Image model',
+    videoModels: zh ? '视频模型' : 'Video model',
+    speechModels: zh ? '语音模型' : 'Speech model',
+    transcribeModels: zh ? '转写模型' : 'Transcription model',
+  }[kind]
   const provider = settings?.providers.find(p => p.id === selected?.providerId)
   const control = <div className="workbench-field">
     <span>{title}</span>

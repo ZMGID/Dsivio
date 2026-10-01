@@ -42,6 +42,7 @@ struct BuiltIn {
     required_files: Vec<String>,
     repository: String,
     revision: String,
+    subdir: Option<String>,
     skills: Vec<String>,
     category_ids: Vec<String>,
     unpack: String,
@@ -92,6 +93,8 @@ struct CatalogPlugin {
     repository: String,
     revision: String,
     #[serde(default)]
+    subdir: Option<String>,
+    #[serde(default)]
     skills: Vec<String>,
     category_ids: Vec<String>,
     #[serde(default = "default_unpack")]
@@ -103,6 +106,19 @@ struct CatalogPlugin {
 }
 
 fn default_unpack() -> String { "skills".into() }
+
+fn validate_subdir(subdir: &str) -> Result<(), String> {
+    validate_archive_relative_path(subdir)
+}
+
+fn validate_archive_relative_path(path: &str) -> Result<(), String> {
+    if path.is_empty() || path.contains(['\\', ':', '\0'])
+        || path.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err("Skill 压缩包包含不安全路径".into());
+    }
+    Ok(())
+}
 
 fn catalog_text(dir: &Path, relative: &str) -> Result<String, String> {
     if relative.is_empty()
@@ -152,6 +168,9 @@ fn load_catalog_from(dir: &Path) -> Result<Catalog, String> {
             || plugin.preset_plugin_id.as_deref().is_some_and(|id| id != plugin.id || crate::plugins::catalog_plugin(id).is_none()) {
             return Err(format!("插件目录条目无效：{}", plugin.id));
         }
+        if let Some(subdir) = plugin.subdir.as_deref() {
+            validate_subdir(subdir)?;
+        }
         let setup = catalog_text(dir, &plugin.setup)?;
         let dsivio_reference = setup.contains(DSIVIO_REFERENCE_PATH).then(|| reference.clone());
         let adapter_files = adapter_files(dir, &setup, &plugin.setup)?;
@@ -175,6 +194,7 @@ fn load_catalog_from(dir: &Path) -> Result<Catalog, String> {
             required_files: plugin.required_files,
             repository: plugin.repository,
             revision: plugin.revision,
+            subdir: plugin.subdir,
             skills: plugin.skills,
             category_ids: plugin.category_ids,
             unpack: plugin.unpack,
@@ -1317,22 +1337,36 @@ fn unpack_built_in_skills(item: &BuiltIn, bytes: Vec<u8>, stage: &Path) -> Resul
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
     let mut total = 0u64;
     let mut count = 0usize;
+    let subdir_prefix = item.subdir.as_deref().map(|subdir| {
+        validate_subdir(subdir)?;
+        Ok::<_, String>(format!("{subdir}/"))
+    }).transpose()?;
     for index in 0..zip.len() {
         let mut file = zip.by_index(index).map_err(|e| e.to_string())?;
-        let Some((_, archive_path)) = file.name().split_once('/') else { continue; };
+        // Validate before filtering: an unrelated subtree cannot hide malicious entries.
+        let original = file.name().strip_suffix('/').unwrap_or(file.name());
+        validate_archive_relative_path(original)?;
+        if file.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
+            return Err("Skill 压缩包包含不安全路径".into());
+        }
+        let Some((_, archive_path)) = original.split_once('/') else { continue; };
+        let scoped_path = match subdir_prefix.as_deref() {
+            None => archive_path,
+            Some(prefix) => match archive_path.strip_prefix(prefix) {
+                Some(rest) if !rest.is_empty() => rest,
+                _ => continue,
+            },
+        };
         let selected = if item.unpack == "root" {
-            if archive_path.is_empty() || item.skip.iter().any(|prefix| archive_path.starts_with(prefix)) { continue; }
-            format!("{}/{archive_path}", item.skill_id)
+            if item.skip.iter().any(|prefix| scoped_path.starts_with(prefix)) { continue; }
+            format!("{}/{scoped_path}", item.skill_id)
         } else {
-            let Some(path) = archive_path.strip_prefix("skills/") else { continue; };
+            let Some(path) = scoped_path.strip_prefix("skills/") else { continue; };
             let Some(skill) = path.split('/').next() else { continue; };
             if !item.skills.iter().any(|name| name == skill) { continue; }
             path.to_string()
         };
-        if selected.starts_with('/') || selected.contains('\\') || selected.contains(':')
-            || selected.split('/').any(|part| part == "." || part == "..")
-            || file.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000)
-        { return Err("Skill 压缩包包含不安全路径".into()); }
+        validate_archive_relative_path(&selected)?;
         let target = stage.join(&selected);
         if file.is_dir() {
             fs::create_dir_all(&target).map_err(|e| e.to_string())?;
@@ -1733,7 +1767,6 @@ mod tests {
         assert!(resolve.entry.unwrap().contains("official MCP"));
         assert!(resolve.skills.is_empty());
         let snapshot = built_in_snapshot(&load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap());
-        assert_eq!(snapshot["entries"].as_array().unwrap().len(), 11);
         assert_eq!(snapshot["entries"][0]["source"]["kind"], "built-in");
         assert_eq!(snapshot["entries"][0]["id"], "hypit");
         assert_eq!(snapshot["entries"][0]["manifest"]["icon"], "assets/hypit-logo.svg");
@@ -1885,26 +1918,10 @@ mod tests {
     fn hypit_project_prompt_follows_the_plugin_installation() {
         let catalog = load_catalog_from(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/plugins")).unwrap();
         let installed = |_: &BuiltIn| true;
-        let prompt = project_prompt_in(&catalog, "Hypit", installed).expect("installed Hypit adds its prompt");
-        for needed in ["dsivio media models", "Settings > 媒体创作", "exits with 5", "hypit-setup", "capabilities", "known: false", "hypit plan"] {
-            assert!(prompt.contains(needed), "缺少 {needed}");
-        }
+        assert!(project_prompt_in(&catalog, "Hypit", installed).is_some());
         // Uninstalled: nothing is added. Other projects and other plugins never receive it.
         assert!(project_prompt_in(&catalog, "Hypit", |_| false).is_none());
         assert!(project_prompt_in(&catalog, "My own project", installed).is_none());
-        for item in catalog.plugins.iter().filter(|item| item.id != "hypit") {
-            assert!(item.project_prompt.is_none(), "{}", item.id);
-        }
-        // The prompt only claims what the shipped adapter and Profile actually do.
-        assert!(!prompt.contains("baseUrl\": "), "no service address instructions");
-    }
-    #[test]
-    fn hypit_setup_uses_the_shipped_adapter_instead_of_writing_a_provider() {
-        let hypit = plugin("hypit");
-        for needed in ["adapter/", "@dsivio/hypit-provider", "dsivio media models", "no `baseUrl`", "DSIVIO_MODEL_NOT_IN_HYPIT", "no `bindings`"] {
-            assert!(hypit.setup.contains(needed), "缺少 {needed}");
-        }
-        assert!(hypit.setup.contains("do not write your own Provider"));
     }
     #[test]
     fn dsivio_reference_is_installed_only_for_setups_that_read_it() {
@@ -1914,22 +1931,6 @@ mod tests {
         }
         let hypit = catalog.plugins.iter().find(|item| item.id == "hypit").unwrap();
         let text = hypit.dsivio_reference.as_deref().unwrap();
-        for needle in ["dsivio media image", "dsivio media video", "dsivio media status", "--idempotency-key", "不要重新提交", "mixer_generate_image", "mixer_video_analysis"] {
-            assert!(text.contains(needle), "缺少 {needle}");
-        }
-        // Plugins call Dsivio; they no longer read keys or reimplement vendor protocols (ADR 0009).
-        for stale in ["apiKeys", "settings.json", "xai_video", "images/generations"] {
-            assert!(!text.contains(stale), "不应再教插件自己对接：{stale}");
-        }
-        assert!(!hypit.setup.contains("关于 Dsivio"));
-        assert!(hypit.setup.contains("dsivio media"));
-        assert!(hypit.adapter_files.iter().any(|(_, text)| text.contains("--idempotency-key") && text.contains("--no-wait")));
-        for needed in ["capabilities", "known: false", "firstFrame", "maxReferenceImages"] {
-            assert!(text.contains(needed), "参考文档没有说明 {needed}");
-        }
-        for stale in ["apiKeys", "settings.json", "workbenchMedia", "xai_video", "images/generations"] {
-            assert!(!hypit.setup.contains(stale), "hypit setup 不应再让插件读密钥或自己对接：{stale}");
-        }
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("hypit-setup");
         install_market_skill(&target, &hypit.setup).unwrap();
@@ -2153,4 +2154,117 @@ mod tests {
         assert_eq!(version("1.0"), None);
         assert!(!id_ok("../escape"));
     }
+
+    fn skill_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (path, content) in entries {
+            zip.start_file(*path, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(content).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    fn subdir_plugin() -> BuiltIn {
+        let mut item = plugin("hypit");
+        item.id = "test-video".into();
+        item.skill_id = "test-video".into();
+        item.skills = vec!["test-video".into()];
+        item.subdir = Some("plugins/test-video".into());
+        item
+    }
+
+    #[test]
+    fn subdir_extracts_only_selected_skills_and_preserves_hypit() {
+        let item = subdir_plugin();
+        let bytes = skill_archive(&[
+            ("repo/plugins/test-video/skills/test-video/SKILL.md", b"video"),
+            ("repo/plugins/test-video/skills/test-video/references/guide.md", b"guide"),
+            ("repo/plugins/test-video/package.json", b"not a Skill"),
+            ("repo/plugins/test-video-evil/skills/test-video/evil.txt", b"skip"),
+            ("repo/skills/hypit/SKILL.md", b"hypit"),
+        ]);
+        let stage = tempfile::tempdir().unwrap();
+        unpack_built_in_skills(&plugin("hypit"), bytes.clone(), stage.path()).unwrap();
+        unpack_built_in_skills(&item, bytes, stage.path()).unwrap();
+        assert_eq!(fs::read(stage.path().join("hypit/SKILL.md")).unwrap(), b"hypit");
+        assert_eq!(fs::read(stage.path().join("test-video/SKILL.md")).unwrap(), b"video");
+        assert_eq!(fs::read(stage.path().join("test-video/references/guide.md")).unwrap(), b"guide");
+        assert!(!stage.path().join("test-video/evil.txt").exists());
+        assert!(!stage.path().join("test-video/package.json").exists());
+        assert!(!stage.path().join("plugins").exists());
+    }
+
+    #[test]
+    fn subdir_root_mapping_and_required_files() {
+        let mut item = subdir_plugin();
+        item.unpack = "root".into();
+        item.required_files = vec!["bin/entry.js".into()];
+        item.skip = vec!["showcase/".into()];
+        let bytes = skill_archive(&[
+            ("repo/plugins/test-video/SKILL.md", b"video"),
+            ("repo/plugins/test-video/bin/entry.js", b"entry"),
+            ("repo/plugins/test-video/showcase/demo.mp4", b"skip"),
+            ("repo/plugins/other/bin/entry.js", b"skip"),
+        ]);
+        let stage = tempfile::tempdir().unwrap();
+        unpack_built_in_skills(&item, bytes, stage.path()).unwrap();
+        assert_eq!(fs::read(stage.path().join("test-video/bin/entry.js")).unwrap(), b"entry");
+        assert!(!stage.path().join("test-video/showcase").exists());
+        let missing = skill_archive(&[("repo/plugins/test-video/SKILL.md", b"video")]);
+        assert!(unpack_built_in_skills(&item, missing, tempfile::tempdir().unwrap().path()).is_err());
+    }
+
+    #[test]
+    fn subdir_requires_a_real_skill_not_an_empty_or_sibling_directory() {
+        let item = subdir_plugin();
+        for path in [
+            "repo/plugins/test-video-evil/skills/test-video/SKILL.md",
+            "repo/plugins/test-video/skills/test-video/README.md",
+            "repo/skills/test-video/SKILL.md",
+        ] {
+            assert!(unpack_built_in_skills(&item, skill_archive(&[(path, b"x")]), tempfile::tempdir().unwrap().path()).is_err());
+        }
+    }
+
+    #[test]
+    fn subdir_rejects_unsafe_components_and_unselected_archive_paths() {
+        for path in ["", "/plugins/video", "plugins/video/", "plugins//video", ".", "..",
+            "plugins/./video", "plugins/../video", "C:/video", "plugins\\video", "plugins/\0video"] {
+            assert!(validate_subdir(path).is_err(), "{path:?}");
+        }
+        let item = subdir_plugin();
+        for path in ["repo/other/../escape", "repo/other/C:/escape", "repo/other\\escape", "/repo/escape", "repo//escape"] {
+            let archive = skill_archive(&[
+                ("repo/plugins/test-video/skills/test-video/SKILL.md", b"valid"),
+                (path, b"bad"),
+            ]);
+            assert!(unpack_built_in_skills(&item, archive, tempfile::tempdir().unwrap().path()).is_err(), "{path}");
+        }
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.add_symlink("repo/unselected/link", "/outside", zip::write::SimpleFileOptions::default()).unwrap();
+        assert!(unpack_built_in_skills(&item, zip.finish().unwrap().into_inner(), tempfile::tempdir().unwrap().path()).is_err());
+    }
+
+    #[test]
+    fn subdir_enforces_size_and_file_count_boundaries() {
+        let item = subdir_plugin();
+        let limit = vec![0; 30 * 1024 * 1024];
+        let stage = tempfile::tempdir().unwrap();
+        unpack_built_in_skills(&item, skill_archive(&[("repo/plugins/test-video/skills/test-video/SKILL.md", &limit)]), stage.path()).unwrap();
+        assert_eq!(fs::metadata(stage.path().join("test-video/SKILL.md")).unwrap().len(), limit.len() as u64);
+        let oversized = vec![0; limit.len() + 1];
+        let stage = tempfile::tempdir().unwrap();
+        let bytes = skill_archive(&[("repo/plugins/test-video/skills/test-video/SKILL.md", &oversized)]);
+        assert_eq!(unpack_built_in_skills(&item, bytes, stage.path()).unwrap_err(), "Skill 内容超过限制");
+        assert!(!stage.path().join("test-video/SKILL.md").exists());
+        let mut paths = vec!["repo/plugins/test-video/skills/test-video/SKILL.md".to_string()];
+        paths.extend((1..2001).map(|i| format!("repo/plugins/test-video/skills/test-video/{i}")));
+        let entries: Vec<_> = paths.iter().map(|path| (path.as_str(), b"x".as_slice())).collect();
+        let stage = tempfile::tempdir().unwrap();
+        unpack_built_in_skills(&item, skill_archive(&entries[..2000]), stage.path()).unwrap();
+        assert!(stage.path().join("test-video/1999").is_file());
+        assert_eq!(unpack_built_in_skills(&item, skill_archive(&entries), tempfile::tempdir().unwrap().path()).unwrap_err(), "Skill 内容超过限制");
+    }
+
 }

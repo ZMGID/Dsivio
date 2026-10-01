@@ -4,7 +4,7 @@ import { api } from '../../api/tauri'
 import { useMediaGeneration } from './useMediaGeneration'
 import type { MediaRequest } from '../../generated/mediaGeneration'
 const request: MediaRequest = { providerId: 'p', model: 'm', kind: 'image', prompt: 'product', images: [], options: {}, origin: 'workbench/edit' }
-beforeEach(() => { vi.restoreAllMocks(); vi.spyOn(api, 'listMediaTasks').mockResolvedValue([]); vi.spyOn(api, 'startMediaGeneration').mockResolvedValue({ id: 'task', providerId: 'p', model: 'm', kind: 'image', prompt: '', origin: request.origin, createdAt: '', status: 'running', remoteId: null, error: null, outputs: [], canResume: false }) })
+beforeEach(() => { vi.restoreAllMocks(); vi.spyOn(api, 'listMediaTasks').mockResolvedValue([]); vi.spyOn(api, 'startMediaGeneration').mockResolvedValue({ id: 'task', providerId: 'p', model: 'm', kind: 'image', prompt: '', origin: request.origin, createdAt: '', status: 'running', remoteId: null, error: null, outputs: [], canResume: false, result: null, requestHash: null, cancellation: null }) })
 it('locks submission while reading files and submits only once', async () => {
  const page = renderHook(() => useMediaGeneration({ origin: request.origin }))
  await waitFor(() => expect(page.result.current.loading).toBe(false))

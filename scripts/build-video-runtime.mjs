@@ -1,5 +1,5 @@
 // Build-time only: download pinned runtimes and install locked dependencies.
-// The installed application never runs npm, npx, pip, or uv to prepare MCPs.
+// Market setup can use bundled npm explicitly; application startup never installs dependencies.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const asrCheck = spawnSync(process.execPath, [join(repo, 'scripts/sync-dsivio-video-asr.mjs'), '--check'], { stdio: 'inherit' })
+if (asrCheck.error) throw asrCheck.error
+if (asrCheck.status !== 0) throw new Error('Bundled ASR snapshot verification failed')
 const inputs = join(repo, 'scripts/video-runtime')
 const destination = join(repo, 'src-tauri/resources/video-runtime')
 const versions = JSON.parse(readFileSync(join(inputs, 'versions.json')))
@@ -24,6 +27,7 @@ const marker = join(destination, 'runtime.json')
 const required = ['python-packages/comfy_mcp/server.py', 'analyzer/node_modules/mcp-video-analyzer/dist/index.js',
   process.platform === 'win32' ? 'python/python.exe' : 'python/bin/python3',
   process.platform === 'win32' ? 'node/node.exe' : 'node/bin/node',
+  process.platform === 'win32' ? 'node/node_modules/npm/bin/npm-cli.js' : 'node/lib/node_modules/npm/bin/npm-cli.js',
   `bin/comfy${process.platform === 'win32' ? '.exe' : ''}`, `bin/yt-dlp${process.platform === 'win32' ? '.exe' : ''}`,
   `bin/ffprobe${process.platform === 'win32' ? '.exe' : ''}`,
   `analyzer/node_modules/ffmpeg-static/ffmpeg${process.platform === 'win32' ? '.exe' : ''}`]
@@ -94,18 +98,22 @@ try {
   run('rustc', ['--edition=2021', '-C', 'opt-level=s', '-C', 'strip=symbols', join(inputs, 'launcher.rs'), '-o', launcher])
   cpSync(launcher, join(staging, 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'))
 
-  // Keep distribution licenses and metadata; remove package managers and their
-  // build-machine launchers. Production starts only the explicit local entries.
+  // Keep npm's JS entry and dependencies for explicit project setup. Remove
+  // unrelated managers and shell launchers; npm always runs through bundled Node.
   rmSync(join(staging, 'python-packages/bin'), { recursive: true, force: true })
   rmSync(join(staging, 'python-packages/Scripts'), { recursive: true, force: true })
-  rmSync(join(staging, process.platform === 'win32' ? 'node/node_modules' : 'node/lib/node_modules'), { recursive: true, force: true })
+  const nodeModules = join(staging, process.platform === 'win32' ? 'node/node_modules' : 'node/lib/node_modules')
+  for (const directory of readdirSync(nodeModules)) {
+    if (directory !== 'npm') rmSync(join(nodeModules, directory), { recursive: true, force: true })
+  }
   for (const file of ['npm', 'npx', 'corepack', 'npm.cmd', 'npx.cmd', 'corepack.cmd', 'npm.ps1', 'npx.ps1', 'corepack.ps1']) {
     rmSync(join(dirname(node), file), { force: true })
   }
-  writeFileSync(join(staging, 'runtime.json'), JSON.stringify({ ...versions, platform, fingerprint: identity }, null, 2) + '\n')
+  const npmVersion = JSON.parse(readFileSync(join(nodeModules, 'npm/package.json'))).version
+  writeFileSync(join(staging, 'runtime.json'), JSON.stringify({ ...versions, npm: npmVersion, platform, fingerprint: identity }, null, 2) + '\n')
   writeFileSync(join(staging, '.gitkeep'), '')
-  // Fail the build before replacing an older usable bundle if relocation or
-  // either MCP handshake is broken. This test uses no package managers or PATH.
+  // Fail before replacing an older bundle if relocation, explicit npm setup or
+  // either MCP handshake is broken. MCP startup never installs dependencies.
   run(process.execPath, [join(repo, 'scripts/verify-video-runtime.mjs'), staging, '--relocate'])
   rmSync(destination, { recursive: true, force: true })
   renameSync(staging, destination)

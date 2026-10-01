@@ -13,7 +13,7 @@ vi.mock('../copy/CopyUploadField', () => ({ CopyUploadField: ({ label, onChange 
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.spyOn(api, 'listMediaTasks').mockResolvedValue([])
-  vi.spyOn(api, 'startMediaGeneration').mockResolvedValue({ id: 'result', providerId: 'image-provider', model: 'image-model', kind: 'image', status: 'running', createdAt: '', error: null, remoteId: null, outputs: [], canResume: false, origin: null, prompt: '' })
+  vi.spyOn(api, 'startMediaGeneration').mockResolvedValue({ id: 'result', providerId: 'image-provider', model: 'image-model', kind: 'image', status: 'running', createdAt: '', error: null, remoteId: null, outputs: [], canResume: false, origin: null, prompt: '', result: null, requestHash: null, cancellation: null })
   vi.stubGlobal('fetch', vi.fn(async () => ({ blob: async () => new Blob(['image'], { type: 'image/png' }) })))
   URL.revokeObjectURL = vi.fn()
 })

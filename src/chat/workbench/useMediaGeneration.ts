@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../../api/tauri'
-import type { MediaRequest, MediaTask, MediaTaskFilter } from '../../generated/mediaGeneration'
+import type { MediaCancelResult, MediaRequest, MediaTask, MediaTaskFilter } from '../../generated/mediaGeneration'
 import type { WorkbenchSubpageId } from './registry'
 
 const POLL_MS = 2500
@@ -22,6 +22,8 @@ export interface MediaGeneration {
   submit: (request: MediaRequest | (() => Promise<MediaRequest>)) => Promise<MediaTask | undefined>
   /** 对已保存的任务继续查询／下载，不会重新提交。 */
   resume: (id: string) => Promise<void>
+  /** Explicit task cancellation; never inferred from stopping a workflow. */
+  cancel: (id: string) => Promise<MediaCancelResult | undefined>
   refresh: () => void
   /** 读取本地素材等前置步骤期间占住提交按钮。 */
   hold: (value: boolean) => void
@@ -112,5 +114,19 @@ export function useMediaGeneration(filter: Partial<MediaTaskFilter> | null): Med
     }
   }, [])
 
-  return { tasks, loading, busy, error, setError, submit, resume, refresh, hold }
+  const cancel = useCallback(async (id: string) => {
+    const scope = currentScope.current
+    try {
+      const result = await api.cancelMediaTask(id)
+      if (!mounted.current || currentScope.current !== scope) return undefined
+      setTasks(current => current.map(task => task.id === id ? result.task : task))
+      setReload(value => value + 1)
+      return result
+    } catch (failure) {
+      if (mounted.current && currentScope.current === scope) setError(String(failure))
+      return undefined
+    }
+  }, [])
+
+  return { tasks, loading, busy, error, setError, submit, resume, cancel, refresh, hold }
 }

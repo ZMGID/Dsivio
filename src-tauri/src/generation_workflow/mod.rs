@@ -584,6 +584,7 @@ async fn execute_node(
                     images,
                     options: media_options,
                     origin: Some(origin),
+                    description_revision: None,
                 };
                 let task = media_generation::start_media_generation(app.clone(), request).await?;
                 run.nodes[index].media_task_id = Some(task.id.clone());
@@ -622,6 +623,7 @@ async fn execute_node(
                 MediaStatus::Failed => Err(task
                     .error
                     .unwrap_or_else(|| "媒体生成失败；可继续查询，或新建一次运行重新生成".into())),
+                MediaStatus::Cancelled => Err("媒体任务已取消".into()),
                 MediaStatus::Running => Err("媒体任务仍在运行；可稍后继续运行以查询结果".into()),
             }
         }

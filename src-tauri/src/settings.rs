@@ -411,6 +411,16 @@ pub struct ModelInfo {
     /// Native video protocol, independent of the provider chat protocol.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_protocol: Option<String>,
+    /// Explicit speech product connection; never inferred from the chat endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech_base_url: Option<String>,
+    /// Explicit cloud transcription connection, independent from chat and speech.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcribe_protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcribe_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1098,16 +1108,48 @@ impl Default for DefaultModelSelection {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[serde(rename_all = "camelCase", default, deny_unknown_fields)]
+pub struct LocalAsrConfig {
+    pub model: String,
+    pub languages: Vec<String>,
+    pub auto_install: bool,
+}
+
+impl Default for LocalAsrConfig {
+    fn default() -> Self {
+        Self { model: "small".into(), languages: vec!["en".into(), "zh".into()], auto_install: true }
+    }
+}
+
 /// Workbench model membership. Independent from conversational default assignments.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WorkbenchMediaConfig {
     pub image_models: Vec<DefaultModelSelection>,
     pub video_models: Vec<DefaultModelSelection>,
+    pub speech_models: Vec<DefaultModelSelection>,
+    pub transcribe_models: Vec<DefaultModelSelection>,
+    pub local_asr: LocalAsrConfig,
+}
+
+impl Default for WorkbenchMediaConfig {
+    fn default() -> Self {
+        Self {
+            image_models: Vec::new(),
+            video_models: Vec::new(),
+            speech_models: Vec::new(),
+            transcribe_models: vec![DefaultModelSelection {
+                provider_id: "local".into(),
+                model: "whisperx-small".into(),
+            }],
+            local_asr: LocalAsrConfig::default(),
+        }
+    }
 }
 
 fn sanitize_workbench_media(config: &mut WorkbenchMediaConfig, providers: &[ModelProvider]) {
-    for pool in [&mut config.image_models, &mut config.video_models] {
+    for pool in [&mut config.image_models, &mut config.video_models, &mut config.speech_models] {
         let mut seen = std::collections::HashSet::new();
         pool.retain_mut(|entry| {
             entry.provider_id = entry.provider_id.trim().to_owned();
@@ -1117,6 +1159,34 @@ fn sanitize_workbench_media(config: &mut WorkbenchMediaConfig, providers: &[Mode
                 && providers.iter().any(|p| p.id == entry.provider_id && p.enabled_models.contains(&entry.model))
                 && seen.insert((entry.provider_id.clone(), entry.model.clone()))
         });
+    }
+    let mut seen = std::collections::HashSet::new();
+    config.transcribe_models.retain_mut(|entry| {
+        if entry.provider_id.trim().len() != entry.provider_id.len() {
+            entry.provider_id = entry.provider_id.trim().to_owned();
+        }
+        if entry.model.trim().len() != entry.model.len() {
+            entry.model = entry.model.trim().to_owned();
+        }
+        let local = entry.provider_id == "local" && entry.model == "whisperx-small";
+        (local || providers.iter().any(|p| p.id == entry.provider_id && p.enabled_models.contains(&entry.model)))
+            && seen.insert((entry.provider_id.clone(), entry.model.clone()))
+    });
+    if config.local_asr.model != "small" {
+        config.local_asr.model.clear();
+        config.local_asr.model.push_str("small");
+    }
+    let mut languages = std::collections::HashSet::new();
+    config.local_asr.languages.retain_mut(|language| {
+        if language.trim().len() != language.len() {
+            *language = language.trim().to_owned();
+        }
+        language.make_ascii_lowercase();
+        (2..=3).contains(&language.len()) && language.bytes().all(|byte| byte.is_ascii_lowercase())
+            && language != "und" && languages.insert(language.clone())
+    });
+    if config.local_asr.languages.is_empty() {
+        config.local_asr.languages = vec!["en".into(), "zh".into()];
     }
 }
 
@@ -4890,6 +4960,41 @@ mod tests {
         assert_eq!(cleaned.workbench_media.image_models[0].model, "image-b");
         assert!(Settings::default().workbench_media.image_models.is_empty());
         assert!(Settings::default().workbench_media.video_models.is_empty());
+    }
+
+    #[test]
+    fn speech_and_transcribe_settings_preserve_explicit_products_and_local_identity() {
+        let mut settings = Settings::default();
+        settings.providers.push(serde_json::from_value(serde_json::json!({
+            "id": "cloud", "name": "OpenAI", "baseUrl": "https://chat.invalid",
+            "enabled": false, "enabledModels": ["gpt-4o-mini-tts", "whisper-1"],
+            "modelOverrides": {
+                "gpt-4o-mini-tts": {"speechProtocol": "openai_tts", "speechBaseUrl": "https://api.openai.com/v1"},
+                "whisper-1": {"transcribeProtocol": "openai_transcribe", "transcribeBaseUrl": "https://api.openai.com/v1"}
+            }
+        })).unwrap());
+        settings.workbench_media = serde_json::from_value(serde_json::json!({
+            "speechModels": [{"providerId": "cloud", "model": "gpt-4o-mini-tts"}, {"providerId": "local", "model": "whisperx-small"}],
+            "transcribeModels": [
+                {"providerId": " local ", "model": " whisperx-small "},
+                {"providerId": "local", "model": "whisperx-small"},
+                {"providerId": "local", "model": "whisperx-large"},
+                {"providerId": "cloud", "model": "whisper-1"},
+                {"providerId": "missing", "model": "whisper-1"}
+            ],
+            "localAsr": {"model": "unsupported", "languages": [" ZH ", "zh", "en", "auto", "und", ""], "autoInstall": false}
+        })).unwrap();
+        let normalized = sanitize_settings(settings);
+        assert_eq!(normalized.workbench_media.speech_models[0].provider_id, "cloud");
+        assert_eq!(normalized.workbench_media.speech_models.len(), 1);
+        assert_eq!(normalized.workbench_media.transcribe_models.iter().map(|model| model.provider_id.as_str()).collect::<Vec<_>>(), vec!["local", "cloud"]);
+        assert_eq!(normalized.workbench_media.local_asr.model, "small");
+        assert_eq!(normalized.workbench_media.local_asr.languages, vec!["zh", "en"]);
+        assert!(!normalized.workbench_media.local_asr.auto_install);
+        let roundtrip: Settings = serde_json::from_value(serde_json::to_value(&normalized).unwrap()).unwrap();
+        assert_eq!(roundtrip.providers[0].model_overrides["gpt-4o-mini-tts"].speech_base_url.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(roundtrip.providers[0].base_url, "https://chat.invalid");
+        assert_eq!(roundtrip.workbench_media.transcribe_models[0].model, "whisperx-small");
     }
 
     #[test]

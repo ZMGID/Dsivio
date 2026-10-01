@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use base64::{engine::general_purpose, Engine as _};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::api::send_with_failover;
 use crate::chat::model_metadata::normalize_model_name;
@@ -59,6 +59,8 @@ struct ImageGenerationRequest {
     quality: String,
     n: usize,
     input_images: Vec<InputImage>,
+    background: Option<String>,
+    output_format: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +81,7 @@ pub(crate) fn validate_generation(
     arguments: &Value,
     image_count: usize,
 ) -> Result<(), String> {
-    let request = parse_request(arguments)?;
+    let request = parse_for_model(provider, model, arguments)?;
     validate_image_request(provider, model, &request)?;
     reject_excess_reference_images(provider, model, image_count)?;
     validate_provider(provider)
@@ -100,7 +102,7 @@ pub(crate) async fn generate_image_with_provider(
     retry_attempts: usize,
     operation: &str,
 ) -> Result<GeneratedBatch, String> {
-    let mut request = parse_request(arguments)?;
+    let mut request = parse_for_model(provider, model, arguments)?;
     validate_image_request(provider, model, &request)?;
     reject_excess_reference_images(provider, model, input_images.len())?;
     request.input_images = input_images.to_vec();
@@ -110,7 +112,11 @@ pub(crate) async fn generate_image_with_provider(
     let normalized_model = normalize_model_name(model);
     let cache_key = (provider.id.clone(), normalized_model);
     let cached_route = state.provider_runtime().image_route(&cache_key);
-    let route = cached_route.unwrap_or_else(|| resolve_image_route(provider, model));
+    let route = if request.background.is_some() || request.output_format.is_some() {
+        resolve_image_route(provider, model)
+    } else {
+        cached_route.unwrap_or_else(|| resolve_image_route(provider, model))
+    };
 
     let (images, note) = match call_image_route(
         state,
@@ -126,7 +132,7 @@ pub(crate) async fn generate_image_with_provider(
         Ok(result) => result,
         // 猜错自愈：选定 route 返回端点错配错误 → 换另一端点（Chat↔ImagesApi）重试一次；
         // 成功则记 (provider_id, normalized_model)→route 到会话缓存，下次同模型直达。
-        Err(err) if is_endpoint_mismatch_error(&err) && alternate_route(route).is_some() => {
+        Err(err) if request.background.is_none() && request.output_format.is_none() && is_endpoint_mismatch_error(&err) && alternate_route(route).is_some() => {
             let alt = alternate_route(route).expect("checked by guard");
             let result = call_image_route(
                 state,
@@ -287,6 +293,13 @@ pub(crate) fn has_known_direct_image_generation_route(
     }
 }
 
+fn parse_for_model(provider: &ModelProvider, model: &str, arguments: &Value) -> Result<ImageGenerationRequest, String> {
+    let mut args: std::collections::BTreeMap<String, Value> = serde_json::from_value(arguments.clone()).map_err(|e| e.to_string())?;
+    args.retain(|name, value| !(value.is_null() && matches!(name.as_str(), "size"|"quality"|"n"|"aspectRatio"|"aspect_ratio")));
+    let args = super::model_parameters::validate_and_resolve(provider, model, &super::MediaKind::Image, args, None)?;
+    parse_request(&json!(args))
+}
+
 fn parse_request(arguments: &Value) -> Result<ImageGenerationRequest, String> {
     let prompt = arguments
         .get("prompt")
@@ -294,7 +307,7 @@ fn parse_request(arguments: &Value) -> Result<ImageGenerationRequest, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "Image generation requires prompt".to_string())?;
-    let prompt = truncate_chars(prompt, MAX_PROMPT_CHARS);
+    let prompt = prompt.to_owned();
     let size = parse_size_arg(
         arguments
             .get("size")
@@ -303,26 +316,21 @@ fn parse_request(arguments: &Value) -> Result<ImageGenerationRequest, String> {
     )?;
     let aspect_ratio = parse_aspect_ratio_arg(
         arguments
-            .get("aspect_ratio")
+            .get("aspectRatio")
+            .or_else(|| arguments.get("aspect_ratio"))
             .and_then(|value| value.as_str())
             .unwrap_or("auto"),
     )?;
-    let quality = match arguments
+    let quality = arguments
         .get("quality")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_QUALITY)
-    {
-        valid @ ("auto" | "low" | "medium" | "high" | "xhigh" | "max") => valid,
-        other => return Err(format!("Unsupported image quality: {other}")),
-    };
+        .and_then(Value::as_str)
+        .unwrap_or(DEFAULT_QUALITY);
     let n = match arguments.get("n") {
         None | Some(Value::Null) => 1,
         Some(value) => value
             .as_u64()
-            .filter(|n| (1..=4).contains(n))
-            .ok_or("Image count must be an integer from 1 to 4")? as usize,
+            .filter(|n| usize::try_from(*n).is_ok())
+            .ok_or("Image count must be an unsigned integer")? as usize,
     };
 
     Ok(ImageGenerationRequest {
@@ -332,6 +340,8 @@ fn parse_request(arguments: &Value) -> Result<ImageGenerationRequest, String> {
         quality: quality.to_string(),
         n,
         input_images: Vec::new(),
+        background: arguments.get("background").and_then(Value::as_str).map(str::to_owned),
+        output_format: arguments.get("outputFormat").and_then(Value::as_str).map(str::to_owned),
     })
 }
 
@@ -1354,6 +1364,12 @@ fn apply_openai_image_options(body: &mut Value, request: &ImageGenerationRequest
     if let Some(quality) = openai_quality(&request.quality) {
         body["quality"] = Value::String(quality.to_string());
     }
+    if let Some(background) = &request.background {
+        body["background"] = Value::String(background.clone());
+    }
+    if let Some(format) = &request.output_format {
+        body["output_format"] = Value::String(format.clone());
+    }
 }
 
 fn apply_xai_image_options(body: &mut Value, request: &ImageGenerationRequest) {
@@ -1505,7 +1521,7 @@ fn images_edits_form(
         .text("n", request.n.to_string());
     let mut options = serde_json::json!({"model":model});
     apply_openai_image_options(&mut options, request);
-    for name in ["size", "quality"] {
+    for name in ["size", "quality", "background", "output_format"] {
         if let Some(value) = options[name].as_str() {
             form = form.text(name, value.to_owned());
         }
@@ -1547,7 +1563,7 @@ pub struct ImageCapabilities {
     pub custom_pixel_size: bool,
 }
 
-pub(crate) fn image_capabilities(provider: &ModelProvider, model: &str) -> ImageCapabilities {
+fn route_capabilities(provider: &ModelProvider, model: &str) -> ImageCapabilities {
     let name = model.to_ascii_lowercase();
     let gateway = resolve_image_route(provider, model) == ImageRoute::AsyncTask;
     let mut c = ImageCapabilities {
@@ -1624,31 +1640,64 @@ pub(crate) fn image_capabilities(provider: &ModelProvider, model: &str) -> Image
     c
 }
 
+pub(crate) fn model_description(provider: &ModelProvider, model: &str) -> super::model_parameters::ModelDescription {
+    use super::model_parameters::{argument, finish, DataType};
+    use std::collections::BTreeMap;
+    use serde_json::json;
+    let c = route_capabilities(provider, model);
+    let mut arguments = BTreeMap::new();
+    let mut prompt = argument(DataType::String, Some("--prompt-file"), json!({"minLength":1,"maxLength":MAX_PROMPT_CHARS,"lengthUnit":"unicodeCodePoint"}));
+    prompt.required = true;
+    prompt.transport = json!({"flag":"--prompt-file","encoding":"utf8-file"});
+    arguments.insert("prompt".into(), prompt);
+    arguments.insert("images".into(), argument(DataType::MediaList, Some("--ref"), json!({"maxCount":c.max_reference_images,"maxBytes":MAX_IMAGE_BYTES,"mimePatterns":["image/png","image/jpeg","image/webp"],"locations":["local","https","http","inline"]})));
+    let route = resolve_image_route(provider, model);
+    let name = model.to_ascii_lowercase();
+    let known = uses_xai_images_api(provider, model) || uses_gpt_image_api_model(model) || name.contains("dall-e") || name.contains("gemini") || name.contains("nano-banana");
+    if known {
+        let mut sizes: Vec<Value> = c.sizes.iter().map(|s| json!(s)).collect();
+        sizes.insert(0, json!("auto"));
+        let mut size = argument(DataType::String, Some("--size"), json!({"allowed":sizes}));
+        if c.custom_pixel_size {
+            // Exact pixels are validated by the existing route's geometry encoder.
+            size.facts.insert("pixelDimensions".into(), json!(true));
+        }
+        arguments.insert("size".into(), size);
+        let mut ratios: Vec<Value> = c.ratios.iter().map(|r| json!(r)).collect();
+        ratios.insert(0, json!("auto"));
+        arguments.insert("aspectRatio".into(), argument(DataType::String, Some("--ratio"), json!({"allowed":ratios})));
+        arguments.insert("quality".into(), argument(DataType::String, Some("--quality"), json!({"allowed":c.qualities})));
+        arguments.insert("n".into(), argument(DataType::Integer, Some("--n"), json!({"minimum":1,"maximum":c.max_count,"defaultValue":1})));
+    }
+    let mut constraints = vec![];
+    if uses_gpt_image_api_model(model) && matches!(route, ImageRoute::ImagesApi | ImageRoute::AsyncTask) {
+        arguments.insert("background".into(), argument(DataType::String, None, json!({"allowed":["auto","opaque","transparent"]})));
+        arguments.insert("outputFormat".into(), argument(DataType::String, None, json!({"allowed":["png","jpeg","webp"]})));
+        constraints.push(json!({"ruleId":"transparent-output-format","when":{"equals":{"argument":"background","value":"transparent"}},"check":"restrictAllowed","arguments":["outputFormat"],"allowed":["png","webp"]}));
+    }
+    finish(provider, model, super::MediaKind::Image, arguments, constraints, false, Some(c.max_count), route == ImageRoute::AsyncTask)
+}
+
+pub(crate) fn image_capabilities(provider: &ModelProvider, model: &str) -> ImageCapabilities {
+    let d = model_description(provider, model);
+    let allowed = |name: &str| d.arguments.get(name).and_then(|a| a.facts.get("allowed")).and_then(Value::as_array).cloned().unwrap_or_default();
+    // Static compatibility fields remain borrowed from the route tables, but their presence and
+    // limits are projections of the authoritative description.
+    let mut c = route_capabilities(provider, model);
+    c.max_count = d.arguments.get("n").and_then(|a| a.facts.get("maximum")).and_then(Value::as_u64).unwrap_or(1) as u32;
+    c.max_reference_images = d.arguments["images"].facts["maxCount"].as_u64().unwrap_or(0) as usize;
+    c.sizes.retain(|s| allowed("size").contains(&json!(s)));
+    c.ratios.retain(|s| allowed("aspectRatio").contains(&json!(s)));
+    c.qualities.retain(|s| allowed("quality").contains(&json!(s)));
+    c
+}
+
 fn validate_image_request(
     provider: &ModelProvider,
     model: &str,
     request: &ImageGenerationRequest,
 ) -> Result<(), String> {
     let c = image_capabilities(provider, model);
-    if request.n > c.max_count as usize {
-        return Err(format!(
-            "{model} on this connection accepts at most {} image(s) per request",
-            c.max_count
-        ));
-    }
-    if !c.qualities.contains(&request.quality.as_str()) {
-        return Err(format!(
-            "{model} does not support quality {} (allowed: {})",
-            request.quality,
-            c.qualities.join(", ")
-        ));
-    }
-    if request.aspect_ratio != "auto" && !c.ratios.contains(&request.aspect_ratio.as_str()) {
-        return Err(format!(
-            "{model} does not support aspect ratio {}",
-            request.aspect_ratio
-        ));
-    }
     if request.size != "auto" {
         if let Some((w, h)) = parse_pixel_pair(&request.size) {
             if !c.custom_pixel_size {
@@ -1671,12 +1720,6 @@ fn validate_image_request(
                     return Err(format!("{model} does not support pixel size {size}"));
                 }
             }
-        } else if !c.sizes.contains(&request.size.as_str()) {
-            return Err(format!(
-                "{model} does not support size {} (allowed: {})",
-                request.size,
-                c.sizes.join(", ")
-            ));
         }
     }
     Ok(())
@@ -1689,12 +1732,11 @@ pub(crate) fn image_api_payload(
     arguments: &Value,
     reference_count: usize,
 ) -> Result<Value, String> {
-    validate_generation(provider, model, arguments, reference_count)?;
-    Ok(images_generations_json_body(
-        provider,
-        model,
-        &parse_request(arguments)?,
-    ))
+    let request = parse_for_model(provider, model, arguments)?;
+    validate_image_request(provider, model, &request)?;
+    reject_excess_reference_images(provider, model, reference_count)?;
+    validate_provider(provider)?;
+    Ok(images_generations_json_body(provider, model, &request))
 }
 
 fn max_reference_images(provider: &ModelProvider, model: &str) -> usize {
@@ -1768,9 +1810,6 @@ fn mime_for_image_path(path: &Path) -> &'static str {
     }
 }
 
-fn truncate_chars(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
-}
 
 #[cfg(test)]
 mod tests {
@@ -2003,12 +2042,6 @@ mod tests {
         assert!(err.contains("prompt"));
     }
 
-    #[test]
-    fn rejects_out_of_range_image_count() {
-        for n in [0, 99] {
-            assert!(parse_request(&serde_json::json!({"prompt":"draw an icon","n":n})).is_err());
-        }
-    }
 
     #[test]
     fn parse_request_accepts_resolution_tier_and_custom_pixels() {
@@ -2165,6 +2198,8 @@ mod tests {
             quality: "auto".to_string(),
             n: 1,
             input_images: Vec::new(),
+            background: None,
+            output_format: None,
         };
         let body = build_gemini_native_body(&request);
         assert_eq!(
@@ -2271,6 +2306,8 @@ mod tests {
             quality: "auto".to_string(),
             n: 1,
             input_images: Vec::new(),
+            background: None,
+            output_format: None,
         };
         assert_eq!(
             chat_user_content(&request),
@@ -2287,6 +2324,8 @@ mod tests {
             quality: "auto".to_string(),
             n: 1,
             input_images: vec![sample_input_image()],
+            background: None,
+            output_format: None,
         };
         let content = chat_user_content(&request);
         assert_eq!(content[0]["type"], "text");
@@ -2306,6 +2345,8 @@ mod tests {
             quality: "auto".to_string(),
             n: 1,
             input_images: vec![sample_input_image()],
+            background: None,
+            output_format: None,
         };
         let body = build_gemini_native_body(&request);
         assert_eq!(
@@ -2324,6 +2365,8 @@ mod tests {
             quality: "auto".to_string(),
             n: 1,
             input_images: vec![sample_input_image()],
+            background: None,
+            output_format: None,
         };
         let body = xai_edits_body("grok-imagine-image", &one);
         assert_eq!(body["image"]["type"], "image_url");
@@ -2349,6 +2392,8 @@ mod tests {
             quality: "high".to_string(),
             n: 1,
             input_images: vec![sample_input_image()],
+            background: None,
+            output_format: None,
         };
         let body = openai_compat_edits_json_body("gpt-image-1.5", &request);
         assert_eq!(body["image"], "data:image/png;base64,aGVsbG8=");
@@ -2400,6 +2445,8 @@ mod tests {
             quality: "auto".to_string(),
             n: 1,
             input_images: Vec::new(),
+            background: None,
+            output_format: None,
         };
         let landscape = ImageGenerationRequest {
             size: "1536x1024".to_string(),
@@ -2593,6 +2640,8 @@ mod tests {
             quality: "auto".into(),
             n: 1,
             input_images: vec![sample_input_image()],
+            background: None,
+            output_format: None,
         };
         let result = generate_with_images_edits(
             &state,
@@ -2723,6 +2772,8 @@ mod tests {
                 quality: "auto".to_string(),
                 n: 1,
                 input_images: four[..3].to_vec(),
+                background: None,
+                output_format: None,
             },
         );
         assert_eq!(body["images"].as_array().map(|v| v.len()), Some(3));

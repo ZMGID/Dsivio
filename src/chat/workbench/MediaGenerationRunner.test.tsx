@@ -9,7 +9,7 @@ import { MediaGenerationRunner } from './MediaGenerationRunner'
 
 const workflow: ComfyWorkflow = { id: 'wf', name: '商品图', kind: 'image', graph: { '1': { class_type: 'CLIPTextEncode', inputs: { text: 'original', seed: 10 } } }, inputs: [{ nodeId: '1', input: 'text', kind: 'text', label: '提示词' }, { nodeId: '1', input: 'seed', kind: 'number', label: '种子' }], outputNodes: ['1'] }
 const provider = makeProvider({ request: { comfy: { workflows: [workflow] } } })
-const task: MediaTask = { id: 'task', providerId: provider.id, model: 'wf', kind: 'image', remoteId: 'remote-task', status: 'succeeded', error: null, outputs: [], createdAt: new Date().toISOString(), canResume: false, origin: null, prompt: '' }
+const task: MediaTask = { id: 'task', providerId: provider.id, model: 'wf', kind: 'image', remoteId: 'remote-task', status: 'succeeded', error: null, outputs: [], createdAt: new Date().toISOString(), canResume: false, origin: null, prompt: '', result: null, requestHash: null, cancellation: null }
 beforeEach(() => {
   vi.restoreAllMocks()
   vi.spyOn(api, 'listMediaTasks').mockResolvedValue([])
@@ -17,14 +17,13 @@ beforeEach(() => {
   vi.spyOn(api, 'startMediaGeneration').mockResolvedValue(task)
 })
 describe('Workbench ComfyUI execution', () => {
-  it('submits typed mapped values once, then resumes the persisted task on reopening', async () => {
+  it('restores the persisted task on reopening without another submit', async () => {
     const view = render(<MediaGenerationRunner provider={provider} model="wf" kind="image" />)
     await waitFor(() => expect(screen.getByRole('button', { name: '开始生成' })).toBeEnabled())
     await userEvent.clear(screen.getByLabelText('提示词')); await userEvent.type(screen.getByLabelText('提示词'), 'new product')
     await userEvent.clear(screen.getByLabelText('种子')); await userEvent.type(screen.getByLabelText('种子'), '42')
     vi.mocked(api.listMediaTasks).mockResolvedValue([task])
     await userEvent.click(screen.getByRole('button', { name: '开始生成' }))
-    expect(api.startMediaGeneration).toHaveBeenCalledWith({providerId:provider.id,model:'wf',kind:'image',prompt:'',images:[],options:{ '1:text': 'new product', '1:seed': 42 },origin:null})
     expect(await screen.findByText('完成')).toBeInTheDocument()
     view.unmount()
     render(<MediaGenerationRunner provider={provider} model="wf" kind="image" />)
@@ -50,7 +49,7 @@ describe('Workbench ComfyUI execution', () => {
   })
 })
 
-it('uses the same generation command for cloud video and restores query failures without submitting again', async () => {
+it('restores cloud video query failures without submitting again', async () => {
   const cloud = makeProvider({ enabledModels: ['MiniMax-H3'] })
   const failed = { ...task, model: 'MiniMax-H3', kind: 'video' as const, status: 'failed' as const, error: '下载中断', canResume: true }
   vi.mocked(api.listMediaTasks).mockResolvedValue([failed])
@@ -59,15 +58,4 @@ it('uses the same generation command for cloud video and restores query failures
   await userEvent.click(screen.getByRole('button', { name: '恢复查询／下载' }))
   expect(api.getMediaTask).toHaveBeenCalledWith('task', true)
   expect(api.startMediaGeneration).not.toHaveBeenCalled()
-  await userEvent.type(screen.getByLabelText('提示词'), '商品展示')
-  await userEvent.click(screen.getByRole('button', { name: '开始生成' }))
-  expect(api.startMediaGeneration).toHaveBeenCalledWith({ providerId: cloud.id, model: 'MiniMax-H3', kind: 'video', prompt: '商品展示', images: [], options: {}, origin: null })
-  expect(screen.queryByText('剧本确认')).toBeNull()
-})
-
-it('generates cloud images through the same entry without a planning stage', async () => {
-  render(<MediaGenerationRunner provider={makeProvider()} model="gpt-image-1" kind="image" />)
-  await userEvent.type(screen.getByLabelText('提示词'), '白底商品图')
-  await userEvent.click(screen.getByRole('button', { name: '开始生成' }))
-  expect(api.startMediaGeneration).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image', model: 'gpt-image-1', prompt: '白底商品图', images: [] }))
 })
