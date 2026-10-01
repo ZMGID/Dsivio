@@ -46,7 +46,7 @@ pub mod studio;
 pub mod updates;
 pub mod usage;
 pub mod utils;
-pub(crate) mod media_runtime;
+pub mod media_runtime;
 pub mod media_generation;
 pub mod generation_workflow;
 pub mod comfyui;
@@ -120,6 +120,11 @@ fn disable_process_power_throttling() {
             std::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
         );
     }
+}
+
+pub(crate) fn application_context() -> tauri::Context<tauri::Wry> {
+    // Keep one macro expansion: on macOS it also emits the embedded Info.plist symbol.
+    tauri::generate_context!()
 }
 
 /// 应用入口函数
@@ -811,7 +816,7 @@ pub fn run() {
             dock::terminal::dock_terminal_resize,
             dock::terminal::dock_terminal_close,
         ])
-        .build(tauri::generate_context!())
+        .build(application_context())
         .expect("error while building tauri application")
         .run(|app_handle, event| match event {
             tauri::RunEvent::ExitRequested { api, code, .. } => {

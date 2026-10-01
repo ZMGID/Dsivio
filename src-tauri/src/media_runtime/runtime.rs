@@ -8,6 +8,63 @@ use tauri::{AppHandle, Manager};
 
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 
+const PYTHON_PATH: &str = if cfg!(windows) {
+    "python/python.exe"
+} else {
+    "python/bin/python3"
+};
+const NODE_PATH: &str = if cfg!(windows) {
+    "node/node.exe"
+} else {
+    "node/bin/node"
+};
+
+pub(super) fn tools_resource_directory() -> Result<PathBuf, String> {
+    // Use Tauri's own bundle lookup without constructing or initializing an App.
+    let context = crate::application_context();
+    resolve_resource_directory(
+        tauri::utils::platform::resource_dir(context.package_info(), &tauri::Env::default())
+            .map_err(|error| error.to_string()),
+        cfg!(debug_assertions),
+    )
+}
+
+pub(super) fn tools_at(root: &Path) -> Result<BTreeMap<&'static str, PathBuf>, String> {
+    let programs = [
+        (
+            "ffmpeg",
+            if cfg!(windows) {
+                "analyzer/node_modules/ffmpeg-static/ffmpeg.exe"
+            } else {
+                "analyzer/node_modules/ffmpeg-static/ffmpeg"
+            },
+        ),
+        (
+            "ffprobe",
+            if cfg!(windows) { "bin/ffprobe.exe" } else { "bin/ffprobe" },
+        ),
+        (
+            "yt-dlp",
+            if cfg!(windows) { "bin/yt-dlp.exe" } else { "bin/yt-dlp" },
+        ),
+        ("python", PYTHON_PATH),
+        ("node", NODE_PATH),
+    ];
+    let mut tools = BTreeMap::new();
+    for (name, relative) in programs {
+        let path = root.join(relative);
+        match path.metadata() {
+            Ok(metadata) if metadata.is_file() => {
+                tools.insert(name, crate::utils::strip_windows_verbatim_prefix(path));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Cannot inspect bundled {name}: {error}")),
+        }
+    }
+    Ok(tools)
+}
+
 pub(super) fn initialize(app: &AppHandle) -> Result<(), String> {
     let root = resource_directory(app)?.join("video-runtime");
     ROOT.set(root)
@@ -64,16 +121,8 @@ fn environment_at(root: &Path) -> Result<BTreeMap<String, String>, String> {
     // These paths become Node entry arguments and Python environment values.
     // Keep canonical filesystem paths out of the external-process contract.
     let root = crate::utils::strip_windows_verbatim_prefix(root.to_path_buf());
-    let python = root.join(if cfg!(windows) {
-        "python/python.exe"
-    } else {
-        "python/bin/python3"
-    });
-    let node = root.join(if cfg!(windows) {
-        "node/node.exe"
-    } else {
-        "node/bin/node"
-    });
+    let python = root.join(PYTHON_PATH);
+    let node = root.join(NODE_PATH);
     let mut paths = vec![
         root.join("bin"),
         python.parent().unwrap().into(),

@@ -13,6 +13,10 @@ fn main() -> ExitCode {
             attach_parent_console();
             return kivio::media_generation::cli::run(args);
         }
+        if first == kivio::media_runtime::cli::SUBCOMMAND {
+            attach_parent_console();
+            return kivio::media_runtime::cli::run(args);
+        }
     }
 
     kivio::run();
@@ -20,7 +24,7 @@ fn main() -> ExitCode {
 }
 
 /// Release builds use the GUI subsystem. Piped stdio from a parent process is inherited as is;
-/// an interactive terminal needs its console attached so `dsivio media` output is visible.
+/// an interactive terminal needs its console attached so CLI output is visible.
 fn attach_parent_console() {
     #[cfg(all(windows, not(debug_assertions)))]
     unsafe {

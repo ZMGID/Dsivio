@@ -1,4 +1,5 @@
 //! Bundled analyzer runtime and read-only legacy settings migration.
+pub mod cli;
 pub(crate) mod runtime;
 pub(crate) mod config;
 pub(crate) mod migration;

@@ -63,6 +63,16 @@ stdout 只输出一行 JSON，进度和错误说明写在 stderr。
 
 生成是付费调用。遇到 5 和 124 时不要重新提交同一个请求。
 
+## 内置程序路径：`dsivio tools`
+
+插件需要本地媒体工具时，运行 `dsivio tools --json`，获取内置运行时中实际存在的程序的绝对路径。这个命令不需要 Dsivio 处于运行状态，也不会启动 App。
+
+```json
+{"ffmpeg":"/…/ffmpeg","ffprobe":"/…/ffprobe","yt-dlp":"/…/yt-dlp","python":"/…/python3","node":"/…/node"}
+```
+
+缺失的程序不输出对应字段；`ffmpeg` 指向内置 `ffmpeg-static` 二进制。不加 `--json` 时，每行输出 `名称<TAB>路径`。退出码 0 表示成功，2 表示参数错误，1 表示无法定位资源或输出失败。获取路径后直接调用对应程序，不依赖它们在 `PATH` 上。
+
 ## Dsivio 自带的工具
 
 在 Dsivio 对话里，也可以直接使用下面这些工具：
