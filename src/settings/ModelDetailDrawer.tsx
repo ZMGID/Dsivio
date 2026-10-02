@@ -1,9 +1,10 @@
 import { VideoModelFields } from './VideoModelFields'
+import { AudioModelFields } from './AudioModelFields'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ArrowLeft, RotateCcw } from 'lucide-react'
 import type { ModelInfo, ModelProvider } from '../api/tauri'
 import { resolveModelInfo, matchModel, providerModelDatabaseId } from '../data/modelMatching'
-import { Toggle, Input, Select } from './public/controls'
+import { Toggle, Input } from './public/controls'
 import { Button, IconButton } from '../components/Button'
 
 type Lang = 'zh' | 'en'
@@ -170,6 +171,7 @@ export function ModelDetailDrawer({
     }
   }, [modelName, onReset, dbDefaults])
 
+  const audioModel = Boolean(form.speechProtocol || form.transcribeProtocol || form.capabilities?.speechGeneration || form.capabilities?.speechTranscription)
   const videoProtocolMissing = form.capabilities?.videoGeneration === true && !form.videoProtocol
   const isDirty = !deepEqual(form, resolved)
 
@@ -263,21 +265,7 @@ export function ModelDetailDrawer({
             />
           </div>
 
-          <div className="kv-drawer-section">
-            <h3 className="kv-drawer-label">{lang === 'zh' ? '语音产品连接（独立于聊天）' : 'Speech product connection (separate from chat)'}</h3>
-            <p className="kv-row-desc">{lang === 'zh' ? '仅显式配置后可加入媒体池。MiniMax 需按量付费语音产品 Key，Token Plan 不代表已开通。OpenAI 样本上传克隆和 Doubao Voice 暂不提供；Ark 凭证不代表语音已配置。' : 'Configure explicitly before adding to a media pool. MiniMax requires a pay-as-you-go speech key, not inferred Token Plan access. OpenAI sample cloning and Doubao Voice are not provided; Ark credentials do not configure voice.'}</p>
-            <Select ariaLabel={lang === 'zh' ? '语音协议' : 'Speech protocol'} value={form.speechProtocol || ''}
-              options={[{ value: '', label: lang === 'zh' ? '未启用' : 'Disabled' }, { value: 'minimax_tts', label: 'MiniMax TTS / Clone' }, { value: 'openai_tts', label: 'OpenAI TTS' }]}
-              onChange={value => updateField('speechProtocol', value === 'minimax_tts' || value === 'openai_tts' ? value : undefined)} />
-            <label className="block pt-2"><span className="kv-row-desc">{lang === 'zh' ? '语音产品 Base URL' : 'Speech product base URL'}</span>
-              <Input value={form.speechBaseUrl || ''} onChange={value => updateField('speechBaseUrl', value || undefined)}
-                placeholder={form.speechProtocol === 'minimax_tts' ? 'https://api.minimax.io/v1' : 'https://api.openai.com/v1'} /></label>
-            <Select ariaLabel={lang === 'zh' ? '云转写协议' : 'Cloud transcription protocol'} value={form.transcribeProtocol || ''}
-              options={[{ value: '', label: lang === 'zh' ? '未启用' : 'Disabled' }, { value: 'openai_transcribe', label: 'OpenAI whisper-1' }]}
-              onChange={value => updateField('transcribeProtocol', value === 'openai_transcribe' ? value : undefined)} />
-            <label className="block pt-2"><span className="kv-row-desc">{lang === 'zh' ? '云转写产品 Base URL' : 'Transcription product base URL'}</span>
-              <Input value={form.transcribeBaseUrl || ''} onChange={value => updateField('transcribeBaseUrl', value || undefined)} placeholder="https://api.openai.com/v1" /></label>
-          </div>
+          {audioModel && <AudioModelFields model={modelName} form={form} baseUrl={provider?.baseUrl} lang={lang} onChange={updateField} />}
 
           {!form.capabilities?.videoGeneration && <>
           <div className="kv-drawer-row">
@@ -323,6 +311,8 @@ export function ModelDetailDrawer({
             <label className="kv-drawer-label">{t.capabilities}</label>
             <div className="kv-drawer-toggles">
               <CapabilityToggle label={lang === 'zh' ? '视频生成' : 'Video Generation'} checked={form.capabilities?.videoGeneration ?? false} onChange={v => updateCapability('videoGeneration', v)} />
+              <CapabilityToggle label={lang === 'zh' ? '语音合成' : 'Speech Synthesis'} checked={form.capabilities?.speechGeneration ?? false} onChange={v => updateCapability('speechGeneration', v)} />
+              <CapabilityToggle label={lang === 'zh' ? '语音转写' : 'Transcription'} checked={form.capabilities?.speechTranscription ?? false} onChange={v => updateCapability('speechTranscription', v)} />
               {!form.capabilities?.videoGeneration && <>
               <CapabilityToggle label={t.vision} checked={form.capabilities?.vision ?? false} onChange={(v) => updateCapability('vision', v)} />
               <CapabilityToggle label={t.videoInput} checked={form.capabilities?.videoInput ?? false} onChange={(v) => updateCapability('videoInput', v)} />

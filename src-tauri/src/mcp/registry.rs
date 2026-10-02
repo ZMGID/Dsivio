@@ -134,9 +134,11 @@ async fn list_enabled_tool_catalog_inner(
         crate::settings::chat_memory_tools_enabled(&settings),
     );
     tools.push(super::types::mixer_media_task_tool());
-    let video = &settings.default_models.video_generation;
-    if video.is_configured() { tools.push(super::types::mixer_generate_video_tool(&video.model)); }
-    if let Some((provider_id, model)) = settings.image_generation_model() {
+    use crate::media_generation::{chat_model, MediaKind};
+    if let Some((_, model)) = chat_model(&settings, &MediaKind::Video) {
+        tools.push(super::types::mixer_generate_video_tool(&model));
+    }
+    if let Some((provider_id, model)) = chat_model(&settings, &MediaKind::Image) {
         let mut tool = mixer_generate_image_tool_for(Some(&model));
         let provider_name = settings
             .get_provider(&provider_id)

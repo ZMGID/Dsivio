@@ -1,4 +1,5 @@
 import { suggestedVideoModels, videoProvider } from '../data/videoModels'
+import { isSpeechCatalogOnly, suggestedSpeechModels } from '../data/speechModels'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type ModelProvider } from '../api/tauri'
 import { applyModelCatalog } from '../data/modelCatalog'
@@ -39,8 +40,8 @@ export function useProviderCatalogController(port: ProviderCatalogPort) {
     setError('')
     const identity = connectionIdentity(provider)
     try {
-      const catalog = videoProvider(provider.baseUrl)?.catalogOnly
-        ? { models: suggestedVideoModels(provider.baseUrl), capabilities: {} }
+      const catalog = videoProvider(provider.baseUrl)?.catalogOnly || isSpeechCatalogOnly(provider.baseUrl)
+        ? { models: [...suggestedVideoModels(provider.baseUrl), ...suggestedSpeechModels(provider.baseUrl)], capabilities: {} }
         : await portRef.current.fetch(providerId, {
         id: provider.id,
         baseUrl: provider.baseUrl,

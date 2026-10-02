@@ -443,10 +443,7 @@ pub(super) async fn complete_assistant_reply_inner(
     let tools_capable = agent_prepare::chat_tools_capable(
         &effective_chat_tools,
         settings.chat_memory.enabled,
-        crate::settings::chat_image_generation_enabled_for_session(
-            &settings,
-            Some(session_model_for_conversation(conversation)),
-        ) || settings.default_models.video_generation.is_configured(),
+        crate::settings::chat_media_generation_enabled(&settings),
     ) || video_plan.model.is_some();
     let tool_list = await_chat_tool_discovery(
         state.inner(),
@@ -456,7 +453,6 @@ pub(super) async fn complete_assistant_reply_inner(
             app,
             state.inner(),
             &settings,
-            Some(session_model_for_conversation(conversation)),
             allowed_mcp_server_ids(conversation, &settings),
         ),
     )

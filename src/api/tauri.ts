@@ -927,6 +927,9 @@ export type ModelInfo = {
     webSearch?: boolean
     imageGeneration?: boolean
     videoGeneration?: boolean
+    /** Display tags for audio models; usability comes from speechProtocol / transcribeProtocol. */
+    speechGeneration?: boolean
+    speechTranscription?: boolean
     embedding?: boolean
   }
   /** 嵌入模型的向量维度（默认/原生）。 */
@@ -1035,8 +1038,6 @@ export type DefaultModelsConfig = {
   videoAnalysis: DefaultModelSelection
   titleSummary: DefaultModelSelection
   compression: DefaultModelSelection
-  imageGeneration: DefaultModelSelection
-  videoGeneration: DefaultModelSelection
   promptOptimize: DefaultModelSelection
   advisor: DefaultModelSelection
 }
@@ -1835,6 +1836,7 @@ export const api = {
     invoke<VoiceReference>('register_media_voice', { providerId, model, voiceId, consentAttestation }),
   checkMediaSpeechConnection: (providerId: string, model: string) =>
     invoke<{ configured: boolean; authenticated: boolean; speechAuthorization: 'notVerified'; message: string }>('check_media_speech_connection', { providerId, model }),
+  listLocalSpeechVoices: () => invoke<string[]>('list_local_speech_voices'),
   getLocalAsrStatus: () => invoke<LocalAsrStatus>('get_local_asr_status'),
   installLocalAsr: (config: LocalAsrConfig) => invoke<LocalAsrStatus>('install_local_asr', { config }),
   cancelLocalAsrInstall: (operationId: string) => invoke<LocalAsrStatus>('cancel_local_asr_install', { operationId }),

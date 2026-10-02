@@ -1,4 +1,4 @@
-import { isVideoGenerationModel } from '../data/videoModels'
+import { isNonChatModel } from '../data/speechModels'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Layers } from 'lucide-react'
 import { type ModelProvider } from '../api/tauri'
@@ -66,7 +66,7 @@ function MultiModelSelectorBase({ value, onChange, placement = 'up' }: MultiMode
       activeProviders
         .map((provider) => ({
           provider,
-          models: (provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels).filter(model => !isVideoGenerationModel(model, provider)),
+          models: (provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels).filter(model => !isNonChatModel(model, provider)),
         }))
         .filter((entry) => entry.models.length > 0),
     [activeProviders],

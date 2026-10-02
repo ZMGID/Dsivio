@@ -64,7 +64,7 @@ enum Op {
     Lookup { source: String, idempotency_key: String },
     Cancel { id: String },
     Asrstatus,
-    Asrinstall { model: String, languages: Vec<String> },
+    Asrinstall { model: Option<String>, languages: Vec<String> },
     Asrstop,
 }
 
@@ -240,11 +240,14 @@ async fn dispatch(app: &tauri::AppHandle, op: Op) -> Reply {
             }
         }
         Op::Asrstatus => match super::local_asr::status().await {
-            Ok(result) => Reply::ok(json!(result)),
+            Ok(result) => Reply::ok(asr_status_reply(json!(result), &configured_local_asr(app))),
             Err(error) => Reply::err(ErrorCode::Invalid, error),
         },
         Op::Asrinstall { model, languages } => {
-            let config = crate::settings::LocalAsrConfig { model, languages, auto_install: true };
+            let config = match asr_install_config(&configured_local_asr(app), model, languages) {
+                Ok(config) => config,
+                Err(error) => return Reply::err(ErrorCode::Invalid, error),
+            };
             match super::local_asr::install(config).await {
                 Ok(result) => Reply::ok(json!(result)),
                 Err(error) => Reply::err(ErrorCode::Invalid, error),
@@ -285,6 +288,63 @@ async fn dispatch(app: &tauri::AppHandle, op: Op) -> Reply {
             Err(error) => Reply::err(ErrorCode::Invalid, error),
         },
     }
+}
+
+fn configured_local_asr(app: &tauri::AppHandle) -> crate::settings::LocalAsrConfig {
+    use tauri::Manager;
+    app.state::<crate::state::AppState>().settings_read().workbench_media.local_asr.clone()
+}
+
+fn same_languages(a: &[String], b: &[String]) -> bool {
+    let set = |items: &[String]| items.iter().cloned().collect::<std::collections::BTreeSet<_>>();
+    set(a) == set(b)
+}
+
+/// Transcription always checks the Settings configuration, so installing anything else would
+/// download several GB that the first transcription then replaces. Flags may only restate it.
+fn asr_install_config(
+    configured: &crate::settings::LocalAsrConfig,
+    model: Option<String>,
+    languages: Vec<String>,
+) -> Result<crate::settings::LocalAsrConfig, String> {
+    let model_differs = model.as_deref().is_some_and(|model| model != configured.model);
+    if model_differs || !languages.is_empty() && !same_languages(&languages, &configured.languages) {
+        return Err(format!(
+            "转写按「设置 > 媒体创作 > 转写」安装（模型 {}，语言 {}）；要改语言请先在设置里修改，再不带参数运行 asr install",
+            configured.model,
+            configured.languages.join("、")
+        ));
+    }
+    Ok(configured.clone())
+}
+
+/// Measured on macOS: ~1.5 GB shared environment plus 0.4–1.3 GB per language; reruns resume.
+const ASR_DOWNLOAD_ESTIMATE: &str = "约 2–5 GB，视语言而定，中断后重试会续传";
+
+/// Adds what the App will actually do, so callers do not mistake "not installed" for "unavailable".
+fn asr_status_reply(mut status: Value, configured: &crate::settings::LocalAsrConfig) -> Value {
+    let state = status["state"].as_str().unwrap_or_default().to_owned();
+    let installed: Vec<String> = serde_json::from_value(status["languages"].clone()).unwrap_or_default();
+    let note = match state.as_str() {
+        "installing" => None,
+        "ready" if same_languages(&installed, &configured.languages) => None,
+        "ready" if configured.auto_install => Some(format!(
+            "设置中的语言已改为 {}，下次 transcribe 会按设置重新安装（下载{ASR_DOWNLOAD_ESTIMATE}）",
+            configured.languages.join("、")
+        )),
+        "ready" => Some("设置中的语言已变更，需先运行 dsivio media asr install 重新安装".to_owned()),
+        _ if configured.auto_install => Some(format!(
+            "可直接使用：首次 dsivio media transcribe 会自动安装（下载{ASR_DOWNLOAD_ESTIMATE}，耗时较长），之后离线运行"
+        )),
+        _ => Some(format!(
+            "未开启自动安装：先运行 dsivio media asr install（下载{ASR_DOWNLOAD_ESTIMATE}）"
+        )),
+    };
+    status["settings"] = json!(configured);
+    if let Some(note) = note {
+        status["note"] = json!(note);
+    }
+    status
 }
 
 /// Idempotent submissions are serialized so two calls with one key cannot both reach a vendor.
@@ -390,7 +450,7 @@ fn capabilities_of(
     }
 }
 
-fn pool<'a>(
+pub(super) fn pool<'a>(
     settings: &'a crate::settings::Settings,
     kind: &MediaKind,
 ) -> &'a [crate::settings::DefaultModelSelection] {
@@ -404,13 +464,13 @@ fn pool<'a>(
 
 /// A pool member can be submitted right now: its provider is enabled and still lists the model.
 /// This is the rule `start` enforces, so the default never points at something that would be refused.
-fn usable(
+pub(super) fn usable(
     settings: &crate::settings::Settings,
     entry: &crate::settings::DefaultModelSelection,
     kind: &MediaKind,
 ) -> bool {
     if entry.provider_id == "local" {
-        return *kind == MediaKind::Transcribe && entry.model == "whisperx-small";
+        return (*kind == MediaKind::Transcribe && entry.model == "whisperx-small") || (*kind == MediaKind::Speech && entry.model == super::local_tts::MODEL && super::local_tts::available());
     }
     settings.providers.iter().any(|p| {
         p.id == entry.provider_id && p.enabled && p.enabled_models.contains(&entry.model)
@@ -422,25 +482,30 @@ fn usable(
     })
 }
 
+fn members(settings: &crate::settings::Settings, kind: &MediaKind) -> Vec<crate::settings::DefaultModelSelection> {
+    let mut members: Vec<_> = pool(settings,kind).iter().filter(|entry|usable(settings,entry,kind)).cloned().collect();
+    if *kind == MediaKind::Speech && super::local_tts::available() && !members.iter().any(|m|m.provider_id == "local" && m.model == super::local_tts::MODEL) {
+        members.push(crate::settings::DefaultModelSelection {provider_id:"local".into(),model:super::local_tts::MODEL.into()});
+    }
+    members
+}
+
 fn list_models(settings: &crate::settings::Settings, kind: Option<&MediaKind>) -> Vec<ModelEntry> {
     let kinds = match kind {
         Some(kind) => vec![kind.clone()],
         None => vec![MediaKind::Image, MediaKind::Video, MediaKind::Speech, MediaKind::Transcribe],
     };
-    let local = (kinds.contains(&MediaKind::Transcribe)
-        && settings.workbench_media.transcribe_models.iter().any(|entry| entry.provider_id == "local"))
-        .then(super::local_provider);
+    let local = super::local_provider();
     kinds
         .into_iter()
         .flat_map(|kind| {
-            pool(settings, &kind)
-                .iter()
-                .filter(|entry| usable(settings, entry, &kind))
+            members(settings, &kind)
+                .into_iter()
                 .enumerate()
                 .map(|(index, entry)| {
                     let capabilities =
                         capabilities_of(settings, &kind, &entry.provider_id, &entry.model);
-                    let provider = if entry.provider_id == "local" { local.as_ref().expect("local transcribe provider") } else { settings.get_provider(&entry.provider_id).expect("usable provider") };
+                    let provider = if entry.provider_id == "local" { &local } else { settings.get_provider(&entry.provider_id).expect("usable provider") };
                     let description = super::model_parameters::describe(provider, &entry.model, &kind);
                     let known = match kind {
                         MediaKind::Image => description.arguments.contains_key("n"),
@@ -464,7 +529,7 @@ fn list_models(settings: &crate::settings::Settings, kind: Option<&MediaKind>) -
         .collect()
 }
 
-/// Only models enabled under 设置 > 媒体创作 are usable. No model means the pool's first entry.
+/// Cloud models use the media pool; installed system TTS is an explicit local capability.
 fn resolve_model(
     settings: &crate::settings::Settings,
     kind: &MediaKind,
@@ -476,11 +541,7 @@ fn resolve_model(
         MediaKind::Speech => "语音",
         MediaKind::Transcribe => "转写",
     };
-    let members: Vec<_> = pool(settings, kind)
-        .iter()
-        .filter(|entry| usable(settings, entry, kind))
-        .cloned()
-        .collect();
+    let members = members(settings, kind);
     let first = members.first().ok_or_else(|| {
         if pool(settings, kind).is_empty() {
             format!("媒体创作里没有开启{label}模型，请先到「设置 > 媒体创作」打开")
@@ -628,7 +689,7 @@ dsivio media —— 用 Dsivio「设置 > 媒体创作」里的模型生成图�
   dsivio media transcribe <标准WAV> --language <语言> [--model local/whisperx-small|供应商/模型]
                       [--sample-frames <正安全整数>] [--timestamps word|segment]
   dsivio media asr status [--json]
-  dsivio media asr install [--model small] [--language en] [--language zh] [--json]
+  dsivio media asr install [--json]     按「设置 > 媒体创作 > 转写」的模型与语言安装
   dsivio media asr stop [--json]
   dsivio media cancel <任务ID> [--timeout <秒，默认30>] [--json]
   dsivio media status <任务ID> [--resume]
@@ -649,6 +710,7 @@ image / video / speech / transcribe 通用：
 stdout 只输出 JSON。退出码：0 成功，2 参数错误/模型未开启（未提交），3 服务拒绝（未扣费），
 4 提交后失败，5 提交结果不确定（不要重交，用 status 查询），6 Dsivio 未运行，7 已取消，124 等待超时。
 cancel 成功交互退出0，请读取 outcome；asr install 退出0只表示安装已受理，不表示ready。
+transcribe 必须指定 --language，且该语言已在转写设置中勾选；本地转写首次下载约 2–5 GB（视语言而定），中断后重试会续传。
 ";
 
 struct Args {
@@ -1316,10 +1378,8 @@ fn run_command(argv: Vec<String>) -> Result<u8, Failure> {
                 "stop" => { args.only(&[]).map_err(Failure::invalid)?; Op::Asrstop }
                 "install" => {
                     args.only(&["model", "language"]).map_err(Failure::invalid)?;
-                    let model = args.one("model").map_err(Failure::invalid)?.unwrap_or("small").to_owned();
-                    let mut languages = args.many("language");
-                    if languages.is_empty() { languages = vec!["en".into(), "zh".into()]; }
-                    Op::Asrinstall { model, languages }
+                    let model = args.one("model").map_err(Failure::invalid)?.map(str::to_owned);
+                    Op::Asrinstall { model, languages: args.many("language") }
                 }
                 _ => return Err(Failure::invalid("需要 asr status/install/stop")),
             };
@@ -2070,6 +2130,46 @@ mod tests {
                 "#!/bin/sh\nexec '/Applications/it'\\''s here/dsivio' \"$@\"\n"
             );
         }
+    }
+
+    fn local_asr(languages: &[&str], auto_install: bool) -> crate::settings::LocalAsrConfig {
+        crate::settings::LocalAsrConfig {
+            model: "small".into(),
+            languages: languages.iter().map(|l| l.to_string()).collect(),
+            auto_install,
+        }
+    }
+
+    #[test]
+    fn asr_install_uses_the_configuration_transcription_will_check() {
+        let configured = local_asr(&["zh", "en", "pt"], true);
+        // Bare `asr install` used to install en+zh, which transcription then rejected and reinstalled.
+        assert_eq!(asr_install_config(&configured, None, vec![]).unwrap(), configured);
+        assert_eq!(
+            asr_install_config(&configured, Some("small".into()), vec!["pt".into(), "en".into(), "zh".into()]).unwrap(),
+            configured
+        );
+        let error = asr_install_config(&configured, None, vec!["en".into(), "zh".into()]).unwrap_err();
+        assert!(error.contains("设置 > 媒体创作 > 转写") && error.contains("zh"), "{error}");
+        assert!(asr_install_config(&configured, Some("large".into()), vec![]).is_err());
+    }
+
+    #[test]
+    fn asr_status_reports_settings_and_what_the_first_transcription_will_do() {
+        let status = |state: &str, languages: &[&str]| json!({"state": state, "languages": languages});
+        let automatic = asr_status_reply(status("notInstalled", &["en", "zh"]), &local_asr(&["zh", "en", "pt"], true));
+        assert_eq!(automatic["settings"], json!({"model": "small", "languages": ["zh", "en", "pt"], "autoInstall": true}));
+        let note = automatic["note"].as_str().unwrap();
+        assert!(note.contains("自动安装") && note.contains("GB"), "{note}");
+
+        let manual = asr_status_reply(status("notInstalled", &["en", "zh"]), &local_asr(&["zh"], false));
+        assert!(manual["note"].as_str().unwrap().contains("asr install"));
+
+        let changed = asr_status_reply(status("ready", &["en", "zh"]), &local_asr(&["zh", "en", "pt"], true));
+        assert!(changed["note"].as_str().unwrap().contains("重新安装"));
+
+        let ready = asr_status_reply(status("ready", &["zh", "en"]), &local_asr(&["en", "zh"], true));
+        assert!(ready.get("note").is_none());
     }
 
 }

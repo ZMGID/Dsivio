@@ -68,8 +68,6 @@ export function makeSettings(overrides: Omit<Partial<SettingsData>, 'workbenchMe
       videoAnalysis: { providerId: '', model: '' },
       titleSummary: { providerId: '', model: '' },
       compression: { providerId: '', model: '' },
-      imageGeneration: { providerId: '', model: '' },
-      videoGeneration: { providerId: '', model: '' },
       promptOptimize: { providerId: '', model: '' },
       advisor: { providerId: '', model: '' },
     },

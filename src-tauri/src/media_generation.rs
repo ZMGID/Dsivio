@@ -10,6 +10,7 @@ pub mod model_parameters;
 pub mod speech_providers;
 pub mod voices;
 pub mod local_asr;
+pub mod local_tts;
 pub mod transcribe_providers;
 mod request_evidence;
 use base64::Engine;
@@ -829,7 +830,7 @@ pub(crate) async fn start_configured(
         pool.iter()
             .any(|m| m.provider_id == request.provider_id && m.model == request.model)
     };
-    if !allowed {
+    if !allowed && !(request.kind == MediaKind::Speech && request.provider_id == "local" && request.model == local_tts::MODEL && local_tts::available()) {
         return Err("请先把模型加入媒体创作模型池".into());
     }
     start(app, request).await
@@ -840,8 +841,8 @@ pub fn request_hash(request: &MediaRequest) -> Result<String, String> {
 }
 
 pub fn local_provider() -> ModelProvider {
-    serde_json::from_value(json!({"id":"local","name":"本地 WhisperX","baseUrl":"","enabled":true,
-        "availableModels":["whisperx-small"],"enabledModels":["whisperx-small"],"apiKeys":[]})).expect("local model provider")
+    serde_json::from_value(json!({"id":"local","name":"系统本地媒体","baseUrl":"","enabled":true,
+        "availableModels":["whisperx-small","system-tts"],"enabledModels":["whisperx-small","system-tts"],"apiKeys":[]})).expect("local model provider")
 }
 
 pub(crate) fn transcribe_configured(provider: &ModelProvider, model: &str) -> bool {
@@ -916,7 +917,7 @@ enum AudioWork {
 async fn start_audio_task(app: &AppHandle, mut request: MediaRequest) -> Result<MediaTask, String> {
     if !request.prompt.is_empty() || !request.images.is_empty() { return Err("语音/转写只接收 options 中声明的输入".into()); }
     let state = app.state::<AppState>();
-    let provider = if request.provider_id == "local" && request.kind == MediaKind::Transcribe { local_provider() } else { provider(&state, &request.provider_id)? };
+    let provider = if request.provider_id == "local" && matches!(request.kind, MediaKind::Transcribe | MediaKind::Speech) { local_provider() } else { provider(&state, &request.provider_id)? };
     if !provider.enabled_models.contains(&request.model) { return Err("模型尚未启用".into()); }
     let original = request.clone();
     request.options = model_parameters::validate_and_resolve(&provider, &request.model, &request.kind, request.options, request.description_revision.as_deref())?;
@@ -946,10 +947,10 @@ async fn start_audio_task(app: &AppHandle, mut request: MediaRequest) -> Result<
         let config = state.settings_read().workbench_media.local_asr.clone();
         AudioWork::Transcribe(input, config)
     };
-    let protocol = if request.kind == MediaKind::Speech {
+    let protocol = if request.kind == MediaKind::Speech && provider.id == "local" { "system_tts" } else if request.kind == MediaKind::Speech {
         provider.model_overrides.get(&request.model).and_then(|m|m.speech_protocol.as_deref()).ok_or("缺少语音协议")?
     } else if provider.id == "local" { "whisperx" } else { "openai_transcribe" };
-    let base_url = if request.kind == MediaKind::Speech {
+    let base_url = if provider.id == "local" { String::new() } else if request.kind == MediaKind::Speech {
         provider.model_overrides.get(&request.model).and_then(|m|m.speech_base_url.clone()).ok_or("缺少语音产品地址")?
     } else if provider.id == "local" {String::new()} else {
         provider.model_overrides.get(&request.model).and_then(|m|m.transcribe_base_url.clone()).ok_or("缺少转写产品地址")?
@@ -970,7 +971,8 @@ fn spawn_audio_task(root: PathBuf, data: PathBuf, provider: ModelProvider, mut s
     tauri::async_runtime::spawn(async move {
         let _guard = guard;
         let id = saved.task.id.clone();
-        let local = saved.protocol == "whisperx";
+        let local_asr_task = saved.protocol == "whisperx";
+        let local = local_asr_task || saved.protocol == "system_tts";
         let phase = if local { ControlPhase::Local } else { ControlPhase::Pending };
         let control = CONTROLS.lock().get(&id).map(|c|(c.cancel.clone(),c.finished.clone()));
         let Some((cancel, finished)) = control else { return; };
@@ -1016,7 +1018,7 @@ fn spawn_audio_task(root: PathBuf, data: PathBuf, provider: ModelProvider, mut s
                 tokio::select! {
                     biased;
                     _ = cancel.notified() => {
-                        local_asr::cancel(&id).await?;
+                        if local_asr_task { local_asr::cancel(&id).await?; }
                         Ok(())
                     },
                     result = &mut future => result,
@@ -1026,7 +1028,7 @@ fn spawn_audio_task(root: PathBuf, data: PathBuf, provider: ModelProvider, mut s
         if let Err(error) = result {
             if let Ok(mut current) = read(&root,&id) {
                 record_background_error(&mut current,error);
-                if current.task.kind == MediaKind::Speech && speech_providers::is_resumable(&directory(&root,&id).unwrap_or_default()) {
+                if !local && current.task.kind == MediaKind::Speech && speech_providers::is_resumable(&directory(&root,&id).unwrap_or_default()) {
                     current.task.status = MediaStatus::Failed;
                     current.task.can_resume = true;
                 } else if !local && current.task.submission_state.is_none() { current.task.submission_state = Some(MediaSubmissionState::Uncertain); }
@@ -1115,6 +1117,10 @@ pub fn register_media_voice(app:AppHandle,provider_id:String,model:String,voice_
 pub async fn check_media_speech_connection(app:AppHandle,provider_id:String,model:String)->Result<Value,String> {
     let provider = provider(&app.state::<AppState>(),&provider_id)?;
     speech_providers::connection_check(&provider,&model).await
+}
+#[tauri::command]
+pub async fn list_local_speech_voices() -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(local_tts::voices).await.map_err(|error| error.to_string())
 }
 #[tauri::command]
 pub async fn get_local_asr_status()->Result<local_asr::LocalAsrStatus,String> {local_asr::status().await}
@@ -1615,6 +1621,15 @@ pub fn get_media_task(
 }
 // Caller holds the task claim. Recovery never repeats an uncertain or completed paid POST.
 fn recover_task(root: &Path, saved: &mut StoredTask, resume: bool) -> Result<(), String> {
+    if saved.protocol == "system_tts" && !matches!(saved.task.status, MediaStatus::Succeeded | MediaStatus::Cancelled) {
+        if saved.task.status == MediaStatus::Running {
+            saved.task.status = MediaStatus::Failed;
+            saved.task.error = Some("本地配音执行已中断，可重新生成；未调用云服务".into());
+        }
+        saved.task.can_resume = false;
+        save(root,saved)?;
+        return Ok(());
+    }
     if saved.task.kind == MediaKind::Speech && saved.task.status != MediaStatus::Succeeded && saved.task.status != MediaStatus::Cancelled {
         let can_resume = speech_providers::is_resumable(&directory(root,&saved.task.id)?);
         saved.task.can_resume = can_resume;
@@ -1727,6 +1742,16 @@ pub(crate) async fn wait(
     }
 }
 
+/// Chat tools take the first usable pool member they can drive. ComfyUI workflows are skipped:
+/// their inputs are user-defined bindings, not the chat tool's prompt/size schema.
+pub(crate) fn chat_model(settings: &crate::settings::Settings, kind: &MediaKind) -> Option<(String, String)> {
+    cli::pool(settings, kind)
+        .iter()
+        .filter(|entry| cli::usable(settings, entry, kind))
+        .find(|entry| settings.get_provider(&entry.provider_id).is_some_and(|p| p.request.comfy.is_none()))
+        .map(|entry| (entry.provider_id.clone(), entry.model.clone()))
+}
+
 pub(crate) async fn tool_call(
     app: &AppHandle,
     name: &str,
@@ -1747,15 +1772,8 @@ pub(crate) async fn tool_call(
             .await?,
         ));
     }
-    let selection = app
-        .state::<AppState>()
-        .settings_read()
-        .default_models
-        .video_generation
-        .clone();
-    if selection.provider_id.is_empty() {
-        return Err("请在模型分工中配置对话视频模型".into());
-    }
+    let (provider_id, model) = chat_model(&app.state::<AppState>().settings_read(), &MediaKind::Video)
+        .ok_or("请先在「设置 > 媒体创作」的视频模型池开启模型")?;
     let mut options: BTreeMap<String, Value> =
         serde_json::from_value(args).map_err(|e| e.to_string())?;
     let prompt = options
@@ -1765,8 +1783,8 @@ pub(crate) async fn tool_call(
     let task = start(
         app,
         MediaRequest {
-            provider_id: selection.provider_id,
-            model: selection.model,
+            provider_id,
+            model,
             kind: MediaKind::Video,
             prompt,
             images: vec![],

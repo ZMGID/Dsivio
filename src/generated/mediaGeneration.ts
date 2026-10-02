@@ -41,7 +41,7 @@ export type VoiceReference = { id: string, providerId: string, voiceId: string, 
 
 export type RuntimeStatus = { state: string, pid: number | null, activeTaskId: string | null, };
 
-export type LocalAsrProgress = { stage: string, message: string, };
+export type LocalAsrProgress = { stage: string, message: string, downloadedBytes: number | null, };
 
 export type LocalAsrStatus = { operationId: string | null, state: string, installationId: string | null, serviceVersion: string, model: string, languages: Array<string>, progress: LocalAsrProgress | null, error: string | null, runtime: RuntimeStatus, };
 

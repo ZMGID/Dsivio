@@ -4,6 +4,13 @@ import { isVideoGenerationModel } from './videoModels'
 import { isSpeechModelConfigured, LOCAL_TRANSCRIBE_MODEL } from './speechModels'
 
 export type MediaPoolKind = 'imageModels' | 'videoModels' | 'speechModels' | 'transcribeModels'
+export const MEDIA_KINDS = ['imageModels', 'videoModels', 'speechModels', 'transcribeModels'] as const
+export const MEDIA_KIND_LABEL: Record<MediaPoolKind, { zh: string; en: string }> = {
+  imageModels: { zh: '图片', en: 'Image' },
+  videoModels: { zh: '视频', en: 'Video' },
+  speechModels: { zh: '语音', en: 'Speech' },
+  transcribeModels: { zh: '转写', en: 'Transcription' },
+}
 export function mediaModelKey(selection: DefaultModelSelection): string {
   return JSON.stringify([selection.providerId, selection.model])
 }
@@ -40,6 +47,6 @@ export function removeMediaPoolEntries(config: WorkbenchMediaConfig, providerId:
     videoModels: (config?.videoModels ?? []).filter(keep),
     speechModels: (config?.speechModels ?? []).filter(keep),
     transcribeModels: (config?.transcribeModels ?? []).filter(keep),
-    localAsr: config.localAsr,
+    localAsr: config?.localAsr,
   }
 }

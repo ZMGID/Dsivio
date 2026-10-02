@@ -1,4 +1,4 @@
-//! Chat entry for image generation: resolve the conversation's image model, collect reference
+//! Chat entry for image generation: take the image pool's default model, collect reference
 //! images from the conversation, then hand the request to `media_generation`.
 use std::path::{Path, PathBuf};
 
@@ -26,15 +26,9 @@ pub async fn tool_generate_image(
     let drafts = conversation_id
         .map(|conversation_id| crate::chat::draft_journal::latest_drafts_for(app, conversation_id))
         .unwrap_or_default();
-    let session_ref = conversation
-        .as_ref()
-        .map(|conversation| crate::settings::SessionModel {
-            provider_id: conversation.provider_id.as_str(),
-            model: conversation.model.as_str(),
-        });
     let (provider_id, model) =
-        crate::chat::model_metadata::image_generation_model_for_session(&settings, session_ref)
-            .ok_or_else(|| "Mixer image generation model is not configured".to_string())?;
+        crate::media_generation::chat_model(&settings, &crate::media_generation::MediaKind::Image)
+            .ok_or("请先在「设置 > 媒体创作」的图片模型池开启模型")?;
     let provider = settings
         .get_provider(&provider_id)
         .cloned()

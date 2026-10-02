@@ -530,6 +530,7 @@ pub fn run() {
             media_generation::delete_media_voice,
             media_generation::register_media_voice,
             media_generation::check_media_speech_connection,
+            media_generation::list_local_speech_voices,
             media_generation::get_local_asr_status,
             media_generation::install_local_asr,
             media_generation::stop_local_asr,

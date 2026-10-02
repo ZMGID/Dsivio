@@ -1,4 +1,4 @@
-import { isVideoGenerationModel } from '../data/videoModels'
+import { isNonChatModel } from '../data/speechModels'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Star } from 'lucide-react'
 import { type ModelProvider } from '../api/tauri'
@@ -76,7 +76,7 @@ function ModelSelectorBase({
   const visibleProviders = activeProviders
     .map((provider) => ({
       provider,
-      models: (provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels).filter(model => !isVideoGenerationModel(model, provider)),
+      models: (provider.enabledModels.length > 0 ? provider.enabledModels : provider.availableModels).filter(model => !isNonChatModel(model, provider)),
     }))
     .filter((entry) => entry.models.length > 0)
   const currentProvider = activeProviders.find((p) => p.id === currentProviderId)

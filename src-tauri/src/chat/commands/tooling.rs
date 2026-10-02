@@ -2,7 +2,7 @@ use tauri::AppHandle;
 
 use crate::chat::agent::prepare as agent_prepare;
 use crate::mcp::{self, ChatToolDefinition};
-use crate::settings::{SessionModel, Settings};
+use crate::settings::Settings;
 use crate::skills;
 use crate::state::AppState;
 
@@ -170,42 +170,20 @@ pub(crate) async fn list_tools_for_chat(
     app: &AppHandle,
     state: &AppState,
     settings: &Settings,
-    session: Option<SessionModel<'_>>,
     allowed_mcp_server_ids: Option<&[String]>,
 ) -> ChatToolList {
     if !(settings.chat_tools.enabled
         || crate::settings::chat_native_tools_enabled(&settings.chat_tools)
         || crate::settings::chat_memory_tools_enabled(settings)
-        || crate::settings::chat_image_generation_enabled_for_session(settings, session)
-        || settings.default_models.video_generation.is_configured()
+        || crate::settings::chat_media_generation_enabled(settings)
         || settings.advisor_model().is_some())
     {
         return ChatToolList::default();
     }
     let catalog =
         mcp::registry::list_enabled_tool_catalog_for_run(app, state, allowed_mcp_server_ids).await;
-    let mut tools = catalog.tools;
-    if let Some((provider_id, model)) =
-        crate::chat::model_metadata::image_generation_model_for_session(settings, session)
-    {
-        if !tools.iter().any(|tool| tool.name == "mixer_generate_image") {
-            let mut tool = mcp::types::mixer_generate_image_tool_for(Some(&model));
-            let provider_name = settings
-                .get_provider(&provider_id)
-                .map(|provider| {
-                    if provider.name.trim().is_empty() {
-                        provider.id.clone()
-                    } else {
-                        provider.name.clone()
-                    }
-                })
-                .unwrap_or(provider_id);
-            tool.server_id = Some(format!("{provider_name} / {model}"));
-            tools.push(tool);
-        }
-    }
     ChatToolList {
-        tools,
+        tools: catalog.tools,
         unavailable_mcp_servers: catalog.unavailable_mcp_servers,
     }
 }

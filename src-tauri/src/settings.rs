@@ -434,6 +434,10 @@ pub struct ModelCapabilities {
     pub web_search: Option<bool>,
     pub image_generation: Option<bool>,
     pub video_generation: Option<bool>,
+    /// Text-to-speech and cloud transcription are display tags only. Whether a model is
+    /// usable is decided by its explicit speech/transcribe protocol, never by these.
+    pub speech_generation: Option<bool>,
+    pub speech_transcription: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1148,6 +1152,35 @@ impl Default for WorkbenchMediaConfig {
     }
 }
 
+/// Chat used to pick its own image/video model under 模型分工. Those choices join the end of the
+/// matching media pool, so the pool order (and the Workbench default) stays as the user set it.
+fn migrate_chat_media_models(settings: &mut Settings) {
+    let image = std::mem::take(&mut settings.default_models.legacy_image_generation);
+    let video = std::mem::take(&mut settings.default_models.legacy_video_generation);
+    for (selection, is_video) in [(image, false), (video, true)] {
+        let provider_id = selection.provider_id.trim();
+        let model = selection.model.trim();
+        let Some(provider) = settings.providers.iter().find(|p| p.id == provider_id) else {
+            continue;
+        };
+        let capable = provider.request.comfy.is_none()
+            && provider.enabled_models.iter().any(|m| m == model)
+            && if is_video {
+                crate::media_generation::video_providers::is_video_model(provider, model)
+            } else {
+                crate::chat::model_metadata::model_can_generate_images_directly(provider, model)
+            };
+        let pool = if is_video {
+            &mut settings.workbench_media.video_models
+        } else {
+            &mut settings.workbench_media.image_models
+        };
+        if capable && !pool.iter().any(|m| m.provider_id.trim() == provider_id && m.model.trim() == model) {
+            pool.push(DefaultModelSelection { provider_id: provider_id.into(), model: model.into() });
+        }
+    }
+}
+
 fn sanitize_workbench_media(config: &mut WorkbenchMediaConfig, providers: &[ModelProvider]) {
     for pool in [&mut config.image_models, &mut config.video_models, &mut config.speech_models] {
         let mut seen = std::collections::HashSet::new();
@@ -1230,7 +1263,6 @@ fn resolve_mixer_side_model(
  * vision：图片附件分析副任务使用；为空时继承当前会话主模型（无会话时回退有效 Chat 默认）。
  * title_summary：标题总结副任务使用；为空时继承当前会话主模型（无会话时回退有效 Chat 默认）。
  * compression：上下文/历史对话压缩副任务使用；为空时继承当前会话主模型（无会话时回退有效 Chat 默认）。
- * image_generation：生图副任务使用；为空时若当前会话主模型支持直接生图则继承该模型。
  * prompt_optimize：输入框问题优化副任务使用；为空时继承当前会话主模型。
  * advisor：顾问模型（executor-advisor 模式）——主循环模型可用 `advisor` 工具向它
  *   单次咨询；为空 = 功能关闭（工具不注册），没有继承语义。
@@ -1250,13 +1282,15 @@ pub struct DefaultModelsConfig {
     #[serde(default)]
     pub compression: DefaultModelSelection,
     #[serde(default)]
-    pub image_generation: DefaultModelSelection,
-    #[serde(default)]
-    pub video_generation: DefaultModelSelection,
-    #[serde(default)]
     pub prompt_optimize: DefaultModelSelection,
     #[serde(default)]
     pub advisor: DefaultModelSelection,
+    /// Read-only: chat image/video models from before they moved into the media pools.
+    /// `sanitize_settings` moves them into `workbench_media`; they are never written back.
+    #[serde(rename = "imageGeneration", skip_serializing)]
+    pub legacy_image_generation: DefaultModelSelection,
+    #[serde(rename = "videoGeneration", skip_serializing)]
+    pub legacy_video_generation: DefaultModelSelection,
 }
 
 impl Default for DefaultModelsConfig {
@@ -1267,10 +1301,10 @@ impl Default for DefaultModelsConfig {
             video_analysis: DefaultModelSelection::default(),
             title_summary: DefaultModelSelection::default(),
             compression: DefaultModelSelection::default(),
-            image_generation: DefaultModelSelection::default(),
-            video_generation: DefaultModelSelection::default(),
             prompt_optimize: DefaultModelSelection::default(),
             advisor: DefaultModelSelection::default(),
+            legacy_image_generation: DefaultModelSelection::default(),
+            legacy_video_generation: DefaultModelSelection::default(),
         }
     }
 }
@@ -2012,19 +2046,6 @@ impl Settings {
         resolve_mixer_side_model(&self.default_models.prompt_optimize, session, self)
     }
 
-    pub fn image_generation_model(&self) -> Option<(String, String)> {
-        if self.default_models.image_generation.is_configured()
-            && !self.default_models.image_generation.model.trim().is_empty()
-        {
-            Some((
-                self.default_models.image_generation.provider_id.clone(),
-                self.default_models.image_generation.model.clone(),
-            ))
-        } else {
-            None
-        }
-    }
-
     /// Advisor model (executor-advisor pattern): the `advisor` tool is exposed
     /// only when both provider and model are set. No inheritance — blank = off.
     pub fn advisor_model(&self) -> Option<(String, String)> {
@@ -2132,11 +2153,10 @@ pub fn chat_memory_tools_enabled(settings: &Settings) -> bool {
     settings.chat_memory.enabled
 }
 
-pub fn chat_image_generation_enabled_for_session(
-    settings: &Settings,
-    session: Option<SessionModel<'_>>,
-) -> bool {
-    crate::chat::model_metadata::image_generation_model_for_session(settings, session).is_some()
+/// Chat generation tools exist only when the media pools have a usable image or video model.
+pub fn chat_media_generation_enabled(settings: &Settings) -> bool {
+    use crate::media_generation::{chat_model, MediaKind};
+    chat_model(settings, &MediaKind::Image).is_some() || chat_model(settings, &MediaKind::Video).is_some()
 }
 
 pub fn is_skill_enabled(chat_tools: &ChatToolsConfig, skill_id: &str) -> bool {
@@ -2454,7 +2474,6 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             &mut settings.default_models.video_analysis,
             &mut settings.default_models.title_summary,
             &mut settings.default_models.compression,
-            &mut settings.default_models.image_generation,
             &mut settings.default_models.prompt_optimize,
         ] {
             if removed_legacy_local_provider_ids.contains(&selection.provider_id) {
@@ -2554,28 +2573,14 @@ pub fn sanitize_settings(mut settings: Settings) -> Settings {
             &settings.providers,
         );
         sanitize_default_model_selection(
-            &mut settings.default_models.image_generation,
-            &settings.providers,
-        );
-        sanitize_default_model_selection(
             &mut settings.default_models.prompt_optimize,
             &settings.providers,
         );
         sanitize_default_model_selection(&mut settings.default_models.advisor, &settings.providers);
     }
 
+    migrate_chat_media_models(&mut settings);
     sanitize_workbench_media(&mut settings.workbench_media, &settings.providers);
-
-    // Video selection is explicit: never repair it to the first (possibly chat) model.
-    let video = &mut settings.default_models.video_generation;
-    video.provider_id = video.provider_id.trim().to_string();
-    video.model = video.model.trim().to_string();
-    if !settings.providers.iter().any(|p| p.id == video.provider_id && p.enabled
-        && p.enabled_models.contains(&video.model)
-        && crate::media_generation::video_providers::is_video_model(p, &video.model))
-    {
-        *video = DefaultModelSelection::default();
-    }
 
     // 3. 确保当前使用的模型确实在该 provider 的 enabled_models 中。
     // enabled_models 可以为空：预设 provider 不再自带模型。
@@ -4090,8 +4095,6 @@ mod tests {
         s.default_models.title_summary.model = "apple-foundation".to_string();
         s.default_models.compression.provider_id = "apple".to_string();
         s.default_models.compression.model = "apple-foundation".to_string();
-        s.default_models.image_generation.provider_id = "apple".to_string();
-        s.default_models.image_generation.model = "apple-foundation".to_string();
 
         let s = sanitize_settings(s);
         assert!(s.providers.iter().all(|provider| provider.id != "apple"));
@@ -4106,7 +4109,6 @@ mod tests {
         assert_eq!(s.default_models.vision.provider_id, "cloud");
         assert_eq!(s.default_models.title_summary.provider_id, "cloud");
         assert_eq!(s.default_models.compression.provider_id, "cloud");
-        assert_eq!(s.default_models.image_generation.provider_id, "cloud");
     }
 
     #[test]
@@ -4720,11 +4722,9 @@ mod tests {
             s.effective_prompt_optimize_model_for_session(None),
             s.effective_chat_model()
         );
-        assert!(s.image_generation_model().is_none());
         assert!(s.default_models.vision.provider_id.is_empty());
         assert!(s.default_models.title_summary.provider_id.is_empty());
         assert!(s.default_models.compression.provider_id.is_empty());
-        assert!(s.default_models.image_generation.provider_id.is_empty());
     }
 
     #[test]
@@ -4902,8 +4902,6 @@ mod tests {
         s.default_models.title_summary.model = "title-model".to_string();
         s.default_models.compression.provider_id = "compression".to_string();
         s.default_models.compression.model = "compression-model".to_string();
-        s.default_models.image_generation.provider_id = "image".to_string();
-        s.default_models.image_generation.model = "image-model".to_string();
 
         let s = sanitize_settings(s);
 
@@ -4928,10 +4926,6 @@ mod tests {
             s.effective_prompt_optimize_model_for_session(None),
             s.effective_chat_model()
         );
-        assert_eq!(
-            s.image_generation_model(),
-            Some(("image".to_string(), "image-model".to_string()))
-        );
     }
 
     #[test]
@@ -4941,7 +4935,6 @@ mod tests {
             "id":"p", "name":"Pool", "baseUrl":"https://example.com", "enabled":true,
             "enabledModels":["image-a","image-b","MiniMax-H3"], "apiKeys":[]
         })).unwrap());
-        settings.default_models.image_generation = DefaultModelSelection { provider_id:"p".into(), model:"image-a".into() };
         settings.workbench_media = serde_json::from_value(serde_json::json!({
             "imageModels":[{"providerId":"p","model":"image-a"},{"providerId":" p ","model":"image-b "},{"providerId":"p","model":"image-a"},{"providerId":"deleted","model":"gone"}],
             "videoModels":[{"providerId":"p","model":"MiniMax-H3"}]
@@ -4950,7 +4943,6 @@ mod tests {
         assert_eq!(normalized.workbench_media.image_models.len(), 2);
         assert_eq!(normalized.workbench_media.image_models[1].model, "image-b");
         assert_eq!(normalized.workbench_media.video_models.len(), 1);
-        assert_eq!(normalized.default_models.image_generation.model, "image-a");
         let value = serde_json::to_value(&normalized).unwrap();
         let mut restored: Settings = serde_json::from_value(value).unwrap();
         restored.providers[0].enabled = false;
@@ -4998,22 +4990,45 @@ mod tests {
     }
 
     #[test]
-    fn video_selection_roundtrips_and_never_falls_back_to_chat() {
-        let old: DefaultModelsConfig = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert!(old.video_generation.model.is_empty());
-        let mut settings = Settings::default();
-        settings.providers.push(serde_json::from_value(serde_json::json!({
-            "id":"video", "name":"Video", "baseUrl":"https://api.minimax.cn",
-            "apiKeys":[], "enabled":true, "enabledModels":["MiniMax-H3","chat-model"]
-        })).unwrap());
-        settings.default_models.video_generation = DefaultModelSelection { provider_id:"video".into(), model:"MiniMax-H3".into() };
-        let encoded = serde_json::to_value(sanitize_settings(settings)).unwrap();
-        let mut restored = sanitize_settings(serde_json::from_value(encoded).unwrap());
-        assert_eq!(restored.default_models.video_generation.model, "MiniMax-H3");
-        restored.providers[0].enabled_models = vec!["chat-model".into()];
-        let removed = sanitize_settings(restored);
-        assert!(removed.default_models.video_generation.model.is_empty());
-        assert!(removed.default_models.video_generation.provider_id.is_empty());
+    fn legacy_chat_media_models_join_the_end_of_media_pools_once() {
+        let mut settings: Settings = serde_json::from_value(serde_json::json!({
+            "providers":[
+                {"id":"video","name":"Video","baseUrl":"https://api.minimax.cn","apiKeys":[],"enabled":true,
+                 "enabledModels":["MiniMax-H3","Hailuo-02","chat-model"]},
+                {"id":"img","name":"Img","baseUrl":"https://api.openai.com/v1","apiKeys":[],"enabled":true,
+                 "enabledModels":["gpt-image-1"]}
+            ],
+            "defaultModels":{
+                "videoGeneration":{"providerId":"video","model":"MiniMax-H3"},
+                "imageGeneration":{"providerId":"img","model":"gpt-image-1"}
+            },
+            "workbenchMedia":{"videoModels":[{"providerId":"video","model":"Hailuo-02"}]}
+        })).unwrap();
+        settings = sanitize_settings(settings);
+        let pool = |entries: &[DefaultModelSelection]| entries.iter().map(|m| m.model.clone()).collect::<Vec<_>>();
+        // The existing pool order stays the priority; the chat choice joins at the end.
+        assert_eq!(pool(&settings.workbench_media.video_models), ["Hailuo-02", "MiniMax-H3"]);
+        assert_eq!(pool(&settings.workbench_media.image_models), ["gpt-image-1"]);
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert!(saved["defaultModels"].get("videoGeneration").is_none());
+        assert!(saved["defaultModels"].get("imageGeneration").is_none());
+        let again = sanitize_settings(serde_json::from_value(saved).unwrap());
+        assert_eq!(pool(&again.workbench_media.video_models), ["Hailuo-02", "MiniMax-H3"]);
+    }
+
+    #[test]
+    fn legacy_chat_media_models_that_cannot_generate_are_dropped() {
+        let settings: Settings = serde_json::from_value(serde_json::json!({
+            "providers":[{"id":"p","name":"P","baseUrl":"https://api.minimax.cn","apiKeys":[],"enabled":true,
+                "enabledModels":["chat-model"]}],
+            "defaultModels":{
+                "videoGeneration":{"providerId":"p","model":"chat-model"},
+                "imageGeneration":{"providerId":"gone","model":"x"}
+            }
+        })).unwrap();
+        let settings = sanitize_settings(settings);
+        assert!(settings.workbench_media.video_models.is_empty());
+        assert!(settings.workbench_media.image_models.is_empty());
     }
 
     #[test]
@@ -5044,8 +5059,6 @@ mod tests {
         s.default_models.title_summary.model = "ghost".to_string();
         s.default_models.compression.provider_id = "chat".to_string();
         s.default_models.compression.model = String::new();
-        s.default_models.image_generation.provider_id = "chat".to_string();
-        s.default_models.image_generation.model = String::new();
 
         let s = sanitize_settings(s);
 
@@ -5057,8 +5070,6 @@ mod tests {
         assert!(s.default_models.title_summary.model.is_empty());
         assert_eq!(s.default_models.compression.provider_id, "chat");
         assert_eq!(s.default_models.compression.model, "m1");
-        assert_eq!(s.default_models.image_generation.provider_id, "chat");
-        assert_eq!(s.default_models.image_generation.model, "m1");
         assert_eq!(s.chat_provider_id, "chat");
         assert_eq!(s.chat_model, "m1");
     }
@@ -5145,8 +5156,6 @@ mod tests {
         s.default_models.vision.model = "vision-model".to_string();
         s.default_models.title_summary.provider_id = "title-provider".to_string();
         s.default_models.title_summary.model = "title-model".to_string();
-        s.default_models.image_generation.provider_id = "image-provider".to_string();
-        s.default_models.image_generation.model = "image-model".to_string();
         let value = serde_json::to_value(&s).expect("settings should serialize");
 
         assert_eq!(
@@ -5161,14 +5170,6 @@ mod tests {
         assert_eq!(
             value["defaultModels"]["titleSummary"]["model"],
             "title-model"
-        );
-        assert_eq!(
-            value["defaultModels"]["imageGeneration"]["providerId"],
-            "image-provider"
-        );
-        assert_eq!(
-            value["defaultModels"]["imageGeneration"]["model"],
-            "image-model"
         );
         assert_eq!(value["defaultModels"]["promptOptimize"]["providerId"], "");
         assert_eq!(value["defaultModels"]["promptOptimize"]["model"], "");

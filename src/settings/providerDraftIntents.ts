@@ -1,4 +1,5 @@
 import { removeMediaPoolEntries } from '../data/mediaModelPools'
+import { knownAudioModelInfo } from '../data/speechModels'
 import type { ModelInfo, ModelProvider, Settings } from '../api/tauri'
 import type { ProviderPreset } from './providerPresets'
 import { createProviderRequestDraft } from './public/providerDraft'
@@ -21,13 +22,11 @@ function clearDefaultModelProvider(
   providerId: string,
 ): Settings['defaultModels'] {
   return {
-    videoGeneration: defaultModels.videoGeneration?.providerId === providerId ? { providerId: '', model: '' } : (defaultModels.videoGeneration ?? { providerId: '', model: '' }),
     chat: defaultModels.chat.providerId === providerId ? { providerId: '', model: '' } : defaultModels.chat,
     vision: defaultModels.vision.providerId === providerId ? { providerId: '', model: '' } : defaultModels.vision,
     videoAnalysis: defaultModels.videoAnalysis.providerId === providerId ? { providerId: '', model: '' } : defaultModels.videoAnalysis,
     titleSummary: defaultModels.titleSummary.providerId === providerId ? { providerId: '', model: '' } : defaultModels.titleSummary,
     compression: defaultModels.compression.providerId === providerId ? { providerId: '', model: '' } : defaultModels.compression,
-    imageGeneration: defaultModels.imageGeneration.providerId === providerId ? { providerId: '', model: '' } : defaultModels.imageGeneration,
     promptOptimize: defaultModels.promptOptimize.providerId === providerId ? { providerId: '', model: '' } : defaultModels.promptOptimize,
     advisor: defaultModels.advisor.providerId === providerId ? { providerId: '', model: '' } : defaultModels.advisor,
   }
@@ -39,17 +38,34 @@ function resolveDefaultModelsAfterModelRemoval(
   resolveAfterRemoval: (currentModel: string) => string,
 ): Settings['defaultModels'] {
   return {
-    videoGeneration: defaultModels.videoGeneration?.providerId === providerId && resolveAfterRemoval(defaultModels.videoGeneration.model) !== defaultModels.videoGeneration.model
-      ? { providerId: '', model: '' } : (defaultModels.videoGeneration ?? { providerId: '', model: '' }),
     chat: defaultModels.chat.providerId === providerId ? { ...defaultModels.chat, model: resolveAfterRemoval(defaultModels.chat.model) } : defaultModels.chat,
     vision: defaultModels.vision.providerId === providerId ? { ...defaultModels.vision, model: resolveAfterRemoval(defaultModels.vision.model) } : defaultModels.vision,
     videoAnalysis: defaultModels.videoAnalysis.providerId === providerId ? { ...defaultModels.videoAnalysis, model: resolveAfterRemoval(defaultModels.videoAnalysis.model) } : defaultModels.videoAnalysis,
     titleSummary: defaultModels.titleSummary.providerId === providerId ? { ...defaultModels.titleSummary, model: resolveAfterRemoval(defaultModels.titleSummary.model) } : defaultModels.titleSummary,
     compression: defaultModels.compression.providerId === providerId ? { ...defaultModels.compression, model: resolveAfterRemoval(defaultModels.compression.model) } : defaultModels.compression,
-    imageGeneration: defaultModels.imageGeneration.providerId === providerId ? { ...defaultModels.imageGeneration, model: resolveAfterRemoval(defaultModels.imageGeneration.model) } : defaultModels.imageGeneration,
     promptOptimize: defaultModels.promptOptimize.providerId === providerId ? { ...defaultModels.promptOptimize, model: resolveAfterRemoval(defaultModels.promptOptimize.model) } : defaultModels.promptOptimize,
     advisor: defaultModels.advisor.providerId === providerId ? { ...defaultModels.advisor, model: resolveAfterRemoval(defaultModels.advisor.model) } : defaultModels.advisor,
   }
+}
+
+/**
+ * A known speech/transcription model starts with its protocol, product URL and tags, so adding it
+ * is enough to make it selectable. Anything the user already set on the model is kept.
+ */
+function withKnownAudioInfo(provider: ModelProvider, models: string[]): Record<string, ModelInfo> | undefined {
+  let overrides: Record<string, ModelInfo> | undefined
+  for (const model of models) {
+    const known = knownAudioModelInfo(provider.baseUrl, model)
+    if (!known) continue
+    const current = provider.modelOverrides?.[model]
+    overrides ??= { ...provider.modelOverrides }
+    overrides[model] = {
+      ...known,
+      ...current,
+      capabilities: { ...known.capabilities, ...current?.capabilities },
+    }
+  }
+  return overrides
 }
 
 function updateProvider(settings: Settings, id: string, updates: Partial<ModelProvider>): Settings {
@@ -150,7 +166,8 @@ export function applyProviderDraftIntent(settings: Settings, intent: ProviderDra
       const provider = settings.providers.find((item) => item.id === intent.id)
       const model = intent.model.trim()
       if (!provider || !model || provider.enabledModels.includes(model)) return settings
-      return updateProvider(settings, intent.id, { enabledModels: [...provider.enabledModels, model] })
+      const modelOverrides = withKnownAudioInfo(provider, [model])
+      return updateProvider(settings, intent.id, { enabledModels: [...provider.enabledModels, model], ...(modelOverrides && { modelOverrides }) })
     }
     case 'add-models': {
       const provider = settings.providers.find((item) => item.id === intent.id)
@@ -166,7 +183,8 @@ export function applyProviderDraftIntent(settings: Settings, intent: ProviderDra
         nextModels.push(model)
       }
       if (!nextModels.length) return settings
-      return updateProvider(settings, intent.id, { enabledModels: [...provider.enabledModels, ...nextModels] })
+      const modelOverrides = withKnownAudioInfo(provider, nextModels)
+      return updateProvider(settings, intent.id, { enabledModels: [...provider.enabledModels, ...nextModels], ...(modelOverrides && { modelOverrides }) })
     }
     case 'remove-model': {
       const provider = settings.providers.find((item) => item.id === intent.id)

@@ -708,37 +708,6 @@ pub(crate) fn builtin_web_search_supported(provider: &ModelProvider) -> bool {
     }
 }
 
-pub(crate) fn image_generation_model_for_session(
-    settings: &crate::settings::Settings,
-    session: Option<crate::settings::SessionModel<'_>>,
-) -> Option<(String, String)> {
-    if !settings
-        .default_models
-        .image_generation
-        .provider_id
-        .trim()
-        .is_empty()
-        && !settings
-            .default_models
-            .image_generation
-            .model
-            .trim()
-            .is_empty()
-    {
-        return Some((
-            settings.default_models.image_generation.provider_id.clone(),
-            settings.default_models.image_generation.model.clone(),
-        ));
-    }
-    let session = session.filter(|session| session.is_set())?;
-    let provider = settings.get_provider(session.provider_id)?;
-    if model_can_generate_images_directly(provider, session.model) {
-        Some((session.provider_id.to_string(), session.model.to_string()))
-    } else {
-        None
-    }
-}
-
 fn image_generation_model_name_heuristic(provider: &ModelProvider, model: &str) -> Option<bool> {
     let descriptor = format!(
         "{} {} {} {}",

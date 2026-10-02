@@ -1,4 +1,4 @@
-import { isVideoGenerationModel } from '../data/videoModels'
+import { isNonChatModel } from '../data/speechModels'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, RefreshCw, Check } from 'lucide-react'
@@ -40,7 +40,7 @@ export function ProviderModelTestModal({
   lang: Lang
   onClose: () => void
 }) {
-  const testableModels = models.filter(model => !isVideoGenerationModel(model, { modelOverrides }))
+  const testableModels = models.filter(model => !isNonChatModel(model, { modelOverrides, baseUrl }))
   const [selected, setSelected] = useState<Set<string>>(() => new Set(testableModels))
   const [results, setResults] = useState<Record<string, Result>>({})
   const [running, setRunning] = useState(false)
@@ -142,7 +142,7 @@ export function ProviderModelTestModal({
           </IconButton>
         </div>
 
-        {testableModels.length !== models.length && <p className="kv-row-desc">{lang === 'zh' ? '视频生成模型不发送聊天测试请求。请在模型详情预览原生请求，实际生成需在视频任务中验证。' : 'Video models are excluded from chat tests. Preview native requests in model details; verify generation in a video task.'}</p>}
+        {testableModels.length !== models.length && <p className="kv-row-desc">{lang === 'zh' ? '视频、语音和转写模型不发送聊天测试请求。视频可在模型详情预览原生请求；语音在「媒体创作」里检查配置。' : 'Video, speech and transcription models are excluded from chat tests. Preview video requests in model details; check speech under Media creation.'}</p>}
         {models.length === 0 ? (
           <p className="kv-mtest-empty">{t.empty}</p>
         ) : (
@@ -162,7 +162,7 @@ export function ProviderModelTestModal({
             <ul className="kv-mtest-list custom-scrollbar">
               {models.map((model) => {
                 const res = results[model]
-                const video = isVideoGenerationModel(model, { modelOverrides })
+                const video = isNonChatModel(model, { modelOverrides, baseUrl })
                 return (
                   <li key={model} className="kv-mtest-item">
                     <div className="kv-mtest-row">
@@ -176,7 +176,7 @@ export function ProviderModelTestModal({
                       <ModelIcon model={model} size={16} />
                       <span className="kv-mtest-name" title={model}>{model}</span>
                       <span className={statusClass(res?.status)}>
-                        {video && (lang === 'zh' ? '视频模型' : 'Video model')}
+                        {video && (lang === 'zh' ? '非聊天模型' : 'Not a chat model')}
                         {res?.status === 'testing' && (
                           <RefreshCw size={12} className="animate-spin" />
                         )}

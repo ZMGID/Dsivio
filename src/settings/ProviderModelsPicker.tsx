@@ -1,5 +1,5 @@
 import { suggestedVideoModels, videoProvider } from '../data/videoModels'
-import { suggestedSpeechModels } from '../data/speechModels'
+import { isSpeechCatalogOnly, suggestedSpeechModels } from '../data/speechModels'
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Minus, Plus, RefreshCw, Search, X } from 'lucide-react'
@@ -72,7 +72,7 @@ export function ProviderModelsPicker({
 
   // 每次打开都拉一次：缓存列表可能已经过期，不能只在 availableModels 为空时才请求。
   useEffect(() => {
-    if (!videoProvider(provider.baseUrl)?.catalogOnly) onFetch()
+    if (!videoProvider(provider.baseUrl)?.catalogOnly && !isSpeechCatalogOnly(provider.baseUrl)) onFetch()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在挂载时刷新；手动刷新走按钮。
   }, [])
 
@@ -173,8 +173,8 @@ export function ProviderModelsPicker({
           </IconButton>
         </div>
 
-        {suggestedVideoModels(provider.baseUrl).length > 0 && (
-          <p className="kv-row-desc px-4">{lang === 'zh' ? '含官方视频模型目录；可添加不代表账号已开通，实际权限以供应商为准。' : 'Includes official video models. Availability depends on your provider account.'}</p>
+        {(suggestedVideoModels(provider.baseUrl).length > 0 || suggestedSpeechModels(provider.baseUrl).length > 0) && (
+          <p className="kv-row-desc px-4">{lang === 'zh' ? '含官方视频、语音和转写模型目录；可添加不代表账号已开通，实际权限以供应商为准。' : 'Includes official video, speech and transcription models. Availability depends on your provider account.'}</p>
         )}
 
         {manualOpen && (

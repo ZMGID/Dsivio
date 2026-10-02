@@ -114,7 +114,7 @@ fn route<'a>(provider: &'a ModelProvider, model: &str) -> Result<Route<'a>, Stri
     base.set_path(&path);
     Ok(Route { protocol, base })
 }
-pub fn configured(provider: &ModelProvider, model: &str) -> bool { route(provider, model).is_ok() && provider.preferred_api_key().is_some() }
+pub fn configured(provider: &ModelProvider, model: &str) -> bool { if provider.id == "local" && model == super::local_tts::MODEL { return super::local_tts::available(); } route(provider, model).is_ok() && provider.preferred_api_key().is_some() }
 fn systems(protocol: &str) -> &'static [&'static str] { if protocol == "minimax_tts" { MINIMAX_VOICES } else { OPENAI_VOICES } }
 fn instructions_supported(model: &str) -> bool { model.starts_with("gpt-4o-mini-tts") }
 
@@ -123,6 +123,7 @@ pub fn model_description(provider: &ModelProvider, model: &str) -> ModelDescript
     description(provider, model, root.as_deref())
 }
 fn description(provider: &ModelProvider, model: &str, root: Option<&Path>) -> ModelDescription {
+    if provider.id == "local" && model == super::local_tts::MODEL { return super::local_tts::description(provider); }
     let protocol = route(provider, model).map(|r| r.protocol).unwrap_or("");
     let minimax = protocol == "minimax_tts";
     let mut args = BTreeMap::new();
@@ -158,6 +159,12 @@ fn description(provider: &ModelProvider, model: &str, root: Option<&Path>) -> Mo
 }
 
 pub fn validate_input(provider: &ModelProvider, model: &str, args: &BTreeMap<String, Value>, root: &Path) -> Result<SpeechInput, String> {
+    if provider.id == "local" && model == super::local_tts::MODEL {
+        let args = model_parameters::resolve(&super::local_tts::description(provider), args.clone(), None)?;
+        let text = args.get("text").and_then(Value::as_str).ok_or("Speech text required")?;
+        if text.trim().is_empty() { return Err("Speech text must contain non-whitespace text".into()); }
+        return Ok(SpeechInput { mode:"tts".into(),text:text.into(),voice:args.get("voice").and_then(Value::as_str).map(str::to_owned),instruction:None,output_format:"wav".into(),speed:args.get("speed").and_then(Value::as_f64).unwrap_or(1.0),sample:None,sample_extension:None,sample_sha256:None,consent_sha256:None,evidence:BTreeMap::new() });
+    }
     let route = route(provider, model)?;
     provider.preferred_api_key().ok_or("SPEECH_KEY_MISSING: configure an authorized product key on this provider")?;
     let args = model_parameters::resolve(&description(provider, model, Some(root)), args.clone(), None)?;
@@ -223,6 +230,7 @@ fn validate_probe(value: &Value, extension: &str) -> Result<(), String> {
 
 /// No preview synthesis, retry loop or credential rotation: an uncertain POST is never repeated.
 pub async fn execute(client: &reqwest::Client, provider: &ModelProvider, model: &str, input: &SpeechInput, task_id: &str, task_dir: &Path, root: &Path, before_send: &(dyn Fn() -> Result<(), String> + Send + Sync)) -> Result<Vec<MediaOutput>, SpeechError> {
+    if provider.id == "local" && model == super::local_tts::MODEL { return super::local_tts::execute(input, task_dir).await.map_err(SpeechError::known); }
     let route = route(provider, model)?;
     let key = provider.preferred_api_key().ok_or_else(|| SpeechError::known("SPEECH_KEY_MISSING"))?;
     let fingerprint = voices::sha256(&serde_jcs::to_vec(&json!({"providerId":provider.id,"model":model,"protocol":route.protocol,"base":route.base.as_str(),"input":input.request_fingerprint()})).expect("speech request JSON"));

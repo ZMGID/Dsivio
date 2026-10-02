@@ -1,4 +1,3 @@
-import { isVideoGenerationModel } from '../../data/videoModels'
 import { Toggle, SettingRow, SettingsGroup } from '../components'
 import { Button } from '../../components/Button'
 import { ModelPairSelect } from '../ModelPairSelect'
@@ -38,36 +37,6 @@ export function MixerTab({
 }: MixerTabProps) {
   return (
     <>
-      <SettingsGroup title={lang === 'zh' ? '对话生成' : 'Chat generation'}>
-        <SettingRow
-          label={t.defaultImageGenerationModel}
-          description={t.defaultImageGenerationModelHint}
-        >
-          <ModelPairSelect
-            providerId={settings.defaultModels.imageGeneration.providerId || ''}
-            model={settings.defaultModels.imageGeneration.model || ''}
-            providers={settings.providers}
-            inheritLabel={t.mixerNoImageGenerationModel}
-            filterModel={(provider, model) =>
-              resolveModelInfo(model, provider.modelOverrides, provider).capabilities?.imageGeneration === true
-            }
-            onChange={(providerId, model) => {
-              onUpdateDefaultModel('imageGeneration', providerId, model)
-            }}
-          />
-        </SettingRow>
-        <SettingRow label={lang === 'zh' ? '对话视频生成模型' : 'Chat video generation model'} description={lang === 'zh' ? '对话生成视频时使用此模型，与 Workbench 共用生成流程。' : 'Used by chat video generation; shares the Workbench generation pipeline.'}>
-          <ModelPairSelect
-            ariaLabel={lang === 'zh' ? '对话视频生成模型' : 'Chat video generation model'}
-            providerId={settings.defaultModels.videoGeneration?.providerId || ''}
-            model={settings.defaultModels.videoGeneration?.model || ''}
-            providers={settings.providers}
-            inheritLabel={lang === 'zh' ? '未配置' : 'Not configured'}
-            filterModel={(provider, model) => isVideoGenerationModel(model, provider)}
-            onChange={(providerId, model) => onUpdateDefaultModel('videoGeneration', providerId, model)}
-          />
-        </SettingRow>
-      </SettingsGroup>
       <SettingsGroup title={t.mixerSection}>
         <div className="mb-3 flex items-start justify-between gap-3">
           {t.mixerSectionHint ? (
@@ -81,8 +50,6 @@ export function MixerTab({
               onUpdateDefaultModel('videoAnalysis', '', '')
               onUpdateDefaultModel('titleSummary', '', '')
               onUpdateDefaultModel('compression', '', '')
-              onUpdateDefaultModel('imageGeneration', '', '')
-              onUpdateDefaultModel('videoGeneration', '', '')
               onUpdateDefaultModel('promptOptimize', '', '')
             }}
             data-tauri-drag-region="false"

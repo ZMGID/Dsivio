@@ -27,7 +27,7 @@ dsivio media speech --model 供应商/模型 --mode clone --text-file text.txt \
 dsivio media transcribe evidence.wav --language zh [--model local/whisperx-small] \
     [--sample-frames 正整数] [--timestamps word|segment] [--out ./outputs]
 dsivio media asr status [--json]
-dsivio media asr install [--model small] [--language en] [--language zh] [--json]
+dsivio media asr install [--json]
 dsivio media asr stop [--json]
 dsivio media cancel <任务ID> [--timeout 秒] [--json]
 dsivio media status <任务ID> [--resume]
@@ -52,7 +52,9 @@ dsivio media wait <任务ID> [--timeout 秒] [--out ./outputs]
 - `--out <目录>`：成功后把结果复制到这个目录。不传时，结果文件留在 Dsivio 的任务目录里，路径见输出。
 - TTS 与 clone 都输出可验证的音频任务产物。clone 只在模型描述明确支持时可用，必须提供用户真实授权的样本与同意声明；不替用户编造声明，不把普通音色选择当作上传克隆。
 - `transcribe` 输入必须是 16kHz/mono/PCM s16 WAV，data 长度与 `sampleFrames` 一致；任意 MP3/视频先由插件素材工具提取标准证据。返回标准 MediaTask，转写数据在 `result` 或 JSON output 中；没有对齐时间的词保留缺省，不估算补齐。
-- `asr install` 返回安装操作状态，退出 0 仅表示开始/复用，不表示 ready；继续查 `asr status`。手动安装与首次识别共用同一 owner，失败保留旧环境；本地失败不自动上传云端。`asr stop` 只停空闲服务，busy 时先明确取消对应 task。
+- `transcribe` 必须指定 `--language`，不做自动识别；语言必须已在「设置 > 媒体创作 > 转写」勾选（见 `asr status` 的 `settings.languages`），否则报 `ASR_LANGUAGE_NOT_INSTALLED`，此时请用户在设置里添加，不要猜语言重试。
+- 本地 WhisperX「未安装」不等于不可用：`asr status` 的 `settings.autoInstall` 为 true 时，直接 `transcribe` 即由 App 自动安装，`note` 字段说明下一步。安装下载约 2–5 GB（约 1.5 GB 环境，加每种语言 0.4–1.3 GB），耗时较长，开始前告诉用户；中断或失败后重试会续传已下载的部分。
+- `asr install` 会真的开始安装，按设置中的模型与语言执行；不要用它查看用法（用 `dsivio media --help`）。传入与设置不同的 `--model`/`--language` 会被拒绝。返回安装操作状态，退出 0 仅表示开始/复用，不表示 ready；继续查 `asr status`。手动安装与首次识别共用同一 owner，失败保留旧环境；本地失败不自动上传云端。`asr stop` 只停空闲服务，busy 时先明确取消对应 task。
 - `cancel` 返回 `confirmed|requested|unsupported|too-late` 以及作用域/费用事实；退出 0 不等于远端已取消或退款。同步云请求已发出时通常无法确认取消；不删除回执、成功产物或供应商记录。
 - `models --kind matting` 在当前延期范围返回空列表；导入透明素材不等于已实现云端抠像。
 
@@ -101,8 +103,16 @@ stdout 只输出一行 JSON，进度和错误说明写在 stderr。
 | 工具 | 作用 | 出现的条件 |
 | --- | --- | --- |
 | `mixer_video_analysis` | 分析会话里的视频附件，结果会复用 | 「设置 > 模型分工 > 视频分析模型」有可用模型 |
-| `mixer_generate_image` | 生成或编辑图片，可传本地图片路径或之前结果的 `art_` ID 作参考 | 「设置 > 模型分工 > 生图模型」已选 |
-| `mixer_generate_video` | 生成视频，立即返回任务 ID | 「设置 > 模型分工 > 对话视频生成模型」已选 |
+| `mixer_generate_image` | 生成或编辑图片，可传本地图片路径或之前结果的 `art_` ID 作参考 | 「设置 > 媒体创作」图片模型池有可用模型（用排在最前的） |
+| `mixer_generate_video` | 生成视频，立即返回任务 ID | 「设置 > 媒体创作」视频模型池有可用模型（用排在最前的） |
 | `mixer_media_task` | 用任务 ID 等待或查询同一个任务，拿到本地文件 | 有生成工具时 |
 
 插件自己的程序、脚本以及外部 Agent 调用不到这些工具，这些场景请使用 `dsivio media` 命令。
+
+### 提交响应丢失时按 key 找回（只读）
+
+```sh
+dsivio media status --source dsvideo --idempotency-key <原提交key>
+```
+
+此入口只读取 App 的任务记录，不提交生成，也不恢复供应商查询；不能与任务 ID 或 `--resume` 混用。返回原任务 JSON，退出码沿用任务状态。没有记录时退出 2，诊断包含 `MEDIA_TASK_NOT_FOUND`；这不证明厂商未受理，调用方继续查询或提示核实，不能自动重交。

@@ -738,16 +738,12 @@ pub(super) async fn compute_context_state(
         && agent_prepare::chat_tools_capable(
             &effective_chat_tools,
             settings.chat_memory.enabled,
-            crate::settings::chat_image_generation_enabled_for_session(
-                &settings,
-                Some(session_model_for_conversation(conversation)),
-            ) || settings.default_models.video_generation.is_configured(),
+            crate::settings::chat_media_generation_enabled(&settings),
         );
     let mut tools = list_tools_for_chat(
         app,
         state.inner(),
         &settings,
-        Some(session_model_for_conversation(conversation)),
         super::tooling::allowed_mcp_server_ids(conversation, &settings),
     )
     .await

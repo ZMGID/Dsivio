@@ -1,4 +1,4 @@
-import { isVideoGenerationModel } from '../data/videoModels'
+import { isNonChatModel } from '../data/speechModels'
 import { type ModelProvider } from '../api/tauri'
 import { i18n, type Lang } from '../components/i18n'
 
@@ -135,7 +135,7 @@ export const buildModelPairOptions = (
     .filter(provider => isProviderEnabled(provider) && !provider.request?.comfy)
     .flatMap(provider =>
       provider.enabledModels
-        .filter(model => filterModel ? filterModel(provider, model) : !isVideoGenerationModel(model, provider))
+        .filter(model => filterModel ? filterModel(provider, model) : !isNonChatModel(model, provider))
         .map(model => ({
           value: modelPairValue(provider.id, model),
           label: `${provider.name} - ${model}`,

@@ -2,8 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { VIDEO_MODELS, VIDEO_PROTOCOLS, suggestedVideoModels, isVideoGenerationModel } from './videoModels'
 import { resolveModelInfo } from './modelMatching'
 import { PROVIDER_PRESETS } from '../settings/providerPresets'
-import { applyProviderDraftIntent } from '../settings/providerDraftIntents'
-import { makeProvider, makeSettings } from '../settings/tabs/testFixtures'
+import { makeProvider } from '../settings/tabs/testFixtures'
 import { buildModelPairOptions } from '../settings/utils'
 
 describe('video model catalog', () => {
@@ -28,13 +27,8 @@ describe('video model catalog', () => {
     expect(isVideoGenerationModel('private-video',{modelOverrides:{'private-video':{videoProtocol:'seedance'}}})).toBe(true)
     expect(resolveModelInfo('MiniMax-H3',{'MiniMax-H3':{capabilities:{videoGeneration:false}}}).capabilities?.videoGeneration).toBe(false)
   })
-  it('keeps media out of generic chat options and clears removed media selections', () => {
+  it('keeps media out of generic chat options', () => {
     const provider=makeProvider({enabledModels:['gpt-4o','MiniMax-H3']})
-    const settings=makeSettings({providers:[provider]})
-    settings.defaultModels.videoGeneration={providerId:provider.id,model:'MiniMax-H3'}
     expect(buildModelPairOptions([provider]).map(m => m.label)).not.toContain(`${provider.name} - MiniMax-H3`)
-    const removed=applyProviderDraftIntent(settings,{type:'remove-model',id:provider.id,model:'MiniMax-H3'})
-    expect(removed.defaultModels.videoGeneration).toEqual({providerId:'',model:''})
-    expect(applyProviderDraftIntent(settings,{type:'delete',id:provider.id}).defaultModels.videoGeneration).toEqual({providerId:'',model:''})
   })
 })

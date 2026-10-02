@@ -8,7 +8,9 @@ use tokio::{io::{AsyncBufReadExt, BufReader}, process::{Child, Command}, sync::{
 use ts_rs::TS;
 const SERVICE_VERSION: &str = "0.2.0";
 const PROTOCOL: &str = "dsivio-video.asr/1";
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(1800);
+/// Downloads take as long as the network needs; a step only fails when nothing moves for a while.
+struct Watchdog {poll:Duration,stall:Duration,limit:Duration}
+const INSTALL_WATCHDOG:Watchdog=Watchdog {poll:Duration::from_secs(5),stall:Duration::from_secs(600),limit:Duration::from_secs(4*3600)};
 pub use crate::settings::LocalAsrConfig;
 impl LocalAsrConfig {
     fn normalized(mut self)->Result<Self,String> {
@@ -27,7 +29,7 @@ pub struct RuntimeStatus {pub state:String,pub pid:Option<u32>,pub active_task_i
 pub struct LocalAsrStopResult {pub outcome:String,pub runtime:RuntimeStatus}
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all="camelCase")]
-pub struct LocalAsrProgress {pub stage:String,pub message:String}
+pub struct LocalAsrProgress {pub stage:String,pub message:String,#[ts(type = "number | null")] pub downloaded_bytes:Option<u64>}
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all="camelCase")]
 pub struct LocalAsrStatus {
@@ -76,6 +78,25 @@ fn installed_valid(root:&Path,installed:&Installed,hash:&str)->bool {
     venv_python(&dir).is_file() && fs::read(dir.join("config.json")).ok().and_then(|bytes|serde_json::from_slice::<Installed>(&bytes).ok()).is_some_and(|config|config.installation_id==installed.installation_id && config.snapshot_hash==installed.snapshot_hash && config.config==installed.config)
 }
 fn venv_python(dir:&Path)->PathBuf {dir.join(if cfg!(windows) {"venv/Scripts/python.exe"}else{"venv/bin/python"})}
+/// Model caches are content-addressed, so installations share one: a failed or re-configured
+/// install resumes instead of downloading several GB again. Earlier installs kept their own.
+fn model_cache(root:&Path,dir:&Path)->PathBuf {let legacy=dir.join("cache");if legacy.is_dir(){legacy}else{root.join("models")}}
+/// Installation directories other than `keep` were left by interrupted or superseded installs.
+fn remove_abandoned_installations(root:&Path,keep:Option<&str>) {
+    let Ok(entries)=fs::read_dir(root) else {return;};
+    for entry in entries.flatten() {
+        let name=entry.file_name();let Some(name)=name.to_str() else {continue;};
+        if uuid::Uuid::parse_str(name).is_ok() && Some(name)!=keep && entry.path().is_dir() {let _=fs::remove_dir_all(entry.path());}
+    }
+}
+/// The service log lives in its run directory, which is removed on failure; keep it for diagnosis.
+fn preserve_service_log(run_dir:&Path,destination:&Path) {
+    use std::io::Write;
+    let Ok(log)=fs::read(run_dir.join("service.log")) else {return;};
+    let mut options=fs::OpenOptions::new();options.create(true).append(true);
+    #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
+    if let Ok(mut file)=options.open(destination) {let _=writeln!(file,"\n==> service.log ({})",run_dir.display());let _=file.write_all(&log);}
+}
 fn stopped()->RuntimeStatus {RuntimeStatus {state:"stopped".into(),pid:None,active_task_id:None}}
 pub fn initialize(app:&tauri::AppHandle)->Result<(),String> {
     let resources=crate::media_runtime::runtime::resource_directory(app)?;
@@ -87,6 +108,7 @@ fn initialize_at(data:PathBuf,snapshot:PathBuf,python:PathBuf)->Result<(),String
     let evidence=data.join("media-tasks");private_dir(&evidence)?;
     let hash=verify_snapshot(&snapshot)?;
     let active=fs::read(root.join("active.json")).ok().and_then(|b|serde_json::from_slice::<Installed>(&b).ok()).filter(|i|installed_valid(&root,i,&hash));
+    remove_abandoned_installations(&root,active.as_ref().map(|i|i.installation_id.as_str()));
     let config=active.as_ref().map(|i|i.config.clone()).unwrap_or_default();
     let status=LocalAsrStatus {operation_id:None,state:if active.is_some(){"ready"}else{"notInstalled"}.into(),installation_id:active.as_ref().map(|i|i.installation_id.clone()),service_version:SERVICE_VERSION.into(),model:config.model,languages:config.languages,progress:None,error:None,runtime:stopped()};
     let supervisor=Arc::new(Supervisor {root,snapshot,python,evidence,state:Mutex::new(InstallState {status,active,cancel:None}),service:Mutex::new(None),startup:Mutex::new(None),queue:Arc::new(Semaphore::new(1)),shutting_down:std::sync::atomic::AtomicBool::new(false),client:reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).build().map_err(|e|e.to_string())?});
@@ -127,7 +149,7 @@ pub async fn install(config:LocalAsrConfig)->Result<LocalAsrStatus,String> {
     }
     let id=uuid::Uuid::new_v4().to_string();let (cancel,receiver)=watch::channel(false);
     state.status.operation_id=Some(id.clone());state.status.state="installing".into();state.status.model=config.model.clone();state.status.languages=config.languages.clone();state.status.error=None;
-    state.status.progress=Some(LocalAsrProgress {stage:"starting".into(),message:"Preparing a new isolated WhisperX installation".into()});state.cancel=Some(cancel);
+    state.status.progress=Some(LocalAsrProgress {stage:"starting".into(),message:"Preparing a new isolated WhisperX installation".into(),downloaded_bytes:None});state.cancel=Some(cancel);
     let result=state.status.clone();drop(state);
     tauri::async_runtime::spawn(async move {
         let installed=Installed {installation_id:id.clone(),config,snapshot_hash:hash};
@@ -137,7 +159,11 @@ pub async fn install(config:LocalAsrConfig)->Result<LocalAsrStatus,String> {
         if state.status.operation_id.as_deref()!=Some(&id) {return;}
         state.cancel=None;
         match outcome {
-            Ok(())=>{state.status.state="ready".into();state.status.installation_id=Some(id);state.status.progress=None;state.active=Some(installed);}
+            Ok(())=>{
+                // Activation already stopped the old service; its environment is no longer used.
+                if let Some(previous)=state.active.as_ref() {let _=fs::remove_dir_all(owner.root.join(&previous.installation_id));}
+                state.status.state="ready".into();state.status.installation_id=Some(id);state.status.progress=None;state.active=Some(installed);
+            }
             Err(error)=>{state.status.state="failed".into();state.status.error=Some(error);state.status.progress=None;}
         }
     });
@@ -152,10 +178,11 @@ pub async fn cancel_install(operation_id:&str)->Result<LocalAsrStatus,String> {
     loop {let state=owner.state.lock().await;if state.status.state!="installing" {return Ok(state.status.clone());}drop(state);tokio::time::sleep(Duration::from_millis(50)).await;}
 }
 async fn progress(owner:&Supervisor,stage:&str,message:&str) {
-    owner.state.lock().await.status.progress=Some(LocalAsrProgress {stage:stage.into(),message:message.into()});
+    owner.state.lock().await.status.progress=Some(LocalAsrProgress {stage:stage.into(),message:message.into(),downloaded_bytes:None});
 }
-fn owned_command(program:&Path)->Command {
-    let mut command=Command::new(program);command.kill_on_drop(true).env_clear();
+/// `pycache` keeps bytecode in App data: the venv shares the bundled stdlib, which must stay unmodified.
+fn owned_command(program:&Path,pycache:&Path)->Command {
+    let mut command=Command::new(program);command.kill_on_drop(true).env_clear().env("PYTHONPYCACHEPREFIX",pycache);
     for key in ["PATH","HOME","USERPROFILE","SYSTEMROOT","SystemRoot","WINDIR","TEMP","TMP","TMPDIR","LANG","LC_ALL","LC_CTYPE","SSL_CERT_FILE","SSL_CERT_DIR"] {
         if let Some(value)=std::env::var_os(key){command.env(key,value);}
     }
@@ -166,51 +193,89 @@ async fn kill_owned(child:&mut Child)->Result<(),String> {
     #[cfg(unix)] if let Some(pid)=child.id() {unsafe {libc::kill(-(pid as i32),libc::SIGKILL);}}
     let _=child.start_kill();child.wait().await.map(|_|()).map_err(|e|e.to_string())
 }
-async fn run_install_command(mut command:Command,log:&Path,cancel:&mut watch::Receiver<bool>)->Result<(),String> {
+/// Bytes on disk under `path`. Hugging Face snapshot links point into blobs, so links are not followed.
+fn tree_size(path:&Path)->u64 {
+    let Ok(metadata)=fs::symlink_metadata(path) else {return 0;};
+    if !metadata.is_dir() {return if metadata.is_file() {metadata.len()} else {0};}
+    fs::read_dir(path).map(|entries|entries.flatten().map(|entry|tree_size(&entry.path())).sum()).unwrap_or(0)
+}
+/// Runs one preparation step. It keeps going while the log or `watched` grows and reports the bytes
+/// added to `watched`; it stops after `stall` without progress or the overall `limit`.
+async fn run_install_command(mut command:Command,log:&Path,watched:&Path,cancel:&mut watch::Receiver<bool>,watchdog:&Watchdog,on_progress:&(dyn Fn(u64)+Sync))->Result<(),String> {
     use std::process::Stdio;
     let mut options=fs::OpenOptions::new();options.create(true).append(true);
     #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
     let file=options.open(log).map_err(|e|e.to_string())?;
     command.stdout(Stdio::from(file.try_clone().map_err(|e|e.to_string())?)).stderr(Stdio::from(file)).stdin(Stdio::null());
     if *cancel.borrow() {return Err("ASR_INSTALL_CANCELLED".into());}
+    let measure=|| {let (log,watched)=(log.to_owned(),watched.to_owned());tokio::task::spawn_blocking(move||(tree_size(&watched),tree_size(&log)))};
+    let (baseline,_)=measure().await.map_err(|e|e.to_string())?;
     let mut child=command.spawn().map_err(|e|format!("ASR_INSTALL_FAILED: cannot launch bundled Python: {e}"))?;
-    tokio::select! {
-        result=child.wait()=>{let status=result.map_err(|e|e.to_string())?;if status.success(){Ok(())}else{Err(format!("ASR_INSTALL_FAILED: preparation exited {status}; private diagnostics: {}",log.display()))}},
-        _=cancel.changed()=>{kill_owned(&mut child).await?;Err("ASR_INSTALL_CANCELLED".into())},
-        _=tokio::time::sleep(INSTALL_TIMEOUT)=>{kill_owned(&mut child).await?;Err("ASR_INSTALL_TIMEOUT: child exceeded 30 minutes".into())},
+    let started=std::time::Instant::now();let mut seen=None;let mut moved=started;
+    let mut ticker=tokio::time::interval(watchdog.poll);ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            result=child.wait()=>{let status=result.map_err(|e|e.to_string())?;return if status.success(){Ok(())}else{Err(format!("ASR_INSTALL_FAILED: preparation exited {status}; private diagnostics: {}",log.display()))};},
+            _=cancel.changed()=>{kill_owned(&mut child).await?;return Err("ASR_INSTALL_CANCELLED".into());},
+            _=ticker.tick()=>{
+                let (watched_size,log_size)=measure().await.map_err(|e|e.to_string())?;
+                on_progress(watched_size.saturating_sub(baseline));
+                if seen!=Some((watched_size,log_size)) {seen=Some((watched_size,log_size));moved=std::time::Instant::now();}
+                else if moved.elapsed()>=watchdog.stall {
+                    kill_owned(&mut child).await?;
+                    return Err(format!("ASR_INSTALL_STALLED: no download progress for {} minutes; retrying resumes from the files already downloaded; private diagnostics: {}",watchdog.stall.as_secs()/60,log.display()));
+                }
+                if started.elapsed()>=watchdog.limit {kill_owned(&mut child).await?;return Err(format!("ASR_INSTALL_TIMEOUT: step exceeded {} hours; private diagnostics: {}",watchdog.limit.as_secs()/3600,log.display()));}
+            },
+        }
     }
 }
+fn prepare_command(python:&Path,pycache:&Path,snapshot:&Path,config:&LocalAsrConfig,cache:&Path)->Command {
+    let mut command=owned_command(python,pycache);
+    command.arg(snapshot.join("prepare.py")).arg("--model").arg(&config.model).arg("--languages").args(&config.languages).arg("--cache").arg(cache);
+    // Xet keeps a file in memory until it is complete, so progress is invisible and an interrupted
+    // download restarts from zero. Plain HTTP writes `.incomplete` files that later attempts resume.
+    command.env("HF_HUB_DISABLE_XET","1");
+    // For .bin-only alignment models transformers also fetches a converted safetensors copy (~1.3 GB)
+    // in a background thread that keeps this step alive after it reports success. Inference reads .bin.
+    command.env("DISABLE_SAFETENSORS_CONVERSION","true");
+    command
+}
 async fn install_staging(owner:&Supervisor,installed:&Installed,mut cancel:watch::Receiver<bool>)->Result<(),String> {
-    let dir=owner.root.join(&installed.installation_id);private_dir(&dir)?;private_dir(&dir.join("cache"))?;
+    let dir=owner.root.join(&installed.installation_id);private_dir(&dir)?;let cache=owner.root.join("models");private_dir(&cache)?;
     let log=owner.root.join(format!("install-{}.log",installed.installation_id));
     progress(owner,"venv","Creating an isolated environment with bundled Python").await;
-    let mut command=owned_command(&owner.python);command.args(["-m","venv"]).arg(dir.join("venv"));
-    run_install_command(command,&log,&mut cancel).await?;
+    let mut command=owned_command(&owner.python,&owner.root.join("pycache"));command.args(["-m","venv"]).arg(dir.join("venv"));
+    run_install_command(command,&log,&dir,&mut cancel,&INSTALL_WATCHDOG,&|_|{}).await?;
     progress(owner,"dependencies","Installing pinned WhisperX dependencies").await;
-    let python=venv_python(&dir);let mut command=owned_command(&python);
+    let python=venv_python(&dir);let mut command=owned_command(&python,&owner.root.join("pycache"));
     command.args(["-m","pip","install","--disable-pip-version-check","-r"]).arg(owner.snapshot.join("requirements.txt"));
-    run_install_command(command,&log,&mut cancel).await?;
+    run_install_command(command,&log,&dir,&mut cancel,&INSTALL_WATCHDOG,&|_|{}).await?;
     progress(owner,"models","Downloading the ASR, alignment and NLTK model caches").await;
-    let mut command=owned_command(&python);
-    command.arg(owner.snapshot.join("prepare.py")).arg("--model").arg(&installed.config.model).arg("--languages").args(&installed.config.languages).arg("--cache").arg(dir.join("cache"));
-    run_install_command(command,&log,&mut cancel).await?;
+    let command=prepare_command(&python,&owner.root.join("pycache"),&owner.snapshot,&installed.config,&cache);
+    let report=|bytes:u64| {if let Ok(mut state)=owner.state.try_lock() {if let Some(progress)=state.status.progress.as_mut().filter(|p|p.stage=="models") {progress.downloaded_bytes=Some(bytes);}}};
+    run_install_command(command,&log,&cache,&mut cancel,&INSTALL_WATCHDOG,&report).await?;
     private_write(&dir.join("config.json"),&serde_json::to_vec(installed).map_err(|e|e.to_string())?)?;
     progress(owner,"selfTest","Verifying the offline service and real WAV inference").await;
     let probe=dir.join("self-test");private_dir(&probe)?;let audio=probe.join("silence.wav");
     private_write(&audio,&silence_wav())?;
-    let mut service=start_service(owner,&dir,&installed.config,&probe,&mut cancel).await?;
+    let mut service=start_service(owner,&dir,&installed.config,&probe,&log,&mut cancel).await?;
     let selftest=async {
         for language in &installed.config.languages {
             let response=owner.client.post(format!("http://127.0.0.1:{}/transcribe",service.port)).bearer_auth(&service.nonce)
                 .json(&json!({"audio_path":audio,"language":language,"task_id":"installation-self-test","sample_frames":16000,"timestamps":"word"})).timeout(Duration::from_secs(300)).send().await.map_err(|e|format!("ASR_SELF_TEST_FAILED: {e}"))?;
-            if !response.status().is_success(){return Err("ASR_SELF_TEST_FAILED: offline inference refused standard evidence".into());}
+            if !response.status().is_success(){
+                let detail=response.text().await.unwrap_or_default();
+                return Err(format!("ASR_SELF_TEST_FAILED: {language} offline inference refused standard evidence: {}",detail.chars().take(300).collect::<String>()));
+            }
             let result:Value=response.json().await.map_err(|e|e.to_string())?;
             validate_transcript(&result,language,16000)?;
         }
         Ok::<(),String>(())
     };
     let result=tokio::select! {result=selftest=>result,_=cancel.changed()=>Err("ASR_INSTALL_CANCELLED".into())};
-    terminate(&owner.client,&mut service).await?;result?;
+    if result.is_err() {preserve_service_log(&service.run_dir,&log);}
+    terminate(&owner.client,&mut service).await?;result.map_err(|error|format!("{error}; private diagnostics: {}",log.display()))?;
     let _=fs::remove_dir_all(&probe);
     if *cancel.borrow(){return Err("ASR_INSTALL_CANCELLED".into());}
     if owner.startup.lock().await.is_some(){return Err("ASR_BUSY: a task is starting the service".into());}
@@ -229,16 +294,16 @@ async fn install_staging(owner:&Supervisor,installed:&Installed,mut cancel:watch
 fn silence_wav()->Vec<u8> {
     let mut bytes=b"RIFF".to_vec();bytes.extend(32036u32.to_le_bytes());bytes.extend(b"WAVEfmt ");bytes.extend(16u32.to_le_bytes());bytes.extend(1u16.to_le_bytes());bytes.extend(1u16.to_le_bytes());bytes.extend(16000u32.to_le_bytes());bytes.extend(32000u32.to_le_bytes());bytes.extend(2u16.to_le_bytes());bytes.extend(16u16.to_le_bytes());bytes.extend(b"data");bytes.extend(32000u32.to_le_bytes());bytes.resize(32044,0);bytes
 }
-async fn start_service(owner:&Supervisor,dir:&Path,config:&LocalAsrConfig,allow_root:&Path,cancel:&mut watch::Receiver<bool>)->Result<OwnedService,String> {
+async fn start_service(owner:&Supervisor,dir:&Path,config:&LocalAsrConfig,allow_root:&Path,diagnostics:&Path,cancel:&mut watch::Receiver<bool>)->Result<OwnedService,String> {
     verify_snapshot(&owner.snapshot)?;
     let generation=uuid::Uuid::new_v4().to_string();let run_dir=dir.join("run").join(&generation);private_dir(&run_dir)?;
     let nonce=format!("{}{}",uuid::Uuid::new_v4().simple(),uuid::Uuid::new_v4().simple());private_write(&run_dir.join("nonce"),nonce.as_bytes())?;
     let mut options=fs::OpenOptions::new();options.write(true).create_new(true);
     #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
     let log=options.open(run_dir.join("service.log")).map_err(|e|e.to_string())?;
-    let mut command=owned_command(&venv_python(dir));
+    let mut command=owned_command(&venv_python(dir),&owner.root.join("pycache"));
     command.arg("-u").arg(owner.snapshot.join("server.py")).args(["--port","0","--model"]).arg(&config.model)
-        .args(["--device","cpu","--compute","int8","--batch-size","8","--cache"]).arg(dir.join("cache"))
+        .args(["--device","cpu","--compute","int8","--batch-size","8","--cache"]).arg(model_cache(&owner.root,dir))
         .arg("--allow-root").arg(allow_root).arg("--token-file").arg(run_dir.join("nonce"))
         .arg("--parent-pid").arg(std::process::id().to_string()).arg("--supervised-stdin")
         .env("HF_HUB_OFFLINE","1").env("TRANSFORMERS_OFFLINE","1").env("HF_HUB_DISABLE_TELEMETRY","1")
@@ -267,7 +332,10 @@ async fn start_service(owner:&Supervisor,dir:&Path,config:&LocalAsrConfig,allow_
         result=tokio::time::timeout(Duration::from_secs(120),startup)=>result.unwrap_or_else(|_|Err("ASR_START_TIMEOUT".into())),
         _=cancel.changed()=>Err("ASR_SERVICE_CANCELLED".into()),
     };
-    let port=match result {Ok(port)=>port,Err(error)=>{let _=kill_owned(&mut child).await;let _=fs::remove_dir_all(&run_dir);return Err(error);}};
+    let port=match result {Ok(port)=>port,Err(error)=>{
+        let _=kill_owned(&mut child).await;preserve_service_log(&run_dir,diagnostics);let _=fs::remove_dir_all(&run_dir);
+        return Err(format!("{error}; private diagnostics: {}",diagnostics.display()));
+    }};
     private_write(&run_dir.join("run.json"),&serde_json::to_vec(&json!({"generation":generation,"port":port,"pid":child.id(),"protocol":PROTOCOL,"serviceVersion":SERVICE_VERSION})).map_err(|e|e.to_string())?)?;
     Ok(OwnedService {child,port,nonce,generation,active_task_id:None,last_used:std::time::Instant::now(),run_dir,installation_dir:dir.into()})
 }
@@ -370,7 +438,7 @@ pub async fn transcribe(task_id:&str,audio:&Path,language:&str,sample_frames:u64
             if guard.as_mut().is_some_and(|s|s.child.try_wait().ok().flatten().is_some()){guard.take();}
             let installation_dir=start_owner.root.join(&installed.installation_id);
             if guard.as_ref().is_some_and(|service|service.installation_dir!=installation_dir){if let Some(mut service)=guard.take(){terminate(&start_owner.client,&mut service).await?;}}
-            if guard.is_none(){*guard=Some(start_service(&start_owner,&start_owner.root.join(&installed.installation_id),&config,&evidence,&mut receiver).await?);}
+            if guard.is_none(){*guard=Some(start_service(&start_owner,&start_owner.root.join(&installed.installation_id),&config,&evidence,&start_owner.root.join("service-failures.log"),&mut receiver).await?);}
             let service=guard.as_mut().unwrap();service.active_task_id=Some(task);
             lease.generation=Some(service.generation.clone());
             if *receiver.borrow(){return Err("ASR_SERVICE_CANCELLED".into());}
@@ -447,6 +515,83 @@ mod tests {
         assert!(verify_snapshot(&root).unwrap_err().contains("server.py hash mismatch"));
         private_write(&root.join("server.py"),b"server.py").unwrap();assert_eq!(verify_snapshot(&root).unwrap(),before);
         fs::remove_dir_all(root).unwrap();
+    }
+    fn scratch(name:&str)->PathBuf {let root=std::env::temp_dir().join(format!("dsivio-asr-{name}-{}",uuid::Uuid::new_v4()));private_dir(&root).unwrap();root}
+    #[test]
+    fn installations_share_one_model_cache_so_retries_resume() {
+        let root=scratch("cache");let fresh=root.join(uuid::Uuid::new_v4().to_string());private_dir(&fresh).unwrap();
+        assert_eq!(model_cache(&root,&fresh),root.join("models"));
+        // Installations made before the shared cache keep reading their own.
+        let legacy=root.join(uuid::Uuid::new_v4().to_string());private_dir(&legacy.join("cache")).unwrap();
+        assert_eq!(model_cache(&root,&legacy),legacy.join("cache"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn abandoned_installations_are_removed_but_shared_state_is_kept() {
+        let root=scratch("abandoned");let active=uuid::Uuid::new_v4().to_string();let orphan=uuid::Uuid::new_v4().to_string();
+        for dir in [&active,&orphan,&"models".to_owned(),&"pycache".to_owned()] {private_dir(&root.join(dir)).unwrap();}
+        private_write(&root.join(format!("install-{orphan}.log")),b"why it failed").unwrap();
+        remove_abandoned_installations(&root,Some(&active));
+        assert!(root.join(&active).is_dir() && root.join("models").is_dir() && root.join("pycache").is_dir());
+        assert!(!root.join(&orphan).exists());
+        assert!(root.join(format!("install-{orphan}.log")).is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn failed_service_log_outlives_its_run_directory() {
+        let root=scratch("log");let run=root.join("run");private_dir(&run).unwrap();
+        private_write(&run.join("service.log"),b"Traceback: RESOURCE_NOT_PREPARED").unwrap();
+        let destination=root.join("install.log");private_write(&destination,b"pip output\n").unwrap();
+        preserve_service_log(&run,&destination);fs::remove_dir_all(&run).unwrap();
+        let kept=String::from_utf8(fs::read(&destination).unwrap()).unwrap();
+        assert!(kept.starts_with("pip output") && kept.contains("RESOURCE_NOT_PREPARED"),"{kept}");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn tree_size_counts_files_without_following_snapshot_links() {
+        let root=scratch("size");private_dir(&root.join("blobs")).unwrap();
+        private_write(&root.join("blobs/model"),&[0u8;1000]).unwrap();
+        #[cfg(unix)] std::os::unix::fs::symlink(root.join("blobs/model"),root.join("link")).unwrap();
+        assert!((1000..1100).contains(&tree_size(&root)),"{}",tree_size(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn install_steps_wait_while_downloading_but_stop_when_stalled() {
+        let root=scratch("watchdog");let log=root.join("install.log");let watched=root.join("models");private_dir(&watched).unwrap();
+        let watchdog=Watchdog {poll:Duration::from_millis(50),stall:Duration::from_millis(400),limit:Duration::from_secs(30)};
+        let (_cancel,mut receiver)=watch::channel(false);
+        // A slow download that keeps writing outlives the stall window.
+        let mut growing=Command::new("sh");growing.arg("-c").arg(format!("for i in 1 2 3 4 5 6 7 8 9 10 11 12; do head -c 4096 /dev/zero >> '{}/blob.incomplete'; sleep 0.1; done",watched.display()));
+        let downloaded=std::sync::atomic::AtomicU64::new(0);
+        run_install_command(growing,&log,&watched,&mut receiver,&watchdog,&|bytes|downloaded.store(bytes,std::sync::atomic::Ordering::Relaxed)).await.unwrap();
+        assert!(downloaded.load(std::sync::atomic::Ordering::Relaxed)>0);
+        // No output and no new bytes: stopped long before the hard limit.
+        let mut stalled=Command::new("sleep");stalled.arg("20");
+        let started=std::time::Instant::now();
+        let error=run_install_command(stalled,&log,&watched,&mut receiver,&watchdog,&|_|{}).await.unwrap_err();
+        assert!(error.starts_with("ASR_INSTALL_STALLED") && started.elapsed()<Duration::from_secs(5),"{error}");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn model_preparation_downloads_each_model_once_and_resumably() {
+        let config=LocalAsrConfig {languages:vec!["en".into(),"pt".into()],..LocalAsrConfig::default()};
+        let command=prepare_command(Path::new("python"),Path::new("/pycache"),Path::new("/snapshot"),&config,Path::new("/models"));
+        let env=|key:&str|command.as_std().get_envs().find(|(k,_)|*k==key).and_then(|(_,v)|v).map(|v|v.to_string_lossy().into_owned());
+        // transformers otherwise fetches a second ~1.3 GB safetensors copy per language in a thread
+        // that keeps the step alive after preparation reports success.
+        assert_eq!(env("DISABLE_SAFETENSORS_CONVERSION").as_deref(),Some("true"));
+        assert_eq!(env("HF_HUB_DISABLE_XET").as_deref(),Some("1"));
+        let args:Vec<_>=command.as_std().get_args().map(|a|a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args,["/snapshot/prepare.py","--model","small","--languages","en","pt","--cache","/models"]);
+    }
+    #[test]
+    fn python_bytecode_stays_out_of_the_bundled_runtime() {
+        // Bundled Python shares its stdlib with the venv; without a prefix every import writes
+        // .pyc into App resources (signed bundle in release, a watched dev source tree in dev).
+        let command=owned_command(Path::new("python"),Path::new("/data/whisperx/pycache"));
+        let prefix=command.as_std().get_envs().find(|(key,_)|*key=="PYTHONPYCACHEPREFIX").and_then(|(_,value)|value);
+        assert_eq!(prefix,Some(std::ffi::OsStr::new("/data/whisperx/pycache")));
     }
     #[test]
     fn unaligned_local_words_keep_absent_timing() {

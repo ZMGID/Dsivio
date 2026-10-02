@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import {
   Plus, Minus, Trash2, RefreshCw, Eye, EyeOff, Wrench, Brain,
   ArrowLeft, ChevronRight, SlidersHorizontal, List,
-  Image as ImageIcon, Video,
+  Image as ImageIcon, Video, Mic, AudioLines,
 } from 'lucide-react'
 import { Select, Input, SettingsGroup, FieldBlock, Toggle } from '../components'
 import { Button, IconButton } from '../../components/Button'
@@ -13,6 +13,7 @@ import { ProviderRequestPanel } from '../ProviderRequestPanel'
 import { ProviderOAuthPanel } from '../ProviderOAuthPanel'
 import { ProviderUsageCard } from '../ProviderUsageCard'
 import { resolveModelInfo } from '../../data/modelMatching'
+import { isSpeechModel, isTranscribeModel } from '../../data/speechModels'
 import { api, isOpenCodeFree, clampedActiveKeyIndex, activeKeyIndexAfterRemove } from '../../api/tauri'
 import type { I18n, Lang } from '../../components/i18n'
 import type { ModelProvider, ProviderApiFormat } from '../../api/tauri'
@@ -298,6 +299,8 @@ export function ProviderDetail({
                       <Brain size={11} strokeWidth={2} />
                     </span>
                   )}
+                  {isSpeechModel(provider, model) && <span className="kv-tag" title={lang === 'zh' ? '语音合成' : 'Speech synthesis'}><AudioLines size={12} />{lang === 'zh' ? '语音合成' : 'Speech'}</span>}
+                  {isTranscribeModel(provider, model) && <span className="kv-tag" title={lang === 'zh' ? '语音转写' : 'Transcription'}><Mic size={12} />{lang === 'zh' ? '语音转写' : 'Transcription'}</span>}
                   {caps?.videoGeneration && <span className="kv-tag" title={lang === 'zh' ? '视频生成' : 'Video generation'}><Video size={12} />{lang === 'zh' ? '视频生成' : 'Video generation'}</span>}
                   {caps?.imageGeneration && (
                     <span className="kv-badge-mini kv-badge-mini--image" title={lang === 'zh' ? '生图' : 'Image generation'}>

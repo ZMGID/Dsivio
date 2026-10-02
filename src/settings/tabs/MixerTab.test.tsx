@@ -8,7 +8,7 @@ import { i18n } from '../../components/i18n'
 const t = i18n.zh
 
 /**
- * 回归重点：六个模型槽位各自写对 defaultModels 的 key。
+ * 回归重点：各模型槽位各自写对 defaultModels 的 key。
  * 全是 (key, providerId, model) 同签名调用，接错 key 类型检查不报错。
  */
 function renderTab(overrides: Record<string, unknown> = {}) {
@@ -31,12 +31,10 @@ function renderTab(overrides: Record<string, unknown> = {}) {
 }
 
 describe('MixerTab', () => {
-  it('只把视频生成模型列入媒体槽位并保存到独立配置', async () => {
-    const props = renderTab({ providers: [makeProvider({ enabledModels: ['gpt-4o', 'MiniMax-H3'] })] })
-    await userEvent.click(screen.getByRole('button', { name: '对话视频生成模型' }))
-    expect(screen.queryByRole('option', { name: /gpt-4o/ })).toBeNull()
-    await userEvent.click(screen.getByRole('option', { name: /MiniMax-H3/ }))
-    expect(props.onUpdateDefaultModel).toHaveBeenCalledWith('videoGeneration', 'p1', 'MiniMax-H3')
+  it('不再提供对话生图/生视频模型选择（统一在媒体创作模型池配置）', () => {
+    renderTab()
+    expect(screen.queryByText('对话生成')).toBeNull()
+    expect(screen.queryByRole('button', { name: '对话视频生成模型' })).toBeNull()
   })
 
   it('可以关闭视频分析，且不清空已选模型', async () => {
@@ -82,11 +80,11 @@ describe('MixerTab', () => {
     expect(screen.getByText(t.mixerAdvisorSection)).toBeTruthy()
   })
 
-  it('「全部恢复自动」一次重置六个槽位（不含 advisor）', async () => {
+  it('「全部恢复自动」一次重置全部辅助槽位（不含 advisor）', async () => {
     const props = renderTab()
     await userEvent.click(screen.getByRole('button', { name: t.mixerResetAuto }))
     const keys = props.onUpdateDefaultModel.mock.calls.map((c) => c[0])
-    expect(keys).toEqual(['vision', 'videoAnalysis', 'titleSummary', 'compression', 'imageGeneration', 'videoGeneration', 'promptOptimize'])
+    expect(keys).toEqual(['vision', 'videoAnalysis', 'titleSummary', 'compression', 'promptOptimize'])
     // advisor 有独立开关，不该被批量重置清掉
     expect(keys).not.toContain('advisor')
   })
@@ -122,8 +120,6 @@ describe('MixerTab', () => {
         videoAnalysis: { providerId: '', model: '' },
         titleSummary: { providerId: '', model: '' },
         compression: { providerId: '', model: '' },
-        imageGeneration: { providerId: '', model: '' },
-      videoGeneration: { providerId: '', model: '' },
         promptOptimize: { providerId: '', model: '' },
         advisor: { providerId: 'p1', model: 'gpt-4o' },
       },

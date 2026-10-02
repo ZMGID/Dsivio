@@ -47,7 +47,6 @@ describe('ComfyUI provider configuration', () => {
     expect(saved.providers[0].request.comfy.workflows[0].inputs[0]).toMatchObject({ nodeId: '6', input: 'text', kind: 'text', label: '提示词' })
     expect(saved.workbenchMedia.imageModels).toHaveLength(1)
     expect(saved.workbenchMedia.videoModels).toHaveLength(0)
-    expect(saved.defaultModels.imageGeneration.providerId).toBe('')
   })
   it('rejects canvas JSON and displays connection failures without losing imported data', async () => {
     render(<Fixture />)

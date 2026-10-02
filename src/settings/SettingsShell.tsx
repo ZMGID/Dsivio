@@ -42,6 +42,7 @@ import { RequestDebugPanel } from './RequestDebugPanel'
 import { HotkeysTab } from './tabs/HotkeysTab'
 import { LensTab } from './tabs/LensTab'
 import { MediaCreationTab } from './tabs/MediaCreationTab'
+import { mediaPoolEntries, MEDIA_KINDS, MEDIA_KIND_LABEL, type MediaPoolKind } from '../data/mediaModelPools'
 import { MixerTab } from './tabs/MixerTab'
 import { TranslateTab } from './tabs/TranslateTab'
 import { MemoryTab } from './tabs/MemoryTab'
@@ -179,6 +180,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
   }, [])
   // 使用统计页内的视图：应用用量 / 调用明细 / 请求调试
   const [usageView, setUsageView] = useState<'app' | 'calls' | 'debug'>('app')
+  const [mediaKind, setMediaKind] = useState<MediaPoolKind>('imageModels')
   useEffect(() => {
     if (initialTab) navigateToSettingsTab(initialTab)
   }, [initialTab, navigateToSettingsTab])
@@ -860,7 +862,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     },
     media: {
       title: lang === 'zh' ? '媒体创作' : 'Media creation',
-      subtitle: lang === 'zh' ? '选择 Workbench 可使用的图片和视频模型，可多选。' : 'Choose the image and video models available in Workbench. Select as many as you need.',
+      subtitle: lang === 'zh' ? '对话、工作台和 dsivio media 命令都从这里选模型，每类排在最前的可用模型是默认模型。' : 'Chat, Workbench and the dsivio media command take models from here. The first available model of each type is the default.',
     },
     mixer: {
       title: t.tabMixer,
@@ -979,6 +981,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             <div key={activeTab} className={`settings-section-title-enter${activeTab === 'usage' ? ' settings-usage-title' : ''}`}>
               <div className="flex items-center gap-3">
                 <div className="kv-page-title">{pageMeta[activeTab].title}</div>
+                {activeTab === 'media' && (
+                  <nav className="kv-plugin-segments" aria-label={lang === 'zh' ? '媒体类型' : 'Media type'} data-tauri-drag-region="false">
+                    {MEDIA_KINDS.map(kind => {
+                      const count = mediaPoolEntries(settings, kind).filter(entry => entry.available).length
+                      return <button key={kind} type="button" className="kv-plugin-segment" aria-current={mediaKind === kind ? 'page' : undefined} onClick={() => setMediaKind(kind)}>
+                        {MEDIA_KIND_LABEL[kind][lang === 'zh' ? 'zh' : 'en']}{count > 0 && <span className="kv-media-tab-count">{count}</span>}
+                      </button>
+                    })}
+                  </nav>
+                )}
                 {activeTab === 'usage' && (
                   <div className="inline-flex items-center gap-0.5 rounded-full bg-[var(--bg-input-subtle)] p-0.5" data-tauri-drag-region="false">
                     {([
@@ -1207,9 +1219,10 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
             )}
 
             {/* ===== 混音器标签页 ===== */}
-            {activeTab === 'media' && <MediaCreationTab settings={settings} lang={lang}
+            {activeTab === 'media' && <MediaCreationTab settings={settings} lang={lang} kind={mediaKind}
               onUpdatePool={(kind, models) => setSettings(prev => prev ? { ...prev, workbenchMedia: { ...prev.workbenchMedia, [kind]: models } } : prev)}
-              onUpdateLocalAsr={localAsr => setSettings(prev => prev ? { ...prev, workbenchMedia: { ...prev.workbenchMedia, localAsr } } : prev)} />}
+              onUpdateLocalAsr={localAsr => setSettings(prev => prev ? { ...prev, workbenchMedia: { ...prev.workbenchMedia, localAsr } } : prev)}
+              onNavigateTab={navigateToSettingsTab} />}
             {activeTab === 'mixer' && (
               <MixerTab
                 settings={settings}

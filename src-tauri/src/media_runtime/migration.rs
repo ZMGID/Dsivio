@@ -126,11 +126,7 @@ mod tests {
         import_providers(&mut settings, &data).unwrap();
         assert_eq!(settings.providers.len(), 2);
         assert_eq!(settings.providers[0].api_keys, vec!["test-key"]);
-        assert!(settings
-            .default_models
-            .video_generation
-            .provider_id
-            .is_empty());
+        assert!(settings.workbench_media.video_models.is_empty());
         assert!(settings.providers[1].request.comfy.is_some());
     }
 }

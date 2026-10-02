@@ -4,9 +4,8 @@ import { makeProvider, makeSettings } from '../settings/tabs/testFixtures'
 import { applyProviderDraftIntent } from '../settings/providerDraftIntents'
 
 describe('media pool boundary', () => {
-  it('does not inherit conversation defaults or select every enabled model', () => {
+  it('does not select every enabled model', () => {
     const settings=makeSettings({providers:[makeProvider({enabledModels:['MiniMax-H3']})]})
-    settings.defaultModels.videoGeneration={providerId:'p1',model:'MiniMax-H3'}
     expect(mediaPoolEntries(settings,'videoModels')).toEqual([])
   })
   it('preserves disabled membership, makes it unavailable, and removes deleted references', () => {
