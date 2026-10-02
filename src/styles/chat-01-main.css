@@ -2418,13 +2418,13 @@ button.chat-composer-status-item:hover {
   outline: none;
 }
 
-.chat-window-shell button:focus-visible {
+html[data-input-modality="keyboard"] .chat-window-shell button:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
   /* 键盘聚焦时焦点环缓入；失焦时瞬退（不拖尾），是更利落的行为。 */
   transition: box-shadow var(--kv-dur-fast) var(--kv-ease-out);
 }
 
-.dark .chat-window-shell button:focus-visible {
+html.dark[data-input-modality="keyboard"] .chat-window-shell button:focus-visible {
   box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.18);
 }

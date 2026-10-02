@@ -63,6 +63,16 @@ html.windows body {
   text-rendering: auto;
 }
 
+/* 焦点环只留给键盘导航（data-input-modality 见 src/utils/inputModality.ts）。WebKit 在脚本移焦点
+   （弹窗初始焦点、菜单）时也画原生蓝框，即使刚用鼠标点过。文本输入框不在此列，聚焦样式照常。
+   !important：各页面的 :focus-visible outline 规则特异性不一，且样式表在本文件之后加载；这里只压掉
+   outline 与 Tailwind ring。用 box-shadow 画焦点环的规则需自行限定在 keyboard 下。 */
+html:not([data-input-modality="keyboard"])
+  :is(button, a, summary, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [role="switch"], [tabindex], dialog):focus-visible {
+  outline: none !important;
+  --tw-ring-shadow: 0 0 #0000 !important;
+}
+
 :root {
   /* neutral = 象牙白 / 蛋壳白（off-white，极淡奶油调）。
      暖偏移固定为 (R, R−1, R−3)：顶层 253 → #fdfcfa。
