@@ -316,7 +316,7 @@ Use each observation to decide whether to wait, change a download route or recom
 and share what that means for the piece. Let the process carry out a known wait while you advance
 independent work; reading the same output repeatedly adds no new evidence.
 
-Use the retained local WhisperX Provider for alignment. The Dsivio adapter does not yet offer cloud ASR or speech generation.
+In Dsivio, WhisperX alignment runs through the App's `dsivio media transcribe`, which manages its installation and service; do not prepare the plugin's own local WhisperX described here.
 
 A **mirror** is an alternative server supplying copies of packages or model files. It can provide a
 better route when the original host is slow or unreachable. It changes where bytes are acquired;

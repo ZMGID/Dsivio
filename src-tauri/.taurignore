@@ -1,0 +1,2 @@
+# Built runtime and its Python/Node write caches while the App runs; a rebuild here kills in-flight installs.
+resources/video-runtime/

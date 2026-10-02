@@ -199,7 +199,7 @@ import { StudioPage } from './StudioPage'
 import { MarketPage } from './market/MarketPage'
 import { PluginCenterHeading } from './market/PluginCenterHeading'
 import { marketApi } from './market/api'
-import { isBuiltInMarketId, marketUseTarget, type MarketLocal } from './market/types'
+import { isBuiltInMarketId, marketUseReusesConversation, marketUseTarget, type MarketLocal } from './market/types'
 const ArtifactsCenter = lazy(() => import('./ArtifactsCenter').then((module) => ({ default: module.ArtifactsCenter })))
 const WorkbenchHome = lazy(() => import('./workbench/WorkbenchHome').then((module) => ({ default: module.WorkbenchHome })))
 
@@ -2515,7 +2515,6 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (usesExternalRuntime || usesChatRuntime || draftAgentRuntime.kind !== 'builtin') throw new Error('请先切换到内置 Agent 模式，再使用应用。')
     if (!item.skillId || item.status !== 'ready') throw new Error('应用尚未完成安装验收。')
     if (!activeProviderId || !activeModel) throw new Error('请先配置对话模型，再使用应用。')
-    if (isCurrentConversationBusy()) throw new Error('请等本次回复结束后再切换应用。')
     const startingHash = window.location.hash
     if (!item.enabled || item.id === 'ziniao-cli') await marketApi.setEnabled(item.id, true)
     const target = marketUseTarget(item, item.manifest.setupSkillId ? await marketApi.setupDone(item.id) : true)
@@ -2523,8 +2522,9 @@ export default function Chat({ onSettingsChange, onContentReady }: ChatProps) {
     if (window.location.hash !== startingHash) return
     const pluginProject = item.projectContext ?? (item.manifest.project ? await marketApi.ensureProject(item.id) : null)
     const useProject = pluginProject ?? (selectedProject ? { id: selectedProject.id, name: selectedProject.name } : null)
-    const reuse = !newChat && currentConversation && (!pluginProject || (currentConversation.project_id ?? currentConversation.projectId) === pluginProject.id)
-    let conv = reuse ? currentConversation : await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined, useProject?.name, useProject?.id ?? null)
+    const reuse = marketUseReusesConversation(newChat, currentConversation, pluginProject?.id ?? null)
+    if (reuse && isCurrentConversationBusy()) throw new Error('请等本次回复结束后再切换应用。')
+    let conv = reuse && currentConversation ? currentConversation : await chatApi.createConversation(activeProviderId || undefined, activeModel || undefined, useProject?.name, useProject?.id ?? null)
     conv = await chatApi.updateConversation(conv.id, { activeSkillId: target.skillId, assistantId: null, ...(newChat ? { title: item.manifest.name } : {}) })
     if (window.location.hash !== startingHash) return
     currentConversationIdRef.current = conv.id

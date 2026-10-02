@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isBuiltInMarketId, marketItems, marketUsePrompt, marketUseTarget, primaryAction, type MarketLocal, type MarketSnapshot } from './types'
+import { isBuiltInMarketId, marketItems, marketUsePrompt, marketUseReusesConversation, marketUseTarget, primaryAction, type MarketLocal, type MarketSnapshot } from './types'
 
 const local = { id: 'test', manifest: { name: '已安装版本' }, status: 'ready', enabled: true } as MarketLocal
 const snapshot: MarketSnapshot = { categories: [], entries: [], installed: [local], refreshedAt: null, error: '离线', sourceUrl: '' }
@@ -53,6 +53,15 @@ it('首次使用内置插件固定加载 setup，完成后回到主 skill', () =
   expect(marketUseTarget(builtIn, true)).toEqual({ skillId: 'hypit', prompt: '使用 Hypit，告诉我可以做什么。' })
   const noSetup = { ...builtIn, manifest: { ...builtIn.manifest, setupSkillId: undefined } } as MarketLocal
   expect(marketUseTarget(noSetup, false).skillId).toBe('hypit')
+})
+
+it('使用插件新建对话时不复用（也不受）当前运行中的对话', () => {
+  const current = { project_id: 'p1' }
+  expect(marketUseReusesConversation(true, current, null)).toBe(false)
+  expect(marketUseReusesConversation(false, null, null)).toBe(false)
+  expect(marketUseReusesConversation(false, current, null)).toBe(true)
+  expect(marketUseReusesConversation(false, { projectId: 'p1' }, 'p1')).toBe(true)
+  expect(marketUseReusesConversation(false, current, 'p2')).toBe(false)
 })
 
 it('内置插件使用直接安装和卸载流程', () => {

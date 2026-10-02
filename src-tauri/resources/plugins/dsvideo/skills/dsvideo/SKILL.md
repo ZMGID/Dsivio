@@ -8,18 +8,13 @@ description: Direct and produce videos with Dsvideo, primarily through generated
 ## Dsivio 内置运行方式
 
 本插件随 Dsivio 打包，已经安装；不要安装公开 npm 包、复制其他 Provider 或读取 App 配置/密钥。
-所有参考文档中的 `dsvideo <参数>` 在此使用 `dsivio dsvideo <参数>`。CLI 由 App 自带 Node 运行。
-先用 `dsivio dsvideo --version` 与 `dsivio dsvideo doctor --endpoint dsivio.media` 检查。
-图片、视频生成通过 `dsivio media` 交给正在运行的 App；模型在「设置 > 媒体创作」配置。
-本地转写使用 App 的 `dsivio media transcribe`，不另外启动插件的 WhisperX。
-项目保持在用户选择的工作目录；运行 `dsivio dsvideo runtime init` 创建默认 Dsivio Profile。
-提交结果不确定时只查询原任务，不自动重新生成。首次检查不要求付费测试。
-
-## 项目与持续状态
-
-首次使用和切换目录时读取同插件的 `dsvideo:dsvideo-setup` Skill。运行 `dsivio dsvideo projects list` 查看全部已登记项目和插件内的项目索引文档；使用 `projects init --path <绝对路径> --name <名称>` 初始化新目录，`projects use --path <绝对路径>` 切换登记。
-项目索引保存在 Dsvideo 插件自己的 `data/PROJECTS.md`，按 `projects list` 返回的 `document` 路径读取；同目录的 `projects.json` 与索引由命令维护，插件更新保留它们。
-每个项目保留独立的 `DSVIDEO_STATE.md`，记录目标、进度、素材与成果位置及待办，每次制作后更新。不要覆盖已有状态，不以首次目录代替其他项目。当前对话的项目目录是工作边界，跨目录制作须由用户明确选择，必要时使用 `--workspace`。
+参考文档中的 `dsvideo <参数>` 在此写作 `dsivio dsvideo <参数>`，CLI 由 App 自带 Node 运行。先用 `dsivio dsvideo --version` 与 `dsivio dsvideo doctor --endpoint dsivio.media` 检查，检查不做付费测试。
+图片、视频、配音和转写都通过 `dsivio media` 交给正在运行的 App；模型在「设置 > 媒体创作」配置，详见 references/environment/model-and-provider.md。
+转写对齐：Dsvideo 的 whisperx-alignment 调用 App 的 `dsivio media transcribe`，安装、模型与服务由 App 管理，不要另起或自行安装 WhisperX。doctor 报 DSIVIO_ASR_PREPARATION_REQUIRED 时看 `dsivio media asr status` 的 `settings` 与 `note`：开启自动安装就直接转写（首次下载约 2–5 GB，先告诉用户）；`--language` 须是设置中已勾选的语言。
+配音：`dsivio media models --kind speech` 中的 local/system-tts 使用 macOS/Windows 系统声音，无需云语音模型。按文本语言从该模型 voice.allowed 选择实际声音名，用 `dsivio media speech --model local/system-tts --text-file <UTF-8文件> --voice <名称>` 输出 WAV，或在 Dsvideo 中使用 @dsvideo/system-speech 的 system-tts。只做普通配音，不宣称声音克隆。
+预算：Dsivio 的模型可能显示 Pricing unknown，这只表示价格未公布。和用户一次确认制作范围与大致预算后，在范围内正常推进，不必每一步再问。场景/人物图、关键帧和少量试片是常规制作步骤，能让片子更好就做，不要为了少一次请求而省掉；商品视频通常先生成包含商品的场景图，再和原商品图一起作为视频参考图。明显超出约定（成片数量、时长、分辨率大幅增加或反复整片重生成）时再问。
+提交结果不确定时只查询原任务，不自动重新生成。
+项目：每次加载先运行 `dsivio dsvideo projects list`。返回的 document 所在目录的 SETUP_STATE.md 未标记 setup_completed: true 时，先读同插件 ../dsvideo-setup/SKILL.md 完成 setup；已完成则直接读取当前项目的 DSVIDEO_STATE.md，制作后更新。新建、切换或修复项目也按 setup 文档处理。
 
 
 You are the director and producer entrusted with making the video the user is asking for. Understand

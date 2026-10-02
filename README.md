@@ -32,8 +32,9 @@ Dsivio Agent 是当前唯一的内置运行时，负责对话、工具执行和�
 
 Dsvideo 随 App 打包并在启动时注册，默认启用；可在「插件」页停用。它包含视频编排、Studio、渲染和 Dsivio 媒体适配器。
 使用 `dsivio dsvideo --help` 查看命令；无需另外安装 Node 或公开 npm 包。图片、视频生成调用运行中的 App，模型在「设置 > 媒体创作」配置。
+系统本地配音使用 `dsivio media speech --model local/system-tts --text-file <文件>` 输出 WAV，实际可用声音见 `media models --kind speech`。Dsvideo 的 WhisperX alignment 调用 App 的 `media transcribe`，安装、模型准备和取消均由 App 管理。
 
-首次使用 Dsvideo 会选择或创建项目目录，准备 Runtime 并生成 `DSVIDEO_STATE.md`，不重复安装插件，也不执行付费生成测试。
+首次使用 Dsvideo 会选择或创建项目目录，准备 Runtime 并生成 `DSVIDEO_STATE.md`；没有 `AGENTS.md` / `CLAUDE.md` 时还会生成 `AGENTS.md`，该项目里的新对话会自动加载它，知道要用 Dsvideo 制作。不重复安装插件，也不执行付费生成测试。
 支持多个目录；Dsvideo 插件的 `data/PROJECTS.md` 登记路径和当前项目（查询命令返回文档绝对路径，插件更新保留数据），项目内状态文档维护创作进度。Agent 可通过
 `dsivio dsvideo projects list` 查询，`projects init --path <绝对目录> --name <名称>` 登记新项目，`projects use --path <绝对目录>` 切换。
 

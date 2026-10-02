@@ -77,6 +77,11 @@ export function marketUsePrompt(local: MarketLocal): string {
     || '使用这个插件，告诉我可以做什么。'
 }
 
+/** Only an explicit reuse targets the current conversation; a new chat never touches (or waits on) it. */
+export function marketUseReusesConversation(newChat: boolean, current: { project_id?: string | null; projectId?: string | null } | null, pluginProjectId: string | null) {
+  return !newChat && Boolean(current) && (!pluginProjectId || (current?.project_id ?? current?.projectId) === pluginProjectId)
+}
+
 /** First use pins the setup Skill; once setup has succeeded, use pins the main Skill. */
 export function marketUseTarget(local: MarketLocal, setupDone: boolean): { skillId: string; prompt: string } {
   const main = local.skillId ?? ''
