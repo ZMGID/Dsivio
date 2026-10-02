@@ -1,0 +1,303 @@
+{
+  "version": 1,
+  "project": "Dsivio",
+  "layers": [
+    {
+      "id": "ui",
+      "name": "功能界面"
+    },
+    {
+      "id": "bridge",
+      "name": "前端接口层"
+    },
+    {
+      "id": "domain",
+      "name": "Rust 业务"
+    },
+    {
+      "id": "service",
+      "name": "Rust 能力服务"
+    },
+    {
+      "id": "resource",
+      "name": "资源与外部"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "chat-ui",
+      "name": "对话",
+      "layer": "ui",
+      "order": 1,
+      "desc": "会话、消息流、集/项目侧栏、子代理、弹出窗口、市场",
+      "match": [
+        "src/chat/**"
+      ]
+    },
+    {
+      "id": "workbench-ui",
+      "name": "创作工作台",
+      "layer": "ui",
+      "order": 2,
+      "desc": "电商、选品、图文、图片、视频、发布、内容管理",
+      "match": [
+        "src/chat/workbench/**",
+        "src/chat/studio/**"
+      ]
+    },
+    {
+      "id": "automation-ui",
+      "name": "自动化编排",
+      "layer": "ui",
+      "order": 3,
+      "desc": "自动化流程编辑与运行状态",
+      "match": [
+        "src/chat/automation/**"
+      ]
+    },
+    {
+      "id": "dock-ui",
+      "name": "右侧工作区",
+      "layer": "ui",
+      "order": 4,
+      "desc": "文件树、Git、终端、后台任务面板",
+      "match": [
+        "src/chat/dock/**"
+      ]
+    },
+    {
+      "id": "settings-ui",
+      "name": "设置与引导",
+      "layer": "ui",
+      "order": 5,
+      "desc": "模型、MCP、知识库、连接器等设置和首次引导",
+      "match": [
+        "src/settings/**",
+        "src/onboarding/**"
+      ]
+    },
+    {
+      "id": "lens-ui",
+      "name": "Lens 屏幕问答",
+      "layer": "ui",
+      "order": 6,
+      "desc": "截图、标注、划词翻译、视觉问答",
+      "match": [
+        "src/lens/**",
+        "src/Lens.tsx"
+      ]
+    },
+    {
+      "id": "tauri-api",
+      "name": "Tauri 接口",
+      "layer": "bridge",
+      "order": 1,
+      "desc": "invoke/事件封装与协议契约",
+      "match": [
+        "src/api/**"
+      ]
+    },
+    {
+      "id": "model-catalog",
+      "name": "模型目录",
+      "layer": "bridge",
+      "order": 2,
+      "desc": "模型数据库、媒体模型池与匹配",
+      "match": [
+        "src/data/**"
+      ]
+    },
+    {
+      "id": "chat-core",
+      "name": "Agent 运行时",
+      "layer": "domain",
+      "order": 1,
+      "desc": "对话存储、Agent 循环、子代理、知识库、上下文压缩",
+      "match": [
+        "src-tauri/src/chat/**",
+        "src-tauri/src/agents/**",
+        "src-tauri/src/prompts.rs",
+        "src-tauri/src/notes.rs"
+      ]
+    },
+    {
+      "id": "workbench-core",
+      "name": "内容生成后端",
+      "layer": "domain",
+      "order": 2,
+      "desc": "图片/视频项目、店铺、选品、模板、生成工作流",
+      "match": [
+        "src-tauri/src/workbench/**",
+        "src-tauri/src/media_generation/**",
+        "src-tauri/src/media_generation.rs",
+        "src-tauri/src/media_runtime/**",
+        "src-tauri/src/generation_workflow/**",
+        "src-tauri/src/content_templates/**",
+        "src-tauri/src/sourcing/**",
+        "src-tauri/src/studio/**",
+        "src-tauri/src/studio.rs",
+        "src-tauri/src/comfyui.rs",
+        "src-tauri/src/fonts.rs"
+      ]
+    },
+    {
+      "id": "automation-core",
+      "name": "自动化执行",
+      "layer": "domain",
+      "order": 3,
+      "desc": "流程定义、调度、运行与通知",
+      "match": [
+        "src-tauri/src/automation/**"
+      ]
+    },
+    {
+      "id": "dock-core",
+      "name": "文件/Git/终端",
+      "layer": "domain",
+      "order": 4,
+      "match": [
+        "src-tauri/src/dock/**"
+      ]
+    },
+    {
+      "id": "screen-core",
+      "name": "屏幕工具",
+      "layer": "domain",
+      "order": 5,
+      "desc": "截图、OCR、替换翻译、Lens 会话",
+      "match": [
+        "src-tauri/src/lens.rs",
+        "src-tauri/src/lens_commands.rs",
+        "src-tauri/src/screenshot.rs",
+        "src-tauri/src/sck.rs",
+        "src-tauri/src/capture_geometry.rs",
+        "src-tauri/src/macos_ocr.rs",
+        "src-tauri/src/windows_ocr.rs",
+        "src-tauri/src/rapidocr.rs",
+        "src-tauri/src/offline_models.rs",
+        "src-tauri/src/replace_translation/**",
+        "src-tauri/src/shortcuts.rs"
+      ]
+    },
+    {
+      "id": "tools-core",
+      "name": "工具与扩展",
+      "layer": "service",
+      "order": 1,
+      "desc": "MCP、Skills、插件、连接器、本机工具、联网搜索",
+      "match": [
+        "src-tauri/src/mcp/**",
+        "src-tauri/src/skills/**",
+        "src-tauri/src/plugins/**",
+        "src-tauri/src/connectors/**",
+        "src-tauri/src/native_tools/**",
+        "src-tauri/src/web_search/**",
+        "src-tauri/src/web_search.rs",
+        "src-tauri/src/computer_control.rs",
+        "src-tauri/src/market.rs",
+        "src-tauri/src/self_config/**"
+      ]
+    },
+    {
+      "id": "provider-core",
+      "name": "模型调用与设置",
+      "layer": "service",
+      "order": 2,
+      "desc": "设置持久化、多协议模型适配、HTTP 重试/换 key、OAuth、用量、更新",
+      "match": [
+        "src-tauri/src/settings.rs",
+        "src-tauri/src/provider_oauth/**",
+        "src-tauri/src/provider_oauth.rs",
+        "src-tauri/src/provider_request.rs",
+        "src-tauri/src/opencode_free.rs",
+        "src-tauri/src/usage.rs",
+        "src-tauri/src/updates.rs",
+        "src-tauri/src/api.rs",
+        "src-tauri/src/chat/model/**",
+        "src-tauri/src/chat/model_metadata.rs",
+        "src-tauri/src/chat/provider_runtime.rs"
+      ]
+    },
+    {
+      "id": "window-core",
+      "name": "窗口与平台",
+      "layer": "service",
+      "order": 3,
+      "desc": "窗口管理、焦点、应用数据目录",
+      "match": [
+        "src-tauri/src/windows.rs",
+        "src-tauri/src/window_focus.rs",
+        "src-tauri/src/app_data.rs",
+        "src-tauri/src/macos_hang_watchdog.rs"
+      ]
+    },
+    {
+      "id": "builtin-resources",
+      "name": "内置技能与插件",
+      "layer": "resource",
+      "order": 1,
+      "desc": "随应用分发的 skills、插件、视频工作室脚本",
+      "match": [
+        "src-tauri/resources/**",
+        "packages/**"
+      ]
+    },
+    {
+      "id": "llm-http",
+      "name": "外部 HTTP",
+      "layer": "resource",
+      "order": 2,
+      "externals": [
+        "reqwest"
+      ]
+    },
+    {
+      "id": "local-db",
+      "name": "本地数据库",
+      "layer": "resource",
+      "order": 3,
+      "externals": [
+        "rusqlite"
+      ]
+    }
+  ],
+  "files": {},
+  "infra": [
+    "src/components/**",
+    "src/utils/**",
+    "src/generated/**",
+    "src/styles/**",
+    "src/themeColors.ts",
+    "src/vite-env.d.ts",
+    "src/App.tsx",
+    "src/main.tsx",
+    "src/bootSplash.ts",
+    "src/chat/types.ts",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/main.rs",
+    "src-tauri/src/state.rs",
+    "src-tauri/src/utils.rs",
+    "src-tauri/src/proc.rs",
+    "src-tauri/src/path_env.rs",
+    "src-tauri/src/commands.rs"
+  ],
+  "exclude": [
+    "scripts/**",
+    "docs/**",
+    "website/**",
+    "tests/**",
+    ".scratch/**",
+    "src/test/**",
+    "src/chat/fixtures/**",
+    "src-tauri/src/bin/**",
+    "src-tauri/build_support/**",
+    "src-tauri/gen/**",
+    "**/*.test.*",
+    "**/testFixtures.ts",
+    "src-tauri/src/**/tests.rs",
+    "src-tauri/src/**/*_tests.rs"
+  ],
+  "ignore": [
+    "orphan:builtin-resources"
+  ]
+}
