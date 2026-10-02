@@ -127,7 +127,7 @@ describe('workflow editor behavior', () => {
   })
   it('shows save failure, keeps unsaved snapshot editable and retries it without claiming success', async () => {
     const flow = workflowStore.save(draft()); render(<WorkflowCanvas flow={flow} />)
-    const write = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota') })
+    const write = vi.spyOn(Object.getPrototypeOf(localStorage) as Storage, 'setItem').mockImplementation(() => { throw new Error('quota') })
     fireEvent.click(screen.getByText('输入提示')); fireEvent.change(screen.getByLabelText('节点名称'), { target: { value: '未丢失' } })
     expect(screen.getByRole('alert').textContent).toContain('保存失败')
     expect(screen.queryByText('已保存到本机')).toBeNull()

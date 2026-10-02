@@ -1,7 +1,7 @@
 import { ArrowRightLeft } from 'lucide-react'
 import { useT } from '../components/i18n'
 import { chatTitlebarPillButtonClass } from './platform'
-import type { ProductMode } from './productMode'
+import { otherProductMode, readProductModeEnter, type ProductMode } from './productMode'
 
 interface ProductModeSwitcherProps {
   mode: ProductMode
@@ -15,34 +15,6 @@ function useProductModeLabels(): Record<ProductMode, string> {
     chat: t.productModeChatName,
     workbench: t.productModeWorkbenchName,
   }
-}
-
-export function otherProductMode(mode: ProductMode): ProductMode {
-  return mode === 'chat' ? 'workbench' : 'chat'
-}
-
-type ModeEnterDirection = 'forward' | 'back'
-
-/** 切到工作台时名字自下而上，切回对话时自上而下。 */
-export function productModeEnterDirection(next: ProductMode): ModeEnterDirection {
-  return next === 'workbench' ? 'forward' : 'back'
-}
-
-/**
- * 侧栏整棵换掉时，切换器会卸载再挂上。方向写在 documentElement 上，
- * 新按钮渲染时读得到；只给名字用，不触发整页过渡。
- */
-export function armProductModeEnter(direction: ModeEnterDirection): void {
-  const root = document.documentElement
-  root.dataset.productModeDir = direction
-  window.setTimeout(() => {
-    if (root.dataset.productModeDir === direction) delete root.dataset.productModeDir
-  }, 240)
-}
-
-function readProductModeEnter(): ModeEnterDirection | null {
-  const value = document.documentElement.dataset.productModeDir
-  return value === 'forward' || value === 'back' ? value : null
 }
 
 /**

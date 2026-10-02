@@ -335,7 +335,7 @@ describe('Built-in image workflows', () => {
   })
 
   it('reports a local draft failure instead of claiming it was saved', async () => {
-    const storage = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('quota exceeded') })
+    const storage = vi.spyOn(Object.getPrototypeOf(localStorage) as Storage, 'setItem').mockImplementation(() => { throw new Error('quota exceeded') })
     try {
       render(<ImageStudio />)
       const toast = await screen.findByRole('alert')

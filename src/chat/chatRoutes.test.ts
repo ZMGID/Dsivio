@@ -190,8 +190,8 @@ describe('extensionsNavItemForView', () => {
     expect(extensionsNavItemForView('workbench')).toBe('workbench')
     window.location.hash = '#chat/workbench/shops'
     expect(extensionsNavItemForView('workbench')).toBe('workbench/shops')
-    window.location.hash = '#chat/workbench/ranks'
-    expect(extensionsNavItemForView('workbench')).toBe('workbench/ranks')
+    window.location.hash = '#chat/workbench/match'
+    expect(extensionsNavItemForView('workbench')).toBe('workbench/match')
     window.location.hash = '#chat/workbench/posts'
     expect(extensionsNavItemForView('workbench')).toBe('workbench/posts')
     window.location.hash = '#chat/workbench/main'

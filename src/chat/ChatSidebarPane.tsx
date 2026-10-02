@@ -2,8 +2,7 @@ import { memo, useCallback, useState, Profiler, type ProfilerOnRenderCallback } 
 import { Sidebar, type SidebarProps } from './Sidebar'
 import { WorkbenchSidebar } from './workbench/WorkbenchSidebar'
 import { useConversationTransition } from './conversationTransitionStore'
-import { armProductModeEnter, productModeEnterDirection } from './ProductModeSwitcher'
-import { loadProductMode, saveProductMode, type ProductMode } from './productMode'
+import { armProductModeEnter, loadProductMode, productModeEnterDirection, saveProductMode, type ProductMode } from './productMode'
 
 export interface ChatSidebarPaneProps extends Omit<SidebarProps, 'productMode' | 'onSelectProductMode'> {
   onRender: ProfilerOnRenderCallback

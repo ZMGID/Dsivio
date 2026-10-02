@@ -204,8 +204,11 @@ describe('ProvidersTab', () => {
     expect(presetTiles[0]?.textContent).toMatch(/Hezubus/)
     expect(presetTiles[0]?.querySelector('.kv-provider-preset-tile-heart')).toBeTruthy()
     expect(presetTiles[0]?.textContent).not.toMatch(/赞助/)
-    expect(presetTiles[1]?.textContent).toMatch(/Codex OAuth/)
-    expect(presetTiles[2]?.textContent).toMatch(/Kimi OAuth/)
+    // 媒体预设（ComfyUI、语音、视频目录）排在聊天预设之前。
+    const presetIndex = (name: RegExp) => presetTiles.findIndex((tile) => name.test(tile.textContent ?? ''))
+    expect(presetTiles[1]?.textContent).toMatch(/ComfyUI/)
+    expect(presetIndex(/Codex OAuth/)).toBeGreaterThan(presetIndex(/ComfyUI/))
+    expect(presetIndex(/Kimi OAuth/)).toBe(presetIndex(/Codex OAuth/) + 1)
     expect(presetTiles.at(-2)?.textContent).toMatch(/ModelScope/)
     expect(presetTiles.at(-1)?.textContent).toMatch(/GitHub Models/)
     expect(screen.getByRole('button', { name: /GLM Coding Plan/ })).toBeTruthy()
