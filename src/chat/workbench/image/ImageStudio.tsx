@@ -82,6 +82,7 @@ export function ImageStudio({
   emptyTitle,
   emptyHint,
   notice,
+  onNoticeDismiss,
   cta,
   ctaDisabled,
   onGenerate,
@@ -103,6 +104,7 @@ export function ImageStudio({
   emptyTitle: string
   emptyHint: string
   notice: string
+  onNoticeDismiss?: () => void
   cta?: string
   ctaDisabled?: boolean
   onGenerate?: () => void
@@ -110,13 +112,13 @@ export function ImageStudio({
 }) {
   const t = useT()
   return (
-    <WorkbenchPage mediaPool={modelControl ? undefined : 'imageModels'} fill crumb={t.workbenchGroupImage} crumbCurrent={crumbCurrent} title={title} actions={capsules}>
+    <WorkbenchPage mediaPool={modelControl ? undefined : 'imageModels'} fill crumb={t.workbenchGroupImage} crumbCurrent={crumbCurrent} title={title} actions={capsules} error={notice} onErrorDismiss={onNoticeDismiss}>
       {tabs}
       <div className="workbench-split workbench-split--even">
         <WorkbenchCard title={configTitle} hint={configHint}>
           {modelControl}
           <fieldset className="contents" disabled={ctaDisabled}>{config}</fieldset>
-          <WorkbenchCta notice={notice}>
+          <WorkbenchCta>
             {footer ?? (cta && onGenerate ? <Button variant="primary" disabled={ctaDisabled} onClick={onGenerate}>{cta}</Button> : null)}
           </WorkbenchCta>
         </WorkbenchCard>

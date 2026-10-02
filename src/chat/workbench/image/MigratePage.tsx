@@ -75,6 +75,7 @@ export function MigratePage() {
       emptyTitle={t.workbenchMigrateEmpty}
       emptyHint={t.workbenchMigrateEmptyHint}
       notice={notice || generation.error}
+      onNoticeDismiss={() => { setNotice(''); generation.setError('') }}
       cta={t.workbenchMigrateGenerate.replace('{n}', String(products.length))}
       onGenerate={() => void generate()}
     />

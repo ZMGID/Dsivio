@@ -69,7 +69,7 @@ export function VideoStudio({
 }) {
   const t = useT()
   return (
-    <WorkbenchPage mediaPool={modelControl ? undefined : "videoModels"} fill crumb={t.workbenchGroupVideo} crumbCurrent={crumbCurrent} title={title} actions={capsules}>
+    <WorkbenchPage mediaPool={modelControl ? undefined : "videoModels"} fill crumb={t.workbenchGroupVideo} crumbCurrent={crumbCurrent} title={title} actions={capsules} error={notice}>
       <div className="workbench-video-body">
         <div className="workbench-split workbench-split--even">
           <WorkbenchCard title={settingsTitle} hint={settingsHint}>
@@ -78,7 +78,7 @@ export function VideoStudio({
           </WorkbenchCard>
           <WorkbenchCard title={generateTitle} hint={generateHint}>
             <fieldset className="contents" disabled={generation?.busy}>{generate}</fieldset>
-            <WorkbenchCta notice={notice}>
+            <WorkbenchCta>
               {footer ?? (cta && onGenerate ? <Button variant="primary" disabled={generation?.busy} onClick={onGenerate}>{cta}</Button> : null)}
             </WorkbenchCta>
           </WorkbenchCard>

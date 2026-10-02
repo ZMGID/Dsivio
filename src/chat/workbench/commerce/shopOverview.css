@@ -21,3 +21,18 @@
   align-items: center;
   flex-wrap: wrap;
 }
+
+.shop-overview-page .workbench-table td,
+.listing-page .workbench-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--theme-surface-border);
+  vertical-align: top;
+}
+
+.listing-page .listing-shop-row,
+.listing-page .listing-image-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}

@@ -810,6 +810,20 @@
   margin-top: 20px;
 }
 
+.workbench-upload,
+.workbench-drop-zone {
+  border-radius: 12px;
+  outline: 2px dashed transparent;
+  outline-offset: 4px;
+  transition: outline-color 120ms ease, background-color 120ms ease;
+}
+
+.workbench-upload.is-drop-over,
+.workbench-drop-zone.is-drop-over {
+  outline-color: var(--wb-accent);
+  background: color-mix(in srgb, var(--wb-accent) 6%, transparent);
+}
+
 .workbench-required {
   margin-left: 4px;
   color: var(--wb-accent);
@@ -1023,6 +1037,13 @@
 
 .workbench-check-item.is-error .workbench-check-mark {
   color: #dc2626;
+}
+
+.workbench-check-suggestion {
+  white-space: pre-wrap;
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--text);
 }
 
 .workbench-flow-shell {

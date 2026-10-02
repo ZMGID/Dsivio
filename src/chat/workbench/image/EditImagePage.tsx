@@ -115,6 +115,7 @@ export function EditImagePage() {
       emptyTitle={t.workbenchEditEmpty}
       emptyHint={t.workbenchEditEmptyHint}
       notice={notice || generation.error}
+      onNoticeDismiss={() => { setNotice(''); generation.setError('') }}
       cta={t.workbenchEditGenerate}
       onGenerate={() => void generate()}
     />

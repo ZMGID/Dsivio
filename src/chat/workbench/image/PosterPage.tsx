@@ -96,6 +96,7 @@ export function PosterPage() {
       emptyTitle={t.workbenchPosterEmpty}
       emptyHint={t.workbenchPosterEmptyHint}
       notice={notice || generation.error}
+      onNoticeDismiss={() => { setNotice(''); generation.setError('') }}
       cta={t.workbenchPosterGenerate}
       onGenerate={() => void generate()}
     />

@@ -1,7 +1,23 @@
 import type { SourcingConfig, LookalikeRequest, SourcingSearch, SourcingSearchSummary, PickFilter, PickPage, SavePickRequest, PickItem } from '../generated/sourcing'
 import type { GenerationWorkflow, WorkflowRun } from '../generated/generationWorkflow'
 import type { AiTaskRequest, AiTaskResult } from '../generated/aiTask'
-import type { MediaRequest, MediaTask, MediaTaskFilter, MediaCancelResult, VoiceReference, LocalAsrStatus, LocalAsrStopResult } from '../generated/mediaGeneration'
+import type { MediaRequest, MediaTask, MediaTaskFilter, MediaCancelResult, VoiceReference, LocalAsrStatus, LocalAsrStopResult, RecordOutputRequest } from '../generated/mediaGeneration'
+import type { Role, RoleSaveRequest } from '../generated/roles'
+import type {
+  Category, CategoryAttribute, CommerceCapabilities, ListingDraft, ListingFilter, ListingRecord, ListingTarget,
+  MetricRange, OrderPage, ProductPage, ShopMetrics,
+} from '../generated/commerce'
+import type { Product, ProductSaveRequest } from '../generated/products'
+export type { Product, ProductSaveRequest } from '../generated/products'
+export type { Role, RoleSaveRequest } from '../generated/roles'
+import type {
+  PublishAccount, PublishAppConfig, PublishBeginResult, PublishRecord, PublishRecordFilter, PublishRequest,
+  PublishSubmitResult, VideoStats,
+} from '../generated/publish'
+export type {
+  PublishAccount, PublishAppConfig, PublishBeginResult, PublishRecord, PublishRecordFilter, PublishRequest,
+  PublishSubmitResult, VideoStats,
+} from '../generated/publish'
 export type { MediaCancelResult, VoiceReference, LocalAsrStatus, LocalAsrStopResult } from '../generated/mediaGeneration'
 import type { ComfyConfig, ComfyWorkflow, ComfyConnection } from '../generated/comfyui'
 import type { DefaultModelSelection, WorkbenchMediaConfig, LocalAsrConfig } from '../generated/workbenchMedia'
@@ -40,6 +56,18 @@ import { normalizeGitDiffStat, normalizeGitRepoState, type GitSnapshot } from '.
 /** 是否运行在 Tauri 运行时(而非纯浏览器/SSR) */
 export const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
+/** 浏览器预览没有 Tauri 桥，原生 TypeError 对用户无意义；其他错误原样抛出。 */
+async function invoke<T>(...params: Parameters<typeof coreInvoke>): Promise<T> {
+  try {
+    return await coreInvoke<T>(...params)
+  } catch (error) {
+    if (!isTauriRuntime() && error instanceof TypeError) {
+      throw new Error('当前是浏览器预览，此功能需要在桌面应用中使用')
+    }
+    throw error
+  }
+}
+
 export type LensWebSearchResult = {
   title: string
   url: string
@@ -54,18 +82,6 @@ export type LensWebSearchState = {
   reason?: string
   results?: LensWebSearchResult[]
   error?: string
-}
-
-/** 浏览器预览没有 Tauri 桥，原生 TypeError 对用户无意义；其他错误原样抛出。 */
-async function invoke<T>(...params: Parameters<typeof coreInvoke>): Promise<T> {
-  try {
-    return await coreInvoke<T>(...params)
-  } catch (error) {
-    if (!isTauriRuntime() && error instanceof TypeError) {
-      throw new Error('当前是浏览器预览，此功能需要在桌面应用中使用')
-    }
-    throw error
-  }
 }
 
 // Lens 多轮对话消息类型（视觉模型）
@@ -503,6 +519,8 @@ export type ChatPastedImageResult = {
   name?: string
   error?: string | null
 }
+
+export type LocalImagePayload = { name: string; mime: string; base64: string }
 
 export type ChatClipboardFilesResult = {
   success: boolean
@@ -1391,7 +1409,7 @@ export type PluginInstallBrief = {
   userMessage: string
 }
 
-export type UsageRange = 'today' | '1d' | '7d' | '30d' | '365d'
+export type UsageRange = 'today' | '1d' | '7d' | '30d' | '90d' | '365d'
 
 export type UsageStatsQuery = {
   range?: UsageRange
@@ -1818,11 +1836,40 @@ function chatSubagentControl(conversationId: string, args: SubAgentControlReques
 }
 
 export const api = {
+  publishBegin: (config: PublishAppConfig) => invoke<PublishBeginResult>('publish_begin', { config }),
+  publishComplete: (requestId: string, callbackUrl: string) => invoke<PublishAccount>('publish_complete', { requestId, callbackUrl }),
+  publishListAccounts: () => invoke<PublishAccount[]>('publish_list_accounts'),
+  publishRefreshAccount: (id: string) => invoke<PublishAccount>('publish_refresh_account', { id }),
+  publishUnbind: (id: string) => invoke<void>('publish_unbind', { id }),
+  publishSubmit: (request: PublishRequest) => invoke<PublishSubmitResult>('publish_submit', { request }),
+  publishRetry: (id: string) => invoke<PublishRecord>('publish_retry', { id }),
+  publishListRecords: (filter?: PublishRecordFilter) => invoke<PublishRecord[]>('publish_list_records', { filter: filter ?? null }),
+  publishRefreshRecord: (id: string) => invoke<PublishRecord>('publish_refresh_record', { id }),
+  publishStats: (id: string) => invoke<VideoStats>('publish_stats', { id }),
   shopBegin: (config: ShopAppConfig) => invoke<ShopBeginResult>('shop_begin', { config }),
   shopComplete: (requestId: string, callbackUrl: string) => invoke<ShopConnection[]>('shop_complete', { requestId, callbackUrl }),
   shopList: () => invoke<ShopConnection[]>('shop_list'),
   shopCheck: (id: string) => invoke<ShopConnection>('shop_check', { id }),
   shopUnbind: (id: string) => invoke<void>('shop_unbind', { id }),
+  commerceShops: () => invoke<ShopConnection[]>('commerce_shops'),
+  commerceCapabilities: (shopId: string) => invoke<CommerceCapabilities>('commerce_capabilities', { shopId }),
+  commerceMetrics: (shopId: string, range: MetricRange) => invoke<ShopMetrics>('commerce_metrics', { shopId, range }),
+  commerceCategories: (shopId: string, parentId?: string | null) => invoke<Category[]>('commerce_categories', { shopId, parentId: parentId ?? null }),
+  commerceAttributes: (shopId: string, categoryId: string) => invoke<CategoryAttribute[]>('commerce_attributes', { shopId, categoryId }),
+  commerceProducts: (shopId: string, cursor?: string | null) => invoke<ProductPage>('commerce_products', { shopId, cursor: cursor ?? null }),
+  commerceOrders: (shopId: string, range: MetricRange, cursor?: string | null) => invoke<OrderPage>('commerce_orders', { shopId, range, cursor: cursor ?? null }),
+  commerceListings: (filter: ListingFilter) => invoke<ListingRecord[]>('commerce_listings', { filter }),
+  commerceSubmit: (draft: ListingDraft, targets: ListingTarget[], groupId?: string | null) => invoke<ListingRecord[]>('commerce_submit', { draft, targets, groupId: groupId ?? null }),
+  commerceResubmit: (id: string, draft?: ListingDraft | null, target?: ListingTarget | null) => invoke<ListingRecord>('commerce_resubmit', { id, draft: draft ?? null, target: target ?? null }),
+  commerceRefresh: (id: string) => invoke<ListingRecord>('commerce_refresh', { id }),
+  commerceStatus: (id: string) => invoke<ListingRecord>('commerce_status', { id }),
+  rolesList: () => invoke<Role[]>('roles_list'),
+  rolesSave: (request: RoleSaveRequest) => invoke<Role>('roles_save', { request }),
+  rolesDelete: (id: string) => invoke<void>('roles_delete', { id }),
+  workbenchReadLocalImage: (path: string) => invoke<LocalImagePayload>('workbench_read_local_image', { path }),
+  productsList: () => invoke<Product[]>('products_list'),
+  productsSave: (request: ProductSaveRequest) => invoke<Product>('products_save', { request }),
+  productsDelete: (id: string) => invoke<void>('products_delete', { id }),
   sourcingSearch: (request: LookalikeRequest) => invoke<SourcingSearch>('sourcing_search', { request }),
   sourcingHistory: () => invoke<SourcingSearchSummary[]>('sourcing_history'),
   sourcingGetSearch: (id: string) => invoke<SourcingSearch>('sourcing_get_search', { id }),
@@ -1842,6 +1889,11 @@ export const api = {
   listMediaTasks: (filter: Partial<MediaTaskFilter>) => invoke<MediaTask[]>('list_media_tasks', { filter: { providerId: null, model: null, origin: null, ...filter } }),
   getMediaTask: (id: string, resume = false) => invoke<MediaTask>('get_media_task', { id, resume }),
   cancelMediaTask: (id: string) => invoke<MediaCancelResult>('cancel_media_task', { id }),
+  deleteMediaTask: (id: string) => invoke<void>('delete_media_task', { id }),
+  recordMediaOutput: (request: RecordOutputRequest) => invoke<MediaTask>('record_media_output', { request }),
+  importMediaArtifact: (origin: string, path: string, title?: string | null) => invoke<MediaTask>('import_media_artifact', { origin, path, title: title ?? null }),
+  exportMediaOutput: (id: string, destination: string) => invoke<string>('export_media_output', { id, destination }),
+  revealGeneratedFile: (path: string) => invoke<void>('chat_reveal_generated_artifact', { path }),
   listMediaVoices: () => invoke<VoiceReference[]>('list_media_voices'),
   deleteMediaVoice: (id: string) => invoke<void>('delete_media_voice', { id }),
   registerMediaVoice: (providerId: string, model: string, voiceId: string, consentAttestation: string) =>
@@ -1866,10 +1918,10 @@ export const api = {
   workbenchVideoBootstrap: () => invoke<VideoBootstrap>('workbench_video', { action: 'bootstrap', input: {} }),
   workbenchVideoTask: (action: string, input: Record<string, unknown>) => invoke<VideoTask>('workbench_video', { action, input }),
   workbenchVideoTemplate: (action: 'template_save' | 'template_import', input: Record<string, unknown>) => invoke<VideoTemplate>('workbench_video', { action, input }),
-  workbenchVideoOpen: (id?: string, mode: 'open' | 'reveal' = 'open') =>
-    invoke<void>('workbench_video', { action: 'open', input: { id, mode } }),
-  workbenchVideoPreview: (id: string) => invoke<string>('workbench_video', { action: 'preview', input: { id } }),
-  workbenchVideoPoster: (id: string) => invoke<string>('workbench_video', { action: 'poster', input: { id } }),
+  workbenchVideoOpen: (id?: string, mode: 'open' | 'reveal' = 'open', shotId?: string) =>
+    invoke<void>('workbench_video', { action: 'open', input: { id, mode, ...(shotId ? { shotId } : {}) } }),
+  workbenchVideoPreview: (id: string, shotId?: string) => invoke<string>('workbench_video', { action: 'preview', input: { id, ...(shotId ? { shotId } : {}) } }),
+  workbenchVideoPoster: (id: string, shotId?: string) => invoke<string>('workbench_video', { action: 'poster', input: { id, ...(shotId ? { shotId } : {}) } }),
   workbenchVideoImage: (path: string) => invoke<string>('workbench_video', { action: 'image_preview', input: { path } }),
   workbenchImageBootstrap: () => invoke<ImageBootstrap>('workbench_image_bootstrap'),
   workbenchImageGet: (id: string) => invoke<ImageTask>('workbench_image_get', { id }),
@@ -1975,6 +2027,8 @@ export const api = {
    */
   openLocalFile: (href: string, conversationId?: string | null) =>
     invoke<void>('open_local_file', { href, conversationId: conversationId ?? null }),
+  exportSubtitleFile: (source: string, destination: string) =>
+    invoke<string>('export_subtitle_file', { source, destination }),
   openHtmlPreview: (html: string) => invoke<void>('open_html_preview', { html }),
 
   // 连接器 OAuth：GitHub 内置设备授权；其他服务使用已注册应用或 DCR + PKCE + loopback。

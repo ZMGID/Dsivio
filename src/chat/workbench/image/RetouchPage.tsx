@@ -84,6 +84,7 @@ export function RetouchPage() {
       emptyTitle={t.workbenchRetouchEmpty}
       emptyHint={t.workbenchRetouchEmptyHint}
       notice={notice || generation.error}
+      onNoticeDismiss={() => { setNotice(''); generation.setError('') }}
       cta={t.workbenchRetouchGenerate}
       onGenerate={() => void generate()}
     />

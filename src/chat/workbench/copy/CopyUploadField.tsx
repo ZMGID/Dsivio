@@ -1,8 +1,9 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { Plus, X } from 'lucide-react'
 import { Button } from '../../../components/Button'
 import { useT } from '../../../components/i18n'
-import type { LocalImage } from '../localMedia'
+import { imageFromPath, revokeImages, type LocalImage } from '../localMedia'
+import { IMAGE_EXTENSIONS, useFileDrop } from '../useFileDrop'
 
 const DEFAULT_MAX = 7
 const MAX_BYTES = 10 * 1024 * 1024
@@ -31,6 +32,39 @@ export function CopyUploadField({
 }) {
   const t = useT()
   const inputRef = useRef<HTMLInputElement>(null)
+  const zone = useRef<HTMLDivElement>(null)
+  const filesRef = useRef(files)
+  filesRef.current = files
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
+
+  const addPaths = async (accepted: string[], rejected: string[]) => {
+    let notice = rejected.length > 0 ? `${t.workbenchDropUnsupported}${IMAGE_EXTENSIONS.join(' / ')}` : ''
+    const added: LocalImage[] = []
+    for (const path of accepted) {
+      if (filesRef.current.length + added.length >= max) {
+        notice = t.workbenchCopyMaxFiles
+        break
+      }
+      try {
+        added.push(await imageFromPath(path))
+      } catch (error) {
+        notice = `${t.workbenchDropFailed}${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+    if (!alive.current) {
+      revokeImages(added)
+      return
+    }
+    const kept = added.slice(0, Math.max(max - filesRef.current.length, 0))
+    revokeImages(added.slice(kept.length))
+    if (kept.length > 0) onChange([...filesRef.current, ...kept])
+    onNotice(notice)
+  }
+  const over = useFileDrop(zone, IMAGE_EXTENSIONS, (accepted, rejected) => { void addPaths(accepted, rejected) })
 
   const addFiles = (list: FileList | null) => {
     if (!list) return
@@ -52,7 +86,7 @@ export function CopyUploadField({
   }
 
   return (
-    <div className="workbench-upload">
+    <div ref={zone} className={`workbench-upload${over ? ' is-drop-over' : ''}`}>
       <div className="workbench-upload-head">
         <span>
           {label}

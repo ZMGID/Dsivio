@@ -53,6 +53,12 @@ describe('studioModels', () => {
     expect(isImageGenerationModel(google, 'gemini-3.1-flash-image')).toBe(true)
   })
 
+  it('never offers an image-generation model as the planning agent', () => {
+    const relay = makeProvider({ enabledModels: ['gpt-image-2.5-flare', 'gpt-4o'] })
+    expect(isVisionModel(relay, 'gpt-image-2.5-flare')).toBe(false)
+    expect(isVisionModel(relay, 'gpt-4o')).toBe(true)
+  })
+
   it('infers studio protocol from the provider adapter instead of a user picker', () => {
     expect(
       inferImageStudioProtocol(

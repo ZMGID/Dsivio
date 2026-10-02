@@ -1,8 +1,9 @@
-import { memo, useCallback, useState, Profiler, type ProfilerOnRenderCallback } from 'react'
+import { memo, useCallback, useEffect, useState, Profiler, type ProfilerOnRenderCallback } from 'react'
 import { Sidebar, type SidebarProps } from './Sidebar'
 import { WorkbenchSidebar } from './workbench/WorkbenchSidebar'
 import { useConversationTransition } from './conversationTransitionStore'
 import { armProductModeEnter, loadProductMode, productModeEnterDirection, saveProductMode, type ProductMode } from './productMode'
+import { onRequestNewChat } from './requestNewChat'
 
 export interface ChatSidebarPaneProps extends Omit<SidebarProps, 'productMode' | 'onSelectProductMode'> {
   onRender: ProfilerOnRenderCallback
@@ -34,6 +35,13 @@ export const ChatSidebarPane = memo(function ChatSidebarPane({ onRender, ...prop
     if (next === 'workbench') onOpenExtensionsItem('workbench')
     else onNewConversation()
   }, [onNewConversation, onOpenExtensionsItem])
+
+  useEffect(() => onRequestNewChat(() => {
+    armProductModeEnter(productModeEnterDirection('chat'))
+    setProductMode('chat')
+    saveProductMode('chat')
+    onNewConversation()
+  }), [onNewConversation])
 
   return (
     <Profiler id="Sidebar" onRender={onRender}>

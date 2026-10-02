@@ -1,0 +1,50 @@
+.workbench-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.workbench-asset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--theme-surface-border);
+  background: var(--theme-surface-muted);
+  color: var(--text);
+  text-align: left;
+}
+
+button.workbench-asset-card {
+  cursor: pointer;
+}
+
+.workbench-asset-card.is-selected {
+  border-color: var(--wb-accent);
+  background: var(--wb-accent-soft);
+}
+
+.workbench-asset-preview {
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--theme-surface);
+}
+
+.workbench-asset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workbench-asset-text {
+  margin: 0;
+  max-height: 8em;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+  color: var(--text-faint);
+}

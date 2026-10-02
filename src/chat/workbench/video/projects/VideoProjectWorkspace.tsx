@@ -1,6 +1,8 @@
 import type { ComponentType } from 'react'
 import type { VideoFormProps } from './VideoFormFields'
 import { VideoCreationForm } from './VideoCreationForm'
+import { EditPlanEditor } from './VideoEditForm'
+import { parseEditPlan } from '../localEditContract'
 import { videoModel } from '../../../../data/videoModels'
 import { useStudioNavigation } from '../../../studio/useStudioNavigation'
 import { useChatRouteActive } from '../../../chatRouteVisibility'
@@ -18,6 +20,7 @@ import { api, isTauriRuntime } from '../../../../api/tauri'
 import { Button, IconButton } from '../../../../components/Button'
 import { Field } from '../../image/projects/StudioPanels'
 import {
+  videoStatus,
   videoTaskStatus,
   type VideoBootstrap,
   type VideoBrief,
@@ -74,7 +77,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
   const [view, setView] = useState<
     VideoEntry | 'tasks'
   >(feature)
-  const [brief, setBrief] = useState<VideoBrief>(() => initial?.brief || newVideoDraftBrief(feature === 'creation' ? 'creation' : 'analysis'))
+  const [brief, setBrief] = useState<VideoBrief>(() => initial?.brief || newVideoDraftBrief(feature === 'analysis' || feature === 'remake' ? 'analysis' : feature))
   const [task, setTask] = useState<VideoTask | undefined>(initial?.task)
   const [script, setScript] = useState(initial?.script || '')
   const [dirty, setDirty] = useState(initial?.dirty || false)
@@ -88,7 +91,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
   const [operations, setOperations] = useState<Record<string, string>>({})
   const operationsRef = useRef(new Set<string>())
   const savingOperations = useRef(new Set<string>())
-  const busy = foregroundBusy || ((view === 'creation' || view === 'analysis' || view === 'remake') && task ? operations[task.id] || '' : '')
+  const busy = foregroundBusy || ((view === 'creation' || view === 'avatar' || view === 'drama' || view === 'editing' || view === 'analysis' || view === 'remake') && task ? operations[task.id] || '' : '')
   const [error, setError] = useState('')
   const [step, setStep] = useState(initial?.step || 0)
   const [templateName, setTemplateName] = useState('')
@@ -96,10 +99,12 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
   const [video, setVideo] = useState('')
   const [poster, setPoster] = useState('')
   const [previewError, setPreviewError] = useState('')
+  const [shotPreview, setShotPreview] = useState<{ id: string; url: string } | undefined>()
   const [recoveryId, setRecoveryId] = useState('')
   const [dropActive, setDropActive] = useState(false)
   const [dropTarget, setDropTarget] = useState<VideoDropZone | null>(null)
   const isAnalysis = view === 'analysis' || view === 'remake'
+  const scripting = view === 'creation' || view === 'avatar' || view === 'drama' || view === 'editing'
   const generationActive =
     !!task &&
     ['submitting', 'running'].includes(task.status)
@@ -109,12 +114,18 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
   briefRef.current = brief
   viewRef.current = view
   dropReadyRef.current = {
-    accept: routeActive && native && (view === 'creation' || isAnalysis) && step === 0,
+    accept: routeActive && native && (scripting || isAnalysis) && step === 0,
   }
 
+  // Bumped when a confirmed analysis replaces another entry's draft. The apply
+  // closed over the previous token stays ignored, including after the new entry
+  // is allowed to sync again.
+  const sharedApplyToken = useRef(0)
+  const sharedApplySeen = sharedApplyToken.current
   const shared = useSharedDraft('video', entry, native,
     { brief, task, script, step, dirty },
     (draft) => {
+      if (sharedApplySeen !== sharedApplyToken.current) return
       setBrief(draft.brief); setTask(draft.task); setScript(draft.script)
       setStep(draft.step); setDirty(draft.dirty)
     }, !!busy)
@@ -136,7 +147,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
     setRuntimeError('')
     try {
       const all = await api.workbenchVideoBootstrap()
-      const next = { ...all, tasks: all.tasks.filter(t => feature === 'creation' ? t.brief.mode === 'creation' : t.brief.mode === 'analysis') }
+      const next = { ...all, tasks: all.tasks.filter(t => feature === 'creation' ? t.brief.mode === 'creation' : feature === 'avatar' ? t.brief.mode === 'avatar' : feature === 'drama' ? t.brief.mode === 'drama' : feature === 'editing' ? t.brief.mode === 'editing' : t.brief.mode === 'analysis') }
       setData(next)
       const current = syncCurrent.current
       const updated = next.tasks.find(t => t.id === current.task?.id)
@@ -192,16 +203,53 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
   }, [refresh])
 
   useEffect(() => {
-    if (view !== 'creation' && view !== 'analysis' && view !== 'remake') return
+    if (!scripting && !isAnalysis) return
     setDraftSaved(writeVideoDraft(entry, { brief, task, script, step, dirty }))
-  }, [entry, view, brief, task, script, step, dirty])
+  }, [entry, view, brief, task, script, step, dirty, scripting, isAnalysis])
 
-  function useAnalysis() {
-    writeVideoDraft(entry, { brief, task, script, step, dirty })
-    const images = brief.images
+  async function adoptAnalysis() {
+    const sourceEntry = entry
+    const source = { brief, task, script, step, dirty }
+    // Keep the analyzed clone report. The destination shorts draft gets a new
+    // identity so a previously completed shorts task is not reopened.
+    writeVideoDraft(sourceEntry, source)
     const reference: VideoTemplate = { id: task?.id || 'reference-draft', name: brief.name || '本次参考视频', kind: 'reference', script }
-    fresh('creation', reference)
-    setBrief(b => ({ ...b, images, request: '沿用已确认参考的镜头结构、动作和节奏，适配本次商品；不新增无关剧情。' }))
+    const destination = {
+      brief: {
+        ...newVideoDraftBrief('creation'),
+        template: reference,
+        images: brief.images,
+        request: '沿用已确认参考的镜头结构、动作和节奏，适配本次商品；不新增无关剧情。',
+      },
+      task: undefined,
+      script: '',
+      step: 0,
+      dirty: false,
+    }
+    sharedApplyToken.current += 1
+    workspaceVersion.current++
+    try {
+      // Browser preview has no shared draft owner; the local draft is enough.
+      if (native) await shared.replace('creation', destination)
+    } catch (error) {
+      setError(String(error))
+      return
+    }
+    writeVideoDraft('creation', destination)
+    workspaceVersion.current++
+    setWorkspaceKey(key => key + 1)
+    navigation.cancel()
+    setTask(undefined)
+    setBrief(destination.brief)
+    setScript('')
+    setDirty(false)
+    setEntry('creation')
+    setView('creation')
+    setEditingScript(false)
+    setStep(0)
+    setError('')
+    setTemplateName('')
+    setReviseNote('')
   }
 
   function accept(t: VideoTask) {
@@ -270,7 +318,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
     if (brief.mode === 'creation') rememberVideoSettings(brief)
     setTask(undefined)
     setBrief({
-      ...newVideoDraftBrief(mode === 'creation' ? 'creation' : 'analysis'),
+      ...newVideoDraftBrief(mode === 'analysis' || mode === 'remake' ? 'analysis' : mode),
       template,
       ...(template?.spec?.duration_seconds
         ? { duration: template.spec.duration_seconds }
@@ -307,7 +355,8 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
   async function saved(patch?: Partial<VideoBrief>, scriptOverride?: string, forGeneration = false) {
     const version = workspaceVersion.current
     const nextScript = scriptOverride ?? script
-    const nextBrief = { ...brief, ...patch, name: brief.name || brief.request.trim().slice(0, 24) || (brief.mode === 'analysis' ? '视频拆解' : '视频创作') }
+    const nextBrief = { ...brief, ...patch, name: brief.name || brief.request.trim().slice(0, 24) || (brief.mode === 'analysis' ? '视频拆解' : brief.mode === 'avatar' ? '真人带货' : brief.mode === 'drama' ? '短剧带货' : brief.mode === 'editing' ? '产品视频编辑' : '视频创作') }
+    if (nextBrief.mode === 'drama' && !nextBrief.dramaStyle) nextBrief.dramaStyle = 'twist'
     let t = task && !['running', 'submitting'].includes(task.status) ? task : undefined
     if (t) {
       try {
@@ -335,15 +384,34 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
     return t
   }
   async function run(action: string, patch?: Partial<VideoBrief>) {
+    if (action === 'cancel') {
+      if (brief.mode !== 'editing' || !task?.id || !task.mediaTaskId) { setError('没有可取消的剪辑任务'); return }
+      if (busy || operationsRef.current.has(task.id)) return
+      const id = task.id
+      operationsRef.current.add(id)
+      setOperations(all => ({ ...all, [id]: '正在取消剪辑…' }))
+      try {
+        accept(await api.workbenchVideoTask('cancel', { id, revision: task.revision }))
+      } catch (e) {
+        setError(String(e))
+      } finally {
+        operationsRef.current.delete(id)
+        setOperations(all => { const next = { ...all }; delete next[id]; return next })
+      }
+      return
+    }
     if (action === 'submit' && generationActive) return
     const saveKey = task?.id || `draft:${workspaceKey}`
     if (busy || savingOperations.current.has(saveKey) || (task && operationsRef.current.has(task.id))) return
     if (action === 'use_prompt' && !brief.request.trim()) { setError('请先填写已有的视频提示词'); return }
     const version = workspaceVersion.current
-    if (action === 'plan' && !brief.request.trim() && !brief.template && !script.trim() && !brief.images.length) { setError('请填写拍摄要求或添加商品素材'); return }
+    if (action === 'plan' && brief.mode === 'editing' && !(brief.clips || []).length) { setError('请添加至少一段视频'); return }
+    if (brief.mode === 'editing' && ['approve', 'submit'].includes(action) && !parseEditPlan(script)) { setError('请先生成并确认剪辑方案'); return }
+    if (action === 'plan' && brief.mode !== 'editing' && !brief.request.trim() && !brief.template && !script.trim() && !brief.images.length) { setError('请填写拍摄要求或添加商品素材'); return }
     if (action === 'analyze' && !brief.source.trim()) { setError('请先添加参考视频'); return }
+    if ((brief.mode === 'avatar' || brief.mode === 'drama') && ['plan', 'revise', 'use_prompt', 'approve', 'submit'].includes(action) && !{ ...brief, ...patch }.images.length) { setError('请添加商品图片'); return }
     if (['use_prompt', 'approve', 'prepare', 'quote', 'submit'].includes(action)) {
-      const issue = videoInputIssue({ ...brief, ...patch }, action === 'analyze', view === 'remake', script) || (action === 'analyze' ? '' : (!brief.providerId || !brief.model ? '请选择工作台视频模型' : ''))
+      const issue = videoInputIssue({ ...brief, ...patch }, action === 'analyze', view === 'remake', script) || (action === 'analyze' || brief.mode === 'editing' ? '' : (!brief.providerId || !brief.model ? '请选择工作台视频模型' : ''))
       if (issue) { setError(issue); return }
     }
     let t: VideoTask | undefined
@@ -372,9 +440,10 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
       if (syncCurrent.current.task?.id === id && !syncCurrent.current.dirty) accept(result)
     }
     try {
-      setBusy(({ plan: 'AI 正在编写拍摄方案…', revise: 'AI 正在修改拍摄方案…', use_prompt: '正在使用原提示词…', analyze: '正在分析参考视频…', approve: '正在确认剧本…', submit: '正在提交视频生成…', quote: '正在查询报价…', poll: '正在查询生成状态…' } as Record<string, string>)[action] || '正在读取任务…')
+      setBusy(({ plan: brief.mode === 'editing' ? 'AI 正在编写剪辑方案…' : 'AI 正在编写拍摄方案…', revise: 'AI 正在修改方案…', use_prompt: '正在使用原提示词…', analyze: '正在分析参考视频…', approve: brief.mode === 'editing' ? '正在确认剪辑方案…' : '正在确认剧本…', submit: brief.mode === 'editing' ? '正在提交本地剪辑…' : '正在提交视频生成…', quote: '正在查询报价…', poll: '正在查询生成状态…' } as Record<string, string>)[action] || '正在读取任务…')
       if (action === 'get' || action === 'poll') t = await api.workbenchVideoTask('get', { id })
-      if (action === 'poll' && (t.status === 'succeeded' || !t.remote?.id)) { acceptResult(t); return }
+      if (action === 'poll' && t.status === 'succeeded') { acceptResult(t); return }
+      if (action === 'poll' && t.brief.mode !== 'drama' && t.brief.mode !== 'editing' && !t.remote?.id) { acceptResult(t); return }
       if (['submit', 'quote'].includes(action) && (!t.approved || !t.prompt)) {
         t = await api.workbenchVideoTask('approve', { id, revision: t.revision })
         if (t.brief.route !== 'grok') {
@@ -383,7 +452,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
         acceptResult(t)
       }
       if (action !== 'save' && action !== 'get') {
-        t = await api.workbenchVideoTask(action === 'use_prompt' ? 'approve' : action === 'submit' && t.status === 'failed' ? 'retry' : action, { id, revision: t.revision, ...(action === 'revise' ? { note: reviseNote.trim() } : { confirmSpend: action === 'submit' }) })
+        t = await api.workbenchVideoTask(action === 'use_prompt' ? 'approve' : action === 'submit' && (t.status === 'failed' || (t.brief.mode === 'editing' && t.status === 'cancelled')) ? 'retry' : action, { id, revision: t.revision, ...(action === 'revise' ? { note: reviseNote.trim() } : { confirmSpend: action === 'submit' && t.brief.mode !== 'editing' }) })
         acceptResult(t)
         if (action === 'approve' || action === 'use_prompt') {
           if (action === 'use_prompt' && t.brief.route !== 'grok') {
@@ -395,8 +464,10 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
             acceptResult(t)
           }
           setStepIfCurrent(2)
-          setBusy('正在查询报价…')
-          try { t = await api.workbenchVideoTask('quote', { id, revision: t.revision }) } catch { /* Pricing is optional. */ }
+          if (t.brief.mode !== 'editing') {
+            setBusy('正在查询报价…')
+            try { t = await api.workbenchVideoTask('quote', { id, revision: t.revision }) } catch { /* Pricing is optional. */ }
+          }
         }
       }
       acceptResult(t)
@@ -507,12 +578,12 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
     if (zone) markDropTarget(zone)
   }
   const ActiveBriefForm = view === 'creation' ? VideoCreationForm : BriefForm
-  const inputIssue = videoInputIssue(brief, isAnalysis, view === 'remake', script) || (isAnalysis ? '' : (!brief.providerId || !brief.model ? '请选择工作台视频模型' : ''))
+  const inputIssue = videoInputIssue(brief, isAnalysis, view === 'remake', script) || (isAnalysis || brief.mode === 'editing' ? '' : (!brief.providerId || !brief.model ? '请选择工作台视频模型' : ''))
   const route = brief.route
   const resolutions = videoModel(brief.model || '')?.resolutions || videoResolutions(brief)
   const pageEntry = view === 'tasks' ? entry : view
-  const featureTitle = pageEntry === 'creation' ? '短视频生成' : pageEntry === 'remake' ? '爆款视频复刻' : '视频拆解'
-  const featureAction = entry === 'creation' ? '创作' : entry === 'remake' ? '复刻' : '拆解'
+  const featureTitle = pageEntry === 'creation' ? '短视频生成' : pageEntry === 'avatar' ? '真人带货视频' : pageEntry === 'drama' ? '短剧带货视频' : pageEntry === 'editing' ? '产品视频编辑' : pageEntry === 'remake' ? '爆款视频复刻' : '视频拆解'
+  const featureAction = entry === 'creation' ? '创作' : entry === 'avatar' ? '带货' : entry === 'drama' ? '短剧' : entry === 'editing' ? '剪辑' : entry === 'remake' ? '复刻' : '拆解'
 
   return (
     <div className={`kv image-studio video-studio${isAnalysis ? " vs-analysis" : ""}${view === "remake" ? " vs-remake" : ""}`}>
@@ -539,7 +610,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
               {view === 'tasks'
                 ? <Button variant="ghost" onClick={() => selectView(entry)}>返回{featureAction}</Button>
                 : <Button variant="ghost" onClick={() => selectView('tasks')}>记录</Button>}
-              {pageEntry !== 'analysis' && <a href="#chat/workbench/video-templates">视频模板</a>}
+              {pageEntry !== 'analysis' && pageEntry !== 'editing' && <a href="#chat/workbench/video-templates">视频模板</a>}
             </nav>
           </header>
           {view === 'tasks' ? (
@@ -566,7 +637,13 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                 >
                   {(isAnalysis
                     ? ['参考素材', '拆解结果']
-                    : ['素材与要求', '拍摄方案', '生成与成片']
+                    : view === 'drama'
+                      ? ['素材与故事', '分镜剧本', '逐镜头生成']
+                      : view === 'avatar'
+                        ? ['素材与要求', '口播脚本', '生成与成片']
+                        : view === 'editing'
+                          ? ['素材与要求', '剪辑方案', '本地成片']
+                          : ['素材与要求', '拍摄方案', '生成与成片']
                   ).map((name, i) => (
                     <button
                       role="tab"
@@ -614,18 +691,18 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                     <div className="vs-plan-controls">
                       <div className="vs-plan-toolbar">
                         <div className="vs-plan-title">
-                          <h3>{isAnalysis ? '逐镜头拆解' : '拍摄方案'}</h3>
+                          <h3>{isAnalysis ? '逐镜头拆解' : view === 'drama' ? '分镜剧本' : view === 'avatar' ? '口播脚本' : view === 'editing' ? '剪辑方案' : '拍摄方案'}</h3>
                           <small className="vs-muted">{task?.approved && !dirty ? '已准备生成' : '可直接编辑，生成时使用当前方案'}</small>
                         </div>
                         <div className="vs-plan-buttons">
                           <Button variant="ghost" size="sm" onClick={() => setEditingScript(!editingScript)}>{editingScript ? '完成编辑' : '编辑全文'}</Button>
-                          {view === 'creation' && <Button
+                          {scripting && <Button
                           variant="primary" size="sm"
                           onClick={() => { workspaceVersion.current++; navigation.cancel(); setStep(2) }}
                         >去生成</Button>}
                         </div>
                       </div>
-                      {view === 'creation' && !!script.trim() && <div className="vs-plan-revision">
+                      {scripting && !!script.trim() && <div className="vs-plan-revision">
                         <textarea
                           aria-label="修改要求"
                           className="kv-textarea custom-scrollbar"
@@ -642,10 +719,13 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                           ><WandSparkles size={15} />让 AI 修改</Button>
                         </div>
                       </div>}
-                      {view === 'creation' && (!route || !brief.resolution) && <p className="vs-muted vs-plan-hint">可以先写方案，生成时再选择服务和清晰度。</p>}
+                      {scripting && view !== 'editing' && (!route || !brief.resolution) && <p className="vs-muted vs-plan-hint">可以先写方案，生成时再选择服务和清晰度。</p>}
                     </div>
-                    {script && !editingScript && <div className="vs-script-preview"><ChatMarkdown content={script} /></div>}
-                    {(editingScript || !script) && <textarea
+                    {view === 'editing' && script && !editingScript && parseEditPlan(script) && (
+                      <EditPlanEditor script={script} onChange={next => { beginEdit(); setScript(next) }} />
+                    )}
+                    {view !== 'editing' && script && !editingScript && <div className="vs-script-preview"><ChatMarkdown content={script} /></div>}
+                    {(editingScript || !script || (view === 'editing' && !parseEditPlan(script))) && <textarea
                       aria-label="视频方案"
                       className="kv-textarea vs-script custom-scrollbar"
                       value={script}
@@ -658,7 +738,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                   </section>}
                   {isAnalysis && (
                     <section className="vs-panel">
-                      <Button variant="primary" disabled={!script.trim()} onClick={useAnalysis}>{view === 'remake' ? '确认结构，进入制作' : '用我的商品仿拍'}</Button>
+                      <Button variant="primary" disabled={!script.trim()} onClick={() => void adoptAnalysis()}>{view === 'remake' ? '确认结构，进入制作' : '用我的商品仿拍'}</Button>
                       <Field label="保存为参考模板">
                         <input
                           className="kv-input"
@@ -695,11 +775,11 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
               ) : (
                 <>
                   <section className="vs-panel">
-                    <h3>生成规格</h3>
+                    <h3>{view === 'editing' ? '本地剪辑' : '生成规格'}</h3>
                     <p>
-                      {route ? routeNames[route] : '未选路线'} ·{' '}
-                      {brief.duration} 秒 · {brief.ratio} ·{' '}
-                      {brief.resolution || '未选清晰度'}
+                      {view === 'editing'
+                        ? `本地 ffmpeg · 不调用付费模型 · ${(parseEditPlan(dirty ? script : task?.prompt || script)?.clips.length ?? 0)} 段素材`
+                        : <>{route ? routeNames[route] : '未选路线'} · {brief.duration} 秒 · {brief.ratio} · {brief.resolution || '未选清晰度'}</>}
                     </p>
                     <details className="vs-generation-prompt">
                       <summary>查看生成提示词</summary>
@@ -733,13 +813,16 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                       <small>剧本、素材和提示词已保留，处理后可直接重试。</small>
                     </div>}
                     <div className="vs-actions">
-                        <Button onClick={() => { workspaceVersion.current++; navigation.cancel(); setStep(0) }}>返回修改 / 更换服务</Button>
-                        <Button
+                        <Button onClick={() => { workspaceVersion.current++; navigation.cancel(); setStep(0) }}>{view === 'editing' ? '返回修改素材' : '返回修改 / 更换服务'}</Button>
+                        {view !== 'editing' && <Button
                           disabled={!native || !!busy || (!script.trim() && !brief.request.trim())}
                           onClick={() => void run('quote')}
                         >
                           刷新报价
-                        </Button>
+                        </Button>}
+                        {view === 'editing' && task?.mediaTaskId && (task.status === 'running' || task.status === 'submitting') && (
+                          <Button disabled={!!busy} onClick={() => void run('cancel')}>取消剪辑</Button>
+                        )}
                         <Button
                           variant="primary"
                           disabled={
@@ -747,11 +830,13 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                             !!busy ||
                             generationActive ||
                             task?.status === 'uncertain' ||
-                            (!script.trim() && !brief.request.trim())
+                            (view === 'editing' ? !parseEditPlan(script) : (!script.trim() && !brief.request.trim()))
                           }
                           onClick={() => void run('submit')}
                         >
-                          {task?.submission?.retryable || task?.status === 'failed' ? '重试生成' : route === 'comfy' ? '开始生成' : '生成视频'}
+                          {view === 'editing'
+                            ? (task?.status === 'failed' || task?.status === 'cancelled' ? '重试剪辑' : '开始本地剪辑')
+                            : brief.mode === 'drama' && task?.shots?.some(shot => shot.status === 'failed') ? '重试失败镜头' : task?.submission?.retryable || task?.status === 'failed' ? '重试生成' : route === 'comfy' ? '开始生成' : '生成视频'}
                         </Button>
                       </div>
                     {dirty && (
@@ -760,6 +845,45 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                       </p>
                     )}
                   </section>
+                  {brief.mode === 'drama' && !!task?.shots?.length && (
+                    <section className="vs-panel" aria-label="镜头进度">
+                      <h3>逐镜头进度</h3>
+                      <p className="vs-muted">已提交的镜头保持提交时的提示词。重试只重做失败镜头。</p>
+                      {task.shots.map(shot => (
+                        <article key={shot.id} aria-label={`镜头 ${shot.id}`}>
+                          <h3>镜头 {shot.id}</h3>
+                          <p>{videoStatus[shot.status] || shot.status}</p>
+                          <pre className="custom-scrollbar">{shot.prompt}</pre>
+                          {shot.error ? <p role="alert">{shot.error}</p> : null}
+                          {shot.output ? (
+                            <>
+                              <p className="vs-path">{shot.output}</p>
+                              {shotPreview?.id === shot.id ? (
+                                <video className="vs-video" aria-label={`镜头 ${shot.id} 预览`} src={shotPreview.url} controls playsInline preload="metadata" />
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  disabled={!!busy || !native}
+                                  onClick={() => void guarded('读取镜头成片…', async current => {
+                                    const url = await api.workbenchVideoPreview(task.id, shot.id)
+                                    if (current()) setShotPreview({ id: shot.id, url })
+                                  })}
+                                >
+                                  预览这个镜头
+                                </Button>
+                              )}
+                            </>
+                          ) : null}
+                        </article>
+                      ))}
+                      {task.shots.some(shot => shot.mediaTaskId && shot.status !== 'succeeded') && (
+                        <Button disabled={!!busy} onClick={() => void run('poll')}>
+                          <RefreshCw size={14} />
+                          查询镜头进度
+                        </Button>
+                      )}
+                    </section>
+                  )}
                   {task?.remote && (
                     <section className="vs-panel">
                       <h3>{videoTaskStatus(task)}</h3>
@@ -769,13 +893,13 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                         {task.submission?.httpStatus && <small>HTTP {task.submission.httpStatus}</small>}
                         <a href="#chat/settings/media">检查媒体创作设置</a>
                       </> : task.error && <p role="alert">{task.error}</p>}
-                      {task.remote.id && task.status !== 'succeeded' && (
+                      {(task.remote.id || (brief.mode === 'editing' && task.mediaTaskId)) && task.status !== 'succeeded' && (
                         <Button
                           disabled={!!busy}
                           onClick={() => void run('poll')}
                         >
                           <RefreshCw size={14} />
-                          {task.status === 'running' && task.remote.download_url ? '恢复下载' : '查询进度 / 恢复结果'}
+                          {brief.mode === 'editing' ? '查询剪辑进度' : task.status === 'running' && task.remote.download_url ? '恢复下载' : '查询进度 / 恢复结果'}
                         </Button>
                       )}
                       {task.remote.id && <p className="vs-muted">已保存任务编号，重新打开后可继续查询。</p>}
@@ -829,7 +953,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                     <section className="vs-panel">
                       <h3>需要修改</h3>
                       <p className="vs-muted">
-                        写下要改的地方，会按你的意见改写拍摄方案。确认后再生成，新成片覆盖这一条。
+                        {view === 'editing' ? '写下要改的地方，AI 会改剪辑方案。确认后重新做本地剪辑。' : '写下要改的地方，会按你的意见改写拍摄方案。确认后再生成，新成片覆盖这一条。'}
                       </p>
                       <Field label="需要修改的地方">
                         <textarea
@@ -846,11 +970,11 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                         onClick={() => void revisePlan()}
                       >
                         <WandSparkles size={15} />
-                        按意见改写拍摄方案
+                        {view === 'editing' ? '按意见改写剪辑方案' : '按意见改写拍摄方案'}
                       </Button>
                     </section>
                   )}
-                  {task?.output && (
+                  {task?.output && view !== 'editing' && (
                     <section className="vs-panel">
                       <h3>保存为成片验证模板</h3>
                       <Field label="模板名称">
@@ -880,7 +1004,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                       </Button>
                     </section>
                   )}
-                  {task &&
+                  {task && view !== 'editing' &&
                     ['uncertain', 'submitting'].includes(task.status) && (
                       <details className="vs-panel">
                         <summary>已有任务编号？恢复查询</summary>
@@ -917,12 +1041,12 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
             </>
           )}
         </main>
-        {(view === 'creation' || view === 'analysis' || view === 'remake') && <ExecutionStatus
+        {(scripting || isAnalysis) && <ExecutionStatus
           active={!!busy || task?.status === 'running' || task?.status === 'submitting'}
           title={busy || (task ? videoTaskStatus(task) : 'AI 执行状态')}
           detail={error || (task?.status === 'uncertain' ? '提交结果尚未确认，请核对供应商任务记录并恢复查询。' : task?.error) || (busy
             ? '操作完成后会显示结果；等待时间不代表完成比例。'
-            : task?.status === 'running' ? `${task.remote?.download_url ? '视频已生成，正在下载成片' : '视频服务正在生成'}${task.remote?.id ? ` · 任务编号 ${task.remote.id}` : ''}`
+            : task?.status === 'running' ? (brief.mode === 'editing' ? '正在本地剪辑，可以取消。' : `${task.remote?.download_url ? '视频已生成，正在下载成片' : '视频服务正在生成'}${task.remote?.id ? ` · 任务编号 ${task.remote.id}` : ''}`)
             : task?.output ? '成片已保存，可在生成与成片中查看。'
             : '当前步骤的执行状态将在这里显示。')}
         />}

@@ -52,6 +52,13 @@ it('imports both reference video and product images for remake without losing ex
   expect(applyVideoStudioDrop('remake', { images: ['/old.png'], source: '' }, ['/reference.mp4', '/new.jpg'])).toEqual({ source: '/reference.mp4', images: ['/old.png', '/new.jpg'] })
 })
 
+it('collects edit clips, music and subtitles without using the paid reference slots', () => {
+  expect(applyVideoStudioDrop('editing', { images: [], source: '', clips: ['/old.mp4'] }, ['/new.mov', '/skip.png'])).toEqual({ clips: ['/old.mp4', '/new.mov'] })
+  expect(applyVideoStudioDrop('editing', { images: [], source: '' }, ['/bed.mp3'], 'music')).toEqual({ musicPath: '/bed.mp3' })
+  expect(applyVideoStudioDrop('editing', { images: [], source: '' }, ['/cues.srt'], 'subtitles')).toEqual({ subtitlePath: '/cues.srt' })
+  expect(applyVideoStudioDrop('editing', { images: [], source: '' }, ['/note.txt'])).toEqual({ error: '请拖入视频片段（MP4 / MOV / WebM）' })
+})
+
 it('routes remake drops to the hovered zone', () => {
   expect(
     applyVideoStudioDrop(

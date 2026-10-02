@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
+import { invoke } from '@tauri-apps/api/core'
 import { api } from '../../../../api/tauri'
 import { open } from '@tauri-apps/plugin-dialog'
 import { ShortsPage } from '../ShortsPage'
@@ -20,6 +21,7 @@ const brief = () => ({ ...newVideoBrief(), providerId: 'cloud', model: 'grok-ima
 let task: VideoTask
 beforeEach(() => {
  vi.clearAllMocks(); localStorage.clear()
+ vi.mocked(invoke).mockImplementation(async () => ({ revision: 0, value: null }))
  task = { id: 'project', revision: 1, updatedAt: 1, brief: brief(), script: '', prompt: '', approved: false, status: 'draft' }
  vi.mocked(api.workbenchVideoBootstrap).mockResolvedValue({ tasks: [], templates: [], config: {}, root: '', configPath: '', dependencies: {} } as never)
  vi.mocked(api.workbenchVideoTask).mockImplementation(async (action, input) => {
@@ -126,6 +128,74 @@ it('retries a definitively failed project as a new attempt and blocks repeated s
  expect(generate).toBeDisabled()
  fireEvent.click(generate)
  expect(vi.mocked(api.workbenchVideoTask).mock.calls.filter(([action]) => action === 'retry')).toHaveLength(1)
+})
+
+it('starts a clean shorts task after confirming a clone and keeps the previous completed video', async () => {
+  const priorId = '5c29e9dd-d4fc-9def-bb19-a1b49b517315'
+  const priorBrief = { ...newVideoBrief('creation'), request: '上一条短视频' }
+  const prior = {
+    id: priorId, revision: 8, updatedAt: 1, brief: priorBrief, script: '已完成脚本', prompt: '已完成脚本',
+    approved: true, status: 'succeeded', output: '/tmp/prior.mp4', mediaTaskId: '74acab7f',
+    remote: { route: 'grok' as const, id: priorId, base_url: '' },
+  }
+  const cloneBrief = {
+    ...newVideoBrief('analysis'),
+    source: '/private/tmp/p0assets/shorts.mp4',
+    images: ['/private/tmp/p0assets/backpack.png'],
+    request: '复刻这支背包视频',
+  }
+  const clone = {
+    id: 'clone-task', revision: 2, updatedAt: 1, brief: cloneBrief,
+    script: '镜头结构：开场特写背包', prompt: '', approved: false, status: 'draft' as const,
+  }
+  const cloneDraft = { brief: cloneBrief, task: clone, script: clone.script, step: 1, dirty: false }
+  const priorDraft = { brief: priorBrief, task: prior, script: prior.script, step: 2, dirty: false }
+  const library = [prior, clone]
+  localStorage.setItem('dsivio-video-drafts-v1', JSON.stringify({ creation: priorDraft, remake: cloneDraft }))
+  localStorage.setItem(`dsivio-video-drafts-v1:task:${priorId}`, JSON.stringify(priorDraft))
+  const store = new Map<string, { revision: number; value: unknown }>([
+    ['creation', { revision: 4, value: priorDraft }],
+    ['remake', { revision: 2, value: cloneDraft }],
+  ])
+  vi.mocked(invoke).mockImplementation(async (command, input) => {
+    if (command !== 'studio_draft') return { revision: 0, value: null }
+    const args = input as { entry: string; revision: number | null; value: unknown }
+    const current = store.get(args.entry) || { revision: 0, value: null }
+    if (args.value) {
+      if (args.revision !== current.revision) throw new Error('conflict')
+      const next = { revision: current.revision + 1, value: JSON.parse(JSON.stringify(args.value)) }
+      store.set(args.entry, next)
+      return next
+    }
+    return JSON.parse(JSON.stringify(current))
+  })
+  vi.mocked(api.workbenchVideoBootstrap).mockResolvedValue({ tasks: library, templates: [], config: {}, root: '', configPath: '', dependencies: {} } as never)
+  render(<VideoClonePage />)
+  fireEvent.click(await screen.findByRole('button', { name: '确认结构，进入制作' }))
+  expect(await screen.findByRole('heading', { name: '短视频生成' })).toBeVisible()
+  expect(await screen.findByText('新任务')).toBeVisible()
+  expect(screen.getByLabelText('这次要拍什么')).toHaveValue('沿用已确认参考的镜头结构、动作和节奏，适配本次商品；不新增无关剧情。')
+  expect(await screen.findByRole('img', { name: 'backpack.png' })).toBeVisible()
+  expect(screen.queryByText(priorId)).not.toBeInTheDocument()
+  expect(screen.queryByText(/74acab7f/)).not.toBeInTheDocument()
+  const saved = JSON.parse(localStorage.getItem('dsivio-video-drafts-v1') || '{}') as {
+    remake: { task: { id: string }; script: string }
+    creation: { task?: { id: string } }
+  }
+  expect(saved.remake.task.id).toBe('clone-task')
+  expect(saved.remake.script).toContain('开场特写背包')
+  expect(saved.creation.task).toBeUndefined()
+  expect(JSON.stringify(saved.creation)).not.toContain(priorId)
+  expect(localStorage.getItem(`dsivio-video-drafts-v1:task:${priorId}`)).toContain('74acab7f')
+  expect(JSON.stringify(store.get('remake')?.value)).toContain('clone-task')
+  expect(JSON.stringify(store.get('creation')?.value)).not.toContain(priorId)
+  expect(JSON.stringify(store.get('creation')?.value)).not.toContain('74acab7f')
+  expect(library.map(item => item.id)).toEqual([priorId, 'clone-task'])
+  expect(vi.mocked(api.workbenchVideoTask).mock.calls.some(([action]) => action === 'delete')).toBe(false)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) })
+  expect(screen.getByText('新任务')).toBeVisible()
+  expect(screen.queryByText(priorId)).not.toBeInTheDocument()
+  expect(JSON.stringify(store.get('creation')?.value)).not.toContain(priorId)
 })
 
 it('does not create a second project when a failed snapshot has resumed before retry', async () => {

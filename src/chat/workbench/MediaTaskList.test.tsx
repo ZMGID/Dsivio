@@ -1,8 +1,13 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import { save } from '@tauri-apps/plugin-dialog'
+import { api } from '../../api/tauri'
 import type { MediaTask } from '../../generated/mediaGeneration'
 import { MediaTaskRow } from './MediaTaskList'
+
+vi.mock('../../api/tauri', () => ({ api: { openLocalFile: vi.fn(async () => undefined), exportSubtitleFile: vi.fn(async () => '/tmp/out.srt') } }))
+vi.mock('@tauri-apps/plugin-dialog', () => ({ save: vi.fn(async () => '/tmp/exported.srt') }))
 
 vi.mock('../../components/i18n', () => ({ useLang: () => 'en' }))
 vi.mock('@tauri-apps/api/core', () => ({ convertFileSrc: (path: string) => path }))
@@ -24,6 +29,21 @@ describe('Media task cancellation and artifact presentation', () => {
     expect(screen.queryByRole('button', { name: 'Cancel task' })).toBeNull()
     expect(view.container.querySelector('video')).toBeNull()
     expect(screen.getByRole('button', { name: 'Open file' })).toBeInTheDocument()
+  })
+  it('shows a text record title and plays an edit video without treating subtitles as video', async () => {
+    render(<MediaTaskRow task={{ ...task, kind: 'text', status: 'succeeded', prompt: '', result: { title: 'Launch copy' }, outputs: [{ path: '/fixture/output.md', mime: 'text/markdown' }] }} alt="Copy" onResume={vi.fn()} onError={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.getByText(/Text ·/)).toBeInTheDocument()
+    expect(screen.getByText('Launch copy')).toBeInTheDocument()
+    const edit = render(<MediaTaskRow task={{ ...task, kind: 'edit', status: 'succeeded', outputs: [{ path: '/fixture/out.mp4', mime: 'video/mp4' }, { path: '/fixture/cues.srt', mime: 'application/x-subrip' }] }} alt="Edit" onResume={vi.fn()} onError={vi.fn()} onCancel={vi.fn()} />)
+    expect(edit.container.querySelectorAll('video')).toHaveLength(1)
+    expect(edit.container.querySelector('video')).toHaveAttribute('src', '/fixture/out.mp4')
+    const row = within(edit.container)
+    expect(row.getAllByRole('button', { name: 'Open file' })).toHaveLength(2)
+    await userEvent.click(row.getByRole('button', { name: 'Export subtitles' }))
+    expect(save).toHaveBeenCalled()
+    expect(api.exportSubtitleFile).toHaveBeenCalledWith('/fixture/cues.srt', '/tmp/exported.srt')
+    await userEvent.click(row.getAllByRole('button', { name: 'Open file' })[1])
+    expect(api.openLocalFile).toHaveBeenCalledWith('/fixture/cues.srt')
   })
   it('plays a saved speech artifact with audio controls instead of a video element', () => {
     const view = render(<MediaTaskRow task={{ ...task, status: 'succeeded', outputs: [{ path: '/fixture/speech.wav', mime: 'audio/wav' }] }} alt="Speech artifact" onResume={vi.fn()} onError={vi.fn()} onCancel={vi.fn()} />)

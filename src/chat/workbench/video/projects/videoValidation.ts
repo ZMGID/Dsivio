@@ -2,6 +2,11 @@ import { videoRatios, type VideoBrief, type VideoBootstrap } from './types'
 
 // Keep these gates aligned with the worker's validate() contract.
 export function videoInputIssue(b: VideoBrief, analysis = b.mode === 'analysis', remake = false, script = ''): string {
+  if (b.mode === 'editing') {
+    if (!(b.clips || []).length) return '请添加至少一段视频'
+    if (!b.request.trim() && !script.trim()) return '请填写剪辑要求'
+    return ''
+  }
   if (analysis) return !b.source.trim() ? '请先添加参考视频' : remake && !b.images.length ? '请先添加用于仿拍的商品图片' : ''
   if (b.providerId && b.model) {
     if (!b.request.trim() && !b.template && !script.trim()) return '请填写拍摄要求或选择模板'

@@ -37,7 +37,8 @@
 
 /* One composition: source material alongside the prompt, with a single action row. */
 .image-studio--polished .if-form { display: grid; grid-template-columns: 240px minmax(0, 1fr); grid-template-areas: 'materials requirements' 'materials options' 'more more' 'submit submit'; gap: 18px 28px; padding: 24px; background: var(--bg); border: 1px solid var(--if-line); border-radius: 15px; box-shadow: 0 2px 6px color-mix(in srgb, var(--text) 2%, transparent); }
-.image-studio--polished .if-materials { grid-area: materials; min-width: 0; }
+.image-studio--polished .if-materials { grid-area: materials; min-width: 0; display: flex; flex-direction: column; }
+.image-studio--polished .if-materials > .if-upload { flex: 1; height: auto; }
 .image-studio--polished .if-requirements { grid-area: requirements; min-width: 0; }
 .image-studio--polished .if-form > .if-options { grid-area: options; align-self: end; }
 .image-studio--polished .if-form > .if-more { grid-area: more; }

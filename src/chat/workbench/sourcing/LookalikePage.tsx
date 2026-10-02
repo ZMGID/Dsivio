@@ -9,7 +9,8 @@ import { Input, Select } from '../../../settings/public/controls'
 import { WorkbenchEmpty, WorkbenchPage } from '../WorkbenchPage'
 import { TemplateDialog } from '../content/TemplateDialog'
 import '../content/templateLibrary.css'
-import { dataUrl } from '../localMedia'
+import { dataUrl, fileFromPath } from '../localMedia'
+import { STORE_IMAGE_EXTENSIONS, useFileDrop } from '../useFileDrop'
 import { ProductCard } from './ProductCard'
 import { productDraft } from './productDraft'
 import { useSourcingSearch } from './useSourcingSearch'
@@ -84,6 +85,11 @@ export function LookalikePage() {
     window.addEventListener('paste', paste)
     return () => window.removeEventListener('paste', paste)
   }, [pickFile, dialog])
+  const dropZone = useRef<HTMLDivElement>(null)
+  const dropOver = useFileDrop(dropZone, STORE_IMAGE_EXTENSIONS, (accepted, rejected) => {
+    if (accepted[0]) void fileFromPath(accepted[0]).then(pickFile).catch(e => { if (alive.current) setError(String(e)) })
+    else if (rejected.length > 0) setError(`${t.workbenchDropUnsupported}${STORE_IMAGE_EXTENSIONS.join(' / ')}`)
+  }, searchPending)
   const perform = async (action: () => Promise<void>) => {
     if (saving.current) return
     saving.current = true; setBusy(true); setError(''); setNotice('')
@@ -103,10 +109,12 @@ export function LookalikePage() {
   }, [query, sort])
   const close = () => { if (!busy && !search.pending) setDialog(null) }
   return <div className="sourcing-match"><WorkbenchPage crumb={t.workbenchGroupSourcing} title={t.workbenchNavMatch}
+    error={dialog ? '' : error || search.error}
+    onErrorDismiss={() => setError('')}
     subtitle={en ? 'Upload a product photo to find matching products on 1688.' : '上传商品图，在 1688 查找同款及相似款货源。'}
     actions={<><Button variant="ghost" disabled={!configLoaded || search.pending} onClick={() => { setError(''); setAk(savedAk); setDialog('config') }}><Settings2 size={14} />{en ? '1688 settings' : '1688 接口设置'}</Button><Button variant="ghost" disabled={search.pending || reading} onClick={() => { setError(''); setDialog('history'); void search.refreshHistory() }}><Clock size={14} />{t.workbenchMatchHistory}</Button></>}>
     <section className="match-search-panel" aria-label={en ? 'Image search' : '图片搜索'}>
-      <div className={`match-upload${dragging ? ' is-dragging' : ''}`} onDragEnter={event => {
+      <div ref={dropZone} className={`match-upload${dragging || dropOver ? ' is-dragging' : ''}`} onDragEnter={event => {
         event.preventDefault(); if (!search.pending) { dragDepth.current++; setDragging(true) }
       }} onDragOver={event => event.preventDefault()} onDragLeave={event => {
         event.preventDefault(); if (--dragDepth.current <= 0) { dragDepth.current = 0; setDragging(false) }
@@ -145,7 +153,6 @@ export function LookalikePage() {
     </section>
     {configError && <div><p className="sourcing-error" role="alert">{configError}</p><Button disabled={configPending} onClick={() => void loadConfig()}>{configPending ? (en ? 'Loading…' : '正在读取…') : (en ? 'Retry settings' : '重试读取设置')}</Button></div>}
     {!configured && configLoaded && <p className="sourcing-notice">{en ? 'Configure your 1688 AK before searching.' : '首次使用请在「1688 接口设置」中填写 AK。'}</p>}
-    {(error || search.error) && !dialog && <p className="sourcing-error" role="alert">{error || search.error}</p>}
     {search.result?.historyWarning && <p className="sourcing-error" role="alert">{search.result.historyWarning}</p>}
     {notice && <p className="sourcing-notice" role="status">{notice}</p>}
     <section className="match-results" aria-label={t.workbenchMatchResult}>

@@ -4,6 +4,7 @@ import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { InputBar } from './InputBar'
 import { draftKey, getComposerDraft, migrateNewChatDraft, setComposerDraft } from './composerDraft'
+import { RouteActiveContext } from './chatRouteVisibility'
 
 const clipboard = vi.hoisted(() => ({ read: vi.fn(), readText: vi.fn(), writeText: vi.fn() }))
 const openDialog = vi.hoisted(() => vi.fn())
@@ -331,4 +332,15 @@ describe('composer custom editing menu', () => {
     await screen.findByText('无法读取剪贴板，请重试或使用 Ctrl+V。')
     expect(textarea).toHaveValue('前面选中后面')
   })
+})
+
+it('ignores native file drops while its route is only kept alive in the background', async () => {
+  const bar = (active: boolean) => <RouteActiveContext.Provider value={active}><InputBar onSend={() => {}} conversationId="bg-drop" /></RouteActiveContext.Provider>
+  const view = render(bar(false))
+  await act(async () => {})
+  expect(dragEvents.handler).toBeNull()
+  view.rerender(bar(true))
+  await waitFor(() => expect(dragEvents.handler).not.toBeNull())
+  view.rerender(bar(false))
+  await waitFor(() => expect(dragEvents.handler).toBeNull())
 })

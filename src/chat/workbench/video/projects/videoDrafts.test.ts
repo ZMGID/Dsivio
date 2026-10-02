@@ -28,6 +28,10 @@ describe('video generation preferences', () => {
     rememberVideoSettings({ ...reference, resolution: '' })
     expect(newVideoDraftBrief().resolution).toBe('1080p')
   })
+  it('does not copy a paid video route onto a local edit draft', () => {
+    rememberVideoSettings({ ...newVideoBrief(), route: 'grok', resolution: '720p' })
+    expect(newVideoDraftBrief('editing')).toMatchObject({ mode: 'editing', route: '', clips: [] })
+  })
   it('recovers from broken preferences without choosing a service', () => {
     localStorage.setItem('dsivio-video-preferences-v1', '{broken')
     expect(newVideoDraftBrief().route).toBe('')

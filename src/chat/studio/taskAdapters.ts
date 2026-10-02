@@ -25,7 +25,7 @@ export function videoLibraryTask(task: VideoTask): LibraryTask {
   const route = ({ native: '视频模型', grok: 'Grok', minimax: 'MiniMax', comfy: 'ComfyUI', '': '未选路线' })[task.brief.route]
   return {
     id: task.id, name: task.brief.name || '未命名视频任务', description: task.brief.request || task.brief.source,
-    kind: analysis ? 'analysis' : task.brief.route || 'creation', kindLabel: analysis ? '视频拆解 / 参考' : `${route} 视频`,
+    kind: analysis ? 'analysis' : task.brief.mode === 'avatar' || task.brief.mode === 'drama' ? task.brief.mode : task.brief.route || 'creation', kindLabel: analysis ? '视频拆解 / 参考' : task.brief.mode === 'avatar' ? '真人带货' : task.brief.mode === 'drama' ? '短剧带货' : `${route} 视频`,
     status: task.submission?.retryable ? '生成被拒绝 · 可重试' : analysis && task.script && group === 'ready' ? '已拆解' : videoTaskStatus(task),
     group, updatedAt: Number(task.updatedAt) || 0,
     detail: analysis ? '参考分析' : [task.brief.duration ? `${task.brief.duration} 秒` : '', task.brief.ratio, task.brief.resolution, task.output ? '成片已保存' : ''].filter(Boolean).join(' · '),

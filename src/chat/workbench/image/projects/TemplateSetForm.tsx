@@ -6,6 +6,6 @@ export function TemplateSetForm(props: ImageFormProps) {
   <ImageRequirement {...props} placeholder="有哪些额外要求？不填则沿用模板。" />
   <ImageOutputOptions {...props}  />
   <ImageExtraFields {...props} />
-  <ImageStart {...props} nextStep="按所选模板试做样品，确认后继续生成" />
+  <ImageStart {...props} nextStep="先按模板规划，确认方案后生成样品，再继续生成" />
  </div>
 }

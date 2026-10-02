@@ -6,6 +6,18 @@ import { useLang } from '../../components/i18n'
 import type { MediaCancelResult, MediaTask } from '../../generated/mediaGeneration'
 import type { MediaGeneration } from './useMediaGeneration'
 
+async function exportSubtitles(path: string, onError: (message: string) => void) {
+  try {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const name = path.split(/[\\/]/).pop() || 'subtitles.srt'
+    const destination = await save({ defaultPath: name, filters: [{ name: 'SubRip', extensions: ['srt'] }] })
+    if (typeof destination !== 'string' || !destination) return
+    await api.exportSubtitleFile(path, destination)
+  } catch (failure) {
+    onError(String(failure))
+  }
+}
+
 /** 一条生成记录：时间、状态、错误、恢复按钮和输出预览。 */
 export function MediaTaskRow({
   task,
@@ -24,9 +36,10 @@ export function MediaTaskRow({
   const [cancelling, setCancelling] = useState(false)
   const [cancellation, setCancellation] = useState<MediaCancelResult | null>(null)
   const pending = useRef(false)
-  const kind = { image: zh ? '图片' : 'Image', video: zh ? '视频' : 'Video', speech: zh ? '语音' : 'Speech', transcribe: zh ? '转写' : 'Transcription' }[task.kind]
+  const kind = { image: zh ? '图片' : 'Image', video: zh ? '视频' : 'Video', speech: zh ? '语音' : 'Speech', transcribe: zh ? '转写' : 'Transcription', edit: zh ? '剪辑' : 'Edit', text: zh ? '文案' : 'Text' }[task.kind]
+  const recordTitle = task.kind === 'text' && task.result && typeof task.result === 'object' && task.result !== null && 'title' in task.result ? String((task.result as { title?: unknown }).title ?? '') : ''
   const status = {
-    running: task.kind === 'transcribe' ? (zh ? '转写中' : 'Transcribing') : task.kind === 'speech' ? (zh ? '合成中' : 'Synthesizing') : (zh ? '生成中' : 'Generating'),
+    running: task.kind === 'transcribe' ? (zh ? '转写中' : 'Transcribing') : task.kind === 'speech' ? (zh ? '合成中' : 'Synthesizing') : task.kind === 'edit' ? (zh ? '处理中' : 'Processing') : (zh ? '生成中' : 'Generating'),
     succeeded: zh ? '完成' : 'Completed',
     failed: zh ? '失败' : 'Failed',
     cancelled: zh ? '已取消' : 'Cancelled',
@@ -51,6 +64,7 @@ export function MediaTaskRow({
         <span className="kv-row-label">{kind} · {new Date(task.createdAt).toLocaleString()}</span>
         <span className="kv-row-label" role="status">{status}</span>
       </div>
+      {recordTitle ? <p className="workbench-page-sub workbench-page-sub--flush line-clamp-2 [overflow-wrap:anywhere]">{recordTitle}</p> : null}
       {task.prompt ? <p className="workbench-page-sub workbench-page-sub--flush line-clamp-2 [overflow-wrap:anywhere]">{task.prompt}</p> : null}
       {task.error && <p className="kv-row-desc [overflow-wrap:anywhere]" role="alert">{task.error}</p>}
       {outcome && <p className="kv-row-desc" role="status">{outcomeLabels[outcome]}{cancellation ? ` · ${chargeLabels[cancellation.charged]}` : ''}</p>}
@@ -71,9 +85,16 @@ export function MediaTaskRow({
                   : output.mime.startsWith('audio/')
                     ? <audio className="max-w-full" src={convertFileSrc(output.path)} controls preload="metadata" aria-label={alt} />
                     : <p className="kv-row-desc [overflow-wrap:anywhere]">{output.mime} · {output.path}</p>}
-              <Button size="sm" className="mt-2" onClick={() => void api.openLocalFile(output.path).catch((failure) => onError(String(failure)))}>
-                {zh ? '打开文件' : 'Open file'}
-              </Button>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => void api.openLocalFile(output.path).catch((failure) => onError(String(failure)))}>
+                  {zh ? '打开文件' : 'Open file'}
+                </Button>
+                {(output.mime === 'application/x-subrip' || output.path.toLowerCase().endsWith('.srt')) && (
+                  <Button size="sm" onClick={() => void exportSubtitles(output.path, onError)}>
+                    {zh ? '导出字幕' : 'Export subtitles'}
+                  </Button>
+                )}
+              </div>
             </div>
           ))}
         </div>

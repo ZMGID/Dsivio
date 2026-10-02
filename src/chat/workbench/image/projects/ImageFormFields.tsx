@@ -76,12 +76,17 @@ function imageStartIssue(brief: ImageBrief): string {
     return '添加要沿用的样图，或选择已有模板'
   if (['design', 'client'].includes(brief.feature) && !brief.requirement.trim())
     return '写下这套图的用途和要求'
+  if (brief.feature === 'post' || brief.feature === 'detail') {
+    if (!brief.products.some((product) => product.assets.some((asset) => !asset.name.startsWith('__dsimage_')))) return '先添加商品图片'
+    if (!brief.requirement.trim()) return brief.feature === 'post' ? '先写下卖点和带货需求' : '先写下产品描述'
+  }
   return ''
 }
 
 const START_LABELS = {
-  gen: '生成图片', replace: '开始换货', smart: '生成套图样品',
-  design: '开始设计', client: '开始批量试做', workflow: '制作模板',
+  gen: '生成图片', replace: '开始换货', smart: '规划套图',
+  design: '开始设计', client: '规划批量套图', workflow: '制作模板',
+  post: '生成文案方案', detail: '规划详情模块',
 }
 
 export type ImageFormProps = {

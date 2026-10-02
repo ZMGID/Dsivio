@@ -1,5 +1,5 @@
 import { newVideoBrief, type VideoBrief, type VideoTask, type VideoRoute } from './types'
-export type VideoEntry = 'creation' | 'analysis' | 'remake'
+export type VideoEntry = 'creation' | 'analysis' | 'remake' | 'avatar' | 'drama' | 'editing'
 export interface VideoDraft { brief: VideoBrief; task?: VideoTask; script: string; step: number; dirty: boolean }
 const KEY = 'dsivio-video-drafts-v1'
 const taskKey = (id: string) => `${KEY}:task:${id}`
@@ -34,7 +34,7 @@ export function newVideoDraftBrief(mode: VideoBrief['mode'] = 'creation'): Video
   const preferred = preferences()
   if (typeof preferred.assistantId === 'string') b.assistantId = preferred.assistantId
   const route = preferred.route
-  if (route && ['grok', 'minimax', 'comfy'].includes(route)) {
+  if (mode !== 'editing' && route && ['grok', 'minimax', 'comfy'].includes(route)) {
     b.route = route
     b.resolution = preferredVideoResolution(b)
   }
@@ -54,7 +54,7 @@ export function readVideoDrafts(): Partial<Record<VideoEntry, VideoDraft>> {
     const value = JSON.parse(localStorage.getItem(KEY) || '{}')
     return Object.fromEntries(Object.entries(value).filter(([key, draft]) => {
       const d = draft as VideoDraft
-      return ['creation', 'analysis', 'remake'].includes(key) && d?.brief && Array.isArray(d.brief.images) && typeof d.script === 'string' && typeof d.brief.request === 'string'
+      return ['creation', 'analysis', 'remake', 'avatar', 'drama', 'editing'].includes(key) && d?.brief && Array.isArray(d.brief.images) && typeof d.script === 'string' && typeof d.brief.request === 'string'
     }))
   } catch { return {} }
 }

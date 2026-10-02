@@ -20,7 +20,7 @@ export function isImageGenerationModel(
 export function isVisionModel(provider: ModelProvider, model: string): boolean {
   return (
     resolveModelInfo(model, provider.modelOverrides, provider).capabilities
-      ?.vision === true
+      ?.vision === true && !isImageGenerationModel(provider, model)
   )
 }
 

@@ -110,5 +110,34 @@ export function useSharedDraft<T extends { brief: unknown }>(domain: 'image' | '
     }
   }, [domain, entry, enabled])
   useEffect(() => { requestSync.current() }, [value])
-  return { message }
+  // Replace one workflow's shared draft before switching into it. Seeding the
+  // revision keeps the next sync from adopting the draft this value replaces.
+  const replace = async (nextEntry: string, nextValue: T) => {
+    const key = `${domain}/${nextEntry}`
+    const read = () => invoke<Envelope<T>>('studio_draft', { domain, entry: nextEntry, revision: null, value: null })
+    let saved: Envelope<T> | undefined
+    let failure: unknown
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const current = await read()
+      try {
+        saved = await invoke<Envelope<T>>('studio_draft', {
+          domain,
+          entry: nextEntry,
+          revision: current.revision,
+          value: nextValue,
+        })
+        break
+      } catch (error) {
+        failure = error
+      }
+    }
+    if (!saved) throw failure instanceof Error ? failure : new Error('共享草稿尚未同步')
+    baselines.current.set(key, {
+      revision: saved.revision,
+      acknowledged: fingerprint(saved.value ?? nextValue),
+      pending: Promise.resolve(),
+    })
+    return saved
+  }
+  return { message, replace }
 }

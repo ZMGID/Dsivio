@@ -7,10 +7,12 @@ import { CloneImageForm } from './CloneImageForm'
 import { TemplateSetForm } from './TemplateSetForm'
 import { SetDesignForm } from './SetDesignForm'
 import { BatchSetForm } from './BatchSetForm'
+import { GraphicPostForm } from '../../copy/GraphicPostForm'
+import { DetailImageForm } from '../DetailImageForm'
 import type { ImageFeature } from './types'
 let testFeature: ImageFeature = 'gen'
 function ImageStudio({ feature = testFeature }: { feature?: ImageFeature }) {
- const Form = { gen: FreeImageForm, replace: CloneImageForm, smart: TemplateSetForm, design: SetDesignForm, client: BatchSetForm, workflow: FreeImageForm }[feature]
+ const Form = { gen: FreeImageForm, replace: CloneImageForm, smart: TemplateSetForm, design: SetDesignForm, client: BatchSetForm, workflow: FreeImageForm, post: GraphicPostForm, detail: DetailImageForm }[feature]
  return <ImageProjectWorkspace feature={feature} Form={Form} />
 }
 import { open } from '@tauri-apps/plugin-dialog'
@@ -646,4 +648,29 @@ it('keeps image task controls stable during reads and ignores abandoned destinat
   fireEvent.click(screen.getByRole('button', { name: '新建图片' }))
   await act(async () => finish(target))
   expect(screen.getByRole('button', { name: '新任务' })).toBeVisible()
+})
+
+it('stops multi-step image creation at the editable plan until human confirmation', async () => {
+  const planned = fixture()
+  planned.brief.feature = 'design'
+  planned.brief.requirement = '黑色商务背包套图'
+  planned.brief.products = [importedProduct()]
+  planned.plans = [{ ...planned.plans[0], productId: 'imported' }]
+  planned.results = []
+  planned.status = 'ready'
+  vi.mocked(api.workbenchImageBootstrap).mockResolvedValue(bootstrap())
+  vi.mocked(api.workbenchImageSave).mockResolvedValue(planned)
+  vi.mocked(api.workbenchImageAction).mockResolvedValue(planned)
+  render(<ImageStudio feature="design" />)
+  await waitFor(() => expect(dropHandler).toBeTypeOf('function'))
+  dropHandler?.({ payload: { type: 'drop', paths: ['/front.png'] } })
+  await screen.findByRole('button', { name: '移除素材 front.png' })
+  fireEvent.change(screen.getByLabelText('图片要求'), { target: { value: planned.brief.requirement } })
+  fireEvent.click(screen.getByRole('button', { name: '开始设计' }))
+  expect(await screen.findByRole('tab', { name: /方案确认/ })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('button', { name: /确认方案并生成样品/ })).toBeEnabled()
+  fireEvent.click(screen.getByText('编辑详细提示词'))
+  expect(screen.getByRole('textbox', { name: /提示词/ })).toHaveValue('product')
+  expect(screen.getByRole('tab', { name: /生成结果/ })).toHaveAttribute('aria-selected', 'false')
+  expect(api.workbenchImageAction).toHaveBeenCalledTimes(1)
 })

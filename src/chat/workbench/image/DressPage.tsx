@@ -115,6 +115,7 @@ export function DressPage() {
       emptyTitle={t.workbenchDressEmpty}
       emptyHint={t.workbenchDressEmptyHint}
       notice={notice || generation.error}
+      onNoticeDismiss={() => { setNotice(''); generation.setError('') }}
       cta={t.workbenchDressGenerate.replace('{n}', String(refs.length))}
       onGenerate={() => void generate()}
     />

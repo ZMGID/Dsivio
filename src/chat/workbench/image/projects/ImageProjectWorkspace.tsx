@@ -26,6 +26,8 @@ import {
 } from 'lucide-react'
 import { api, isTauriRuntime } from '../../../../api/tauri'
 import { Button, IconButton } from '../../../../components/Button'
+import { UseChatForSetButton } from './dsimageChat'
+import { isImageSetChatFeature } from './dsimageChatPrompt'
 import {
   AssetImage,
   ConfigPanel,
@@ -382,9 +384,9 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
       if (!syncCurrent.current.dirty && !syncCurrent.current.editedPlans) adopt(current)
       else setTask(current)
       if (version !== editorVersion.current) return
-      if (action.kind === 'plan') setStage('plan')
-      if (['start', 'sample', 'bulk', 'generate', 'retry', 'revise', 'resume'].includes(action.kind)) setStage('results')
-      if (action.kind === 'approve') setNotice('样品已确认。现在可以为这个分类的剩余商品规划并出图。')
+      if (action.kind === 'plan' || (action.kind === 'start' && brief.feature !== 'gen')) setStage('plan')
+      if (['sample', 'bulk', 'generate', 'retry', 'revise', 'resume'].includes(action.kind) || (action.kind === 'start' && brief.feature === 'gen')) setStage('results')
+      if (action.kind === 'approve') setNotice('样品已确认。现在可以按已保存方案生成这个分类的剩余商品。')
     } catch (e) {
       report(e)
     } finally {
@@ -597,13 +599,13 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
   const plans = editedPlans || task?.plans || []
   const groupPlans = plans.filter(
     (p) =>
-      brief.feature === 'gen' ||
+      brief.feature === 'gen' || brief.feature === 'post' || brief.feature === 'detail' ||
       productGroup(
         brief.products.find((x) => x.id === p.productId) || ({ category: '' } as ImageProduct),
       ) === group,
   )
   const results = (task ? (showHistory ? task.results : latestResults(task)) : []).filter((result) =>
-    brief.feature === 'gen' || productGroup(brief.products.find((product) => product.id === result.productId) || ({ category: '' } as ImageProduct)) === group,
+    brief.feature === 'gen' || brief.feature === 'post' || brief.feature === 'detail' || productGroup(brief.products.find((product) => product.id === result.productId) || ({ category: '' } as ImageProduct)) === group,
   )
   const approved = task?.approvedGroups.includes(group)
   const complete = task ? sampleComplete(task, group) : false
@@ -649,6 +651,7 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
           <div className="workbench-page-head">
             <h2>{currentFeature.label}</h2>
             <div className="workbench-page-actions">
+              {isImageSetChatFeature(feature) && <UseChatForSetButton brief={brief} />}
               <Button variant="ghost" onClick={() => void switchView(feature)}>创作</Button>
               <Button variant="ghost" onClick={() => void switchView('tasks')}><History size={15} />记录</Button>
               <Button variant="ghost" onClick={() => setSettingsOpen(true)}><Settings2 size={15} />模型与保存位置</Button>
@@ -692,7 +695,7 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
               </div>
               <div className="is-work-toolbar">
                 <div className="is-stage-tabs" role="tablist" aria-label="制作阶段">
-                  {(['brief', 'results'] as const).map((s, i) => (
+                  {(brief.feature === 'gen' ? ['brief', 'results'] as const : ['brief', 'plan', 'results'] as const).map((s, i) => (
                     <button
                       type="button"
                       role="tab"
@@ -701,7 +704,7 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
                       onClick={() => navigateStage(s)}
                     >
                       <span>{i + 1}</span>
-                      {s === 'brief' ? '素材与要求' : '生成结果'}
+                      {s === 'brief' ? '素材与要求' : s === 'plan' ? '方案确认' : '生成结果'}
                       {s === 'results' && successCount > 0 && <b>{successCount}</b>}
                     </button>
                   ))}
@@ -748,7 +751,7 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
                     </div>
                     {groupPlans.length > 0 && (
                       <div className="is-actions">
-                        <Button
+                        {brief.feature !== 'post' && brief.feature !== 'detail' && <Button
                           size="sm"
                           disabled={busy || dirty || !!editedPlans}
                           onClick={() =>
@@ -760,7 +763,7 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
                         >
                           <Layers3 size={14} />
                           存为规则模板
-                        </Button>
+                        </Button>}
                         <Button
                           disabled={busy || !editedPlans}
                           onClick={() =>
@@ -775,12 +778,12 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
                           disabled={busy}
                           onClick={() =>
                             void act({
-                              kind: brief.feature === 'gen' ? 'generate' : 'sample',
+                              kind: brief.feature === 'gen' || brief.feature === 'post' || brief.feature === 'detail' ? 'generate' : 'sample',
                             })
                           }
                         >
                           <Sparkles size={15} />
-                          {brief.feature === 'gen' ? '开始出图' : '生成两款样品'}
+                          {brief.feature === 'post' ? '确认并生成配图' : brief.feature === 'detail' ? '生成模块' : brief.feature === 'gen' ? '开始出图' : '确认方案并生成样品'}
                         </Button>
                       </div>
                     )}
@@ -831,12 +834,19 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
                               </div>
                               <span className="is-count">{plan.refs.length} 张参考图</span>
                             </div>
-                            {plan.copy && (
+                            {(brief.feature === 'post' && plan.slotId === 'h1') || (brief.feature === 'detail' && plan.copy) ? (
+                              <Field label={brief.feature === 'post' ? '发布文案' : '模块文案'}>
+                                <textarea className="kv-textarea custom-scrollbar" rows={brief.feature === 'post' ? 8 : 3} aria-label={brief.feature === 'post' ? '发布文案' : `${plan.purpose}文案`} value={plan.copy} onChange={(e) => {
+                                  editorVersion.current++
+                                  setEditedPlans(plans.map((item) => item.productId === plan.productId && item.slotId === plan.slotId ? { ...item, copy: e.target.value } : item))
+                                }} />
+                              </Field>
+                            ) : plan.copy ? (
                               <div className="is-copy">
                                 <span>图内文案</span>
                                 <p>{plan.copy}</p>
                               </div>
-                            )}
+                            ) : null}
                             <details className="if-more"><summary>编辑详细提示词</summary><Field label="完整画面提示词（包括需要修改的图内文案）">
                               <textarea
                                 className="kv-textarea custom-scrollbar"
@@ -891,7 +901,7 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
                       </Button>
                     </div>
                   </div>
-                  {brief.feature !== 'gen' && task && brief.products.filter((p) => productGroup(p) === group).length > 2 && (
+                  {brief.feature !== 'gen' && brief.feature !== 'post' && brief.feature !== 'detail' && task && brief.products.filter((p) => productGroup(p) === group).length > 2 && (
                     <div className={`is-sample-gate ${approved ? 'approved' : ''}`}>
                       <div>
                         <CheckCircle2 size={20} />

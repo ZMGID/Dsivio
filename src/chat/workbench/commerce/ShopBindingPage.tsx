@@ -127,7 +127,7 @@ export function ShopBindingPage() {
     error: t.workbenchShopsStatusError,
   })[shop.status]
 
-  return <WorkbenchPage crumb={t.workbenchGroupCommerce} title={t.workbenchNavShops} subtitle={t.workbenchShopsSubtitle}>
+  return <WorkbenchPage crumb={t.workbenchGroupCommerce} title={t.workbenchNavShops} subtitle={t.workbenchShopsSubtitle} error={config ? '' : notice} onErrorDismiss={() => setNotice('')}>
     <WorkbenchCard title={t.workbenchShopsSelectPlatform}>
       <div className="workbench-tabs shop-binding-catalog-tabs" aria-label={t.workbenchShopsSelectPlatform}>
         <button type="button" className={`workbench-tab${catalogGroup === 'overseas' ? ' is-active' : ''}`} aria-pressed={catalogGroup === 'overseas'} onClick={() => setCatalogGroup('overseas')}>
@@ -144,7 +144,6 @@ export function ShopBindingPage() {
           <div className="shop-binding-platform-action"><Button onClick={() => start(item.id)}>{t.workbenchShopsBindNow}</Button></div>
         </div>)}
       </div>
-      {!config && notice && <p className="workbench-inline-note" role="alert">{notice}</p>}
     </WorkbenchCard>
     {config && <ShopBindDialog title={name} busy={busy} onClose={() => setConfig(null)}>
       <div className="shop-bind-form">

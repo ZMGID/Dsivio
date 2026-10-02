@@ -5,7 +5,15 @@ export interface VideoBrief {
   name: string
   selectedConcept?: string
   assistantId?: string
-  mode: 'creation' | 'analysis'
+  mode: 'creation' | 'analysis' | 'avatar' | 'drama' | 'editing'
+  clips?: string[]
+  musicPath?: string
+  subtitlePath?: string
+  editFit?: 'pad' | 'crop'
+  editResolution?: '' | '720p' | '1080p'
+  roleIds?: string[]
+  roleImages?: string[]
+  dramaStyle?: string
   request: string
   images: string[]
   duration: number
@@ -26,6 +34,15 @@ export interface VideoBrief {
   referenceAudios?: string[]
   voiceIds?: string[]
 }
+export interface VideoShot {
+  id: string
+  prompt: string
+  status: string
+  mediaTaskId?: string
+  output?: string
+  error?: string
+  canResume?: boolean
+}
 export interface VideoTask {
   id: string
   revision: number
@@ -34,11 +51,14 @@ export interface VideoTask {
   script: string
   concepts?: string[]
   prompt: string
+  shots?: VideoShot[]
   approved: boolean
   status: string
   submission?: { state: 'rejected' | 'uncertain'; httpStatus?: number; reason: string; retryable: boolean }
   error?: string
   output?: string
+  mediaTaskId?: string
+  canResume?: boolean
   media?: { width: number; height: number; duration: number; hasAudio: boolean }
   remote?: { route: VideoRoute; id?: string; base_url: string; download_url?: string }
   quote?: {
@@ -83,6 +103,8 @@ export const newVideoBrief = (
 ): VideoBrief => ({
   name: '',
   mode,
+  ...(mode === 'drama' ? { dramaStyle: 'twist' } : {}),
+  ...(mode === 'editing' ? { clips: [] as string[], editFit: 'pad' as const, editResolution: '' as const, musicPath: '', subtitlePath: '' } : {}),
   request: '',
   images: [],
   duration: 10,

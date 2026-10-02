@@ -49,6 +49,7 @@ import type { ModeOption, ModeTone } from './permissionModes'
 import { isTauriRuntime } from './utils'
 import { isVideoFile } from './attachmentType'
 import { usePopoverMenu } from './usePopoverMenu'
+import { useChatRouteActive } from './chatRouteVisibility'
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'heic', 'heif']
 type AttachmentOperationScope = ReturnType<typeof beginComposerAttachmentOperation>
@@ -1653,8 +1654,9 @@ export const InputBar = memo(function InputBar({
     setSlashSelectedIndex(Math.max(filteredSlashCommands.length - 1, 0))
   }, [filteredSlashCommands.length, slashSelectedIndex])
 
+  const routeActive = useChatRouteActive()
   useEffect(() => {
-    if (!isTauriRuntime()) return
+    if (!isTauriRuntime() || !routeActive) return
     let cancelled = false
     let unlisten: (() => void) | undefined
 
@@ -1694,7 +1696,7 @@ export const InputBar = memo(function InputBar({
       setDragActive(false)
       unlisten?.()
     }
-  }, [addAttachments, composerLocked, pendingFromPaths])
+  }, [addAttachments, composerLocked, pendingFromPaths, routeActive])
 
   const canSend = (Boolean(input.trim()) || attachments.length > 0)
     && !slashPanelOpen

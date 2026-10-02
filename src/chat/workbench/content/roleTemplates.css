@@ -27,3 +27,55 @@
   line-height: 20px;
   overflow-wrap: anywhere;
 }
+
+.content-role-templates .role-template-action {
+  padding: 0 12px 12px;
+}
+
+.role-saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.role-saved-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.role-saved-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.role-saved-open img,
+.role-draft-images img {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.role-draft-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.role-draft-images figure {
+  margin: 0;
+}

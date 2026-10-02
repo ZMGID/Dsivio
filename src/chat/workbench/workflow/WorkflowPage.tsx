@@ -86,7 +86,10 @@ function WorkflowList() {
   return (
     <div className="workbench-workflows-page">
     <WorkbenchPage
+      crumb={t.workbenchGroupCommerce}
       title={t.workbenchNavWorkflows}
+      error={error}
+      onErrorDismiss={() => setError('')}
       actions={(
         <>
           <div className="workbench-workflows-search"><Input
@@ -121,7 +124,6 @@ function WorkflowList() {
         </>
       )}
     >
-      {error ? <p role="alert" className="workbench-inline-note">{error}</p> : null}
       {removed && <p className="workbench-inline-note">已删除“{removed.name}”<Button size="sm" onClick={() => { try { workflowStore.save(removed); setRemoved(null); load() } catch (failure) { setError(String(failure)) } }}>撤销删除</Button></p>}
       <div className="workbench-workflows-columns">
         <WorkbenchCard

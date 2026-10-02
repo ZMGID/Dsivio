@@ -91,14 +91,13 @@ export function PickLibraryPage() {
     } catch (e) { if (alive.current) setDeleteError(String(e)) }
     finally { deleteRunning.current = false; if (alive.current) setDeletingBusy(false) }
   }
-  return <WorkbenchPage crumb={t.workbenchGroupSourcing} title={t.workbenchNavPicks} subtitle={en ? 'Keep products, source links and selection notes on this device.' : '保存同款货源、商品链接和选品记录，重启后可继续查看。'} actions={<Button size="sm" onClick={() => setEditor({ item: null })}>{en ? 'Add product' : '添加选品'}</Button>}>
+  return <WorkbenchPage crumb={t.workbenchGroupSourcing} title={t.workbenchNavPicks} error={error} subtitle={en ? 'Keep products, source links and selection notes on this device.' : '保存同款货源、商品链接和选品记录，重启后可继续查看。'} actions={<Button size="sm" onClick={() => setEditor({ item: null })}>{en ? 'Add product' : '添加选品'}</Button>}>
     <div className="sourcing-toolbar">
       <label className="sourcing-field">{en ? 'Search title, tags or notes' : '搜索名称、标签或备注'}<Input type="search" value={query} onChange={v => { setQuery(v); setPage(1) }} /></label>
       <div className="sourcing-field"><span>{en ? 'Status' : '选品状态'}</span><Select value={stage} onChange={v => { setStage(v); setPage(1) }} ariaLabel={en ? 'Filter by status' : '筛选选品状态'} options={[{ value: '', label: en ? 'All' : '全部状态' }, ...stageOptions(en)]} /></div>
       <Button disabled={pending} onClick={() => setRevision(r => r + 1)}>{en ? 'Refresh' : '刷新'}</Button>
     </div>
     <div className="workbench-page-meta"><span>{t.workbenchPicksCount.replace('{n}', pending || error ? '—' : String(data.total))}</span></div>
-    {error && <p className="sourcing-error" role="alert">{error}</p>}
     {notice && <p className="sourcing-notice" role="status">{notice}</p>}
     <WorkbenchCard fill>
       {pending ? <WorkbenchEmpty>{en ? 'Loading…' : '正在加载…'}</WorkbenchEmpty> : error ? <WorkbenchEmpty>{en ? 'Could not load products. Use Refresh to retry.' : '选品加载失败，请点击「刷新」重试。'}</WorkbenchEmpty> : data.items.length ? <div className="sourcing-grid">{data.items.map(item => <ProductCard key={`${item.id}:${item.revision}`} product={item.product} details={<>

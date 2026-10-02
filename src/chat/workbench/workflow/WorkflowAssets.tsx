@@ -5,6 +5,9 @@ import { api, isTauriRuntime } from '../../../api/tauri'
 import { Button } from '../../../components/Button'
 import { Input } from '../../../settings/public/controls'
 import type { WorkflowAsset } from './workflowConfig'
+import { STORE_IMAGE_EXTENSIONS, useFileDrop } from '../useFileDrop'
+
+const WORKFLOW_VIDEO_EXTENSIONS = ['mp4', 'mov', 'webm']
 
 /** Native paths reuse chat attachment inspection; no File/blob/base64 enters drafts. */
 export function WorkflowAssets({ assets, onChange, many = false, video = false, disabled = false }: {
@@ -33,21 +36,31 @@ export function WorkflowAssets({ assets, onChange, many = false, video = false, 
     }).catch(() => { /* A missing or inaccessible path stays visibly unavailable. */ })
     return () => { active = false }
   }, [paths, video])
-  async function pick() {
+  async function guarded(work: () => Promise<void>) {
     if (pending.current || disabled) return
     pending.current = true; setBusy(true); setError('')
-    try {
-      if (!isTauriRuntime()) throw new Error('请在桌面应用中选择本机素材')
-      const selected = await open({ multiple: many, filters: [{ name: video ? '视频' : '图片', extensions: video ? ['mp4', 'mov', 'webm'] : ['png', 'jpg', 'jpeg', 'webp'] }] })
-      if (!selected || !mounted.current) return
-      const items = await api.chatInspectAttachmentPaths(Array.isArray(selected) ? selected : [selected])
-      if (!mounted.current) return
-      if (items.some(item => item.type !== (video ? 'video' : 'image')) || !items.length) throw new Error('素材不可访问或类型不匹配，请重新选择')
-      change.current(items.map(item => ({ path: item.path, name: item.name, description: assets.find(a => a.path === item.path)?.description ?? '' })))
-    } catch (failure) { if (mounted.current) setError(String(failure)) }
+    try { await work() }
+    catch (failure) { if (mounted.current) setError(String(failure)) }
     finally { pending.current = false; if (mounted.current) setBusy(false) }
   }
-  return <div className="workbench-flow-fields">
+  async function adopt(selected: string[]) {
+    const items = await api.chatInspectAttachmentPaths(selected)
+    if (!mounted.current) return
+    if (items.some(item => item.type !== (video ? 'video' : 'image')) || !items.length) throw new Error('素材不可访问或类型不匹配，请重新选择')
+    change.current(items.map(item => ({ path: item.path, name: item.name, description: assets.find(a => a.path === item.path)?.description ?? '' })))
+  }
+  const pick = () => guarded(async () => {
+    if (!isTauriRuntime()) throw new Error('请在桌面应用中选择本机素材')
+    const selected = await open({ multiple: many, filters: [{ name: video ? '视频' : '图片', extensions: video ? WORKFLOW_VIDEO_EXTENSIONS : [...STORE_IMAGE_EXTENSIONS] }] })
+    if (!selected || !mounted.current) return
+    await adopt(Array.isArray(selected) ? selected : [selected])
+  })
+  const zone = useRef<HTMLDivElement>(null)
+  const over = useFileDrop(zone, video ? WORKFLOW_VIDEO_EXTENSIONS : STORE_IMAGE_EXTENSIONS, (accepted, rejected) => {
+    if (accepted.length > 0) void guarded(() => adopt(many ? accepted : accepted.slice(0, 1)))
+    else if (rejected.length > 0) setError('只能拖入此类文件：' + (video ? WORKFLOW_VIDEO_EXTENSIONS : STORE_IMAGE_EXTENSIONS).join(' / '))
+  }, disabled)
+  return <div ref={zone} className={`workbench-flow-fields workbench-drop-zone${over ? ' is-drop-over' : ''}`}>
     <p className="workbench-page-sub">素材保留在本机，移动文件后需重新选择。</p>
     {assets.map((asset, index) => <div key={`${asset.path}:${index}`} className="workbench-flow-asset">
       <span>{asset.name || '未命名素材'}</span>

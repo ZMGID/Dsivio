@@ -71,7 +71,7 @@ export function MainImagePage() {
           })
         }
         return (
-          <WorkbenchPage crumb={t.workbenchGroupImage} crumbCurrent={t.workbenchMainCrumb} title={t.workbenchMainTitle}>
+          <WorkbenchPage crumb={t.workbenchGroupImage} crumbCurrent={t.workbenchMainCrumb} title={t.workbenchMainTitle} error={notice || generation.error} onErrorDismiss={() => { setNotice(''); generation.setError('') }}>
             <div className="main-image-config">
               <WorkbenchCard title={t.workbenchCopyAssets}>
                 <fieldset disabled={generation.busy} className="main-image-fields">
@@ -127,7 +127,6 @@ export function MainImagePage() {
                   <p className="workbench-page-sub workbench-page-sub--flush">{t.workbenchImagePlatform}：{t.workbenchImagePlatTb} · {t.workbenchImageZh}</p>
                 </fieldset>
                 <WorkbenchCta>
-                  {notice || generation.error ? <p className="workbench-inline-note" role="alert">{notice || generation.error}</p> : null}
                   <Button variant="primary" disabled={generation.busy} onClick={() => void generate()}>
                     {generation.busy ? t.workbenchMainSubmitting : t.workbenchMainGenerate}
                   </Button>

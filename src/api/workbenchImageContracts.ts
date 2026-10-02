@@ -1,5 +1,5 @@
 import type { Template } from '../generated/contentTemplates'
-export type ImageFeature = 'gen' | 'replace' | 'smart' | 'design' | 'client' | 'workflow'
+export type ImageFeature = 'gen' | 'replace' | 'smart' | 'design' | 'client' | 'workflow' | 'post' | 'detail'
 export type ImageAsset = { id: string; name: string; path: string }
 export type ImageProduct = {
   id: string
@@ -166,6 +166,18 @@ export const FEATURES = [
     description: '分类、选模板、分批交付',
     step: '导入一批商品，自动分类、安排套图，每类先出样品。',
   },
+  {
+    id: 'post',
+    label: '图文带货',
+    description: '卖点文案和一组配图',
+    step: '先确认标题、正文、标签和每张配图，再生成图片。',
+  },
+  {
+    id: 'detail',
+    label: '详情页',
+    description: '按模块生成详情长图',
+    step: '先确认头图、卖点、参数、场景和尺寸等模块，再逐张生成。',
+  },
 ] as const
 
 export const SHOTS = [
@@ -234,10 +246,10 @@ export const emptyBrief = (feature: ImageFeature): ImageBrief => ({
   name: '',
   requirement: '',
   language: feature === 'gen' ? 'auto' : feature === 'replace' ? '跟随样图' : 'zh-CN',
-  platform: '',
-  ratio: feature === 'gen' ? 'auto' : '1:1',
+  platform: feature === 'post' ? 'xhs' : feature === 'detail' ? 'tb' : '',
+  ratio: feature === 'gen' ? 'auto' : feature === 'post' || feature === 'detail' ? '3:4' : '1:1',
   resolution: '1k',
-  count: feature === 'gen' ? 0 : 7,
+  count: feature === 'gen' ? 0 : feature === 'post' ? 4 : feature === 'detail' ? 5 : 7,
   style: '',
   templateId: null,
   products: [],
