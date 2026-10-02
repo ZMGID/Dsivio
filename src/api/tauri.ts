@@ -15,7 +15,7 @@ import type { VideoTemplate as ContentVideoTemplate } from '../generated/content
 import type { VideoBootstrap, VideoTask, VideoTemplate } from './workbenchVideoContracts'
 import type { TaskOrganizations, TaskOrganizationPatch } from './studioContracts'
 import type { ImageAction, ImageBootstrap, ImageBrief, ImageConfig, ImagePlan, ImageProduct, ImageTask, ImageTemplate } from './workbenchImageContracts'
-import { Channel, invoke } from '@tauri-apps/api/core'
+import { Channel, invoke as coreInvoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getVersion } from '@tauri-apps/api/app'
 import { getCurrentWindow, LogicalSize } from '@tauri-apps/api/window'
@@ -54,6 +54,18 @@ export type LensWebSearchState = {
   reason?: string
   results?: LensWebSearchResult[]
   error?: string
+}
+
+/** 浏览器预览没有 Tauri 桥，原生 TypeError 对用户无意义；其他错误原样抛出。 */
+async function invoke<T>(...params: Parameters<typeof coreInvoke>): Promise<T> {
+  try {
+    return await coreInvoke<T>(...params)
+  } catch (error) {
+    if (!isTauriRuntime() && error instanceof TypeError) {
+      throw new Error('当前是浏览器预览，此功能需要在桌面应用中使用')
+    }
+    throw error
+  }
 }
 
 // Lens 多轮对话消息类型（视觉模型）

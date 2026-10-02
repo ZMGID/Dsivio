@@ -1,6 +1,9 @@
+import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import { X } from 'lucide-react'
+import { IconButton } from '../../components/Button'
 import { WorkbenchMediaModelSelect } from './WorkbenchMediaModelSelect'
 import type { MediaPoolKind } from '../../data/mediaModelPools'
-import type { ReactNode } from 'react'
 
 /** 工作台中心页外框：面包屑 + 蓝标题 + 可选说明。页面自己管卡片。 */
 export function WorkbenchPage({
@@ -12,6 +15,8 @@ export function WorkbenchPage({
   actions,
   mediaPool,
   fill,
+  error,
+  onErrorDismiss,
   children,
 }: {
   crumb?: string
@@ -22,6 +27,9 @@ export function WorkbenchPage({
   actions?: ReactNode
   mediaPool?: MediaPoolKind
   fill?: boolean
+  error?: string | null
+  /** 提示到期或被关闭时调用，由拥有该错误的状态清空自己，之后同一条错误才能再次弹出。 */
+  onErrorDismiss?: () => void
   children: ReactNode
 }) {
   return (
@@ -41,6 +49,7 @@ export function WorkbenchPage({
           </div>
           {actions ? <div className="workbench-page-actions">{actions}</div> : null}
         </header>
+        <WorkbenchToast message={error} onDismiss={onErrorDismiss} />
         {mediaPool ? <WorkbenchMediaModelSelect key={mediaPool} kind={mediaPool}>{children}</WorkbenchMediaModelSelect> : children}
       </div>
     </div>
@@ -111,6 +120,27 @@ export function WorkbenchEmpty({
       {children ? (
         <p className={title ? 'workbench-empty-hint' : 'workbench-empty-title'}>{children}</p>
       ) : null}
+    </div>
+  )
+}
+
+/** 错误悬浮提示：消息出现后显示数秒自动消失，也可手动关闭；到期或关闭时通知来源清空状态。 */
+export function WorkbenchToast({ message, duration = 5000, onDismiss }: { message?: string | null; duration?: number; onDismiss?: () => void }) {
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  const dismiss = useRef(onDismiss)
+  dismiss.current = onDismiss
+  useEffect(() => {
+    if (!message) { setDismissed(null); return }
+    const timer = window.setTimeout(() => { setDismissed(message); dismiss.current?.() }, duration)
+    return () => window.clearTimeout(timer)
+  }, [message, duration])
+  if (!message || dismissed === message) return null
+  return (
+    <div role="alert" className="workbench-toast">
+      <span>{message.replace(/^Error:\s*/, '')}</span>
+      <IconButton label="关闭提示" size="xs" onClick={() => { setDismissed(message); dismiss.current?.() }}>
+        <X size={14} />
+      </IconButton>
     </div>
   )
 }
