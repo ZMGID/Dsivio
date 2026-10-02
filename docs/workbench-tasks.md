@@ -6,7 +6,7 @@
 
 ## 当前执行：图片、视频功能拆分迁移
 
-完整交付尚未完成。用户要求图片、视频功能全部迁入 Workbench 并退出旧执行后端；下面 M1–M4 仅为此前内部记录，不是分批交付边界。仅模板读写迁出不能宣布迁移完成。2026-09-22 用户否决当前交付与 UI 验收结论；主线程接手检查，不再派发子代理或新任务。
+完整交付尚未完成。用户要求图片、视频功能全部迁入 Workbench 并退出旧执行后端；下面 M1–M4 仅为此前内部记录，不是分批交付边界。仅模板读写迁出不能宣布迁移完成。2026-09-22 用户否决当前交付与 UI 验收结论。
 
 2026-09-22 已确定：先迁移，再继续优化 UI。原图片、视频工作室按具体功能拆进 Workbench；生成统一走 `media_generation`，分析、规划和改写复用 `run_ai_task`。迁移完成后删除旧工作室执行后端，不保留两套生成链。模板分别归内容管理的「图片模板」「视频模板」。
 
@@ -22,6 +22,22 @@
 - 基线：前端 lint / typecheck / architecture / vitest（2778 项）全绿。测试 `localStorage` 写入失败改为 spy `Object.getPrototypeOf(localStorage)`：jsdom 的真实 `Storage` 不允许在实例上覆盖 `setItem`。
 - 仍未做：任何一页的真实桌面 + 真实供应商端到端出图/出片验收（0.3）。
 - 重复实现待定：套图业务（replace / smart / design / 甲方大单）同时存在于 `src-tauri/src/workbench/image_projects/`（工作台）和 `src-tauri/resources/skills/dsimage/`（对话 Skill），两者读写同一模板目录。
+
+### 现状核对（2026-10-02 晚，接手后）
+
+PRD 的 P1–P5 代码已全部落地到工作树（未提交）：侧栏每个功能都有真实实现，没有只有外壳的页面。自动验证全绿：`tsc`、`npm run lint`、`npm run architecture:check`、`protocol:check`、vitest 2884 项、cargo test 2341 项。
+
+- 能力层：`media_generation` 并入本地处理（`local_edit`：字幕、剪辑）与文案记录（`record_media_output`、`delete_media_task`）；`dsivio ai/media/commerce/publish` 经 `app_cli`；电商平台层 9 个适配器（ADR 0011）；发布层 YouTube Shorts、TikTok（ADR 0013）。
+- 页面：真人带货、短剧带货走 `VideoProjectWorkspace`（短剧按镜头提交，重试只重做失败镜头）；图文带货、详情页走 `ImageProjectWorkspace`；种草文章、视频字幕、产品视频编辑、店铺概览、自动化上架、上架检查、商品档案、图片视频库、角色模板、使用记录、发布 4 页均已接线并带测试。
+- 套图模板有一份 JSON Schema（`docs/schemas/`），Rust 运行时与 Python 测试共用；四个套图页有「用对话做」入口。
+- 文件拖入：工作台各上传区共用 `useFileDrop`（`src/chat/workbench/useFileDrop.ts`）。只在所在页面处于前台时监听，按落点判断落在哪个上传区，扩展名不符给出提示；聊天输入框的拖放同样只在对话页生效（`useChatRouteActive`）。已接：主图 / 海报 / 精修 / 迁移 / 换装 / 图片编辑 / 种草文章（`CopyUploadField`）、字幕、发布、商品档案、上架、上架检查、角色、素材库、同款找货、工作流素材；套图与视频工作区本来就有自己的拖入。未接：ComfyUI 运行器里的单张图片输入。需要 `File` 的入口经 Rust 命令 `workbench_read_local_image` 读取（仅图片扩展名、普通文件、≤10MB）。
+
+仍未做（须负责人同意后在真实 App 里验收）：
+
+- P0 复测：套图设计与图片复刻的确认门、短剧视频预览竞态。记录见 `docs/acceptance/workbench-p0-2026-10-02.md`。
+- 真人带货、短剧带货、图文带货、详情页、视频字幕、产品视频编辑的真实 App 验收（含付费生成）。
+- 所有电商平台适配器与发布适配器只用官方文档的录制响应验证，没有真实店铺或真实账号验证。
+- 发布层已知缺口：YouTube Shorts 不做 ffprobe 判定，也不自动加 `#Shorts`；`friends` 隐私映射为私享；没有 1GB 文件上限校验。
 
 ### 本轮代码接入状态（2026-09-22）
 

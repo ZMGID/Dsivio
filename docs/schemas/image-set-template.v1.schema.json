@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dsivio:image-set-template:v1",
+  "title": "Image set template (template.json) v1",
+  "description": "Shared contract for dsimage and the workbench image-set templates. File existence, product_kinds key membership, {vary} inside prompt_by_kind, and deliver pixel ratio are checked by template check (they need the template directory or cross-object key sets JSON Schema cannot name). Unique slot ids are checked by Rust validate_template.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["name", "mode", "slots"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "mode": { "enum": ["replace", "smart"] },
+    "category": { "type": ["string", "null"] },
+    "language": { "type": "string" },
+    "model": { "type": "string", "minLength": 1 },
+    "output": { "$ref": "#/$defs/output" },
+    "style": { "type": "string" },
+    "text_policy": { "type": "string" },
+    "product_kinds": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string" }
+    },
+    "derive": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "back": { "$ref": "#/$defs/deriveBack" }
+      }
+    },
+    "brand": { "$ref": "#/$defs/brand" },
+    "slots": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "items": { "$ref": "#/$defs/slot" }
+    },
+    "notes": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "mode": { "const": "replace" } },
+        "required": ["mode"]
+      },
+      "then": {
+        "properties": {
+          "slots": {
+            "items": {
+              "required": ["example", "prompt"],
+              "properties": {
+                "example": { "$ref": "#/$defs/relativeImage" },
+                "prompt": { "minLength": 1, "pattern": "\\S" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "mode": { "const": "smart" } },
+        "required": ["mode"]
+      },
+      "then": {
+        "properties": {
+          "slots": {
+            "items": {
+              "required": ["brief"],
+              "properties": {
+                "brief": { "type": "string", "minLength": 1, "pattern": "\\S" }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "relativeImage": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Template-directory relative image. Traversal, absolute paths, and drive letters are rejected.",
+      "allOf": [
+        { "pattern": "\\.(png|PNG|jpg|JPG|jpeg|JPEG|webp|WEBP)$" },
+        { "not": { "pattern": "(^|/)\\.\\.(/|$)|\\\\" } },
+        { "not": { "pattern": "^/" } },
+        { "not": { "pattern": "^[A-Za-z]:" } }
+      ]
+    },
+    "ref": {
+      "oneOf": [
+        { "enum": ["@example", "@product.front", "@product.back"] },
+        { "$ref": "#/$defs/relativeImage" }
+      ]
+    },
+    "deriveRef": {
+      "description": "derive.back cannot point at @example or @product.back.",
+      "oneOf": [
+        { "const": "@product.front" },
+        { "$ref": "#/$defs/relativeImage" }
+      ]
+    },
+    "promptText": {
+      "type": "string",
+      "pattern": "^(?:[^{]|\\{(?:vary|sku)\\})*$"
+    },
+    "bytes": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "string", "pattern": "^[0-9]+\\s*([kKmMgG][bB]?)?$" }
+      ]
+    },
+    "deliver": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "max_bytes": { "$ref": "#/$defs/bytes" },
+        "max_px": { "type": "integer", "minimum": 1 }
+      },
+      "dependentRequired": {
+        "width": ["height"],
+        "height": ["width"]
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Fields omitted here are filled from 要求.json generation when the template lives in a client folder. ratio auto is not allowed.",
+      "properties": {
+        "ratio": {
+          "enum": ["1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16", "2:1", "1:2", "21:9", "9:21"]
+        },
+        "resolution": { "enum": ["1k", "2k", "4k"] },
+        "format": { "enum": ["png", "jpeg", "webp"] },
+        "quality": { "enum": ["low", "medium", "high"] },
+        "deliver": { "$ref": "#/$defs/deliver" }
+      }
+    },
+    "brand": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "properties": {
+        "background": { "type": "string" },
+        "text": { "type": "string" },
+        "accent": { "type": "string" }
+      }
+    },
+    "deriveBack": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["prompt"],
+      "properties": {
+        "prompt": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/deriveRef" }
+        }
+      }
+    },
+    "slot": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[Hh][0-9]+$" },
+        "purpose": { "type": "string" },
+        "example": { "$ref": "#/$defs/relativeImage" },
+        "refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ref" }
+        },
+        "refs_by_kind": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/ref" }
+          }
+        },
+        "prompt": { "$ref": "#/$defs/promptText" },
+        "prompt_by_kind": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/promptText" }
+        },
+        "vary": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "brief": { "type": "string" },
+        "brief_by_kind": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["prompt"],
+            "properties": { "prompt": { "pattern": "\\{vary\\}" } }
+          },
+          "then": { "required": ["vary"] }
+        }
+      ]
+    }
+  }
+}

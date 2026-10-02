@@ -1,6 +1,6 @@
 # Workbench 店铺绑定
 
-首期只覆盖 Shopee、SHEIN、TikTok Shop、Mercado Libre 的授权绑定、店铺信息、连接状态检查与本地解绑。店铺概览、商品档案和上架流程尚未接入这些平台的真实业务数据。
+首期店铺绑定覆盖 Shopee、SHEIN、TikTok Shop、Mercado Libre 的授权、店铺信息、连接状态检查与本地解绑。Shopee 的类目、商品、订单、退货和上架走 `workbench/commerce`（ADR 0011），凭证仍只读这一份系统凭据库，不另建令牌存储。其它平台的商品和上架会返回「不支持」。工作台页面接入是后续切片。
 
 ## 使用前准备
 

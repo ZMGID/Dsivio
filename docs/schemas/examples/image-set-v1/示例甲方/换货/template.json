@@ -1,0 +1,45 @@
+{
+  "name": "示例换货",
+  "mode": "replace",
+  "category": "双肩包",
+  "model": "grok-imagine-image-2.0",
+  "output": {
+    "ratio": "1:1",
+    "deliver": { "width": 800, "height": 800, "max_px": 800 }
+  },
+  "text_policy": "图内文字保持样图原文。",
+  "product_kinds": {
+    "backpack": "双肩包（默认）",
+    "bag": "非背包"
+  },
+  "derive": {
+    "back": {
+      "prompt": "同一产品的正后视图，颜色材质五金与正面一致。",
+      "refs": ["@product.front", "assets/back_template.png"]
+    }
+  },
+  "slots": [
+    {
+      "id": "H1",
+      "purpose": "主图",
+      "example": "h1.png",
+      "refs": ["@example", "@product.front"],
+      "refs_by_kind": {
+        "bag": ["@example", "@product.front"]
+      },
+      "prompt": "Replace the product for {sku}. Keep the master layout.",
+      "prompt_by_kind": {
+        "bag": "Replace the bag for {sku}. Keep the master layout."
+      }
+    },
+    {
+      "id": "H2",
+      "purpose": "模特",
+      "example": "h2.png",
+      "refs": ["@example", "@product.front", "@product.back"],
+      "prompt": "Replace the product for {sku}. Model: {vary}.",
+      "vary": ["standing, front 3/4", "walking, side view"]
+    }
+  ],
+  "notes": ["语言、分辨率、风格在甲方 要求.json。"]
+}

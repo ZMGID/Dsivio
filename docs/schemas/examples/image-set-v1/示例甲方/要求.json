@@ -1,0 +1,19 @@
+{
+  "id": "示例甲方",
+  "name": "示例甲方",
+  "templates": ["换货", "设计"],
+  "language": "图内文字默认中文",
+  "generation": {
+    "resolution": "1k",
+    "format": "png",
+    "quality": "high",
+    "deliver": { "width": 800, "height": 800, "max_bytes": "2MB" }
+  },
+  "style": "干净的电商方图，商品是主体，背景有材质但不要纯白空底。",
+  "brand": {
+    "background": "#F3F3F3",
+    "text": "#111111",
+    "accent": "#D6B77A"
+  },
+  "notes": ["共用示例。模板同名字段覆盖本文件。"]
+}

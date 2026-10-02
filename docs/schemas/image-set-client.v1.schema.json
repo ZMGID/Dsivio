@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:dsivio:image-set-client:v1",
+  "title": "Image set client requirements (要求.json) v1",
+  "description": "Shared fields for one client folder. Template files with the same field name override these at generation time. id must equal the client folder name; that comparison is a directory check, not a JSON check. templates must list exactly the child template folders; template check compares the list to disk.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "name", "templates"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^/\\\\&]+$",
+      "not": { "enum": [".", ".."] }
+    },
+    "name": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "templates": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[^/\\\\]+$"
+      }
+    },
+    "language": { "type": "string" },
+    "generation": { "$ref": "#/$defs/generation" },
+    "style": { "type": "string" },
+    "brand": { "$ref": "#/$defs/brand" },
+    "notes": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ]
+    }
+  },
+  "$defs": {
+    "bytes": {
+      "oneOf": [
+        { "type": "integer", "minimum": 1 },
+        { "type": "string", "pattern": "^[0-9]+\\s*([kKmMgG][bB]?)?$" }
+      ]
+    },
+    "deliver": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "max_bytes": { "$ref": "#/$defs/bytes" },
+        "max_px": { "type": "integer", "minimum": 1 }
+      },
+      "dependentRequired": {
+        "width": ["height"],
+        "height": ["width"]
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Shared output defaults. Ratio stays on each template.json.",
+      "properties": {
+        "resolution": { "enum": ["1k", "2k", "4k"] },
+        "format": { "enum": ["png", "jpeg", "webp"] },
+        "quality": { "enum": ["low", "medium", "high"] },
+        "deliver": { "$ref": "#/$defs/deliver" }
+      }
+    },
+    "brand": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "properties": {
+        "background": { "type": "string" },
+        "text": { "type": "string" },
+        "accent": { "type": "string" }
+      }
+    }
+  }
+}

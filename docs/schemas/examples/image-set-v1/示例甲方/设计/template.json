@@ -1,0 +1,27 @@
+{
+  "name": "示例设计",
+  "mode": "smart",
+  "category": "服装",
+  "output": { "ratio": "1:1" },
+  "product_kinds": {
+    "generic": "默认",
+    "outerwear": "外套"
+  },
+  "slots": [
+    {
+      "id": "H1",
+      "purpose": "主图",
+      "brief": "产品完整、正面 3/4，文字不压产品。",
+      "brief_by_kind": {
+        "outerwear": "外套要看到门襟和袖口。"
+      },
+      "refs": ["@product.front"]
+    },
+    {
+      "id": "H2",
+      "purpose": "背面",
+      "brief": "展示背面结构，颜色跟产品图。",
+      "refs": ["@product.back"]
+    }
+  ]
+}

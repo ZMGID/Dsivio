@@ -36,6 +36,16 @@
 - 只有用户主动恢复时才会重新查询这个回执；自动轮询和重新打开页面都只读取状态。
 - 提交失败会分类：请求在生成之前被明确拒绝（4xx，408/429 除外）记为「已拒绝」，可以修改后重交；其余情况（传输错误、5xx、无法解析）记为「结果不确定」，不自动重交。
 
+## 本地处理并入媒体任务
+
+本地字幕和剪辑不是第二套生成实现。它们走同一个 `media_generation::start`：供应商 `local`，模型 `ffmpeg-subtitle` / `ffmpeg-edit`，协议 `ffmpeg_subtitle` / `ffmpeg_edit`。ffmpeg 只从随应用打包的 `media_runtime` 解析；找不到二进制就失败，不改用 PATH。烧字幕用 libass 的 `subtitles` 滤镜。本机打包的 ffmpeg 带这个滤镜。任务被打断后恢复为失败，提交状态是已拒绝，可以重做，不会去云端重交。
+
+`dsivio media subtitle` 和 `dsivio media edit` 仍是运行中 App 的客户端。回环协议增加 `service` 字段，监听改到 `app_cli`，端点文件仍是 `<app_data>/run/media-cli.json`。`media`、`ai`、`commerce`、`publish` 共用这一条连接。
+
+## 产物记录
+
+文案也记成媒体任务：模型 `record`，类型 `text`，状态直接是成功，正文在 `output.md`，`result.title` 是标题。来源沿用调用方，例如 `workbench/posts`。`delete_media_task` 删除记录目录；状态仍是运行中的任务拒绝删除。
+
 ## 暂不在本次范围
 
 - 工作台图片项目（`workbench/image_projects`）仍有自己的轮询循环，负责兼容旧回执；新任务都通过 `media_generation` 提交。
