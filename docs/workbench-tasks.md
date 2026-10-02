@@ -12,6 +12,17 @@
 
 本节优先于后面的功能接线清单；后续清单中的占位功能不等于原工作室已有能力，也不全是本次迁移范围。执行时复用现有规则和数据，不重新造任务平台，不把整套工作室包进新页面。
 
+### 现状核对（2026-10-02）
+
+按代码逐页核对，替代下面 09-22 记录里已过时的状态：
+
+- 旧执行后端已删除：`src/chat/images`、`src/chat/videos`、`src-tauri/src/image_studio`、`src-tauri/src/video_studio` 均不存在。`src-tauri/src/studio.rs` + `studio/` 只剩页面草稿、作品库整理和等待工具，由新页面共用。
+- 已接通：店铺绑定、同款找货、选品库、图片模板、视频模板、工作流；单图 6 页（主图、海报、精修、编辑、迁移、换装）走 `useMediaGeneration`；图片复刻、自由生图、模板套图、套图设计、批量套图、模板制作走 `ImageProjectWorkspace`；短视频、视频分析、视频复刻走 `VideoProjectWorkspace`；`VideoTaskList` 已改用 `MediaTaskList`。
+- 仍是空壳（只有 UI，无后端）：详情页、真人带货、短剧带货、视频编辑、视频字幕、图文带货、种草文章、图片视频库、角色库、使用记录、发布 4 页、商品档案、上架检查；概览与上架只读店铺列表。
+- 基线：前端 lint / typecheck / architecture / vitest（2778 项）全绿。测试 `localStorage` 写入失败改为 spy `Object.getPrototypeOf(localStorage)`：jsdom 的真实 `Storage` 不允许在实例上覆盖 `setItem`。
+- 仍未做：任何一页的真实桌面 + 真实供应商端到端出图/出片验收（0.3）。
+- 重复实现待定：套图业务（replace / smart / design / 甲方大单）同时存在于 `src-tauri/src/workbench/image_projects/`（工作台）和 `src-tauri/resources/skills/dsimage/`（对话 Skill），两者读写同一模板目录。
+
 ### 本轮代码接入状态（2026-09-22）
 
 - 图片独立表单：自由生图、图片复刻（整套换货）、模板套图、套图设计、批量套图；模板制作保留独立流程。
@@ -60,7 +71,7 @@
   在 `registry.ts` 的内容管理中增加两个独立入口。模板读写归内容管理，复用已有文件读写和规则校验；不调用旧工作室生成状态机。保留图片模板 ID、槽位、相对素材路径及 smart/replace 语义；保留视频模板 `kind/script/shots/spec`。不要求先搬磁盘目录。
   完成：已有模板能读取、编辑、导入导出；引用素材可用；业务功能引用同一份模板。图片模板试做与反馈修订随 M2 接通，不将缺少试做的管理页标为全部迁移完成。
 
-- [ ] **M2 · 图片功能逐项迁移**
+- [~] **M2 · 图片功能逐项迁移**（2026-10-02：代码已接入，未做真实出图验收）
   按上表拆分；先完成单张与样图换货，再完成模板套图、套图设计、批量套图及模板试做。保留有效的业务提示词、产品事实、槽位与样品确认规则；不用旧 `image_studio::agent/engine/generation` 执行。
   完成：每项从素材到产物、历史与导出均走新入口；整套和批量记录可关联各张媒体任务，部分失败可单独处理；模板修改不会改写已有任务的方案。每项验收后删除对应旧调用，不等所有图片功能做完才开始清理。
 
@@ -69,7 +80,7 @@
   两个实际差异在对应功能内解决：`run_ai_task` 目前没有原生视频输入，聊天 `mixer_video_analysis` 又依赖会话附件，不能传一个本地路径就声称已接通；旧本地参考音视频与共用接口的 URL 输入不同，需按现有协议接通或明确反馈，不能静默丢弃。
   完成：生成、分析报告、复刻、模板引用分别可用；恢复查询不重新生成；历史作品与草稿可读取。字幕、剪辑、数字人和短剧的新增能力另行排期，不冒充本次旧功能迁移。
 
-- [~] **M4 · 删除旧执行后端和旧入口**
+- [~] **M4 · 删除旧执行后端和旧入口**（2026-10-02：旧目录与入口已删除，剩真实桌面验收）
   收尾删除原 `src/chat/images/ImageStudio.tsx`、`src/chat/videos/VideoStudio.tsx` 及其不再使用的路由分支、API 适配、Tauri 注册；删除旧图片生成引擎、旧视频 worker/生成状态机、专属配置和重复供应商请求。同步解除 `studio` 草稿/历史/等待及视频代码对旧图片类型、锁和 Agent 的依赖。
   共用 `media_generation/video_providers.rs`、数据迁移读取，以及视频分析仍需要的抽帧/元数据工具保留或迁归所属模块，不能按目录名整包删除。只有失去全部调用方的脚本和打包依赖才删除。
   完成：新功能没有旧执行入口调用；旧模板、作品和未完成任务回执不丢失、不自动重新下单；更新后的协议、类型、架构与相关测试通过。旧数据保留不等于继续运行旧后端。
@@ -80,11 +91,11 @@
 
 ## 配套收尾（不阻塞迁移盘点）
 
-- [ ] **0.1 修 ProvidersTab 测试**
+- [x] **0.1 修 ProvidersTab 测试**（2026-10-02：媒体预设在前是 6945db1e 的有意顺序，改断言）
   `src/settings/tabs/ProvidersTab.test.tsx` 预设顺序断言：ComfyUI 预设排到了 Codex OAuth 前面。决定预设顺序（建议 ComfyUI 放最后，本地方案不该抢云端入口），改实现或改断言其一。
   完成：`npx vitest run src/settings/tabs/ProvidersTab.test.tsx` 绿。
 
-- [ ] **0.2 处理 `update-dot-preview.html`**
+- [x] **0.2 处理 `update-dot-preview.html`**（文件已不存在）
   根目录未跟踪文件。删掉，或挪到 `docs/research/` 并说明用途。
 
 - [ ] **0.3 实机跑通主图页**
@@ -98,21 +109,21 @@
 
 统一做法：照 `image/MainImagePage.tsx` —— `WorkbenchMediaModelSelect` 的 `render` 拿 `provider/model`，`useMediaGeneration({ origin: workbenchOrigin('<id>') })`，`ImageStudio` 传 `modelControl` / `results`，提示词形状收进该页一个 `build<Xxx>Prompt()` 纯函数并写测试。共用入口最多接收 16 张参考图片，各模型限制由后端校验。
 
-- [ ] **1.1 海报封面 `poster`**
+- [~] **1.1 海报封面 `poster`**
   `image/PosterPage.tsx`。参考图可选，尺寸按封面类型（`IMAGE_COVERS`）映射到 `aspect_ratio`。
   完成：`PosterPage.test.tsx` 断言 `startMediaGeneration` 带 `origin: 'workbench/poster'` 和对应比例。
 
-- [ ] **1.2 产品精修 `retouch`**
+- [~] **1.2 产品精修 `retouch`**
   `image/RetouchPage.tsx`。必须 1 张原图；`IMAGE_RETOUCH` 六种精修类型各自一段提示词。
   注意：精修是图生图，`images` 必填；无图时提示不提交。
 
-- [ ] **1.3 图片编辑 `edit`**
+- [~] **1.3 图片编辑 `edit`**
   `image/EditImagePage.tsx`。1 张原图 + 编辑指令。现有代码里有 `revokeImages(files.slice(1))` 只留一张的逻辑，保留。
 
-- [ ] **1.4 万物迁移 `migrate`**
+- [~] **1.4 万物迁移 `migrate`**
   `image/MigratePage.tsx`。产品图 + 参考场景图，两组都必填，合计 ≤ 4。
 
-- [ ] **1.5 一键换装 `dress`**
+- [~] **1.5 一键换装 `dress`**
   `image/DressPage.tsx`。产品图 + 服装/模特参考。
 
 - [ ] **1.6 图片复刻 `clone`**
@@ -130,7 +141,7 @@
 
 ## 视频功能接线明细（纳入 M3，新增能力另行排期）
 
-- [ ] **2.1 `VideoStudio` 外框换成真实任务列表**
+- [x] **2.1 `VideoStudio` 外框换成真实任务列表**
   `video/VideoStudio.tsx` 的 `VideoTaskList`（写死 0 条）→ `MediaTaskList`。`VideoStudio` 增加 `modelControl` / `generation` 入参，与 `ImageStudio` 同形。`VIDEO_TASK_TABS` 的「全部/进行中/完成/失败」按 `task.status` 过滤 `generation.tasks`。
 
 - [ ] **2.2 短视频生成 `shorts`**
