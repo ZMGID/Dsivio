@@ -1343,12 +1343,9 @@ fn unpack_built_in_skills(item: &BuiltIn, bytes: Vec<u8>, stage: &Path) -> Resul
     }).transpose()?;
     for index in 0..zip.len() {
         let mut file = zip.by_index(index).map_err(|e| e.to_string())?;
-        // Validate before filtering: an unrelated subtree cannot hide malicious entries.
+        // Validate names before filtering: an unrelated subtree cannot hide malicious entries.
         let original = file.name().strip_suffix('/').unwrap_or(file.name());
         validate_archive_relative_path(original)?;
-        if file.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
-            return Err("Skill 压缩包包含不安全路径".into());
-        }
         let Some((_, archive_path)) = original.split_once('/') else { continue; };
         let scoped_path = match subdir_prefix.as_deref() {
             None => archive_path,
@@ -1367,6 +1364,11 @@ fn unpack_built_in_skills(item: &BuiltIn, bytes: Vec<u8>, stage: &Path) -> Resul
             path.to_string()
         };
         validate_archive_relative_path(&selected)?;
+        // Symlinks are refused only where they would be written; repos ship links such as
+        // .claude/skills/<name> -> skills/<name> outside the selected Skills.
+        if file.unix_mode().is_some_and(|mode| mode & 0o170000 == 0o120000) {
+            return Err("Skill 压缩包包含不安全路径".into());
+        }
         let target = stage.join(&selected);
         if file.is_dir() {
             fs::create_dir_all(&target).map_err(|e| e.to_string())?;
@@ -2241,9 +2243,27 @@ mod tests {
             ]);
             assert!(unpack_built_in_skills(&item, archive, tempfile::tempdir().unwrap().path()).is_err(), "{path}");
         }
+    }
+
+    #[test]
+    fn unselected_symlinks_are_skipped_but_selected_symlinks_are_rejected() {
+        // hypit 仓库自带 .claude/skills/hypit → skills/hypit；不解压的链接不能挡住安装。
+        let options = zip::write::SimpleFileOptions::default();
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        zip.add_symlink("repo/unselected/link", "/outside", zip::write::SimpleFileOptions::default()).unwrap();
-        assert!(unpack_built_in_skills(&item, zip.finish().unwrap().into_inner(), tempfile::tempdir().unwrap().path()).is_err());
+        zip.add_symlink("repo/.claude/skills/hypit", "../../skills/hypit", options).unwrap();
+        zip.start_file("repo/skills/hypit/SKILL.md", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"hypit").unwrap();
+        let stage = tempfile::tempdir().unwrap();
+        unpack_built_in_skills(&plugin("hypit"), zip.finish().unwrap().into_inner(), stage.path()).unwrap();
+        assert_eq!(fs::read_to_string(stage.path().join("hypit/SKILL.md")).unwrap(), "hypit");
+        assert!(!stage.path().join(".claude").exists());
+
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        zip.start_file("repo/skills/hypit/SKILL.md", options).unwrap();
+        zip.add_symlink("repo/skills/hypit/escape", "/outside", options).unwrap();
+        let stage = tempfile::tempdir().unwrap();
+        assert!(unpack_built_in_skills(&plugin("hypit"), zip.finish().unwrap().into_inner(), stage.path()).is_err());
+        assert!(fs::symlink_metadata(stage.path().join("hypit/escape")).is_err());
     }
 
     #[test]
