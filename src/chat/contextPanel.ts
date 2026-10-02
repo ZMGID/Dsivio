@@ -30,6 +30,8 @@ const SEGMENT_LABEL_KEY: Record<string, keyof I18n> = {
 }
 
 export function localizedSegmentLabel(segment: ContextUsageSegment, t: I18n): string {
+  // The backend label is the instruction file that was loaded (AGENTS.md / CLAUDE.md).
+  if (segment.id === 'project_instructions') return `${t.contextSegmentProjectInstructions} · ${segment.label}`
   const key = SEGMENT_LABEL_KEY[segment.id]
   if (key && t[key]) return String(t[key])
   return segment.label
@@ -64,6 +66,7 @@ export function contextSegmentGroupId(segmentId: string): string {
     || segmentId === 'memory_l1'
     || segmentId === 'knowledge_base'
     || segmentId === 'skills'
+    || segmentId === 'project_instructions'
   ) {
     return CONTEXT_GROUP_SYSTEM
   }

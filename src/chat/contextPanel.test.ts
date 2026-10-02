@@ -8,6 +8,7 @@ import {
   CONTEXT_GROUP_TOOLS,
   contextSegmentGroupId,
   fullnessLabel,
+  localizedSegmentLabel,
 } from './contextPanel'
 import { i18n } from '../components/i18n'
 import type { ConversationContextState } from './types'
@@ -214,4 +215,13 @@ it('uses the backend compaction budget instead of a fixed percentage', () => {
   expect(autoCompactPercent({ contextWindowTokens: 200000, autoCompactThresholdTokens: 166000 })).toBe(83)
   expect(autoCompactPercent({ context_window_tokens: 128000, auto_compact_threshold_tokens: 106808 })).toBe(83)
   expect(autoCompactPercent({ contextWindowTokens: 200000 })).toBeNull()
+})
+
+describe('project instructions segment', () => {
+  it('names the loaded file and counts it with the system prompt', () => {
+    const segment = { id: 'project_instructions', label: 'AGENTS.md', estimated_tokens: 120 }
+    expect(localizedSegmentLabel(segment, i18n.zh)).toBe('项目说明 · AGENTS.md')
+    expect(localizedSegmentLabel(segment, i18n.en)).toBe('Project instructions · AGENTS.md')
+    expect(contextSegmentGroupId('project_instructions')).toBe(CONTEXT_GROUP_SYSTEM)
+  })
 })

@@ -52,13 +52,19 @@ pub(super) fn project_prompt_context_for(
         .ok()
         .flatten()?;
     let plugin_prompt = crate::market::project_prompt_for(app, &project.name);
+    let root_path = project
+        .root_path
+        .map(|root| root.trim().to_string())
+        .filter(|root| !root.is_empty());
+    // Read on every turn, so edits apply to the next message and survive compaction.
+    let instructions = root_path
+        .as_deref()
+        .and_then(|root| agent_prepare::load_project_instructions(std::path::Path::new(root)));
     Some(agent_prepare::ProjectPromptContext {
         name: project.name,
-        root_path: project
-            .root_path
-            .map(|root| root.trim().to_string())
-            .filter(|root| !root.is_empty()),
+        root_path,
         plugin_prompt,
+        instructions,
     })
 }
 

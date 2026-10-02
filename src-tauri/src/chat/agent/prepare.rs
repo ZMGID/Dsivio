@@ -221,6 +221,53 @@ pub struct ProjectPromptContext {
     pub root_path: Option<String>,
     /// Instructions an installed plugin attaches to its dedicated project (see `market::project_prompt_for`).
     pub plugin_prompt: Option<String>,
+    /// The user's own instruction file at the project root (see `load_project_instructions`).
+    pub instructions: Option<ProjectInstructions>,
+}
+
+/// Same budget as Codex's default `project_doc_max_bytes`.
+pub const PROJECT_INSTRUCTIONS_MAX_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectInstructions {
+    pub file_name: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
+/// `AGENTS.md` is the cross-agent convention; `CLAUDE.md` covers projects set up for Claude Code.
+/// Only the bound project root is read: the folder is chosen explicitly, so there is no walk upward.
+pub fn load_project_instructions(root: &std::path::Path) -> Option<ProjectInstructions> {
+    ["AGENTS.md", "CLAUDE.md"].into_iter().find_map(|file_name| {
+        let text = std::fs::read_to_string(root.join(file_name)).ok()?;
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        let mut end = text.len().min(PROJECT_INSTRUCTIONS_MAX_BYTES);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        Some(ProjectInstructions {
+            file_name: file_name.to_string(),
+            content: text[..end].to_string(),
+            truncated: end < text.len(),
+        })
+    })
+}
+
+fn project_instructions_prompt(instructions: &ProjectInstructions) -> String {
+    use crate::chat::model::types::{PROJECT_INSTRUCTIONS_CLOSE, PROJECT_INSTRUCTIONS_OPEN};
+    let file = &instructions.file_name;
+    let content = instructions.content.replace(PROJECT_INSTRUCTIONS_CLOSE, "<\\/project_instructions>");
+    let truncated = if instructions.truncated {
+        format!("\n[Truncated at {} KiB; read {file} for the rest.]", PROJECT_INSTRUCTIONS_MAX_BYTES / 1024)
+    } else {
+        String::new()
+    };
+    format!(
+        "{PROJECT_INSTRUCTIONS_OPEN} file=\"{file}\">\nProject instructions from {file} at the project root, written by the user for agents working in this folder. Follow them for work in this project unless they conflict with the user's current request.\n\n{content}{truncated}\n{PROJECT_INSTRUCTIONS_CLOSE}"
+    )
 }
 
 fn work_style_prompt(available_builtin_tools: &[String]) -> String {
@@ -789,6 +836,19 @@ pub fn build_chat_system_prompt_with_segments(
             text,
         );
     }
+    // After the workbench paragraph: both are per-project and move to the first user message.
+    if let Some(instructions) = project_context
+        .filter(|_| !is_chat_runtime)
+        .and_then(|project| project.instructions.as_ref())
+    {
+        append_context_segment(
+            &mut prompt,
+            &mut segments,
+            "project_instructions",
+            &instructions.file_name,
+            &project_instructions_prompt(instructions),
+        );
+    }
     (prompt, merge_context_segments(segments))
 }
 
@@ -1147,11 +1207,16 @@ fn native_tools_prompt(available_builtin_tools: &[String], _has_workbench: bool)
         bullets.push("When the user's request needs video details not already in saved observations, call mixer_video_analysis yourself. Do not ask the user to choose an analysis mode or type a command. Reuse observations for follow-ups; unrelated messages need no analysis.".to_string());
     }
     if has("mixer_generate_video") {
-        bullets.push("To generate a video, call mixer_generate_video with the user prompt and reference inputs. Use the configured model; do not invoke retired dsvideo scripts, director planning or script approval. After submission, use mixer_media_task on the returned ID to check completion and present the resulting video artifact. Never submit again just because a query or download failed.".to_string());
+        bullets.push("To generate a video, call mixer_generate_video with the user prompt and reference inputs. Use the configured model. After submission, use mixer_media_task on the returned ID to check completion and present the resulting video artifact. Never submit again just because a query or download failed.".to_string());
     }
     if has_image_generation {
         bullets.push(
             "To create or edit an image, call mixer_generate_image using the argument examples in that tool's description.".to_string(),
+        );
+    }
+    if has_image_generation || has("mixer_generate_video") {
+        bullets.push(
+            "The mixer_generate_* tools are for one-off media in this conversation. When an active plugin or skill owns a production workflow (for example a Dsvideo project), generate through that workflow's own commands so its project records the assets; do not substitute these tools.".to_string(),
         );
     }
     if has_advisor {
@@ -1559,6 +1624,7 @@ mod tests {
                 name: "Hypit".to_string(),
                 root_path: Some("/tmp/hypit".to_string()),
                 plugin_prompt: plugin_prompt.map(str::to_owned),
+                instructions: None,
             };
             build_chat_system_prompt(
                 "zh-CN", false, false, &registry, &chat_tools, true, &[], None, None, None, None, "", false,
@@ -1574,6 +1640,59 @@ mod tests {
         assert_eq!(build(Some("   ")), without, "blank plugin text adds nothing");
     }
 
+    fn scratch_project(files:&[(&str,&str)])->std::path::PathBuf {
+        let root=std::env::temp_dir().join(format!("dsivio-project-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        for (name,content) in files {std::fs::write(root.join(name),content).unwrap();}
+        root
+    }
+
+    #[test]
+    fn project_instructions_prefer_agents_md_and_fall_back_to_claude_md() {
+        let both=scratch_project(&[("AGENTS.md","shared rules"),("CLAUDE.md","claude rules")]);
+        let found=load_project_instructions(&both).expect("AGENTS.md");
+        assert_eq!((found.file_name.as_str(),found.content.as_str(),found.truncated),("AGENTS.md","shared rules",false));
+        let fallback=scratch_project(&[("AGENTS.md","  \n"),("CLAUDE.md","claude rules")]);
+        assert_eq!(load_project_instructions(&fallback).expect("CLAUDE.md").file_name,"CLAUDE.md","a blank AGENTS.md is skipped");
+        assert!(load_project_instructions(&scratch_project(&[])).is_none());
+        let large=scratch_project(&[("AGENTS.md",&"规".repeat(20_000))]);
+        let truncated=load_project_instructions(&large).expect("large");
+        assert!(truncated.truncated && truncated.content.len()<=PROJECT_INSTRUCTIONS_MAX_BYTES);
+        for root in [both,fallback,large] {std::fs::remove_dir_all(root).unwrap();}
+    }
+
+    #[test]
+    fn project_instructions_ride_with_the_workbench_suffix_not_the_cached_prefix() {
+        let registry = skills::SkillRegistry::default();
+        let mut chat_tools = crate::settings::ChatToolsConfig::default();
+        chat_tools.native_tools.write_file = true;
+        let tools = ["write".to_string()];
+        let build = |instructions: Option<ProjectInstructions>| {
+            let project = ProjectPromptContext {
+                name: "Shop".to_string(),
+                root_path: Some("/tmp/shop".to_string()),
+                plugin_prompt: None,
+                instructions,
+            };
+            build_chat_system_prompt(
+                "zh-CN", false, false, &registry, &chat_tools, true, &tools, None, None, None, None, "", false,
+                None, None, None, Some(&project), Some("/tmp/shop"), None, None, &[],
+            )
+        };
+        let instructions = ProjectInstructions {
+            file_name: "AGENTS.md".to_string(),
+            content: "# Rules\n\nRead DSVIDEO_STATE.md first.\n\nNever skip tests.".to_string(),
+            truncated: false,
+        };
+        let with = build(Some(instructions));
+        let without = build(None);
+        assert!(with.contains("Read DSVIDEO_STATE.md first.\n\nNever skip tests."), "{with}");
+        let (prefix_with, suffix) = crate::chat::model::types::split_workbench_system_suffix(&with).expect("split");
+        let (prefix_without, _) = crate::chat::model::types::split_workbench_system_suffix(&without).expect("split");
+        assert_eq!(prefix_with, prefix_without, "instructions must not change the cached system prefix");
+        assert!(suffix.contains("AGENTS.md") && suffix.contains("Never skip tests."), "{suffix}");
+    }
+
     #[test]
     fn project_folder_path_stays_out_of_static_system_prefix() {
         let registry = skills::SkillRegistry::default();
@@ -1585,6 +1704,7 @@ mod tests {
                 name: "Chat Probe".to_string(),
                 root_path: Some(root.to_string()),
                 plugin_prompt: None,
+                instructions: None,
             };
             build_chat_system_prompt(
                 "zh-CN",
@@ -2234,6 +2354,16 @@ mod tests {
             native_tools_prompt(&["mixer_generate_image".to_string()], false).expect("prompt");
         assert!(prompt.contains("mixer_generate_image"), "{prompt}");
         assert!(prompt.contains("argument examples"), "{prompt}");
+    }
+
+    #[test]
+    fn media_tools_defer_to_an_active_plugin_workflow_instead_of_forbidding_it() {
+        // Dsvideo is a bundled plugin again; the chat media tools must not steer its projects away.
+        let tools = ["mixer_generate_image", "mixer_generate_video", "mixer_media_task"].map(str::to_string);
+        let prompt = native_tools_prompt(&tools, false).expect("prompt");
+        assert!(!prompt.contains("retired dsvideo"), "{prompt}");
+        assert!(prompt.contains("plugin or skill"), "{prompt}");
+        assert!(prompt.contains("mixer_generate_video"), "{prompt}");
     }
 
     #[test]

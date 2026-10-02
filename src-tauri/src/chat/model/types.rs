@@ -14,6 +14,10 @@ pub const MISSING_IMAGE_PLACEHOLDER: &str = "[图片已不可用（附件文件�
 /// is in play. Must stay last so `split_workbench_system_suffix` can peel it
 /// off the stable prefix (cross-conversation prompt cache).
 pub const WORKBENCH_LOCATION_PROMPT_HEAD: &str = "Current default workbench:";
+/// Project instruction files (AGENTS.md / CLAUDE.md) change per project and contain blank lines,
+/// so they travel as one tagged block that `split_workbench_system_suffix` moves with the workbench.
+pub const PROJECT_INSTRUCTIONS_OPEN: &str = "<project_instructions";
+pub const PROJECT_INSTRUCTIONS_CLOSE: &str = "</project_instructions>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -688,11 +692,14 @@ pub fn tool_arguments_to_raw(value: Option<&Value>) -> String {
 /// suffix on the first user message so it lands *after* tools in the token
 /// stream.
 pub fn split_workbench_system_suffix(system: &str) -> Option<(String, String)> {
+    let (system, instructions) = take_project_instructions_block(system);
     let mut paras: Vec<&str> = system.split("\n\n").collect();
-    let idx = paras
+    let workbench = paras
         .iter()
-        .rposition(|para| para.trim().starts_with(WORKBENCH_LOCATION_PROMPT_HEAD))?;
-    let suffix = paras.remove(idx).trim().to_string();
+        .rposition(|para| para.trim().starts_with(WORKBENCH_LOCATION_PROMPT_HEAD))
+        .map(|idx| paras.remove(idx).trim().to_string())
+        .filter(|para| !para.is_empty());
+    let suffix = [workbench, instructions].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
     if suffix.is_empty() {
         return None;
     }
@@ -703,6 +710,17 @@ pub fn split_workbench_system_suffix(system: &str) -> Option<(String, String)> {
         .collect::<Vec<_>>()
         .join("\n\n");
     Some((prefix, suffix))
+}
+
+fn take_project_instructions_block(system: &str) -> (String, Option<String>) {
+    let Some(start) = system.find(PROJECT_INSTRUCTIONS_OPEN) else {
+        return (system.to_string(), None);
+    };
+    let Some(end) = system[start..].find(PROJECT_INSTRUCTIONS_CLOSE).map(|end| start + end + PROJECT_INSTRUCTIONS_CLOSE.len()) else {
+        return (system.to_string(), None);
+    };
+    let rest = format!("{}\n\n{}", &system[..start], &system[end..]);
+    (rest, Some(system[start..end].trim().to_string()))
 }
 
 fn prepend_text_to_first_user_message(messages: &mut [ModelMessage], prefix: &str) -> bool {
@@ -1424,6 +1442,24 @@ MCP note after the path.";
         assert!(suffix.starts_with(WORKBENCH_LOCATION_PROMPT_HEAD));
         assert!(suffix.contains("conv_abc"));
         assert!(!prefix.contains("conv_abc"));
+    }
+
+    #[test]
+    fn split_moves_project_instructions_block_with_its_blank_lines_out_of_system() {
+        let system = format!(
+            "static role\n\n{WORKBENCH_LOCATION_PROMPT_HEAD} `/tmp/proj`. Default here.\n\n\
+{PROJECT_INSTRUCTIONS_OPEN} file=\"AGENTS.md\">\n# Rules\n\nUse pnpm.\n\nRun tests.\n{PROJECT_INSTRUCTIONS_CLOSE}\n\nMCP note after the path."
+        );
+        let (prefix, suffix) = split_workbench_system_suffix(&system).expect("suffix");
+        assert_eq!(prefix, "static role\n\nMCP note after the path.");
+        assert!(suffix.starts_with(WORKBENCH_LOCATION_PROMPT_HEAD), "{suffix}");
+        assert!(suffix.contains("Use pnpm.\n\nRun tests."), "{suffix}");
+        assert!(suffix.trim_end().ends_with(PROJECT_INSTRUCTIONS_CLOSE), "{suffix}");
+        // Instructions alone (read-only tools, no workbench paragraph) still leave the prefix.
+        let only = format!("static role\n\n{PROJECT_INSTRUCTIONS_OPEN} file=\"AGENTS.md\">\nA\n\nB\n{PROJECT_INSTRUCTIONS_CLOSE}");
+        let (prefix, suffix) = split_workbench_system_suffix(&only).expect("suffix");
+        assert_eq!(prefix, "static role");
+        assert!(suffix.contains("A\n\nB"));
     }
 
     #[test]
