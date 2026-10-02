@@ -1,6 +1,6 @@
 ---
 name: dsimage
-description: 电商商品图技能，也能当普通生图工具用。套图走模板（一个文件夹：template.json + 示例图），三种做法：replace（甲方样图换货，脚本直出）、smart（模板给每槽 brief，按品写 prompt）、design（没模板，从零问需求设计一套）；同一甲方一大夹混了多个大类走甲方大单（先 要求.json，按大类分夹，一类一模板，每类先出 2 个再铺）；零散一张几张图走 gen。出图走 OpenAI / Grok / Gemini 或兼容网关的图片 API。Use when the user says 使用 dsimage / dsimage / dsimage引导 / 打印dsimage引导, or asks 怎么用 / 不会用 / 使用说明, or asks for 电商主图 / 详情页 / 产品图 / 商品图 / 白底图 / 套图 / listing images / product photos / PDP / A+ content, or 生成一张图 / 出张图 / 改图 / 换背景 / 海报 / generate an image / edit this image, or 制作模板 / 创建模板 / 换货 / 换品 / 替换模板 / 按这套样图做, or 甲方大单 / 一个大文件夹很多品 / 按大类做模板.
+description: 电商商品图技能，也能当普通生图工具用。套图走模板（一个文件夹：template.json + 示例图），三种做法：replace（甲方样图换货，脚本直出）、smart（模板给每槽 brief，按品写 prompt）、design（没模板，从零问需求设计一套）；同一甲方一大夹混了多个大类走甲方大单（先 要求.json，按大类分夹，一类一模板，每类先出 2 个再铺）；零散一张几张图走 gen。出图交给 Dsivio（`dsivio media image`，模型在「设置 > 媒体创作」的图片模型池）。Use when the user says 使用 dsimage / dsimage / dsimage引导 / 打印dsimage引导, or asks 怎么用 / 不会用 / 使用说明, or asks for 电商主图 / 详情页 / 产品图 / 商品图 / 白底图 / 套图 / listing images / product photos / PDP / A+ content, or 生成一张图 / 出张图 / 改图 / 换背景 / 海报 / generate an image / edit this image, or 制作模板 / 创建模板 / 换货 / 换品 / 替换模板 / 按这套样图做, or 甲方大单 / 一个大文件夹很多品 / 按大类做模板.
 ---
 
 # dsimage
@@ -10,17 +10,19 @@ description: 电商商品图技能，也能当普通生图工具用。套图走�
 本技能下文的 `templates/` 都指文末列出的共享模板目录，由脚本自动定位，不是安装目录。
 
 一个模板 = `templates/<名>/`：`template.json` + `h1.png…` + 可选 `assets/`。同一甲方多套放 `templates/{甲方}/`，共用 `要求.json`。
-内置版先使用图片页面配置；独立 `.env` 配置见 `SETUP.md`。对话里给了接口地址 / key → 立刻按 `SETUP.md` 第 2 步（`setup env` 不带 `--model`），拉列表等人选模型。不回显 key，不手改 `.env`。
+在 Dsivio 里出图不需要任何配置：脚本通过 `dsivio media image` 交给运行中的 App。**不要向用户要接口地址或 API key**，也不要跑 `setup env`。
 
 ## 配置在哪
 
-内置 dsimage 默认使用**图片页面保存的模型、协议和供应商密钥**。页面保存后，下次脚本启动直接读同一份配置，不需要另配 `.env`；出图仍执行 `scripts/dsimage.py`，直接请求供应商 API。
+出图走 Dsivio 的媒体创作：脚本调用 `dsivio media image`，由运行中的 App 选模型、换算参数、提交、等待和下载。模型来自「设置 > 媒体创作」的图片模型池，排第一的是默认；密钥只留在 App 里，脚本不读 App 的设置文件或密钥。
 
-用户问「用什么模型 / 配置在哪」，直接查 `{应用数据目录}/image-studio/config.json` 的 `model`、`protocol`、`providerId`；供应商在 `{应用数据目录}/settings.json` 的 `settings.providers` 中按 `id` 匹配，地址为 `baseUrl`，密钥为 `apiKeys`（选中索引 `activeKeyIndex`）。只报告模型、协议和配置来源，不打印密钥或整份配置。
+- 用户问「用什么模型」：跑 `dsivio media models --kind image`，报默认模型（`default: true`）和可选模型。
+- 没有可用模型：请用户到「设置 > 媒体创作」开启图片模型，然后重跑同一命令。不要改走 `.env`，也不要问 key。
+- 模板里的 `model` 或 `gen --model` 可以写 `供应商/模型` 或模型名。模板指定的模型不在池里时用默认模型（脚本会提示）；`gen --model` 点名的不在池里直接报错。
+- 画幅、分辨率、质量按模型描述传：模型不支持的质量按默认，不支持的画幅或 2k/4k 直接报错，不提交。
+- Dsivio 没在运行（退出码 6）：请用户打开 Dsivio 后重跑。
 
-应用数据目录：macOS `~/Library/Application Support/com.zmair.kivio`；Windows `%APPDATA%/com.zmair.kivio`；Linux `${XDG_DATA_HOME:-~/.local/share}/com.zmair.kivio`。
-
-显式 `--env-file` 或 `IMG_API_KEY` / `IMG_BASE_URL` / `IMG_PROVIDER` 环境变量用于本次独立配置；本次命令或模板指定的模型可覆盖默认模型。未配置图片页面时才按上游方式寻找 `.env`：从命令工作目录逐级向上找第一个含 `IMG_` 的文件，最后找当前 Skill 目录的 `.env`；模型字段 `IMG_MODEL`。查询时如存在本次覆盖，应说明覆盖来源。
+只有用户明确要脱离 Dsivio 用自己的接口时，才走独立配置：显式 `--env-file`、`IMG_API_KEY` / `IMG_BASE_URL` / `IMG_PROVIDER` 环境变量，或已有含 `IMG_` 的 `.env`（从工作目录逐级向上，最后是 Skill 目录）。见 `SETUP.md`。出图失败时不要自己换到独立配置。
 
 ## 路
 
@@ -29,7 +31,7 @@ description: 电商商品图技能，也能当普通生图工具用。套图走�
 | 用户给了什么 | 路 | 读 |
 |---|---|---|
 | 「dsimage引导」「怎么用」「不会用」 | **引导**：把 `guides/howto.md` 原样给用户 | `guides/howto.md` |
-| 安装 / 配 API / 更新 | **安装** | `SETUP.md` |
+| 用户明确要用自己的接口（不走 Dsivio） | **独立配置** | `SETUP.md` |
 | 只要一张或几张：出张图、改这张、换背景、海报 | **gen** | `guides/gen.md` |
 | 点名了库里的 replace 模板，或「按这套样图把这些品换进去」 | **replace** | `guides/replace.md` |
 | 点名了库里的 smart 模板 | **smart** | `guides/smart.md` |
@@ -48,7 +50,7 @@ description: 电商商品图技能，也能当普通生图工具用。套图走�
 
 做到这里先等人，收到明确答复再往下：
 
-- 图片页面和独立 `.env` 都未配置：按 SETUP 配置，模型列表出来后等人选名字。
+- 图片模型池为空或 Dsivio 没在运行：告诉用户去「设置 > 媒体创作」开启图片模型 / 打开 Dsivio，等人处理完再重跑。
 - 引导：只给 howto，等他用其中一句开口。
 - 先问：五问问完等人回（已说的划掉）。用模板时名单最多 5 个，等人回序号或名字。
 - 甲方大单：`要求.json`、分类表、每类 2 个预览，三处都等人点头。
@@ -73,9 +75,9 @@ smart 多个品：一品一个子代理，指令里只给 `brief.md` 路径和�
 
 ## 执行生图
 
-从 Skill 末尾打印的 `Skill directory` 运行文档里的 `scripts/dsimage.py` 命令，命令工具超时设为至少 600 秒。输出目录使用本次对话工作目录下的绝对路径。
+从 Skill 末尾打印的 `Skill directory` 运行文档里的 `scripts/dsimage.py` 命令，命令工具超时设为至少 600 秒。脚本按槽位提交 `dsivio media image`，任务也会出现在 App 的任务记录里（来源 `cli/dsimage`）。输出目录使用本次对话工作目录下的绝对路径。
 
-分辨率默认 1k；只有用户明确指定时才传 2k / 4k。命令退出码为 0 且输出文件存在才算完成，然后把图片和路径交给用户。非零退出码直接返回完整错误；工具超时或取消则说明请求状态未知，保留恢复记录，结束本轮。
+分辨率默认 1k；只有用户明确指定时才传 2k / 4k。命令退出码为 0 且输出文件存在才算完成，然后把图片和路径交给用户。非零退出码直接返回完整错误；工具超时或取消则说明请求状态未知，结束本轮。报「提交结果未知」或「等待超时」的槽位不要换参数重出：重跑同一条命令只会查询原任务，不会重复扣费。
 
 ## 没点名先问
 

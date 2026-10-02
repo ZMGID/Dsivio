@@ -712,7 +712,7 @@ class SetupUpdateTests(TempTemplatesMixin, unittest.TestCase):
         self.assertEqual(calls[0][0][0], "https://ybw-ai.com/v1/chat/completions")
         self.assertEqual(generated[0].read_bytes(), source)
         self.assertIs(gen_image.ADAPTER_RUNNERS["gemini-chat"], gen_image.run_gemini_chat)
-        self.assertEqual(set(gen_image.API_MODES), set(gen_image.ADAPTER_RUNNERS))
+        self.assertEqual(set(gen_image.API_MODES) | {gen_image.DSIVIO_MODE}, set(gen_image.ADAPTER_RUNNERS))
 
     def test_setup_env_cli(self) -> None:
         env = self.tmp / "s.env"

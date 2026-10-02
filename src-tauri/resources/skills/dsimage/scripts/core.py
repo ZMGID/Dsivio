@@ -1325,15 +1325,10 @@ def preview_product(batch: dict[str, Any], tpl: dict[str, Any], product: dict[st
 # ── 生图 ──────────────────────────────────────────────────
 
 def run_pool(jobs: list[dict[str, Any]], *, concurrency: int, redo: bool, env_file: str | None,
-             api_mode: str | None, model_pin: str | None, label: str) -> list[str]:
+             api_mode: str | None, model_pin: str | None, label: str, strict_model: bool = False) -> list[str]:
     if not jobs:
         return []
-    env_path = Path(env_file) if env_file else gen_image.find_default_env_file()
-    gen_image.load_env_file(env_path)
-    if model_pin:
-        os.environ["IMG_MODEL"] = model_pin
-    provider, base_url, model, api_key = gen_image.resolve_runtime()
-    mode = gen_image.detect_mode(provider, base_url, api_mode, model)
+    base_url, api_key, model, mode = gen_image.resolve_backend(env_file, model_pin, api_mode, strict_model=strict_model)
     pool = to_pool_jobs(jobs)
     results = gen_image.run_job_pool(
         pool, concurrency=concurrency, skip_existing=not redo, base_url=base_url,

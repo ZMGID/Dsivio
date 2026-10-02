@@ -93,7 +93,7 @@ python scripts/dsimage.py template check <模板名>
   "mode": "replace",                       // replace | smart
   "category": "男款商务双肩包",
   "language": "pt-BR",                     // 图内文字语言
-  "model": "grok-imagine-image-2.0",       // 可选，锁模型；不写用 .env
+  "model": "grok-imagine-image-2.0",       // 可选，优先用的模型；不在媒体创作图片模型池里就用默认模型
   "output": {
     "ratio": "1:1", "resolution": "1k", "format": "png", "quality": "high",
     "deliver": {"width": 800, "height": 800, "max_bytes": "2MB"}   // 可选；或 max_px

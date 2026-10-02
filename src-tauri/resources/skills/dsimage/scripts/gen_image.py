@@ -13,6 +13,10 @@ jobs.json 的 image 可为字符串或数组（换货：[母版, 产品图]）�
   gemini → https://generativelanguage.googleapis.com/v1      （generateContent）
 其他兼容网关才填 IMG_BASE_URL；URL 含 apimart → 异步轮询。
 
+没有独立配置（--env-file / IMG_* 环境变量 / 含 IMG_ 的 .env）时走 Dsivio：
+`dsivio media image` 交给运行中的 App，模型取「设置 > 媒体创作」的图片模型池，
+脚本不读 App 的设置或密钥。
+
 可用 --mode 或 IMG_API_MODE 强制指定 sync|async|grok|gemini|gemini-chat。
 """
 
@@ -29,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -178,12 +183,6 @@ def env_defines_img_keys(env_file: Path) -> bool:
 
 
 def find_default_env_file() -> Path | None:
-    from dsivio import use_image_config
-    try:
-        if use_image_config():
-            return None
-    except (ValueError, OSError) as exc:
-        fail(f"读取图片页面配置失败：{exc}")
     # 向上查找时只认包含 IMG_ 配置的 .env，避免误用其他项目里给
     # 文本模型准备的 OPENAI_API_KEY
     for directory in (Path.cwd(), *Path.cwd().parents):
@@ -321,6 +320,187 @@ def resolve_runtime() -> tuple[str, str, str, str]:
             "其他兼容接口请设 IMG_BASE_URL。"
         )
     return provider, base_url, model, api_key
+
+
+# ── Dsivio 后端（dsivio media）────────────────────────────
+
+DSIVIO_MODE = "dsivio"
+DSIVIO_NOT_RUNNING = "Dsivio 没有在运行（不自动重试）。请打开 Dsivio 后重跑同一命令。"
+# 模型 id → `dsivio media models` 里的条目（含参数描述），run_dsivio 按它决定传哪些参数。
+_dsivio_models: dict[str, dict[str, Any]] = {}
+
+
+def dsivio_executable() -> str:
+    found = shutil.which("dsivio")
+    if found:
+        return found
+    candidate = Path.home() / ".kivio" / "bin" / ("dsivio.cmd" if sys.platform == "win32" else "dsivio")
+    if candidate.is_file():
+        return str(candidate)
+    fail(DSIVIO_NOT_RUNNING + "（找不到 dsivio 命令，Dsivio 每次启动会安装它。）")
+
+
+def _dsivio(argv: list[str], *, stdin: str | None = None, timeout: int | None = None) -> tuple[int, Any, str]:
+    """跑 `dsivio media ...`，返回 (退出码, stdout 的 JSON, stderr)。"""
+    proc = subprocess.run([dsivio_executable(), "media", *argv], input=stdin, capture_output=True,
+                          text=True, encoding="utf-8", timeout=timeout)
+    lines = proc.stdout.strip().splitlines()
+    try:
+        payload = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        payload = None
+    return proc.returncode, payload, proc.stderr.strip()
+
+
+def dsivio_model(pin: str | None, strict: bool) -> dict[str, Any]:
+    """从图片模型池选模型。pin 可以是 `供应商/模型` 或模型名；模板里的 pin 不在池里时用默认模型。"""
+    code, models, err = _dsivio(["models", "--kind", "image", "--json"], timeout=60)
+    if code == 6:
+        fail(DSIVIO_NOT_RUNNING)
+    if code != 0 or not isinstance(models, list):
+        fail(f"读取 Dsivio 图片模型失败（不自动重试）：{err or f'退出码 {code}'}")
+    if not models:
+        fail("「设置 > 媒体创作」的图片模型池里没有可用模型（不自动重试）。请在设置里开启图片模型；"
+             "不需要给 dsimage 接口地址或 API key。")
+    default = next((m for m in models if m.get("default")), models[0])
+    chosen = default
+    if pin:
+        match = next((m for m in models if m.get("id") == pin), None) \
+            or next((m for m in models if m.get("model") == pin), None)
+        if match:
+            chosen = match
+        elif strict:
+            fail(f"图片模型 {pin} 不在「设置 > 媒体创作」的图片模型池（不自动重试）。可用："
+                 + "、".join(str(m.get("id")) for m in models))
+        else:
+            log("dsivio", f"模板指定的 {pin} 不在图片模型池，改用默认模型 {default.get('id')}")
+    _dsivio_models[chosen["id"]] = chosen
+    return chosen
+
+
+def resolve_backend(env_file: str | None, model_pin: str | None,
+                    api_mode: str | None, *, strict_model: bool = False) -> tuple[str, str, str, str]:
+    """返回 (base_url, api_key, model, mode)。有独立配置走独立配置，否则走 Dsivio；出图前定下，失败不换后端。"""
+    env_path = Path(env_file) if env_file else find_default_env_file()
+    standalone = env_path is not None or any(optional_config(k) for k in (ENV_API_KEY, ENV_BASE_URL)) \
+        or bool(os.environ.get(ENV_PROVIDER, "").strip())
+    if not standalone:
+        return DSIVIO_MODE, "", dsivio_model(model_pin, strict_model)["id"], DSIVIO_MODE
+    load_env_file(env_path)
+    if model_pin:
+        os.environ[ENV_MODEL] = model_pin
+    provider, base_url, model, api_key = resolve_runtime()
+    return base_url, api_key, model, detect_mode(provider, base_url, api_mode, model)
+
+
+def _dsivio_argument(arguments: dict[str, Any], name: str, value: str) -> bool:
+    spec = arguments.get(name)
+    return spec is not None and value in spec.get("allowed", [value])
+
+
+def _dsivio_error(payload: Any, err: str) -> str:
+    if isinstance(payload, dict):
+        return str(payload.get("message") or payload.get("error") or err or payload)
+    return err
+
+
+def run_dsivio(base_url: str, api_key: str, args: argparse.Namespace, prompt: str,
+               model: str, output_dir: Path, fmt: str, label: str,
+               name_prefix: str | None) -> list[Path]:
+    entry = _dsivio_models.get(model) or dsivio_model(model, strict=True)
+    description = entry.get("description") or {}
+    arguments = description.get("arguments") or {}
+    timeout = int(args.timeout or 600)
+    argv = ["image", "--prompt-file", "-", "--model", entry["id"], "--source", "dsimage",
+            "--timeout", str(timeout), "--json"]
+    if description.get("factsRevision"):
+        argv += ["--description-revision", description["factsRevision"]]
+    for image in ref_images(args):
+        argv += ["--ref", str(Path(image).resolve())]
+    ratio = "auto" if str(args.size).lower() == "auto" else size_to_ratio(args.size)
+    if _dsivio_argument(arguments, "aspectRatio", ratio):
+        argv += ["--ratio", ratio]
+    elif "aspectRatio" in arguments:
+        fail(f"{entry['id']} 不支持画幅 {ratio}（不自动重试）。可选：{'、'.join(arguments['aspectRatio'].get('allowed', []))}")
+    else:
+        log(label, f"{entry['id']} 没有画幅参数，按模型默认画幅出图")
+    size = args.resolution.upper()
+    if _dsivio_argument(arguments, "size", size):
+        argv += ["--size", size]
+    elif args.resolution != "1k":
+        fail(f"{entry['id']} 不支持 {size} 分辨率（不自动重试）。")
+    if args.quality:
+        if _dsivio_argument(arguments, "quality", args.quality):
+            argv += ["--quality", args.quality]
+        else:
+            log(label, f"{entry['id']} 不支持 quality={args.quality}，按模型默认")
+    count = int(args.n)
+    if count > 1:
+        if count > int((arguments.get("n") or {}).get("maximum", 1)):
+            fail(f"{entry['id']} 一次不能出 {count} 张（不自动重试）。")
+        argv += ["--n", str(count)]
+    if _dsivio_argument(arguments, "outputFormat", fmt):
+        argv += ["--options-json", json.dumps({"outputFormat": fmt})]
+
+    # 同一个 key 在 App 里只提交一次。结果不确定 / 超时时保留 key，重跑同一命令只会查到原任务；
+    # 成功后 generate_one 清掉恢复目录，--redo 才是新的提交。
+    root = getattr(_recovery, "root", None)
+    key_file = root / "dsivio-key" if root is not None else None
+    if key_file is not None and key_file.is_file():
+        key = key_file.read_text(encoding="utf-8").strip()
+        log("recovery", "沿用上次的提交 key，查询原任务，不重新提交")
+    else:
+        key = f"dsimage:{uuid.uuid4().hex}"
+        if key_file is not None:
+            key_file.write_text(key, encoding="utf-8")
+    argv += ["--idempotency-key", key]
+    lookup = f"`dsivio media status --source dsimage --idempotency-key {key}`"
+
+    def forget() -> None:
+        if key_file is not None:
+            key_file.unlink(missing_ok=True)
+
+    log(label, f"dsivio media image | model={entry['id']}")
+    try:
+        code, task, err = _dsivio(argv, stdin=prompt, timeout=timeout + 120)
+    except subprocess.TimeoutExpired:
+        fail(f"等待超时，任务可能仍在运行（不自动重试）。重跑同一命令会继续等原任务，不重新提交；也可 {lookup}")
+    if code == 0:
+        outputs = (task or {}).get("outputs") or []
+        if not outputs:
+            fail(f"任务 {(task or {}).get('id')} 完成但没有图片（不自动重试）。")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        paths: list[Path] = []
+        for index, item in enumerate(outputs):
+            source = Path(item["path"])
+            suffix = source.suffix.lstrip(".").lower() or _suffix_from_mime(item.get("mime", ""), fmt)
+            dest = output_dir / output_name(name_prefix, index, "jpeg" if suffix == "jpg" else suffix)
+            shutil.copyfile(source, dest)
+            log(label, f"已保存：{dest}")
+            paths.append(dest)
+        return paths
+    message = _dsivio_error(task, err)
+    if code == 6:
+        forget()
+        fail(DSIVIO_NOT_RUNNING)
+    if code == 2:
+        forget()
+        fail(f"参数或模型不可用，没有提交（不自动重试）：{message}")
+    if code == 3:
+        forget()  # 服务明确拒绝、没有扣费；限流类错误由批量退避重试
+        fail(f"服务拒绝了请求，没有扣费：{message}")
+    if code == 4:
+        if isinstance(task, dict) and task.get("canResume"):
+            fail(f"提交结果未知：供应商查不到回执 {task.get('remoteId')}，可能已扣费。请找供应商核实，"
+                 f"不要重新生成；核实后可 `dsivio media status {task.get('id')} --resume`。")
+        forget()
+        fail(f"生成失败（不自动重试）：{message}")
+    if code == 7:
+        forget()
+        fail("任务已取消（不自动重试）。")
+    if code == 124:
+        fail(f"等待超时，任务 {(task or {}).get('id')} 仍在运行（不自动重试）。重跑同一命令会继续等原任务，不重新提交。")
+    fail(f"提交结果未知（dsivio 退出码 {code}），没有重复提交。重跑同一命令会查询原任务；也可 {lookup}。{message}")
 
 
 def detect_mode(provider: str, base_url: str, explicit_mode: str | None, model: str = "") -> str:
@@ -1383,6 +1563,7 @@ ADAPTER_RUNNERS = {
     "grok": run_grok,
     "gemini": run_gemini,
     "gemini-chat": run_gemini_chat,
+    DSIVIO_MODE: run_dsivio,
 }
 
 
@@ -1425,7 +1606,7 @@ def is_backoff_error(message: str) -> bool:
     （误判只是多试一次）。
     """
     text = message.lower()
-    if "提交结果未知" in text:
+    if "提交结果未知" in text or "不自动重试" in text:
         return False
     if any(x in text for x in (
         "http 401", "http 403", "code=401", "code=403", "unauthorized",
@@ -1826,9 +2007,13 @@ def build_check_report(
 
 def run_check(args: argparse.Namespace) -> None:
     env_file = Path(args.env_file) if args.env_file else find_default_env_file()
-    load_env_file(env_file)
     print("配置检查（不打接口）")
-    print("配置来源：" + (str(env_file) if env_file else "图片页面配置 / 环境变量"))
+    if env_file is None and not any(optional_config(k) for k in (ENV_API_KEY, ENV_BASE_URL)):
+        entry = dsivio_model(None, strict=False)
+        print(f"出图走 Dsivio（dsivio media image），默认模型 {entry['id']}。模型在「设置 > 媒体创作」配置。")
+        return
+    load_env_file(env_file)
+    print("配置来源：" + (str(env_file) if env_file else "环境变量"))
     provider, base_url, model, api_key = resolve_runtime()
     mode = detect_mode(provider, base_url, args.mode, model)
     with tempfile.TemporaryDirectory() as tmp:
@@ -1893,10 +2078,7 @@ def main() -> None:
         if args.check:
             run_check(args)
             return
-        env_file = Path(args.env_file) if args.env_file else find_default_env_file()
-        load_env_file(env_file)
-        _provider, base_url, model, api_key = resolve_runtime()
-        mode = detect_mode(_provider, base_url, args.mode, model)
+        base_url, api_key, model, mode = resolve_backend(args.env_file, None, args.mode)
 
         if args.batch:
             run_batch(args, base_url, api_key, model, mode)

@@ -421,7 +421,7 @@ def cmd_gen(args: argparse.Namespace) -> int:
         return 0
     out_dir.mkdir(parents=True, exist_ok=True)
     failed = core.run_pool(jobs, concurrency=args.concurrency, redo=args.redo, env_file=args.env_file,
-                           api_mode=args.mode, model_pin=args.model, label="gen")
+                           api_mode=args.mode, model_pin=args.model, label="gen", strict_model=bool(args.model))
     log = out_dir / core.WORK_DIR / "gen.jsonl"
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a", encoding="utf-8") as fh:

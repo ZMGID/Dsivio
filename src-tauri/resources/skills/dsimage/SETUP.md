@@ -1,6 +1,6 @@
 # dsimage 安装与配置
 
-内置版默认读取图片页面保存的模型和供应商配置，位置见 SKILL.md「配置在哪」。已在页面配置好时无需再创建 `.env`；以下流程用于独立配置或显式 `--env-file` 覆盖。
+**在 Dsivio 里不用看这份文件。** 内置 dsimage 通过 `dsivio media image` 出图，模型在「设置 > 媒体创作」配置；不要向用户要接口地址或 API key，不要跑 `setup env`。以下流程只用于用户明确要脱离 Dsivio、用自己接口的独立配置。
 
 > 给 Agent 读。用户把这份文件的路径或 URL 交给你，例如：
 > `按 https://raw.githubusercontent.com/ZMGID/dsimage/main/skills/dsimage/SETUP.md 安装并配置 dsimage`
