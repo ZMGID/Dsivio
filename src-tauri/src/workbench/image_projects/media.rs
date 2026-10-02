@@ -134,15 +134,7 @@ pub async fn submit(
         .iter()
         .map(|path| super::resolve_existing_image(path).map(|p| p.to_string_lossy().into_owned()))
         .collect::<Result<Vec<_>, _>>()?;
-    let origin = match brief.feature.as_str() {
-        "gen" => "free-image",
-        "replace" => "clone",
-        "smart" => "template-set",
-        "design" => "set-design",
-        "client" => "batch-set",
-        "workflow" => "template-builder",
-        _ => return Err("未知图片功能".into()),
-    };
+    let origin = super::agent::feature_origin(&brief.feature)?;
     let task = media_generation::start_media_generation(
         app.clone(),
         MediaRequest {
@@ -317,4 +309,35 @@ fn allowed_image_output(model: &str, protocol: &str, ratio: &str, resolution: &s
             );
     }
     resolution != "4k" && matches!(ratio, "1:1" | "9:16" | "16:9")
+}
+
+pub(super) fn record_post_copy(app: &AppHandle, task: &Task) -> Result<(), String> {
+    let text = task
+        .plans
+        .iter()
+        .find(|plan| plan.slot_id == "h1")
+        .map(|plan| plan.copy.trim())
+        .filter(|copy| !copy.is_empty())
+        .ok_or("请先确认图文文案")?
+        .to_string();
+    let mut title = text
+        .lines()
+        .next()
+        .unwrap_or("图文文案")
+        .trim_start_matches('#')
+        .trim()
+        .to_string();
+    if title.is_empty() {
+        title = "图文文案".into();
+    }
+    media_generation::record_text_output(
+        app,
+        media_generation::RecordOutputRequest {
+            origin: "workbench/posts".into(),
+            title,
+            text,
+            prompt: Some(task.brief.requirement.clone()),
+        },
+    )?;
+    Ok(())
 }

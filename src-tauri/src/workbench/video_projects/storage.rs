@@ -11,18 +11,49 @@ fn path(id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "无效任务编号")?;
     Ok(root()?.join("tasks").join(format!("{id}.json")))
 }
-pub(super) fn lock(id: &str) -> Result<fs::File, String> {
+const READ_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(8);
+
+fn open_lock(id: &str) -> Result<fs::File, String> {
     let path = path(id)?;
     fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    let file = fs::OpenOptions::new()
+    fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(path.with_extension("lock"))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
+
+/// Exclusive writer lock. Poll and other mutations fail immediately while a
+/// reader holds the file, and delete uses the same exclusive try-lock.
+pub(super) fn lock(id: &str) -> Result<fs::File, String> {
+    let file = open_lock(id)?;
     file.try_lock().map_err(|_| "任务正在处理，请稍后重试")?;
     Ok(file)
+}
+
+/// Shared reader lock for preview, poster and open. Readers run together and
+/// wait only until a writer such as poll_task drops its exclusive lock.
+/// The wait is bounded; a still-held writer stays an error.
+pub(super) async fn lock_shared(id: &str) -> Result<fs::File, String> {
+    acquire_shared(open_lock(id)?, READ_LOCK_WAIT).await
+}
+
+async fn acquire_shared(file: fs::File, wait: std::time::Duration) -> Result<fs::File, String> {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        match file.try_lock_shared() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err("任务正在处理，请稍后重试".into());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.to_string()),
+        }
+    }
 }
 pub(super) fn read(id: &str) -> Result<Value, String> {
     let value: Value = serde_json::from_slice(
@@ -107,6 +138,40 @@ async fn import_brief(mut brief: Value) -> Result<Value, String> {
         }
     }
     brief["images"] = json!(images);
+    if brief.get("roleImages").is_some() {
+        let roles = brief["roleImages"].as_array().cloned().unwrap_or_default();
+        if roles.len() > 8 {
+            return Err("角色参考图最多 8 张".into());
+        }
+        let imported = roles
+            .iter()
+            .map(|value| {
+                import_file(
+                    value.as_str().ok_or("无效角色图片")?,
+                    &["png", "jpg", "jpeg", "webp"],
+                    30,
+                )
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        brief["roleImages"] = json!(imported);
+    }
+    if brief["mode"] == "editing" {
+        let clips = brief["clips"].as_array().cloned().unwrap_or_default();
+        if clips.len() > 12 {
+            return Err("视频片段最多 12 段".into());
+        }
+        let mut imported = Vec::with_capacity(clips.len());
+        for clip in clips {
+            imported.push(import_file(
+                clip.as_str().ok_or("无效视频路径")?,
+                &["mp4", "mov", "webm", "mkv", "m4v"],
+                512,
+            )?);
+        }
+        brief["clips"] = json!(imported);
+        import_optional_media(&mut brief, "musicPath", &["mp3", "wav", "m4a", "aac", "ogg", "flac"], 50)?;
+        import_optional_media(&mut brief, "subtitlePath", &["srt"], 8)?;
+    }
     for (field, extensions, limit) in [
         ("referenceVideos", vec!["mp4", "mov"], 50),
         ("referenceAudios", vec!["mp3", "wav"], 15),
@@ -205,32 +270,77 @@ pub(super) async fn project(_app: &AppHandle, action: &str, input: Value) -> Res
             {
                 return Err("请添加参考视频".into());
             }
+            if input["operation"] == "plan"
+                && t["brief"]["mode"] == "editing"
+                && t["brief"]["clips"].as_array().is_none_or(|clips| clips.is_empty())
+            {
+                return Err("请添加至少一段视频".into());
+            }
             return Ok(t);
         }
         "save" => {
-            clear_attempt(&mut t);
-            t["brief"] = import_brief(input["brief"].clone()).await?;
-            t["script"] = input["script"].clone();
-            t["status"] = json!("draft");
-            t["concepts"] = json!([]);
-            t["approved"] = json!(false);
-            t["prompt"] = json!("");
+            let script = input["script"].as_str().unwrap_or("").to_string();
+            let next_brief = import_brief(input["brief"].clone()).await?;
+            let drama = next_brief["mode"] == "drama" || t["brief"]["mode"] == "drama";
+            if drama && super::shots::has_frozen_shots(&t) {
+                t["brief"] = next_brief;
+                super::shots::apply_script_edit(&mut t, &script)?;
+                t["concepts"] = json!([]);
+                t["approved"] = json!(false);
+                t["prompt"] = json!("");
+                super::shots::derive_project_status(&mut t);
+            } else {
+                clear_attempt(&mut t);
+                t["brief"] = next_brief;
+                t["script"] = json!(script);
+                t["status"] = json!("draft");
+                t["concepts"] = json!([]);
+                t["approved"] = json!(false);
+                t["prompt"] = json!("");
+                if drama {
+                    t.as_object_mut().unwrap().remove("shots");
+                }
+            }
         }
         "plan_result" | "analysis_result" => {
-            t["script"] = input["script"].clone();
-            t["concepts"] = input.get("concepts").cloned().unwrap_or(json!([]));
-            t["analysis"] = input["analysis"].clone();
-            t["approved"] = json!(false);
-            t["prompt"] = json!("");
-            t["status"] = json!("draft");
+            let script = input["script"].as_str().unwrap_or("").to_string();
+            if action == "plan_result" && t["brief"]["mode"] == "drama" && super::shots::has_frozen_shots(&t) {
+                super::shots::apply_script_edit(&mut t, &script)?;
+                t["concepts"] = input.get("concepts").cloned().unwrap_or(json!([]));
+                t["analysis"] = input["analysis"].clone();
+                t["approved"] = json!(false);
+                t["prompt"] = json!("");
+                super::shots::derive_project_status(&mut t);
+            } else {
+                t["script"] = json!(script);
+                t["concepts"] = input.get("concepts").cloned().unwrap_or(json!([]));
+                t["analysis"] = input["analysis"].clone();
+                t["approved"] = json!(false);
+                t["prompt"] = json!("");
+                t["status"] = json!("draft");
+                if t["brief"]["mode"] == "drama" {
+                    t.as_object_mut().unwrap().remove("shots");
+                }
+            }
         }
         "approve" => {
             if t["script"].as_str().unwrap_or("").trim().is_empty() {
                 return Err("请先完成剧本".into());
             }
+            if t["brief"]["mode"] == "editing" {
+                let parsed: Value = serde_json::from_str(t["script"].as_str().unwrap_or(""))
+                    .map_err(|_| "剪辑方案不是有效 JSON".to_string())?;
+                let plan = import_edit_plan(parsed)?;
+                crate::media_generation::local_edit::validate_edit_plan(&plan)?;
+                t["script"] = json!(serde_json::to_string_pretty(&plan).map_err(|e| e.to_string())?);
+            }
             t["approved"] = json!(true);
             t["prompt"] = t["script"].clone();
             t["status"] = json!("approved");
+            if t["brief"]["mode"] == "drama" {
+                super::shots::snapshot_shots_on_approve(&mut t)?;
+                super::shots::derive_project_status(&mut t);
+            }
         }
         "prompt_result" => {
             if t["approved"] != true {
@@ -273,12 +383,42 @@ pub(super) fn clear_attempt(t: &mut Value) {
 }
 
 pub(super) fn retry(t: &mut Value) -> Result<(), String> {
-    if t["status"] != "failed" || t["canResume"] == true {
+    let editing_cancelled = t["brief"]["mode"] == "editing" && t["status"] == "cancelled";
+    if editing_cancelled && t["canResume"] == true {
+        return Err("仅明确失败的任务可重新生成；运行中或结果未确认的任务请查询原结果".into());
+    }
+    if !editing_cancelled && (t["status"] != "failed" || t["canResume"] == true) {
         return Err("仅明确失败的任务可重新生成；运行中或结果未确认的任务请查询原结果".into());
     }
     clear_attempt(t);
     t["status"] = json!("approved");
     Ok(())
+}
+
+fn import_optional_media(brief: &mut Value, field: &str, extensions: &[&str], limit: u64) -> Result<(), String> {
+    let Some(path) = brief[field].as_str().filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    brief[field] = json!(import_file(path, extensions, limit)?);
+    Ok(())
+}
+
+fn import_edit_plan(mut plan: Value) -> Result<Value, String> {
+    let clips = plan["clips"].as_array().cloned().unwrap_or_default();
+    let mut next = Vec::with_capacity(clips.len());
+    for mut clip in clips {
+        let source = clip["source"].as_str().ok_or("素材路径无效")?;
+        clip["source"] = json!(import_file(source, &["mp4", "mov", "webm", "mkv", "m4v"], 512)?);
+        next.push(clip);
+    }
+    plan["clips"] = json!(next);
+    if let Some(path) = plan["music"]["path"].as_str().filter(|value| !value.is_empty()) {
+        plan["music"]["path"] = json!(import_file(path, &["mp3", "wav", "m4a", "aac", "ogg", "flac"], 50)?);
+    }
+    if let Some(path) = plan["subtitles"]["path"].as_str().filter(|value| !value.is_empty()) {
+        plan["subtitles"]["path"] = json!(import_file(path, &["srt"], 8)?);
+    }
+    Ok(plan)
 }
 
 fn template_spec(t: &Value) -> Value {
@@ -346,6 +486,60 @@ mod tests {
         }
         let mut resumable = task; resumable["canResume"] = json!(true);
         assert!(retry(&mut resumable).is_err());
+    }
+
+    fn temp_lock() -> (std::path::PathBuf, std::fs::File) {
+        let dir = std::env::temp_dir().join(format!("dsivio-video-lock-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.join("task.lock"))
+            .unwrap();
+        (dir, file)
+    }
+
+    struct tempfile_dir(std::path::PathBuf);
+    impl Drop for tempfile_dir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn shared_readers_run_together_and_keep_delete_exclusive() {
+        let (dir, first) = temp_lock();
+        let _dir = tempfile_dir(dir);
+        first.try_lock_shared().unwrap();
+        let second = fs::OpenOptions::new().read(true).write(true).open(_dir.0.join("task.lock")).unwrap();
+        second.try_lock_shared().expect("poster can read while preview holds the lock");
+        let deleter = fs::OpenOptions::new().read(true).write(true).open(_dir.0.join("task.lock")).unwrap();
+        assert!(deleter.try_lock().is_err(), "delete must not proceed under a reader");
+        drop(first);
+        drop(second);
+        deleter.try_lock().expect("delete proceeds after readers release");
+        let reader = fs::OpenOptions::new().read(true).write(true).open(_dir.0.join("task.lock")).unwrap();
+        assert!(reader.try_lock_shared().is_err(), "a reader reports the exclusive lock instead of hiding it");
+    }
+
+    #[tokio::test]
+    async fn shared_read_waits_out_poll_then_still_reports_a_held_writer() {
+        let (dir, writer) = temp_lock();
+        let _dir = tempfile_dir(dir);
+        writer.try_lock().unwrap();
+        let blocked = fs::OpenOptions::new().read(true).write(true).open(_dir.0.join("task.lock")).unwrap();
+        let err = acquire_shared(blocked, std::time::Duration::from_millis(40)).await.unwrap_err();
+        assert!(err.contains("任务正在处理，请稍后重试"));
+        let waiting = fs::OpenOptions::new().read(true).write(true).open(_dir.0.join("task.lock")).unwrap();
+        let pending = tokio::spawn(acquire_shared(waiting, std::time::Duration::from_secs(2)));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        drop(writer);
+        let reader = pending.await.unwrap().unwrap();
+        let poster = fs::OpenOptions::new().read(true).write(true).open(_dir.0.join("task.lock")).unwrap();
+        poster.try_lock_shared().unwrap();
+        drop(reader);
     }
 
     #[test]

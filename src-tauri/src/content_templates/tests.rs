@@ -22,8 +22,8 @@ fn image_round_trip_preserves_identity_slots_and_all_reference_assets() {
             .unwrap();
     }
     let data = json!({"name":"旧模板", "mode":"replace", "custom":{"keep":true}, "slots":[
-        {"id":"second", "example":"example.png", "refs":["@example","assets/ref.png"], "refs_by_kind":{"bag":["assets/kind.png","@product.front"]}},
-        {"id":"first", "example":"example.png"}
+        {"id":"H2", "example":"example.png", "prompt":"swap the second page for {sku}", "refs":["@example","assets/ref.png"], "refs_by_kind":{"bag":["assets/kind.png","@product.front"]}},
+        {"id":"H1", "example":"example.png", "prompt":"swap the first page for {sku}"}
     ]});
     files::write(&source.join("template.json"), &data).unwrap();
     let mut imported = image::import_at(&root, source.to_str().unwrap()).unwrap();
@@ -119,7 +119,7 @@ fn image_record_only_and_nested_skill_formats_keep_ids_and_order() {
         id: "legacy-id".into(),
         directory: "templates/legacy".into(),
         builtin: false,
-        data: json!({"name":"旧格式", "mode":"smart", "slots":[{"id":"z"},{"id":"a"}]}),
+        data: json!({"name":"旧格式", "mode":"smart", "slots":[{"id":"h2","brief":"后页"},{"id":"h1","brief":"前页"}]}),
     };
     files::write(&dir.join("record.json"), &old).unwrap();
     let list = image::list_at(&root).unwrap();

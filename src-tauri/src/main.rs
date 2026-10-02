@@ -13,6 +13,18 @@ fn main() -> ExitCode {
             attach_parent_console();
             return kivio::media_generation::cli::run(args);
         }
+        if first == kivio::app_cli::AI_SUBCOMMAND {
+            attach_parent_console();
+            return kivio::app_cli::run_ai(args);
+        }
+        if first == kivio::workbench::commerce::SUBCOMMAND {
+            attach_parent_console();
+            return kivio::workbench::commerce::run(args);
+        }
+        if first == kivio::workbench::publish::SUBCOMMAND {
+            attach_parent_console();
+            return kivio::workbench::publish::run(args);
+        }
         if first == kivio::media_runtime::dsvideo::SUBCOMMAND {
             attach_parent_console();
             return kivio::media_runtime::dsvideo::run(args);

@@ -248,7 +248,7 @@ fn chat_mode_allows_tool(
     config: &crate::settings::ChatModeConfig,
 ) -> bool {
     if tool.source == "mixer"
-        && matches!(tool.name.as_str(), "mixer_video_analysis" | "mixer_generate_image" | "mixer_generate_video" | "mixer_media_task")
+        && matches!(tool.name.as_str(), "mixer_video_analysis" | "mixer_generate_image" | "mixer_generate_video" | "mixer_media_task" | "mixer_process_video")
     {
         return true;
     }

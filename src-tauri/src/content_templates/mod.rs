@@ -99,4 +99,6 @@ pub(crate) fn save_video_result(data: serde_json::Value) -> Result<serde_json::V
     Ok(video::for_studio(video::insert_at(&video::root()?, data)?))
 }
 #[cfg(test)]
+mod image_set_schema;
+#[cfg(test)]
 mod tests;

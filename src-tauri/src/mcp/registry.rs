@@ -134,6 +134,7 @@ async fn list_enabled_tool_catalog_inner(
         crate::settings::chat_memory_tools_enabled(&settings),
     );
     tools.push(super::types::mixer_media_task_tool());
+    tools.push(super::types::mixer_process_video_tool());
     use crate::media_generation::{chat_model, MediaKind};
     if let Some((_, model)) = chat_model(&settings, &MediaKind::Video) {
         tools.push(super::types::mixer_generate_video_tool(&model));
@@ -995,7 +996,7 @@ async fn call_mixer_tool(
             )
             .await
         }
-        "mixer_generate_video" | "mixer_media_task" => crate::media_generation::tool_call(app, &tool.name, arguments).await,
+        "mixer_generate_video" | "mixer_media_task" | "mixer_process_video" => crate::media_generation::tool_call(app, &tool.name, arguments).await,
         other => Err(format!("Unknown mixer tool: {other}")),
     }
 }

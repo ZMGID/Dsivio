@@ -74,7 +74,7 @@ pub(crate) fn finish(provider: &ModelProvider, model: &str, kind: MediaKind, mut
     for (name, arg) in &mut arguments {
         if arg.transport.get("flag").is_none() { arg.transport["optionKey"] = json!(name); }
     }
-    let media_kind = match kind { MediaKind::Image => "image", MediaKind::Video => "video", MediaKind::Speech => "audio", MediaKind::Transcribe => "json" };
+    let media_kind = match kind { MediaKind::Image => "image", MediaKind::Video => "video", MediaKind::Speech => "audio", MediaKind::Transcribe => "json", MediaKind::Edit => "edit", MediaKind::Text => "text" };
     let mut products = json!({"mediaKind":media_kind,"ordered":true,"countMeaning":"exact"});
     if let Some(max_count) = max_count {
         products["minCount"] = json!(1);
@@ -84,6 +84,8 @@ pub(crate) fn finish(provider: &ModelProvider, model: &str, kind: MediaKind, mut
             MediaKind::Video => vec!["video/mp4","video/webm","video/quicktime"],
             MediaKind::Speech => vec!["audio/mpeg","audio/ogg","audio/aac","audio/flac","audio/wav"],
             MediaKind::Transcribe => vec!["application/json"],
+            MediaKind::Edit => vec!["video/mp4","application/x-subrip"],
+            MediaKind::Text => vec!["text/markdown"],
         });
     }
     let mut description = ModelDescription {
@@ -111,6 +113,8 @@ pub fn describe(provider: &ModelProvider, model: &str, kind: &MediaKind) -> Mode
         MediaKind::Video => video_providers::model_description(provider, model),
         MediaKind::Speech => super::speech_providers::model_description(provider, model),
         MediaKind::Transcribe => super::transcribe_description(provider, model),
+        MediaKind::Edit => super::local_edit::description(provider, model),
+        MediaKind::Text => super::text_record_description(provider, model),
     }
 }
 

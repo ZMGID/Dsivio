@@ -249,6 +249,41 @@ pub fn native_web_search_tool() -> ChatToolDefinition {
     }
 }
 
+pub fn native_commerce_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "native__commerce".to_string(),
+        name: "commerce".to_string(),
+        description: "Query a bound shop and submit or refresh a marketplace listing. Read actions are shops, capabilities, metrics, categories, attributes, products, orders, listings, status, and refresh. submit and resubmit change the listing and require approval. Other platforms return unsupported until their adapter is wired.".to_string(),
+        source: "native".to_string(),
+        server_id: None,
+        server_name: Some("Kivio".to_string()),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["shops", "capabilities", "metrics", "categories", "attributes", "products", "orders", "listings", "submit", "resubmit", "refresh", "status"]
+                },
+                "shopId": { "type": "string" },
+                "range": { "type": "string", "enum": ["today", "yesterday", "last7", "last30"] },
+                "parentId": { "type": "string" },
+                "categoryId": { "type": "string" },
+                "cursor": { "type": "string" },
+                "id": { "type": "string" },
+                "groupId": { "type": "string" },
+                "draft": { "type": "object" },
+                "targets": { "type": "array" },
+                "target": { "type": "object" },
+                "filter": { "type": "object" }
+            },
+            "required": ["action"]
+        }),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+    }
+}
+
 pub fn native_skill_activate_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id: "skill__activate".to_string(),
@@ -720,6 +755,27 @@ pub fn mixer_generate_video_tool(model: &str) -> ChatToolDefinition {
         }}),
     }
 }
+pub fn mixer_process_video_tool() -> ChatToolDefinition {
+    ChatToolDefinition {
+        id: "mixer__process_video".into(),
+        name: "mixer_process_video".into(),
+        source: "mixer".into(),
+        description: "Run a local ffmpeg subtitle or edit job. operation is subtitle or edit. subtitle needs an absolute video path and a language; burn is optional. edit needs a plan object. Returns the saved task immediately and does not call a paid cloud model. Use mixer_media_task to wait for the same task.".into(),
+        server_id: None,
+        server_name: Some("Dsivio".into()),
+        sensitive: false,
+        annotations: None,
+        output_schema: None,
+        input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["operation"],"properties":{
+            "operation":{"type":"string","enum":["subtitle","edit"]},
+            "video":{"type":"string"},
+            "language":{"type":"string"},
+            "burn":{"type":"boolean"},
+            "plan":{"type":"object"}
+        }}),
+    }
+}
+
 pub fn mixer_media_task_tool() -> ChatToolDefinition {
     ChatToolDefinition {
         id:"mixer__media_task".into(),name:"mixer_media_task".into(),source:"mixer".into(),

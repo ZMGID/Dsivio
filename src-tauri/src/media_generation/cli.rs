@@ -8,7 +8,7 @@ use super::{MediaKind, MediaRequest, MediaStatus, MediaSubmissionState, MediaTas
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -28,6 +28,7 @@ mod exit {
     /// Submission outcome unknown. Never resubmit; query with `status`.
     pub const UNCERTAIN: u8 = 5;
     /// Dsivio is not running, or this client cannot reach it.
+    #[allow(dead_code)]
     pub const UNAVAILABLE: u8 = 6;
     /// The task was confirmed cancelled; never treat it as a successful artifact.
     pub const CANCELLED: u8 = 7;
@@ -35,18 +36,10 @@ mod exit {
     pub const TIMEOUT: u8 = 124;
 }
 
-const MAX_LINE: u64 = 4 * 1024 * 1024;
 const POLL: Duration = Duration::from_secs(2);
 
 // ---------------------------------------------------------------------------
 // Wire format
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Envelope {
-    token: String,
-    #[serde(flatten)]
-    op: Op,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
@@ -122,93 +115,20 @@ impl Reply {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Endpoint {
-    port: u16,
-    token: String,
-    pid: u32,
-}
-
-fn endpoint_path() -> Option<PathBuf> {
-    crate::app_data::app_data_dir().map(|dir| dir.join("run").join("media-cli.json"))
-}
-
 // ---------------------------------------------------------------------------
 // App side
 
-/// Accept CLI requests for the lifetime of the App. Failure only disables the CLI.
+/// One loopback listener, owned by `app_cli`. Media ops are handled by `handle`.
 pub fn serve(app: tauri::AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = serve_inner(app).await {
-            eprintln!("dsivio media CLI unavailable: {error}");
-        }
-    });
+    crate::app_cli::serve(app);
 }
 
-async fn serve_inner(app: tauri::AppHandle) -> Result<(), String> {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .map_err(|e| e.to_string())?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let token: String = rand::random::<[u8; 32]>()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    let path = endpoint_path().ok_or("无法定位应用数据目录")?;
-    write_private(
-        &path,
-        &serde_json::to_vec(&Endpoint {
-            port,
-            token: token.clone(),
-            pid: std::process::id(),
-        })
-        .map_err(|e| e.to_string())?,
-    )?;
-    loop {
-        let (stream, _) = listener.accept().await.map_err(|e| e.to_string())?;
-        let app = app.clone();
-        let token = token.clone();
-        tauri::async_runtime::spawn(async move {
-            let _ = handle_connection(&app, stream, &token).await;
-        });
+pub(crate) async fn handle(app: &tauri::AppHandle, op: Value) -> Result<Value, String> {
+    let op: Op = serde_json::from_value(op).map_err(|error| format!("请求格式无效：{error}"))?;
+    match dispatch(app, op).await {
+        Reply::Ok { result, .. } => Ok(result),
+        Reply::Err { error, .. } => Err(error),
     }
-}
-
-async fn handle_connection(
-    app: &tauri::AppHandle,
-    stream: tokio::net::TcpStream,
-    token: &str,
-) -> std::io::Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
-    let (read, mut write) = stream.into_split();
-    let mut line = String::new();
-    tokio::io::BufReader::new(read.take(MAX_LINE))
-        .read_line(&mut line)
-        .await?;
-    let reply = match authorize(&line, token) {
-        Ok(op) => dispatch(app, op).await,
-        Err(reply) => reply,
-    };
-    let mut bytes = serde_json::to_vec(&reply).unwrap_or_default();
-    bytes.push(b'\n');
-    write.write_all(&bytes).await?;
-    write.shutdown().await
-}
-
-fn authorize(line: &str, token: &str) -> Result<Op, Reply> {
-    let envelope: Envelope = serde_json::from_str(line.trim())
-        .map_err(|e| Reply::err(ErrorCode::Invalid, format!("请求格式无效：{e}")))?;
-    if !constant_time_eq(envelope.token.as_bytes(), token.as_bytes()) {
-        return Err(Reply::err(
-            ErrorCode::Unauthorized,
-            "连接凭据已失效，请重新打开 Dsivio",
-        ));
-    }
-    Ok(envelope.op)
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 async fn dispatch(app: &tauri::AppHandle, op: Op) -> Reply {
@@ -222,6 +142,7 @@ async fn dispatch(app: &tauri::AppHandle, op: Op) -> Reply {
                 Some("video") => Some(MediaKind::Video),
                 Some("speech") => Some(MediaKind::Speech),
                 Some("transcribe") => Some(MediaKind::Transcribe),
+                Some("edit") => Some(MediaKind::Edit),
                 Some(_) => return Reply::err(ErrorCode::Invalid, "未知媒体类型"),
             };
             let settings = app
@@ -446,7 +367,7 @@ fn capabilities_of(
         MediaKind::Image => Some(json!(super::image_providers::image_capabilities(
             provider, model
         ))),
-        MediaKind::Speech | MediaKind::Transcribe => None,
+        MediaKind::Speech | MediaKind::Transcribe | MediaKind::Edit | MediaKind::Text => None,
     }
 }
 
@@ -459,6 +380,7 @@ pub(super) fn pool<'a>(
         MediaKind::Video => &settings.workbench_media.video_models,
         MediaKind::Speech => &settings.workbench_media.speech_models,
         MediaKind::Transcribe => &settings.workbench_media.transcribe_models,
+        MediaKind::Edit | MediaKind::Text => &[],
     }
 }
 
@@ -470,7 +392,9 @@ pub(super) fn usable(
     kind: &MediaKind,
 ) -> bool {
     if entry.provider_id == "local" {
-        return (*kind == MediaKind::Transcribe && entry.model == "whisperx-small") || (*kind == MediaKind::Speech && entry.model == super::local_tts::MODEL && super::local_tts::available());
+        return (*kind == MediaKind::Transcribe && entry.model == "whisperx-small")
+            || (*kind == MediaKind::Speech && entry.model == super::local_tts::MODEL && super::local_tts::available())
+            || (*kind == MediaKind::Edit && matches!(entry.model.as_str(), super::local_edit::MODEL_SUBTITLE | super::local_edit::MODEL_EDIT));
     }
     settings.providers.iter().any(|p| {
         p.id == entry.provider_id && p.enabled && p.enabled_models.contains(&entry.model)
@@ -478,14 +402,22 @@ pub(super) fn usable(
                 MediaKind::Speech => super::speech_providers::configured(p, &entry.model),
                 MediaKind::Transcribe => super::transcribe_configured(p, &entry.model),
                 MediaKind::Image | MediaKind::Video => true,
+                MediaKind::Edit | MediaKind::Text => false,
             }
     })
 }
 
-fn members(settings: &crate::settings::Settings, kind: &MediaKind) -> Vec<crate::settings::DefaultModelSelection> {
+pub(super) fn members(settings: &crate::settings::Settings, kind: &MediaKind) -> Vec<crate::settings::DefaultModelSelection> {
     let mut members: Vec<_> = pool(settings,kind).iter().filter(|entry|usable(settings,entry,kind)).cloned().collect();
     if *kind == MediaKind::Speech && super::local_tts::available() && !members.iter().any(|m|m.provider_id == "local" && m.model == super::local_tts::MODEL) {
         members.push(crate::settings::DefaultModelSelection {provider_id:"local".into(),model:super::local_tts::MODEL.into()});
+    }
+    if *kind == MediaKind::Edit {
+        for model in [super::local_edit::MODEL_SUBTITLE, super::local_edit::MODEL_EDIT] {
+            if !members.iter().any(|member| member.provider_id == "local" && member.model == model) {
+                members.push(crate::settings::DefaultModelSelection { provider_id: "local".into(), model: model.into() });
+            }
+        }
     }
     members
 }
@@ -493,7 +425,7 @@ fn members(settings: &crate::settings::Settings, kind: &MediaKind) -> Vec<crate:
 fn list_models(settings: &crate::settings::Settings, kind: Option<&MediaKind>) -> Vec<ModelEntry> {
     let kinds = match kind {
         Some(kind) => vec![kind.clone()],
-        None => vec![MediaKind::Image, MediaKind::Video, MediaKind::Speech, MediaKind::Transcribe],
+        None => vec![MediaKind::Image, MediaKind::Video, MediaKind::Speech, MediaKind::Transcribe, MediaKind::Edit],
     };
     let local = super::local_provider();
     kinds
@@ -510,7 +442,7 @@ fn list_models(settings: &crate::settings::Settings, kind: Option<&MediaKind>) -
                     let known = match kind {
                         MediaKind::Image => description.arguments.contains_key("n"),
                         MediaKind::Video => capabilities.is_some(),
-                        MediaKind::Speech | MediaKind::Transcribe => true,
+                        MediaKind::Speech | MediaKind::Transcribe | MediaKind::Edit | MediaKind::Text => true,
                     };
                     ModelEntry {
                         known,
@@ -540,6 +472,8 @@ fn resolve_model(
         MediaKind::Video => "视频",
         MediaKind::Speech => "语音",
         MediaKind::Transcribe => "转写",
+        MediaKind::Edit => "剪辑",
+        MediaKind::Text => "文案",
     };
     let members = members(settings, kind);
     let first = members.first().ok_or_else(|| {
@@ -675,7 +609,7 @@ pub fn install_launcher() {
 const HELP: &str = "\
 dsivio media —— 用 Dsivio「设置 > 媒体创作」里的模型生成图片、视频、语音及转写
 
-  dsivio media models [--kind image|video|speech|transcribe|matting] [--json]
+  dsivio media models [--kind image|video|speech|transcribe|edit|matting] [--json]
   dsivio media image  (--prompt <文本> | --prompt-file <文件|->) [--model <供应商/模型>]
                       [--ref <图片>]... [--ratio 16:9] [--size 2K] [--quality high] [--n 1]
   dsivio media video  (--prompt <文本> | --prompt-file <文件|->) [--model <供应商/模型>]
@@ -688,6 +622,8 @@ dsivio media —— 用 Dsivio「设置 > 媒体创作」里的模型生成图�
                       [--output-format wav|mp3|flac|opus|aac]
   dsivio media transcribe <标准WAV> --language <语言> [--model local/whisperx-small|供应商/模型]
                       [--sample-frames <正安全整数>] [--timestamps word|segment]
+  dsivio media subtitle <视频> --language <语言> [--burn] [--model local/ffmpeg-subtitle]
+  dsivio media edit --plan-file <JSON>
   dsivio media asr status [--json]
   dsivio media asr install [--json]     按「设置 > 媒体创作 > 转写」的模型与语言安装
   dsivio media asr stop [--json]
@@ -719,7 +655,7 @@ struct Args {
     positional: Vec<String>,
 }
 
-const BOOLEAN_FLAGS: &[&str] = &["no-wait", "audio", "no-audio", "resume", "help", "json"];
+const BOOLEAN_FLAGS: &[&str] = &["no-wait", "audio", "no-audio", "resume", "help", "json", "burn"];
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     let mut parsed = Args {
@@ -1001,6 +937,8 @@ fn build_submit(
                 options.insert("timestamps".into(), json!(timestamps));
             }
         }
+        MediaKind::Edit => return Err("本地剪辑请用 subtitle / edit 命令".into()),
+        MediaKind::Text => return Err("文案记录不从媒体命令提交".into()),
     }
     let extra = match (args.one("options-json")?, args.one("options-file")?) {
         (Some(_), Some(_)) => return Err("--options-json and --options-file are mutually exclusive".into()),
@@ -1147,67 +1085,23 @@ fn call(op: Op) -> Result<Value, Failure> {
 }
 
 fn call_with_timeout(op: Op, timeout: Duration) -> Result<Value, Failure> {
-    let unavailable = |detail: String| Failure {
-        code: exit::UNAVAILABLE,
-        message: format!("连接不到 Dsivio，请先打开 Dsivio 再重试（{detail}）"),
-    };
-    let path = endpoint_path().ok_or_else(|| unavailable("无法定位应用数据目录".into()))?;
-    let endpoint: Endpoint = std::fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .ok_or_else(|| unavailable("未找到连接信息".into()))?;
-    let reply = exchange(
-        endpoint.port,
-        &Envelope {
-            token: endpoint.token,
-            op,
-        },
-        timeout,
-    )
-    .map_err(unavailable)?;
-    match reply {
-        Reply::Ok { result, .. } => Ok(result),
-        Reply::Err {
-            code: ErrorCode::Unauthorized,
-            error,
-            ..
-        } => Err(Failure {
-            code: exit::UNAVAILABLE,
-            message: error,
-        }),
-        Reply::Err {
-            code: ErrorCode::Invalid,
-            error,
-            ..
-        } => Err(Failure::invalid(error)),
-        Reply::Err {
-            code: ErrorCode::Internal,
-            error,
-            ..
-        } => Err(Failure {
-            code: exit::INTERNAL,
-            message: error,
-        }),
+    let value = serde_json::to_value(&op).map_err(|error| Failure {
+        code: exit::INTERNAL,
+        message: format!("任务格式无效：{error}"),
+    })?;
+    let joined = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| crate::app_cli::CliFailure::internal(error.to_string()))?;
+        runtime.block_on(crate::app_cli::call("media", value, timeout))
+    })
+    .join();
+    match joined {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(failure)) => Err(Failure { code: failure.code, message: failure.message }),
+        Err(_) => Err(Failure { code: exit::INTERNAL, message: "CLI 调用中断".into() }),
     }
-}
-
-fn exchange(port: u16, envelope: &Envelope, timeout: Duration) -> Result<Reply, String> {
-    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let timeout = timeout.max(Duration::from_millis(1));
-    let mut stream = std::net::TcpStream::connect_timeout(&address, timeout.min(Duration::from_secs(3)))
-        .map_err(|e| e.to_string())?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|e| e.to_string())?;
-    stream.set_write_timeout(Some(timeout)).map_err(|e| e.to_string())?;
-    let mut bytes = serde_json::to_vec(envelope).map_err(|e| e.to_string())?;
-    bytes.push(b'\n');
-    stream.write_all(&bytes).map_err(|e| e.to_string())?;
-    let mut line = String::new();
-    BufReader::new(stream.take(MAX_LINE))
-        .read_line(&mut line)
-        .map_err(|e| e.to_string())?;
-    serde_json::from_str(line.trim()).map_err(|e| format!("Dsivio 响应无效：{e}"))
 }
 
 fn task_from(value: Value) -> Result<MediaTask, Failure> {
@@ -1323,17 +1217,75 @@ fn run_command(argv: Vec<String>) -> Result<u8, Failure> {
             _ => Err(Failure::invalid("需要一个任务 ID")),
         }
     };
+    let run_local = |submit: Submit, default_timeout: u64| -> Result<u8, Failure> {
+        let duration = timeout(default_timeout)?;
+        let out = args.one("out").map_err(Failure::invalid)?.map(|dir| PathBuf::from(absolute(dir, &cwd)));
+        let task = task_from(call(Op::Submit(submit))?)?;
+        if args.flag("no-wait") {
+            return finish(task, false, None);
+        }
+        let (task, timed_out) = wait_for(task, duration)?;
+        finish(task, timed_out, out)
+    };
     match command {
         "models" => {
             args.only(&["kind"]).map_err(Failure::invalid)?;
             if !args.positional.is_empty() { return Err(Failure::invalid("models 不接受位置参数")); }
             let kind = args.one("kind").map_err(Failure::invalid)?;
-            if kind.is_some_and(|kind| !["image", "video", "speech", "transcribe", "matting"].contains(&kind)) {
-                return Err(Failure::invalid("--kind 只能是 image/video/speech/transcribe/matting"));
+            if kind.is_some_and(|kind| !["image", "video", "speech", "transcribe", "edit", "matting"].contains(&kind)) {
+                return Err(Failure::invalid("--kind 只能是 image/video/speech/transcribe/edit/matting"));
             }
             let kind = kind.map(str::to_owned);
             print_json(&call(Op::Models { kind })?);
             Ok(exit::OK)
+        }
+        "subtitle" => {
+            args.only(&["language", "burn", "model", "timeout", "no-wait", "out", "source", "idempotency-key"]).map_err(Failure::invalid)?;
+            let video = match args.positional.as_slice() {
+                [video] => absolute(video, &cwd),
+                _ => return Err(Failure::invalid("需要一个视频文件")),
+            };
+            let language = args.one("language").map_err(Failure::invalid)?.ok_or_else(|| Failure::invalid("需要 --language"))?.to_owned();
+            let mut options = BTreeMap::new();
+            options.insert("video".into(), json!(video));
+            options.insert("language".into(), json!(language));
+            options.insert("burn".into(), json!(args.flag("burn")));
+            let model = args.one("model").map_err(Failure::invalid)?.map(str::to_owned).unwrap_or_else(|| format!("local/{}", super::local_edit::MODEL_SUBTITLE));
+            run_local(Submit {
+                kind: Some(MediaKind::Edit),
+                model: Some(model),
+                prompt: String::new(),
+                images: vec![],
+                options,
+                source: args.one("source").map_err(Failure::invalid)?.map(str::to_owned),
+                idempotency_key: args.one("idempotency-key").map_err(Failure::invalid)?.map(str::to_owned),
+                description_revision: None,
+            }, 600)
+        }
+        "edit" => {
+            args.only(&["plan-file", "model", "timeout", "no-wait", "out", "source", "idempotency-key"]).map_err(Failure::invalid)?;
+            if !args.positional.is_empty() {
+                return Err(Failure::invalid("edit 不接受位置参数"));
+            }
+            let file = args.one("plan-file").map_err(Failure::invalid)?.ok_or_else(|| Failure::invalid("需要 --plan-file"))?;
+            let text = std::fs::read_to_string(absolute(file, &cwd)).map_err(|error| Failure::invalid(format!("读取剪辑计划失败：{error}")))?;
+            let plan: Value = serde_json::from_str(&text).map_err(|error| Failure::invalid(format!("剪辑计划不是 JSON：{error}")))?;
+            if !plan.is_object() {
+                return Err(Failure::invalid("剪辑计划必须是 JSON 对象"));
+            }
+            let mut options = BTreeMap::new();
+            options.insert("plan".into(), plan);
+            let model = args.one("model").map_err(Failure::invalid)?.map(str::to_owned).unwrap_or_else(|| format!("local/{}", super::local_edit::MODEL_EDIT));
+            run_local(Submit {
+                kind: Some(MediaKind::Edit),
+                model: Some(model),
+                prompt: String::new(),
+                images: vec![],
+                options,
+                source: args.one("source").map_err(Failure::invalid)?.map(str::to_owned),
+                idempotency_key: args.one("idempotency-key").map_err(Failure::invalid)?.map(str::to_owned),
+                description_revision: None,
+            }, 600)
         }
         "image" | "video" | "speech" | "transcribe" => {
             let kind = match command {
@@ -1765,32 +1717,10 @@ mod tests {
     }
 
     #[test]
-    fn requests_need_the_current_token() {
-        let line = serde_json::to_string(&Envelope {
-            token: "right".into(),
-            op: Op::Status {
-                id: "x".into(),
-                resume: false,
-            },
-        })
-        .unwrap();
-        assert!(matches!(authorize(&line, "right"), Ok(Op::Status { .. })));
-        assert!(matches!(
-            authorize(&line, "wrong"),
-            Err(Reply::Err {
-                code: ErrorCode::Unauthorized,
-                ..
-            })
-        ));
-        assert!(matches!(
-            authorize("not json", "right"),
-            Err(Reply::Err {
-                code: ErrorCode::Invalid,
-                ..
-            })
-        ));
-        let unknown = r#"{"token":"right","op":"submit","kind":"image","prompt":"p","apiKey":"x"}"#;
-        assert!(authorize(unknown, "right").is_err());
+    fn submit_rejects_unknown_fields() {
+        let unknown = r#"{"op":"submit","kind":"image","prompt":"p","apiKey":"x"}"#;
+        assert!(serde_json::from_str::<Op>(unknown).is_err());
+        assert!(matches!(serde_json::from_str::<Op>(r#"{"op":"status","id":"x"}"#).unwrap(), Op::Status { .. }));
     }
 
     fn submit_for(kind: MediaKind, argv: &[&str], stdin: &str) -> Result<Submit, String> {

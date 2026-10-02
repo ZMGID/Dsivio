@@ -87,7 +87,7 @@ pub fn available_builtin_tool_names(tools: &[ChatToolDefinition]) -> Vec<String>
 pub fn disabled_builtin_tool_feedback(function_name: &str) -> Option<String> {
     // Builtin name set = static native registry (17 native + todo/ask_user)
     // plus the non-native builtin sources listed here.
-    const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image", "mixer_generate_video", "mixer_media_task", "mixer_video_analysis"];
+    const EXTRA_BUILTIN_NAMES: &[&str] = &["mixer_generate_image", "mixer_generate_video", "mixer_media_task", "mixer_process_video", "mixer_video_analysis"];
     // 模型按 wire 名（保留名别名）或改名前的旧名调用——规整到现名再比对注册表。
     let function_name = crate::mcp::types::resolve_reserved_wire_alias(function_name);
     let canonical = crate::mcp::types::canonical_tool_name(function_name);

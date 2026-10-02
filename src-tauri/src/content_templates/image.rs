@@ -5,6 +5,7 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
+    sync::LazyLock,
 };
 
 pub fn root() -> Result<PathBuf, String> {
@@ -171,25 +172,30 @@ fn save_record_at(base: &Path, template: &Template) -> Result<(), String> {
     write(&directory.join("template.json"), &template.data)?;
     write(&directory.join("record.json"), template)
 }
+static TEMPLATE_SCHEMA: LazyLock<Value> = LazyLock::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../docs/schemas/image-set-template.v1.schema.json"
+    ))
+    .expect("image set template schema is valid JSON")
+});
+
+static TEMPLATE_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
+    jsonschema::validator_for(&TEMPLATE_SCHEMA).expect("image set template schema compiles")
+});
+
+/// 运行时用 `docs/schemas/image-set-template.v1.schema.json` 校验。
+/// 这份 Schema 是正式依赖里编译的，不是只在测试里对拍：导入和保存都走这里。
+/// `slots[].id` 是否重复，JSON Schema 表达不了，通过 Schema 之后仍在这里拒绝。
 pub fn validate_template(data: &Value) -> Result<(), String> {
-    if !matches!(data["mode"].as_str(), Some("smart" | "replace")) {
-        return Err("模板 mode 必须是 smart 或 replace".into());
-    }
-    if data["name"].as_str().unwrap_or("").trim().is_empty() {
-        return Err("请填写模板名称".into());
+    if let Err(error) = TEMPLATE_VALIDATOR.validate(data) {
+        return Err(format!("模板不符合套图 Schema：{error}"));
     }
     let slots = data["slots"].as_array().ok_or("模板缺少 slots")?;
-    if slots.is_empty() || slots.len() > 30 {
-        return Err("模板应包含 1–30 个页面".into());
-    }
-    let mut ids = std::collections::HashSet::new();
-    for s in slots {
-        let id = s["id"].as_str().ok_or("页面缺少 id")?;
-        if !ids.insert(id) || id.trim().is_empty() {
+    let mut ids = HashSet::new();
+    for slot in slots {
+        let id = slot["id"].as_str().ok_or("页面缺少 id")?;
+        if !ids.insert(id.to_ascii_lowercase()) || id.trim().is_empty() {
             return Err("页面 id 不能为空或重复".into());
-        }
-        if data["mode"] == "replace" && s["example"].as_str().unwrap_or("").is_empty() {
-            return Err(format!("换货模板的 {id} 缺少 example 样图"));
         }
     }
     Ok(())

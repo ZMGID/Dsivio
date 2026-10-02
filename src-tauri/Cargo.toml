@@ -120,6 +120,9 @@ sqlite-vec = "0.1"
 # 设置页面下载到 app data 目录的 dylib，安装包不带任何 ONNX Runtime 二进制。
 oar-ocr = { version = "0.8", default-features = false, features = ["simd"] }
 ort = { version = "=2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "load-dynamic", "api-23"] }
+# 套图 template.json 在导入/保存时按 docs/schemas 校验。正式依赖，不是 dev：
+# 只在测试里对拍，拦不住以后新写进来的非法模板。不要开默认 features（会再拉一套 HTTP/TLS）。
+jsonschema = { version = "0.58.4", default-features = false }
 
 # macOS 平台特有依赖（系统 API 调用）
 [target.'cfg(target_os = "macos")'.dependencies]

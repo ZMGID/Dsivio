@@ -27,7 +27,7 @@ fn draft_at(
 ) -> Result<Value, String> {
     if !matches!(
         (domain, entry),
-        ("image", "main" | "gen" | "replace" | "smart" | "design" | "client" | "workflow") | ("video", "creation" | "analysis" | "remake")
+        ("image", "main" | "gen" | "replace" | "smart" | "design" | "client" | "workflow" | "post" | "detail") | ("video", "creation" | "analysis" | "remake" | "avatar" | "drama" | "editing")
     ) {
         return Err("未知草稿入口".into());
     }

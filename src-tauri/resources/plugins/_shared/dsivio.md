@@ -14,7 +14,7 @@
 ### 命令
 
 ```sh
-dsivio media models [--kind image|video|speech|transcribe|matting] [--json]
+dsivio media models [--kind image|video|speech|transcribe|edit|matting] [--json]
 dsivio media image --prompt-file prompt.txt [--model 供应商/模型] [--ref a.png]... \
     [--ratio 16:9] [--size 2K] [--quality high] [--n 1] [--out ./outputs]
 dsivio media video --prompt-file prompt.txt [--model 供应商/模型] [--first-frame a.png] [--last-frame b.png] \
@@ -26,6 +26,8 @@ dsivio media speech --model 供应商/模型 --mode clone --text-file text.txt \
     --voice-ref authorized.wav --consent-attestation consent.txt [--output-format wav]
 dsivio media transcribe evidence.wav --language zh [--model local/whisperx-small] \
     [--sample-frames 正整数] [--timestamps word|segment] [--out ./outputs]
+dsivio media subtitle video.mp4 --language zh [--burn] [--model local/ffmpeg-subtitle]
+dsivio media edit --plan-file plan.json
 dsivio media asr status [--json]
 dsivio media asr install [--json]
 dsivio media asr stop [--json]
@@ -106,6 +108,17 @@ stdout 只输出一行 JSON，进度和错误说明写在 stderr。
 | `mixer_generate_image` | 生成或编辑图片，可传本地图片路径或之前结果的 `art_` ID 作参考 | 「设置 > 媒体创作」图片模型池有可用模型（用排在最前的） |
 | `mixer_generate_video` | 生成视频，立即返回任务 ID | 「设置 > 媒体创作」视频模型池有可用模型（用排在最前的） |
 | `mixer_media_task` | 用任务 ID 等待或查询同一个任务，拿到本地文件 | 有生成工具时 |
+| `mixer_process_video` | 本地 ffmpeg 字幕或剪辑，立即返回任务 ID | 始终可用，不走云模型 |
+
+`dsivio ai run` 用正在运行的 App 做一次工作台 AI 调用，不另开会话。App 没运行时退出码 6。
+
+```sh
+dsivio ai run (--prompt <文本> | --prompt-file <文件|->) [--mode once|agent] [--system <文本>] \
+    [--image <图片>]... [--video <视频>] [--slot chat|vision|promptOptimize|videoAnalysis] \
+    [--model <供应商/模型>] [--timeout <秒>]
+```
+
+`--kind edit` 列出 `local/ffmpeg-subtitle` 和 `local/ffmpeg-edit`。字幕命令烧录需要打包的 ffmpeg 带 libass `subtitles` 滤镜。剪辑计划是 JSON 对象，放在 `--plan-file` 里。
 
 插件自己的程序、脚本以及外部 Agent 调用不到这些工具，这些场景请使用 `dsivio media` 命令。
 
@@ -116,3 +129,21 @@ dsivio media status --source dsvideo --idempotency-key <原提交key>
 ```
 
 此入口只读取 App 的任务记录，不提交生成，也不恢复供应商查询；不能与任务 ID 或 `--resume` 混用。返回原任务 JSON，退出码沿用任务状态。没有记录时退出 2，诊断包含 `MEDIA_TASK_NOT_FOUND`；这不证明厂商未受理，调用方继续查询或提示核实，不能自动重交。
+
+## 发布到 TikTok / YouTube：用 `dsivio publish`
+
+插件通过 `dsivio publish` 调用正在运行的 Dsivio。密钥留在 App 的凭据库里，命令行不读取 client secret 或访问令牌。账号要先在工作台或 `begin` / `complete` 里用用户自己的应用凭证完成授权。
+
+```sh
+dsivio publish accounts
+dsivio publish begin --platform tiktok|youtube --client-id <id> --client-secret <secret> [--redirect <url>]
+dsivio publish complete --request <id> [--callback <url>]
+dsivio publish publish --account <id> --file <视频路径> --title <标题> [--description <文本>] [--privacy public|private|unlisted|friends] [--tag <标签>]...
+dsivio publish records [--account <id>]
+dsivio publish status <记录ID>
+dsivio publish stats <记录ID>
+dsivio publish retry --record <记录ID>
+dsivio publish unbind --account <id>
+```
+
+`publish` 与 `submit` 是同一次提交。YouTube 的 `--redirect` 留空时，App 在本机回环上接收授权。TikTok 必须粘贴回调。已发布、上传中、处理中或结果不确定的记录不会再次上传；`status` 只查询。平台没有返回的指标在统计里是不支持，不是 0。退出码：0 成功，2 参数错误，3 被拒，4 失败，5 结果不确定，6 Dsivio 未运行。

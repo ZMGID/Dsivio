@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tokio::time::timeout;
 use ts_rs::TS;
 
@@ -330,6 +330,10 @@ fn timeout_secs(request: &AiTaskRequest) -> u64 {
 
 #[tauri::command]
 pub(crate) async fn run_ai_task(app: AppHandle, state: State<'_, AppState>, request: AiTaskRequest) -> Result<AiTaskResult, String> {
+    execute_request(&app, state.inner(), request).await
+}
+
+async fn execute_request(app: &AppHandle, state: &AppState, request: AiTaskRequest) -> Result<AiTaskResult, String> {
     let settings = state.settings_read().clone();
     let language = crate::settings::resolve_chat_language(&settings);
     validate(&request, &language)?;
@@ -338,9 +342,80 @@ pub(crate) async fn run_ai_task(app: AppHandle, state: State<'_, AppState>, requ
     let conversation_id = conversation_id(request.task_id.trim());
     state.chat_interactions().grant_session_consent(&conversation_id);
     let generation = state.chat_runtime().begin_generation(&conversation_id);
-    let outcome = execute(&app, state.inner(), &settings, &request, provider, model, generation, &language).await;
+    let outcome = execute(app, state, &settings, &request, provider, model, generation, &language).await;
     state.chat_runtime().end_generation(&conversation_id, generation);
     outcome
+}
+
+pub(crate) async fn cli_handle(app: &AppHandle, op: Value) -> Result<Value, String> {
+    if op.get("op").and_then(Value::as_str) != Some("run") {
+        return Err("只支持 run".into());
+    }
+    let prompt = op.get("prompt").and_then(Value::as_str).unwrap_or("").trim().to_owned();
+    if prompt.is_empty() {
+        return Err("提示词为空".into());
+    }
+    let mode = match op.get("mode").and_then(Value::as_str).unwrap_or("once") {
+        "agent" => AiTaskMode::Agent,
+        "once" => AiTaskMode::Once,
+        other => return Err(format!("--mode 只能是 once 或 agent（{other}）")),
+    };
+    let slot = match op.get("slot").and_then(Value::as_str).unwrap_or("chat") {
+        "chat" => AiTaskSlot::Chat,
+        "vision" => AiTaskSlot::Vision,
+        "promptOptimize" => AiTaskSlot::PromptOptimize,
+        "videoAnalysis" => AiTaskSlot::VideoAnalysis,
+        other => return Err(format!("未知 slot {other}")),
+    };
+    let (provider_id, model) = match op.get("model").and_then(Value::as_str) {
+        None => (None, None),
+        Some(value) => {
+            let (provider, name) = value.split_once('/').ok_or("--model 需要 供应商/模型")?;
+            if provider.is_empty() || name.is_empty() {
+                return Err("--model 需要 供应商/模型".into());
+            }
+            (Some(provider.to_owned()), Some(name.to_owned()))
+        }
+    };
+    let mut images = Vec::new();
+    for image in op.get("images").and_then(Value::as_array).into_iter().flatten() {
+        let path = image.as_str().ok_or("图片路径无效")?;
+        images.push(image_data_url(path)?);
+    }
+    let videos = op.get("video").and_then(Value::as_str).filter(|path| !path.is_empty()).map(|path| vec![path.to_owned()]);
+    let timeout_secs = match op.get("timeout").and_then(Value::as_u64) {
+        None => None,
+        Some(value) => Some(u32::try_from(value).map_err(|_| "timeout 超出范围")?),
+    };
+    let request = AiTaskRequest {
+        task_id: uuid::Uuid::new_v4().to_string(),
+        mode,
+        system: op.get("system").and_then(Value::as_str).map(str::to_owned),
+        prompt,
+        images,
+        videos,
+        tools: Vec::new(),
+        slot,
+        provider_id,
+        model,
+        cwd: None,
+        timeout_secs,
+        stream: false,
+    };
+    let result = execute_request(app, app.state::<AppState>().inner(), request).await?;
+    serde_json::to_value(result).map_err(|error| error.to_string())
+}
+
+fn image_data_url(path: &str) -> Result<String, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("读取图片失败：{error}"))?;
+    let mime = match std::path::Path::new(path).extension().and_then(|ext| ext.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => "image/png",
+    };
+    use base64::Engine;
+    Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
 async fn execute(

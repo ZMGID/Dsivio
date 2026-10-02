@@ -1133,3 +1133,52 @@ fn auto_edits_route_logo_to_each_target_and_preserve_delivery_dimensions() {
     }
     fs::remove_dir_all(base).unwrap();
 }
+
+#[test]
+fn feature_origin_maps_posts_and_detail_pages() {
+    assert_eq!(agent::feature_origin("post").unwrap(), "posts");
+    assert_eq!(agent::feature_origin("detail").unwrap(), "detail");
+    assert_eq!(agent::feature_origin("gen").unwrap(), "free-image");
+    assert!(agent::feature_origin("unknown").is_err());
+}
+
+#[test]
+fn post_and_detail_plan_parsing_requires_every_slot_once() {
+    let slots = vec!["h1".into(), "h2".into()];
+    let value = json!({
+        "title": "轻便通勤包",
+        "body": "夏天也能背着走一天。",
+        "tags": ["通勤", "轻便"],
+        "plans": [
+            {"slotId":"h1","purpose":"封面","copy":"轻便","prompt":"cover"},
+            {"slotId":"h2","purpose":"细节","copy":"","prompt":"detail"}
+        ]
+    });
+    let (title, body, tags, plans) = agent::parse_post_plan(&value, &slots).unwrap();
+    assert_eq!(title, "轻便通勤包");
+    assert!(body.contains("夏天"));
+    assert_eq!(tags, vec!["通勤", "轻便"]);
+    assert_eq!(plans.len(), 2);
+    assert!(agent::parse_post_plan(&json!({"title":"","body":"x","tags":["a"],"plans":[]}), &slots).is_err());
+    let duplicated = json!({
+        "title": "标题",
+        "body": "正文",
+        "tags": ["标签"],
+        "plans": [
+            {"slotId":"h1","prompt":"a"},
+            {"slotId":"h1","prompt":"b"}
+        ]
+    });
+    assert!(agent::parse_post_plan(&duplicated, &slots).is_err());
+    let modules = vec!["hero".into(), "selling".into(), "specs".into()];
+    let detail = json!({"plans":[
+        {"slotId":"hero","purpose":"头图","copy":"","prompt":"hero"},
+        {"slotId":"selling","purpose":"卖点","copy":"透气","prompt":"points"},
+        {"slotId":"specs","purpose":"参数","copy":"","prompt":"specs"}
+    ]});
+    assert_eq!(agent::parse_detail_plan(&detail, &modules).unwrap().len(), 3);
+    assert!(agent::parse_detail_plan(&json!({"plans":[{"slotId":"hero","prompt":"only"}]}), &modules).is_err());
+    let document = agent::post_copy_document("标题", "正文", &["通勤".into()]);
+    assert!(document.starts_with("# 标题"));
+    assert!(document.contains("#通勤"));
+}

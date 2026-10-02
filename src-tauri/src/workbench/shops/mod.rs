@@ -3,15 +3,19 @@
 mod providers;
 mod store;
 
+pub(crate) use providers::{doudian_sign_pattern, sign_doudian, sign_kuaishou, sign_shein, sign_shopee, sign_tiktok};
+
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use std::{
     collections::HashMap,
     sync::{Mutex, OnceLock},
 };
 use store::Store;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
 pub enum Platform {
     Shopee,
     Shein,
@@ -24,7 +28,7 @@ pub enum Platform {
     Pinduoduo,
 }
 impl Platform {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Shopee => "shopee",
             Self::Shein => "shein",
@@ -37,7 +41,7 @@ impl Platform {
             Self::Pinduoduo => "pinduoduo",
         }
     }
-    fn parse(value: &str) -> Result<Self, String> {
+    pub(crate) fn parse(value: &str) -> Result<Self, String> {
         match value {
             "shopee" => Ok(Self::Shopee),
             "shein" => Ok(Self::Shein),
@@ -406,4 +410,39 @@ pub async fn shop_unbind(id: String) -> Result<(), String> {
     })
     .await
     .map_err(|_| "店铺解绑任务失败")?
+}
+
+/// Credential material for a connected shop. Refresh and rotation stay in `shop_check`
+/// (`providers::verify`); commerce does not keep a second token store.
+#[derive(Clone)]
+pub(crate) struct ShopSession {
+    pub shop: Shop,
+    pub partner_id: String,
+    pub partner_key: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub open_key: String,
+    pub seller_secret: String,
+}
+
+pub(crate) async fn open_shop_session(id: &str) -> Result<ShopSession, String> {
+    let shop = shop_check(id.to_string()).await?;
+    if shop.status != ShopStatus::Connected {
+        return Err(shop
+            .detail
+            .unwrap_or_else(|| "店铺未连接，请先在店铺绑定里刷新授权".into()));
+    }
+    let credential = load_credential(&shop.id)?;
+    if credential.access_token.is_empty() && credential.open_key.is_empty() {
+        return Err("店铺访问令牌为空，请重新授权".into());
+    }
+    Ok(ShopSession {
+        shop,
+        partner_id: credential.config.app_id,
+        partner_key: credential.config.app_secret,
+        access_token: credential.access_token,
+        refresh_token: credential.refresh_token,
+        open_key: credential.open_key,
+        seller_secret: credential.seller_secret,
+    })
 }

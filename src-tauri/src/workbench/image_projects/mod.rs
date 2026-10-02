@@ -136,7 +136,7 @@ pub fn workbench_image_get(id: String) -> Result<Task, String> {
 fn validate_brief(b: &Brief) -> Result<(), String> {
     if !matches!(
         b.feature.as_str(),
-        "gen" | "replace" | "smart" | "design" | "client" | "workflow"
+        "gen" | "replace" | "smart" | "design" | "client" | "workflow" | "post" | "detail"
     ) {
         return Err("未知图片功能".into());
     }
@@ -500,8 +500,9 @@ async fn execute(
     a: &Action,
     flag: &Arc<AtomicBool>,
 ) -> Result<(), String> {
+    let composed = matches!(t.brief.feature.as_str(), "post" | "detail");
     if a.kind == "start" {
-        if t.brief.feature != "gen" {
+        if t.brief.feature != "gen" && !composed {
             for index in 0..t.brief.products.len() {
                 preparation::identify(app, t, index, cfg, flag).await?;
             }
@@ -509,14 +510,6 @@ async fn execute(
         }
         let groups: std::collections::BTreeSet<_> = t.brief.products.iter().map(group_of).collect();
         for group in groups {
-            let sample_ids = sample_ids(t, &group);
-            if t.brief.feature != "gen" {
-                for index in 0..t.brief.products.len() {
-                    if sample_ids.contains(&t.brief.products[index].id) {
-                        preparation::prepare_product(app, t, index, cfg, flag).await?;
-                    }
-                }
-            }
             execute_step(
                 app,
                 t,
@@ -529,18 +522,12 @@ async fn execute(
                 flag,
             )
             .await?;
-            let kind = if t.brief.feature == "gen" {
-                "generate"
-            } else {
-                "sample"
-            };
-            let pending = t.plans.iter().any(|plan| {
-                (t.brief.feature == "gen" || sample_ids.contains(&plan.product_id))
-                    && !t.results.iter().any(|r| {
-                        r.revision == t.revision
-                            && r.product_id == plan.product_id
-                            && r.slot_id == plan.slot_id
-                    })
+            let pending = t.brief.feature == "gen" && t.plans.iter().any(|plan| {
+                !t.results.iter().any(|r| {
+                    r.revision == t.revision
+                        && r.product_id == plan.product_id
+                        && r.slot_id == plan.slot_id
+                })
             });
             if pending {
                 execute_step(
@@ -548,7 +535,7 @@ async fn execute(
                     t,
                     cfg,
                     &Action {
-                        kind: kind.into(),
+                        kind: "generate".into(),
                         group,
                         ..Default::default()
                     },
@@ -556,16 +543,41 @@ async fn execute(
                 )
                 .await?;
             }
-            if t.brief.feature == "gen" {
+            if t.brief.feature == "gen" || composed {
                 break;
             }
         }
         return Ok(());
     }
-    if a.kind == "bulk" {
+    if matches!(a.kind.as_str(), "sample" | "bulk" | "generate" | "retry" | "revise")
+        && !matches!(t.brief.feature.as_str(), "gen" | "post" | "detail")
+    {
+        let samples = sample_ids(t, &a.group);
         for index in 0..t.brief.products.len() {
-            if group_of(&t.brief.products[index]) == a.group {
-                preparation::prepare_product(app, t, index, cfg, flag).await?;
+            let product = &t.brief.products[index];
+            if group_of(product) != a.group
+                || (a.kind == "sample" && !samples.contains(&product.id))
+                || (matches!(a.kind.as_str(), "retry" | "revise") && product.id != a.product_id)
+            {
+                continue;
+            }
+            if !t.plans.iter().any(|plan| plan.product_id == product.id) {
+                return Err("请先为所有待生成商品保存并确认方案".into());
+            }
+            preparation::prepare_product(app, t, index, cfg, flag).await?;
+            for plan_index in 0..t.plans.len() {
+                let product = &t.brief.products[index];
+                let plan = &t.plans[plan_index];
+                if plan.product_id != product.id {
+                    continue;
+                }
+                if let Some(template) = agent::template_for(t, product) {
+                    let slot = template.data["slots"].as_array().ok_or("模板缺少 slots")?
+                        .iter().find(|slot| slot["id"].as_str() == Some(plan.slot_id.as_str()))
+                        .ok_or("方案页面不在当前模板中")?;
+                    let refs = agent::template_refs(template, product, slot)?;
+                    t.plans[plan_index].refs = refs;
+                }
             }
         }
     }
@@ -675,7 +687,7 @@ async fn execute_step(
                 if group_of(p) != a.group {
                     return false;
                 }
-                a.kind == "bulk" || sample_ids(t, &a.group).contains(&p.id)
+                true
             })
             .cloned()
             .collect();
@@ -796,6 +808,9 @@ async fn execute_step(
     }
     let task_id = t.id.clone();
     let brief = t.brief.clone();
+    if t.brief.feature == "post" && a.kind == "generate" && !t.results.iter().any(|r| r.revision == t.revision) {
+        media::record_post_copy(app, t)?;
+    }
     let backend = media::NativeBackend {
         app,
         cfg,
@@ -805,6 +820,8 @@ async fn execute_step(
     generation::run(t, cfg, plans, flag, &backend, persist).await?;
     t.progress = if t.brief.feature == "gen" {
         "图片已生成，可逐张修改、质检或导出"
+    } else if matches!(t.brief.feature.as_str(), "post" | "detail") {
+        "本轮图片已保存，失败的页面可以单独重试"
     } else {
         "本轮图片已保存，请检查结果；两款样品通过后可继续批量"
     }

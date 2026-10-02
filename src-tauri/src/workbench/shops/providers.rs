@@ -122,9 +122,28 @@ fn hmac_b64(key: &str, input: &str) -> Result<String, String> {
     Ok(STANDARD.encode(mac.finalize().into_bytes()))
 }
 
-// 抖店签名串（不含首尾 app_secret），键值直接相连。
-fn doudian_sign_pattern(app_key: &str, method: &str, param_json: &str, timestamp: i64) -> String {
+/// 快手小店 HMAC-SHA256，键按字典序拼成 `k=v&...&signSecret=`，结果为 Base64。
+pub(crate) fn sign_kuaishou(secret: &str, pairs: &[(&str, &str)]) -> Result<String, String> {
+    let mut sorted = pairs.to_vec();
+    sorted.sort_by(|left, right| left.0.cmp(right.0).then(left.1.cmp(right.1)));
+    let base = sorted.iter().map(|(key, value)| format!("{key}={value}")).collect::<Vec<_>>().join("&");
+    hmac_b64(secret, &format!("{base}&signSecret={secret}"))
+}
+
+/// 抖店签名串（不含首尾 app_secret），键值直接相连。`timestamp` 与请求里发出的字符串一致。
+pub(crate) fn doudian_sign_pattern(app_key: &str, method: &str, param_json: &str, timestamp: &str) -> String {
     format!("app_key{app_key}method{method}param_json{param_json}timestamp{timestamp}v2")
+}
+
+pub(crate) fn sign_doudian(
+    app_secret: &str,
+    app_key: &str,
+    method: &str,
+    param_json: &str,
+    timestamp: &str,
+) -> Result<String, String> {
+    let pattern = doudian_sign_pattern(app_key, method, param_json, timestamp);
+    hmac_hex(app_secret, &format!("{app_secret}{pattern}{app_secret}"))
 }
 
 fn doudian_ok(v: &Value) -> Result<(), String> {
@@ -145,20 +164,16 @@ async fn doudian_call(
     method: &str,
     param: Value,
 ) -> Result<Value, String> {
-    let timestamp = now();
+    let timestamp = now().to_string();
     let param_json = serde_json::to_string(&param).map_err(|_| "抖店请求参数编码失败")?;
-    let pattern = doudian_sign_pattern(&config.app_id, method, &param_json, timestamp);
-    let sign = hmac_hex(
-        &config.app_secret,
-        &format!("{}{pattern}{}", config.app_secret, config.app_secret),
-    )?;
+    let sign = sign_doudian(&config.app_secret, &config.app_id, method, &param_json, &timestamp)?;
     let data = response(
         client()?
             .post(format!("{DOUDIAN_API}/{}", method.replace('.', "/")))
             .query(&[
                 ("app_key", config.app_id.as_str()),
                 ("method", method),
-                ("timestamp", timestamp.to_string().as_str()),
+                ("timestamp", timestamp.as_str()),
                 ("v", "2"),
                 ("sign_method", "hmac-sha256"),
                 ("sign", sign.as_str()),
@@ -204,17 +219,8 @@ async fn kuaishou_api(
         ("signMethod", "HMAC-SHA256".to_owned()),
         ("timestamp", timestamp.to_string()),
     ];
-    let mut sorted = pairs.clone();
-    sorted.sort_by(|a, b| a.0.cmp(b.0));
-    let base = sorted
-        .iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join("&");
-    let sign = hmac_b64(
-        &credential.config.app_secret,
-        &format!("{base}&signSecret={}", credential.config.app_secret),
-    )?;
+    let refs: Vec<(&str, &str)> = pairs.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    let sign = sign_kuaishou(&credential.config.app_secret, &refs)?;
     pairs.push(("sign", sign));
     let data = response(
         client()?
@@ -551,6 +557,26 @@ pub(super) fn callback_params(
     Ok((code, params.get("shop_id").cloned()))
 }
 
+/// Shopee Open Platform v2 base string: partner_id + path + timestamp + access_token + shop_id.
+/// Shop-level calls include both token and shop id; token exchange includes neither.
+pub(crate) fn sign_shopee(
+    partner_id: &str,
+    partner_key: &str,
+    path: &str,
+    timestamp: i64,
+    token: Option<&str>,
+    shop_id: Option<&str>,
+) -> Result<String, String> {
+    let mut input = format!("{partner_id}{path}{timestamp}");
+    if let Some(token) = token {
+        input.push_str(token);
+    }
+    if let Some(shop_id) = shop_id {
+        input.push_str(shop_id);
+    }
+    hmac_hex(partner_key, &input)
+}
+
 fn shopee_sign(
     config: &AppConfig,
     path: &str,
@@ -558,14 +584,14 @@ fn shopee_sign(
     token: Option<&str>,
     shop_id: Option<&str>,
 ) -> Result<String, String> {
-    let mut input = format!("{}{path}{timestamp}", config.app_id);
-    if let Some(token) = token {
-        input.push_str(token);
-    }
-    if let Some(shop_id) = shop_id {
-        input.push_str(shop_id);
-    }
-    hmac_hex(&config.app_secret, &input)
+    sign_shopee(
+        &config.app_id,
+        &config.app_secret,
+        path,
+        timestamp,
+        token,
+        shop_id,
+    )
 }
 
 async fn shopee_token(config: &AppConfig, path: &str, body: Value) -> Result<Value, String> {
@@ -620,12 +646,32 @@ async fn shopee_info(
     ))
 }
 
+pub(crate) fn sign_tiktok(secret: &str, path: &str, query: &[(&str, &str)], body: Option<&str>) -> Result<String, String> {
+    let mut pairs: Vec<(&str, &str)> = query
+        .iter()
+        .copied()
+        .filter(|(key, _)| *key != "sign" && *key != "access_token")
+        .collect();
+    pairs.sort_by(|left, right| left.0.cmp(right.0).then(left.1.cmp(right.1)));
+    let mut raw = String::from(path);
+    for (key, value) in pairs {
+        raw.push_str(key);
+        raw.push_str(value);
+    }
+    if let Some(body) = body {
+        raw.push_str(body);
+    }
+    hmac_hex(secret, &format!("{secret}{raw}{secret}"))
+}
+
 fn tiktok_sign(config: &AppConfig, path: &str, timestamp: i64) -> Result<String, String> {
-    let input = format!(
-        "{}{path}app_key{}timestamp{}{}",
-        config.app_secret, config.app_id, timestamp, config.app_secret
-    );
-    hmac_hex(&config.app_secret, &input)
+    let timestamp = timestamp.to_string();
+    sign_tiktok(
+        &config.app_secret,
+        path,
+        &[("app_key", config.app_id.as_str()), ("timestamp", timestamp.as_str())],
+        None,
+    )
 }
 
 async fn tiktok_token(
@@ -729,7 +775,7 @@ async fn meli_info(access_token: &str) -> Result<(String, String, Option<String>
     Ok((id, name, region))
 }
 
-fn shein_sign(
+pub(crate) fn sign_shein(
     open_key: &str,
     secret: &str,
     path: &str,
@@ -771,7 +817,7 @@ async fn shein_call(
         .chars()
         .take(5)
         .collect();
-    let signature = shein_sign(open_key, secret, path, timestamp, &random)?;
+    let signature = sign_shein(open_key, secret, path, timestamp, &random)?;
     let header = if app_auth {
         "x-lt-appid"
     } else {
@@ -1259,7 +1305,7 @@ mod tests {
     use super::*;
     #[test]
     fn shein_signature_has_random_prefix() {
-        let sign = shein_sign("open", "secret", "/open-api/test", 1583398764000, "1aa34").unwrap();
+        let sign = sign_shein("open", "secret", "/open-api/test", 1583398764000, "1aa34").unwrap();
         assert_eq!(sign, "1aa34NWI2NTVkODMwYzI3YWVkMjY4Y2YxNmRjMWY0MTNkYWVmNjAzODA3YTJkMjk1OWI3YzI3YmMxNzU5ZjczMWRkNw==");
     }
     #[test]
@@ -1434,7 +1480,7 @@ mod tests {
     #[test]
     fn doudian_sign_pattern_is_glued_key_values() {
         assert_eq!(
-            doudian_sign_pattern("k", "token.create", r#"{"code":"c"}"#, 123),
+            doudian_sign_pattern("k", "token.create", r#"{"code":"c"}"#, "123"),
             r#"app_keykmethodtoken.createparam_json{"code":"c"}timestamp123v2"#
         );
     }

@@ -225,6 +225,16 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         call: NativeToolCall::Async(call_automation_delete),
     },
     NativeToolEntry {
+        name: "publish",
+        def: crate::workbench::publish::tool_definition,
+        enabled: |_, _, _| true,
+        parallel_safe: false,
+        bypasses_approval: false,
+        read_only: false,
+        requires_session_consent: false,
+        call: NativeToolCall::Async(call_publish),
+    },
+    NativeToolEntry {
         name: "advisor",
         def: native_advisor_tool,
         // Never auto-listed: exposure depends on `default_models.advisor` being
@@ -362,6 +372,16 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         read_only: true,
         requires_session_consent: false,
         call: NativeToolCall::SyncResult(call_present_artifacts),
+    },
+    NativeToolEntry {
+        name: "commerce",
+        def: super::types::native_commerce_tool,
+        enabled: |_, _, _| true,
+        parallel_safe: false,
+        bypasses_approval: false,
+        read_only: false,
+        requires_session_consent: false,
+        call: NativeToolCall::Async(call_commerce),
     },
     NativeToolEntry {
         name: "kivio_inspect",
@@ -547,6 +567,23 @@ pub fn find_entry(name: &str) -> Option<&'static NativeToolEntry> {
 /// `requires_session_consent` flag so a rename or new tool can't drift.
 pub fn native_tool_requires_session_consent(name: &str) -> bool {
     find_entry(name).is_some_and(|entry| entry.requires_session_consent)
+}
+
+fn call_commerce(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move {
+        let value = crate::workbench::commerce::execute(ctx.arguments)
+            .await
+            .map_err(|error| error.to_string())?;
+        let content = serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+        Ok(McpToolCallResult {
+            content,
+            is_error: false,
+            raw: value.clone(),
+            artifacts: Vec::new(),
+            structured_content: Some(value),
+            follow_up_user_messages: Vec::new(),
+        })
+    })
 }
 
 pub fn text_tool_result(content: String) -> McpToolCallResult {
@@ -1012,6 +1049,10 @@ fn call_automation_runs(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
 
 fn call_automation_delete(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
     Box::pin(async move { crate::automation::tools::delete(ctx.app, ctx.arguments) })
+}
+
+fn call_publish(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
+    Box::pin(async move { crate::workbench::publish::tool_call(ctx.app, ctx.arguments.clone()).await })
 }
 
 /// Advisor consultation (executor-advisor pattern). Runs a single-shot chat
@@ -1542,6 +1583,7 @@ mod tests {
         "automation_run",
         "automation_runs",
         "automation_delete",
+        "publish",
         "advisor",
         "read",
         "ls",
@@ -1554,6 +1596,7 @@ mod tests {
         "kill_background",
         "save_assistant",
         "present_artifacts",
+        "commerce",
         "kivio_inspect",
         "kivio_configure",
         "memory_read",
@@ -1781,15 +1824,15 @@ mod tests {
             working_directory: String::new(),
             workspace_roots: Vec::new(),
         };
-        assert_eq!(names(&off, true, false), ["present_artifacts"]);
+        assert_eq!(names(&off, true, false), ["publish", "present_artifacts", "commerce"]);
 
         // web_search requires both the toggle and a configured provider key.
         let mut search_only = off.clone();
         search_only.web_search = true;
-        assert_eq!(names(&search_only, false, false), ["present_artifacts"]);
+        assert_eq!(names(&search_only, false, false), ["publish", "present_artifacts", "commerce"]);
         assert_eq!(
             names(&search_only, true, false),
-            ["web_search", "present_artifacts"]
+            ["web_search", "publish", "present_artifacts", "commerce"]
         );
 
         // read_file gate exposes the whole read-side group, in order.
@@ -1797,7 +1840,7 @@ mod tests {
         read_only.read_file = true;
         assert_eq!(
             names(&read_only, false, false),
-            ["read", "grep", "glob", "present_artifacts", "kivio_inspect"]
+            ["publish", "read", "grep", "glob", "present_artifacts", "commerce", "kivio_inspect"]
         );
 
         // The write gate exposes the whole-file write tool only. File cards are
@@ -1806,7 +1849,7 @@ mod tests {
         write_only.write_file = true;
         assert_eq!(
             names(&write_only, false, false),
-            ["write", "present_artifacts"]
+            ["publish", "write", "present_artifacts", "commerce"]
         );
 
         let mut automation_only = off.clone();
@@ -1821,7 +1864,9 @@ mod tests {
                 "automation_run",
                 "automation_runs",
                 "automation_delete",
+                "publish",
                 "present_artifacts",
+                "commerce",
             ]
         );
 
@@ -1829,7 +1874,9 @@ mod tests {
         assert_eq!(
             names(&off, false, true),
             [
+                "publish",
                 "present_artifacts",
+                "commerce",
                 "memory_read",
                 "memory_modify",
                 "memory_search",
@@ -1863,6 +1910,7 @@ mod tests {
                 "automation_run",
                 "automation_runs",
                 "automation_delete",
+                "publish",
                 "read",
                 "grep",
                 "glob",
@@ -1872,6 +1920,7 @@ mod tests {
                 "bash_output",
                 "kill_background",
                 "present_artifacts",
+                "commerce",
                 "kivio_inspect",
                 "kivio_configure",
                 "memory_read",

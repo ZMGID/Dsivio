@@ -312,6 +312,18 @@ pub async fn execute_tool_call(
             let content = record.error.clone().unwrap_or_default();
             return (record, content, Vec::new());
         }
+    } else if !hook_approved
+        && tool.name == "commerce"
+        && crate::workbench::commerce::action_requires_approval(&call.arguments)
+        && settings.chat_tools.approval_policy.as_str() != "auto"
+        && !tool_requires_approval(settings, tool)
+    {
+        if !host.request_tool_approval(ctx, &record).await {
+            skip(&mut record, "Tool call was not approved");
+            host.emit_tool_record(ctx.conversation_id, ctx.run_id, ctx.message_id, &record);
+            let content = record.error.clone().unwrap_or_default();
+            return (record, content, Vec::new());
+        }
     } else if !hook_approved && tool_requires_approval(settings, tool) {
         let approved = host.request_tool_approval(ctx, &record).await;
         if !approved {

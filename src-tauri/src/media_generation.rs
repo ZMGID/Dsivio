@@ -11,6 +11,7 @@ pub mod speech_providers;
 pub mod voices;
 pub mod local_asr;
 pub mod local_tts;
+pub mod local_edit;
 pub mod transcribe_providers;
 mod request_evidence;
 use base64::Engine;
@@ -33,6 +34,8 @@ pub enum MediaKind {
     Video,
     Speech,
     Transcribe,
+    Edit,
+    Text,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
@@ -715,6 +718,9 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
     if matches!(request.kind, MediaKind::Speech | MediaKind::Transcribe) {
         return start_audio_task(app, request).await;
     }
+    if request.kind == MediaKind::Edit {
+        return local_edit::start(app, request).await;
+    }
     let request_hash = Some(request_hash(&request)?);
     let p = provider(&state, &request.provider_id)?;
     if !p.enabled_models.contains(&request.model) {
@@ -818,6 +824,12 @@ pub(crate) async fn start_configured(
     app: &AppHandle,
     request: MediaRequest,
 ) -> Result<MediaTask, String> {
+    if request.kind == MediaKind::Edit {
+        if request.provider_id == "local" && matches!(request.model.as_str(), "ffmpeg-subtitle" | "ffmpeg-edit") {
+            return start(app, request).await;
+        }
+        return Err("本地剪辑只使用 local/ffmpeg-subtitle 或 local/ffmpeg-edit".into());
+    }
     let allowed = {
         let state = app.state::<AppState>();
         let settings = state.settings_read();
@@ -826,6 +838,8 @@ pub(crate) async fn start_configured(
             MediaKind::Video => &settings.workbench_media.video_models,
             MediaKind::Speech => &settings.workbench_media.speech_models,
             MediaKind::Transcribe => &settings.workbench_media.transcribe_models,
+            MediaKind::Edit => return Err("本地剪辑不走云模型池".into()),
+            MediaKind::Text => return Err("文案记录不走图片模型池".into()),
         };
         pool.iter()
             .any(|m| m.provider_id == request.provider_id && m.model == request.model)
@@ -842,7 +856,11 @@ pub fn request_hash(request: &MediaRequest) -> Result<String, String> {
 
 pub fn local_provider() -> ModelProvider {
     serde_json::from_value(json!({"id":"local","name":"系统本地媒体","baseUrl":"","enabled":true,
-        "availableModels":["whisperx-small","system-tts"],"enabledModels":["whisperx-small","system-tts"],"apiKeys":[]})).expect("local model provider")
+        "availableModels":["whisperx-small","system-tts","ffmpeg-subtitle","ffmpeg-edit","record"],"enabledModels":["whisperx-small","system-tts","ffmpeg-subtitle","ffmpeg-edit","record"],"apiKeys":[]})).expect("local model provider")
+}
+
+pub(crate) fn text_record_description(provider: &ModelProvider, model: &str) -> model_parameters::ModelDescription {
+    model_parameters::finish(provider, model, MediaKind::Text, BTreeMap::new(), vec![], true, Some(1), false)
 }
 
 pub(crate) fn transcribe_configured(provider: &ModelProvider, model: &str) -> bool {
@@ -1130,6 +1148,261 @@ pub async fn install_local_asr(config:local_asr::LocalAsrConfig)->Result<local_a
 pub async fn cancel_local_asr_install(operation_id:String)->Result<local_asr::LocalAsrStatus,String> {local_asr::cancel_install(&operation_id).await}
 #[tauri::command]
 pub async fn stop_local_asr()->Result<local_asr::LocalAsrStopResult,String> {local_asr::stop().await}
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RecordOutputRequest {
+    pub origin: String,
+    pub title: String,
+    pub text: String,
+    pub prompt: Option<String>,
+}
+
+pub(crate) fn record_text_output(
+    _app: &AppHandle,
+    request: RecordOutputRequest,
+) -> Result<MediaTask, String> {
+    record_text_at(&root()?, request)
+}
+
+fn record_text_at(root: &Path, request: RecordOutputRequest) -> Result<MediaTask, String> {
+    if request.origin.trim().is_empty() || request.title.trim().is_empty() || request.text.trim().is_empty() {
+        return Err("文案记录缺少来源、标题或正文".into());
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = directory(root, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("output.md");
+    std::fs::write(&path, request.text.as_bytes()).map_err(|e| e.to_string())?;
+    let task = StoredTask {
+        task: MediaTask {
+            id,
+            provider_id: "local".into(),
+            model: "record".into(),
+            kind: MediaKind::Text,
+            status: MediaStatus::Succeeded,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            error: None,
+            remote_id: None,
+            outputs: vec![MediaOutput {
+                path: path.to_string_lossy().into_owned(),
+                mime: "text/markdown".into(),
+            }],
+            can_resume: false,
+            submission_state: None,
+            origin: Some(request.origin),
+            prompt: request.prompt.unwrap_or_default(),
+            result: Some(json!({ "title": request.title })),
+            request_hash: None,
+            cancellation: None,
+        },
+        base_url: String::new(),
+        protocol: "local".into(),
+        download_url: None,
+        download_requires_auth: false,
+        accepted_at: None,
+    };
+    save(root, &task)?;
+    Ok(task.task)
+}
+
+#[tauri::command]
+pub fn record_media_output(app: AppHandle, request: RecordOutputRequest) -> Result<MediaTask, String> {
+    record_text_output(&app, request)
+}
+
+fn classify_import(source: &Path) -> Result<(MediaKind, String), String> {
+    let ext = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let (kind, mime) = match ext.as_str() {
+        "png" => (MediaKind::Image, "image/png"),
+        "jpg" | "jpeg" => (MediaKind::Image, "image/jpeg"),
+        "webp" => (MediaKind::Image, "image/webp"),
+        "gif" => (MediaKind::Image, "image/gif"),
+        "mp4" => (MediaKind::Video, "video/mp4"),
+        "webm" => (MediaKind::Video, "video/webm"),
+        "mov" => (MediaKind::Video, "video/quicktime"),
+        "mp3" => (MediaKind::Speech, "audio/mpeg"),
+        "wav" => (MediaKind::Speech, "audio/wav"),
+        "m4a" => (MediaKind::Speech, "audio/mp4"),
+        "srt" => (MediaKind::Transcribe, "application/x-subrip"),
+        "md" | "markdown" | "txt" => (MediaKind::Text, "text/markdown"),
+        _ => return Err(format!("不支持导入这种文件：{ext}")),
+    };
+    Ok((kind, mime.into()))
+}
+
+fn import_title(source: &Path, title: Option<String>) -> String {
+    if let Some(title) = title {
+        let trimmed = title.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("导入文件")
+        .to_string()
+}
+
+fn import_artifact_at(root: &Path, origin: String, source: &Path, title: Option<String>) -> Result<MediaTask, String> {
+    if origin.trim().is_empty() {
+        return Err("导入缺少来源".into());
+    }
+    if !source.is_absolute() {
+        return Err("只能导入绝对路径上的文件".into());
+    }
+    if !source.is_file() {
+        return Err("找不到要导入的文件".into());
+    }
+    let (kind, mime) = classify_import(source)?;
+    let title = import_title(source, title);
+    if kind == MediaKind::Text {
+        let text = std::fs::read_to_string(source).map_err(|error| format!("文案不是 UTF-8：{error}"))?;
+        return record_text_at(root, RecordOutputRequest {
+            origin,
+            title,
+            text,
+            prompt: Some(source.display().to_string()),
+        });
+    }
+    let file_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or("文件名无效")?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let dir = directory(root, &id)?;
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let dest = dir.join(file_name);
+    std::fs::copy(source, &dest).map_err(|error| error.to_string())?;
+    let task = StoredTask {
+        task: MediaTask {
+            id,
+            provider_id: "local".into(),
+            model: "import".into(),
+            kind,
+            status: MediaStatus::Succeeded,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            error: None,
+            remote_id: None,
+            outputs: vec![MediaOutput {
+                path: dest.to_string_lossy().into_owned(),
+                mime,
+            }],
+            can_resume: false,
+            submission_state: None,
+            origin: Some(origin),
+            prompt: file_name.to_string(),
+            result: Some(json!({ "title": title })),
+            request_hash: None,
+            cancellation: None,
+        },
+        base_url: String::new(),
+        protocol: "local".into(),
+        download_url: None,
+        download_requires_auth: false,
+        accepted_at: None,
+    };
+    save(root, &task)?;
+    Ok(task.task)
+}
+
+fn export_output_at(root: &Path, id: &str, destination: &Path) -> Result<String, String> {
+    uuid::Uuid::parse_str(id).map_err(|_| "无效任务编号")?;
+    if ACTIVE.lock().contains(id) {
+        return Err("任务仍在运行，不能导出".into());
+    }
+    let saved = read(root, id)?;
+    if saved.task.status == MediaStatus::Running {
+        return Err("任务仍在运行，不能导出".into());
+    }
+    let output = saved.task.outputs.first().ok_or("没有可导出的文件")?;
+    let source = PathBuf::from(&output.path);
+    if !source.is_file() {
+        return Err("导出的文件不存在".into());
+    }
+    if !destination.is_absolute() {
+        return Err("导出位置必须是绝对路径".into());
+    }
+    if destination == source {
+        return Ok(source.to_string_lossy().into_owned());
+    }
+    if let Some(parent) = destination.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+    }
+    std::fs::copy(&source, destination).map_err(|error| error.to_string())?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub fn import_media_artifact(origin: String, path: String, title: Option<String>) -> Result<MediaTask, String> {
+    import_artifact_at(&root()?, origin, Path::new(&path), title)
+}
+
+#[tauri::command]
+pub fn export_media_output(id: String, destination: String) -> Result<String, String> {
+    export_output_at(&root()?, &id, Path::new(destination.trim()))
+}
+
+#[tauri::command]
+pub fn delete_media_task(id: String) -> Result<(), String> {
+    uuid::Uuid::parse_str(&id).map_err(|_| "无效任务编号")?;
+    if ACTIVE.lock().contains(&id) {
+        return Err("任务仍在运行，不能删除".into());
+    }
+    let media = read(&root()?, &id).ok();
+    if media.as_ref().is_some_and(|task| task.task.status == MediaStatus::Running) {
+        return Err("任务仍在运行，不能删除".into());
+    }
+    let comfy = comfyui::root().ok().and_then(|root| comfyui::read_task(&root, &id).ok());
+    if comfy.as_ref().is_some_and(|task| {
+        matches!(
+            task.status,
+            comfyui::ComfyTaskStatus::Submitting
+                | comfyui::ComfyTaskStatus::Queued
+                | comfyui::ComfyTaskStatus::Running
+                | comfyui::ComfyTaskStatus::DownloadPending
+        )
+    }) {
+        return Err("任务仍在运行，不能删除".into());
+    }
+    if media.is_none() && comfy.is_none() {
+        return Err(format!("找不到任务 {id}"));
+    }
+    if media.is_some() {
+        std::fs::remove_dir_all(directory(&root()?, &id)?).map_err(|error| error.to_string())?;
+    }
+    if comfy.is_some() {
+        if let Ok(comfy_root) = comfyui::root() {
+            let dir = comfy_root.join(&id);
+            if dir.exists() {
+                std::fs::remove_dir_all(dir).map_err(|error| error.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn delete_saved(root: &Path, id: &str) -> Result<(), String> {
+    uuid::Uuid::parse_str(id).map_err(|_| "无效任务编号")?;
+    if ACTIVE.lock().contains(id) {
+        return Err("任务仍在运行，不能删除".into());
+    }
+    let saved = read(root, id)?;
+    if saved.task.status == MediaStatus::Running {
+        return Err("任务仍在运行，不能删除".into());
+    }
+    std::fs::remove_dir_all(directory(root, id)?).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub async fn start_media_generation(
     app: AppHandle,
@@ -1621,6 +1894,16 @@ pub fn get_media_task(
 }
 // Caller holds the task claim. Recovery never repeats an uncertain or completed paid POST.
 fn recover_task(root: &Path, saved: &mut StoredTask, resume: bool) -> Result<(), String> {
+    if local_edit::is_local_edit_protocol(&saved.protocol) && !matches!(saved.task.status, MediaStatus::Succeeded | MediaStatus::Cancelled) {
+        if saved.task.status == MediaStatus::Running {
+            saved.task.status = MediaStatus::Failed;
+            saved.task.error = Some("本地处理已中断，可重新开始；未调用云服务".into());
+            saved.task.submission_state = Some(MediaSubmissionState::Rejected);
+        }
+        saved.task.can_resume = false;
+        save(root,saved)?;
+        return Ok(());
+    }
     if saved.protocol == "system_tts" && !matches!(saved.task.status, MediaStatus::Succeeded | MediaStatus::Cancelled) {
         if saved.task.status == MediaStatus::Running {
             saved.task.status = MediaStatus::Failed;
@@ -1757,6 +2040,41 @@ pub(crate) async fn tool_call(
     name: &str,
     args: Value,
 ) -> Result<crate::mcp::types::McpToolCallResult, String> {
+    if name == "mixer_process_video" {
+        let operation = args.get("operation").and_then(Value::as_str).ok_or("需要 operation")?;
+        let (model, options) = match operation {
+            "subtitle" => {
+                let mut options = BTreeMap::new();
+                options.insert("video".into(), json!(args.get("video").and_then(Value::as_str).ok_or("需要 video")?));
+                options.insert("language".into(), json!(args.get("language").and_then(Value::as_str).ok_or("需要 language")?));
+                if let Some(burn) = args.get("burn") {
+                    options.insert("burn".into(), burn.clone());
+                }
+                (local_edit::MODEL_SUBTITLE, options)
+            }
+            "edit" => {
+                let mut options = BTreeMap::new();
+                options.insert("plan".into(), args.get("plan").cloned().ok_or("需要 plan")?);
+                (local_edit::MODEL_EDIT, options)
+            }
+            _ => return Err("operation 只能是 subtitle 或 edit".into()),
+        };
+        let task = start(
+            app,
+            MediaRequest {
+                provider_id: "local".into(),
+                model: model.into(),
+                kind: MediaKind::Edit,
+                prompt: String::new(),
+                images: vec![],
+                options,
+                origin: Some("chat".into()),
+                description_revision: None,
+            },
+        )
+        .await?;
+        return Ok(tool_result(task));
+    }
     if name == "mixer_media_task" {
         let id = args["id"].as_str().ok_or("需要任务编号")?;
         get_media_task(app.clone(), id.into(), args["resume"].as_bool())?;
@@ -1801,6 +2119,78 @@ pub(crate) async fn tool_call(
 mod tests {
     use super::*;
     use std::io::{Read, Write};
+    #[test]
+    fn workbench_local_text_record_create_list_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let task = record_text_at(root, RecordOutputRequest {
+            origin: "workbench/posts".into(),
+            title: "上新标题".into(),
+            text: "正文与标签".into(),
+            prompt: Some("brief".into()),
+        }).unwrap();
+        assert_eq!(task.kind, MediaKind::Text);
+        assert_eq!(task.status, MediaStatus::Succeeded);
+        assert_eq!(task.result.as_ref().unwrap()["title"], "上新标题");
+        assert_eq!(std::fs::read_to_string(root.join(&task.id).join("output.md")).unwrap(), "正文与标签");
+        let listed: Vec<_> = std::fs::read_dir(root).unwrap().flatten().filter_map(|entry| read(root, &entry.file_name().to_string_lossy()).ok()).filter(|saved| MediaTaskFilter { origin: Some("workbench/posts".into()), ..Default::default() }.matches(&saved.task)).collect();
+        assert_eq!(listed.len(), 1);
+        let mut running = read(root, &task.id).unwrap();
+        running.task.id = uuid::Uuid::new_v4().to_string();
+        running.task.status = MediaStatus::Running;
+        save(root, &running).unwrap();
+        assert!(delete_saved(root, &running.task.id).unwrap_err().contains("运行"));
+        assert!(read(root, &running.task.id).is_ok());
+        delete_saved(root, &task.id).unwrap();
+        assert!(read(root, &task.id).is_err());
+    }
+    #[test]
+    fn workbench_local_import_and_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let source = dir.path().join("photo.png");
+        std::fs::write(&source, b"png-bytes").unwrap();
+        assert!(import_artifact_at(root, "  ".into(), &source, None).is_err());
+        assert!(import_artifact_at(root, "workbench/assets".into(), Path::new("photo.png"), None).is_err());
+        let task = import_artifact_at(root, "workbench/assets".into(), &source, None).unwrap();
+        assert_eq!(task.kind, MediaKind::Image);
+        assert_eq!(task.status, MediaStatus::Succeeded);
+        assert_eq!(task.model, "import");
+        assert_eq!(task.origin.as_deref(), Some("workbench/assets"));
+        assert_eq!(std::fs::read(&task.outputs[0].path).unwrap(), b"png-bytes");
+        let dest = dir.path().join("out").join("copy.png");
+        let exported = export_output_at(root, &task.id, &dest).unwrap();
+        assert_eq!(std::fs::read(exported).unwrap(), b"png-bytes");
+        let mut running = read(root, &task.id).unwrap();
+        running.task.status = MediaStatus::Running;
+        save(root, &running).unwrap();
+        assert!(export_output_at(root, &task.id, &dir.path().join("blocked.png")).unwrap_err().contains("运行"));
+        let note = dir.path().join("note.md");
+        std::fs::write(&note, "# 标题\n正文").unwrap();
+        let text = import_artifact_at(root, "workbench/assets".into(), &note, Some("标题".into())).unwrap();
+        assert_eq!(text.kind, MediaKind::Text);
+        assert_eq!(text.model, "record");
+        assert_eq!(std::fs::read_to_string(root.join(&text.id).join("output.md")).unwrap(), "# 标题\n正文");
+        let bin = dir.path().join("payload.exe");
+        std::fs::write(&bin, b"x").unwrap();
+        assert!(import_artifact_at(root, "workbench/assets".into(), &bin, None).unwrap_err().contains("不支持导入"));
+        assert!(import_artifact_at(root, "workbench/assets".into(), &dir.path().join("missing.png"), None).is_err());
+    }
+    #[test]
+    fn workbench_local_edit_recovery_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("media-tasks");
+        let (_, mut saved, _) = fixture("http://127.0.0.1:1", MediaKind::Edit);
+        saved.protocol = "ffmpeg_edit".into();
+        saved.task.status = MediaStatus::Running;
+        saved.task.model = "ffmpeg-edit".into();
+        save(&root, &saved).unwrap();
+        recover_task(&root, &mut saved, false).unwrap();
+        assert_eq!(saved.task.status, MediaStatus::Failed);
+        assert_eq!(saved.task.submission_state, Some(MediaSubmissionState::Rejected));
+        assert!(!saved.task.can_resume);
+        assert!(saved.task.error.unwrap().contains("本地处理已中断"));
+    }
     #[test]
     fn resumed_synthesized_speech_cannot_be_cancelled_as_unsent_or_lose_paid_output() {
         let data=tempfile::tempdir().unwrap();

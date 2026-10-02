@@ -613,6 +613,46 @@ pub(crate) async fn open_local_file(
     app.shell().open(path_str, None).map_err(|e| e.to_string())
 }
 
+/// Copy a task SRT to a user-chosen path. Source must stay inside app data.
+#[tauri::command]
+pub async fn export_subtitle_file(source: String, destination: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || export_subtitle_file_at(&source, &destination))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+pub(crate) fn export_subtitle_file_at(source: &str, destination: &str) -> Result<String, String> {
+    let source = std::path::PathBuf::from(source);
+    let destination = std::path::PathBuf::from(destination);
+    if !source.is_absolute() || !destination.is_absolute() {
+        return Err("路径必须是绝对路径".into());
+    }
+    let srt = |path: &std::path::Path| {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("srt"))
+    };
+    if !srt(&source) || !srt(&destination) {
+        return Err("只能导出 .srt 字幕".into());
+    }
+    let root = crate::app_data::app_data_dir()
+        .ok_or("无应用数据目录")?
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let real = source.canonicalize().map_err(|_| "找不到字幕文件".to_string())?;
+    if !real.starts_with(&root) || !real.is_file() {
+        return Err("只能导出本机任务里的字幕".into());
+    }
+    if destination.canonicalize().ok().as_ref() == Some(&real) {
+        return Err("导出目标不能是原文件".into());
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::copy(&real, &destination).map_err(|e| format!("导出字幕失败：{e}"))?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
 /// data URL → 临时文件名（只保留 basename，挡住 `../` 与目录分隔符）。
 fn temp_file_name_from_artifact_name(name: &str) -> String {
     let base = name
@@ -1299,6 +1339,14 @@ mod tests {
     use super::CONNECTION_TEST_PROMPT;
     use crate::settings::ProviderApiFormat;
     use serde_json::json;
+
+    #[test]
+    fn subtitle_export_rejects_a_non_srt_before_copying() {
+        let relative = super::export_subtitle_file_at("notes.srt", "/tmp/out.srt").unwrap_err();
+        assert!(relative.contains("绝对路径"));
+        let video = super::export_subtitle_file_at("/tmp/clip.mp4", "/tmp/out.srt").unwrap_err();
+        assert!(video.contains(".srt"));
+    }
 
     /// 旧 artifact（无 path）落临时文件时的文件名清洗：只取 basename，挡目录穿越。
     /// 扩展名闸门与本地文件链接共用 `ensure_openable_extension`——落盘后同样是「交给默认程序」。
