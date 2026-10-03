@@ -16,6 +16,7 @@ export type WorkbenchIcon = (props: { size?: number; className?: string }) => Re
 export interface WorkbenchGroupDef {
   id: string
   label: (t: I18n) => string
+  description: (t: I18n) => string
   icon: WorkbenchIcon
 }
 
@@ -30,14 +31,14 @@ export interface WorkbenchFeatureDef {
 }
 
 export const WORKBENCH_GROUPS = [
-  { id: 'commerce', label: (t) => t.workbenchGroupCommerce, icon: Store },
-  { id: 'sourcing', label: (t) => t.workbenchGroupSourcing, icon: TrendingUp },
-  { id: 'copy', label: (t) => t.workbenchGroupCopy, icon: FileText },
-  { id: 'image', label: (t) => t.workbenchGroupImage, icon: Image },
-  { id: 'video', label: (t) => t.workbenchGroupVideo, icon: Video },
-  { id: 'publish', label: (t) => t.workbenchGroupPublish, icon: Share2 },
-  { id: 'content', label: (t) => t.workbenchGroupContent, icon: FolderOpen },
-  { id: 'stats', label: (t) => t.workbenchGroupStats, icon: History },
+  { id: 'commerce', label: (t) => t.workbenchGroupCommerce, description: (t) => t.workbenchGroupCommerceDesc, icon: Store },
+  { id: 'sourcing', label: (t) => t.workbenchGroupSourcing, description: (t) => t.workbenchGroupSourcingDesc, icon: TrendingUp },
+  { id: 'copy', label: (t) => t.workbenchGroupCopy, description: (t) => t.workbenchGroupCopyDesc, icon: FileText },
+  { id: 'image', label: (t) => t.workbenchGroupImage, description: (t) => t.workbenchGroupImageDesc, icon: Image },
+  { id: 'video', label: (t) => t.workbenchGroupVideo, description: (t) => t.workbenchGroupVideoDesc, icon: Video },
+  { id: 'publish', label: (t) => t.workbenchGroupPublish, description: (t) => t.workbenchGroupPublishDesc, icon: Share2 },
+  { id: 'content', label: (t) => t.workbenchGroupContent, description: (t) => t.workbenchGroupContentDesc, icon: FolderOpen },
+  { id: 'stats', label: (t) => t.workbenchGroupStats, description: (t) => t.workbenchGroupStatsDesc, icon: History },
 ] as const satisfies readonly WorkbenchGroupDef[]
 
 export type WorkbenchGroupId = (typeof WORKBENCH_GROUPS)[number]['id']

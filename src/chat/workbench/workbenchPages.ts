@@ -66,6 +66,7 @@ export interface WorkbenchNavEntry {
 export interface WorkbenchNavGroup {
   id: string
   label: (t: I18n) => string
+  description: (t: I18n) => string
   icon: WorkbenchGroupDef['icon']
   entries: readonly WorkbenchNavEntry[]
 }
@@ -79,6 +80,7 @@ export const WORKBENCH_NAV: {
   groups: WORKBENCH_GROUPS.map((group) => ({
     id: group.id,
     label: group.label,
+    description: group.description,
     icon: group.icon,
     entries: WORKBENCH_FEATURES
       .filter((feature) => feature.group === group.id)
