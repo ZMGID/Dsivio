@@ -556,7 +556,6 @@ pub fn run() {
             media_runtime::migration::legacy_video_outputs,
             comfyui::validate_comfy_workflow,
             comfyui::test_comfy_connection,
-            generation_workflow::check_workflow,
             generation_workflow::start_workflow_run,
             generation_workflow::list_workflow_runs,
             generation_workflow::cancel_workflow_run,
