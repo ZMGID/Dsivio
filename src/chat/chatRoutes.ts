@@ -43,6 +43,10 @@ export function isChatAutomationsPath(path: string): boolean {
   return chatRouteKind(path) === 'automations'
 }
 
+export function isChatSchedulesPath(path: string): boolean {
+  return chatRouteKind(path) === 'schedules'
+}
+
 /** `#chat/automations/{id}` 的 id；列表页返回 null。 */
 export function getRouteAutomationId(): string | null {
   const path = hashPath()
@@ -76,7 +80,7 @@ export function isChatArtifactsPath(path: string): boolean {
 
 /**
  * 从当前 hash 解析会话 id；非会话路由返回 null。
- * 中心页（settings / assistants / skill / mcp / notes / sessions / plugins / automations / …）一律排除。
+ * 中心页（settings / assistants / skill / mcp / notes / sessions / plugins / automations / schedules / …）一律排除。
  */
 export function getRouteConversationId(): string | null {
   return decodeConversationRouteId(hashPath())
@@ -101,7 +105,9 @@ export type ChatExtensionsNavItem =
   | 'knowledge'
   | 'notes'
   | 'automations'
+  | 'tasks'
   | 'artifacts'
+  | 'media'
   | 'workbench'
   | `workbench/${WorkbenchSubpageId}`
   | 'images'
@@ -118,13 +124,14 @@ export function extensionsNavItemForView(chatView: string): ChatExtensionsNavIte
     return 'workbench'
   }
   if (chatView === 'images' || chatView === 'videos' || chatView === 'market') return chatView
+  if (chatView === 'media') return 'media'
   if (chatView === 'artifacts') return 'artifacts'
   if (chatView === 'assistants') return 'assistants'
   if (chatView === 'skill') return 'market'
   if (chatView === 'mcp') return 'market'
   if (chatView === 'knowledge') return 'knowledge'
   if (chatView === 'notes') return 'notes'
-  if (chatView === 'automations') return 'automations'
+  if (chatView === 'automations' || chatView === 'schedules') return 'tasks'
   return null
 }
 

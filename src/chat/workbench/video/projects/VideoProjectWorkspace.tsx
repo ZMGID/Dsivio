@@ -1,3 +1,4 @@
+import { GenerationPlaceholder } from '../../../studio/GenerationPlaceholder'
 import type { ComponentType } from 'react'
 import type { VideoFormProps } from './VideoFormFields'
 import { VideoCreationForm } from './VideoCreationForm'
@@ -884,6 +885,7 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                       )}
                     </section>
                   )}
+                  {generationActive && !task?.output && <GenerationPlaceholder ratio={brief.ratio} label="正在生成视频…" />}
                   {task?.remote && (
                     <section className="vs-panel">
                       <h3>{videoTaskStatus(task)}</h3>
@@ -929,6 +931,15 @@ export default function VideoProjectWorkspace({ feature = 'creation', BriefForm 
                         {task.media && <p className="vs-muted">{task.media.width}×{task.media.height} · {task.media.duration.toFixed(2)} 秒 · {task.media.hasAudio ? '有音轨' : '无音轨'}</p>}
                         {previewError && <p role="status" className="vs-muted">{previewError}</p>}
                         <div className="vs-actions">
+                          <Button onClick={() => {
+                            const sourceBrief = structuredClone(brief)
+                            const sourceScript = script
+                            fresh(entry)
+                            setBrief(sourceBrief)
+                            setScript(sourceScript)
+                            setDirty(true)
+                            setStep(0)
+                          }}>复用参数创建新任务</Button>
                           <Button
                             onClick={() =>
                               void api.workbenchVideoOpen(task.id).catch(e => setError(String(e)))

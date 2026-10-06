@@ -26,3 +26,24 @@ it('does not submit a late file read after leaving the feature', async () => {
  await act(async () => { finish(request); await pending })
  expect(api.startMediaGeneration).not.toHaveBeenCalled()
 })
+
+it.each(['cancel', 'resume'] as const)('keeps late %s failures in their original scope until dismissed', async action => {
+  let reject!: (error: Error) => void
+  const failure = new Promise<never>((_, fail) => { reject = fail })
+  vi.spyOn(api, 'cancelMediaTask').mockReturnValue(failure)
+  vi.spyOn(api, 'getMediaTask').mockReturnValue(failure)
+  const view = renderHook(({ origin }) => useMediaGeneration({ origin }), { initialProps: { origin: `review/${action}` } })
+  await waitFor(() => expect(view.result.current.loading).toBe(false))
+  let pending!: Promise<unknown>
+  act(() => { pending = view.result.current[action]('task') })
+  view.rerender({ origin: 'review/other' })
+  await act(async () => { reject(new Error('cannot reach provider')); await pending })
+  expect(view.result.current.error).toBe('')
+  view.rerender({ origin: `review/${action}` })
+  expect(view.result.current.error).toContain('cannot reach provider')
+  act(() => view.result.current.refresh())
+  await waitFor(() => expect(view.result.current.loading).toBe(false))
+  expect(view.result.current.error).toContain('cannot reach provider')
+  act(() => view.result.current.setError(''))
+  expect(view.result.current.error).toBe('')
+})

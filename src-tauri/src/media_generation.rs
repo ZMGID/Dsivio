@@ -133,6 +133,54 @@ pub struct MediaRequest {
     #[ts(optional)]
     pub description_revision: Option<String>,
 }
+/// UI projection of the route-owned facts. Validation remains in model_parameters.
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaModelInfo {
+    pub revision: String,
+    pub complete: bool,
+    pub parameters: Vec<MediaParameter>,
+}
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaParameter {
+    pub key: String,
+    pub data_type: String,
+    pub required: bool,
+    #[ts(type = "Record<string, unknown>")]
+    pub facts: BTreeMap<String, Value>,
+}
+#[tauri::command]
+pub fn describe_media_model(app: AppHandle, provider_id: String, model: String, kind: MediaKind) -> Result<MediaModelInfo, String> {
+    let state = app.state::<AppState>();
+    let provider = provider(&state, &provider_id)?;
+    let description = model_parameters::describe(&provider, &model, &kind);
+    Ok(MediaModelInfo {
+        revision: description.facts_revision,
+        complete: description.facts_complete,
+        parameters: description.arguments.into_iter().map(|(key, argument)| MediaParameter {
+            key, data_type: serde_json::to_value(argument.data_type).unwrap().as_str().unwrap().to_owned(),
+            required: argument.required, facts: argument.facts,
+        }).collect(),
+    })
+}
+
+/// Read the original input for an explicit new draft, never resubmit an old receipt.
+#[tauri::command]
+pub fn media_task_request(id: String) -> Result<MediaRequest, String> {
+    uuid::Uuid::parse_str(&id).map_err(|_| "无效任务编号")?;
+    for root in [root()?, comfyui::root()?] {
+        let path = root.join(&id).join("reuse-request.json");
+        if path.exists() {
+            return serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?).map_err(|e| e.to_string());
+        }
+    }
+    Err("此历史任务未保存可复用参数，可复制提示词后重新选择模型".into())
+}
+fn save_reusable_request(root: &Path, id: &str, request: &MediaRequest) -> Result<(), String> {
+    voices::atomic_bytes(&root.join(id).join("reuse-request.json"), &serde_json::to_vec(request).map_err(|e| e.to_string())?)
+}
+
 /// Cloud image options. ComfyUI uses declared workflow inputs instead.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -265,7 +313,7 @@ fn mime(path: &str) -> String {
     }
     .into()
 }
-fn from_comfy(task: comfyui::ComfyTask) -> MediaTask {
+pub(crate) fn from_comfy(task: comfyui::ComfyTask) -> MediaTask {
     use comfyui::ComfyTaskStatus as S;
     let request_hash = comfyui::root().ok().and_then(|root| std::fs::read_to_string(root.join(&task.id).join("request-hash.txt")).ok());
     MediaTask {
@@ -739,6 +787,7 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
         let values = comfy_values(&p, &flow, &request)?;
         let id = uuid::Uuid::new_v4().to_string();
         let guard = claim(&id).ok_or("任务已运行")?;
+        save_reusable_request(&comfyui::root()?, &id, &request)?;
         if let Some(hash) = &request_hash {
             voices::atomic_bytes(&comfyui::root()?.join(&id).join("request-hash.txt"),hash.as_bytes())?;
         }
@@ -759,6 +808,7 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
         }
         return Ok(task);
     }
+    let mut reusable_request = request.clone();
     validate_request(&p, &mut request)?;
     if request.prompt.trim().is_empty() {
         return Err("请填写提示词".into());
@@ -789,6 +839,15 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
             .collect();
         "image".into()
     };
+    // Preserve the submitted image bytes for reuse even if an original local file moves.
+    reusable_request.images = request.images.clone();
+    for key in ["firstFrame", "lastFrame", "referenceImages"] {
+        if reusable_request.options.contains_key(key) {
+            if let Some(value) = request.options.get(key).filter(|value| !value.is_null()) {
+                reusable_request.options.insert(key.into(), if value.is_string() { json!([value]) } else { value.clone() });
+            }
+        }
+    }
     let task = StoredTask {
         task: MediaTask {
             id: uuid::Uuid::new_v4().to_string(),
@@ -815,6 +874,7 @@ pub(crate) async fn start(app: &AppHandle, mut request: MediaRequest) -> Result<
         accepted_at: None,
     };
     let guard = claim(&task.task.id).ok_or("任务已运行")?;
+    save_reusable_request(&root()?, &task.task.id, &reusable_request)?;
     save(&root()?, &task)?;
     register_control(&task.task.id);
     spawn_background(app.clone(), task.task.id.clone(), Some(request), guard);
@@ -1312,16 +1372,16 @@ fn import_artifact_at(root: &Path, origin: String, source: &Path, title: Option<
     Ok(task.task)
 }
 
+#[cfg(test)]
 fn export_output_at(root: &Path, id: &str, destination: &Path) -> Result<String, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "无效任务编号")?;
-    if ACTIVE.lock().contains(id) {
+    export_task_output(&read(root, id)?.task, destination, 0)
+}
+fn export_task_output(task: &MediaTask, destination: &Path, index: usize) -> Result<String, String> {
+    if ACTIVE.lock().contains(&task.id) || task.status == MediaStatus::Running {
         return Err("任务仍在运行，不能导出".into());
     }
-    let saved = read(root, id)?;
-    if saved.task.status == MediaStatus::Running {
-        return Err("任务仍在运行，不能导出".into());
-    }
-    let output = saved.task.outputs.first().ok_or("没有可导出的文件")?;
+    let output = task.outputs.get(index).ok_or("没有可导出的文件")?;
     let source = PathBuf::from(&output.path);
     if !source.is_file() {
         return Err("导出的文件不存在".into());
@@ -1347,8 +1407,9 @@ pub fn import_media_artifact(origin: String, path: String, title: Option<String>
 }
 
 #[tauri::command]
-pub fn export_media_output(id: String, destination: String) -> Result<String, String> {
-    export_output_at(&root()?, &id, Path::new(destination.trim()))
+pub fn export_media_output(app: AppHandle, id: String, destination: String, index: Option<usize>) -> Result<String, String> {
+    let task = get_media_task(app, id, None)?;
+    export_task_output(&task, Path::new(destination.trim()), index.unwrap_or(0))
 }
 
 #[tauri::command]
@@ -1377,13 +1438,15 @@ pub fn delete_media_task(id: String) -> Result<(), String> {
         return Err(format!("找不到任务 {id}"));
     }
     if media.is_some() {
-        std::fs::remove_dir_all(directory(&root()?, &id)?).map_err(|error| error.to_string())?;
+        let data_root = root()?;
+        crate::chat::artifacts::delete_media_job_in(&data_root.with_file_name("artifacts"), &data_root, &id)?;
     }
     if comfy.is_some() {
         if let Ok(comfy_root) = comfyui::root() {
             let dir = comfy_root.join(&id);
             if dir.exists() {
-                std::fs::remove_dir_all(dir).map_err(|error| error.to_string())?;
+                let data_root = root()?;
+                crate::chat::artifacts::delete_media_job_in(&data_root.with_file_name("artifacts"), &comfy_root, &id)?;
             }
         }
     }
@@ -1400,7 +1463,7 @@ fn delete_saved(root: &Path, id: &str) -> Result<(), String> {
     if saved.task.status == MediaStatus::Running {
         return Err("任务仍在运行，不能删除".into());
     }
-    std::fs::remove_dir_all(directory(root, id)?).map_err(|error| error.to_string())
+    crate::chat::artifacts::delete_media_job_in(&root.join("artifacts"), root, id)
 }
 
 #[tauri::command]
@@ -2143,6 +2206,38 @@ mod tests {
         assert!(read(root, &running.task.id).is_ok());
         delete_saved(root, &task.id).unwrap();
         assert!(read(root, &task.id).is_err());
+    }
+    #[test]
+    fn reusable_media_input_keeps_canonical_parameters_without_provider_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let request = MediaRequest {
+            provider_id: "provider".into(), model: "image-model".into(), kind: MediaKind::Image,
+            prompt: "product photo".into(), images: vec!["/tmp/reference.png".into()],
+            options: BTreeMap::from([("aspectRatio".into(), json!("16:9"))]),
+            origin: Some("media-station".into()), description_revision: Some("revision".into()),
+        };
+        save_reusable_request(dir.path(), &id, &request).unwrap();
+        let stored: Value = serde_json::from_slice(&std::fs::read(dir.path().join(id).join("reuse-request.json")).unwrap()).unwrap();
+        assert_eq!(stored, serde_json::to_value(&request).unwrap());
+        assert!(stored.get("apiKey").is_none());
+        assert!(stored.get("baseUrl").is_none());
+        assert!(media_task_request("../invalid".into()).is_err());
+    }
+    #[test]
+    fn export_selects_requested_output_and_rejects_out_of_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first.png");
+        let second = dir.path().join("second.png");
+        std::fs::write(&first, b"first").unwrap();
+        std::fs::write(&second, b"second").unwrap();
+        let mut task = import_artifact_at(dir.path(), "media-station".into(), &first, None).unwrap();
+        task.outputs.push(MediaOutput { path: second.to_string_lossy().into(), mime: "image/png".into() });
+        let destination = dir.path().join("exported.png");
+        export_task_output(&task, &destination, 1).unwrap();
+        assert_eq!(std::fs::read(&destination).unwrap(), b"second");
+        assert!(export_task_output(&task, &destination, 2).is_err());
+        assert!(export_task_output(&task, Path::new("relative.png"), 0).is_err());
     }
     #[test]
     fn workbench_local_import_and_export() {

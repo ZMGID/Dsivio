@@ -253,7 +253,7 @@ fn validate_resources(app: &AppHandle, flow: &GenerationWorkflow) -> Result<(), 
                 .get_provider(&model.provider_id)
                 .ok_or("模型提供商不存在")?;
             if !provider.enabled
-                || !provider.has_credentials()
+                || !provider.authentication_ready()
                 || !provider.enabled_models.contains(&model.model)
             {
                 return Err(format!("{}：模型不可用，请重选", node.title));

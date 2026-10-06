@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Database, RefreshCw, Trash2 } from 'lucide-react'
 import {
   api,
@@ -11,10 +11,11 @@ import {
 import { Button } from '../components/Button'
 import { Input, Select, SettingsGroup } from './components'
 import { confirmDialog } from '../components/dialogQueue'
+import { useDocumentDark } from '../theme/useDocumentDark'
 
 type UsageView = 'logs' | 'providers' | 'models'
 
-type UsageStatsPanelProps = {
+export type UsageStatsPanelProps = {
   lang: string
   view: 'app' | 'calls'
 }
@@ -218,18 +219,23 @@ function smoothPath(coords: { x: number; y: number }[]): string {
 function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string }) {
   const [hidden, setHidden] = useState<Set<string>>(() => new Set())
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
-  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  const isDark = useDocumentDark()
 
-  const WIDTH = 640
-  const HEIGHT = 168
-  const PAD_L = 8
-  const PAD_R = 8
-  const PAD_T = 16
-  const PAD_B = 8
+  const gradientId = useId()
+  const WIDTH = 760
+  const HEIGHT = 240
+  const PAD_L = 56
+  const PAD_R = 48
+  const PAD_T = 28
+  const PAD_B = 12
 
   const geom = useMemo(() => {
     const visible = TREND_SERIES.filter(series => !hidden.has(series.key))
-    const maxTokens = Math.max(1, ...points.flatMap(point => visible.map(series => point[series.key])))
+    const peak = Math.max(4, ...points.flatMap(point => visible.map(series => point[series.key])))
+    // Leave headroom and use readable quarter ticks without changing the underlying values.
+    const magnitude = 10 ** Math.floor(Math.log10(peak / 4))
+    const tickStep = Math.ceil(peak / 4 / magnitude) * magnitude
+    const maxTokens = tickStep * 4
     const step = points.length > 1 ? (WIDTH - PAD_L - PAD_R) / (points.length - 1) : 0
     const plotH = HEIGHT - PAD_T - PAD_B
     // 单点(如单日区间)居中,否则从左轴按步长铺开
@@ -285,51 +291,47 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
   const hoverPoint = hoverIndex != null ? points[hoverIndex] : null
   const hoverRate = hoverPoint ? trendHitRate(hoverPoint) : null
   const rateHidden = hidden.has('hitRate')
-  const gridYs = [0, 0.5, 1].map(fraction => PAD_T + geom.plotH - fraction * geom.plotH)
+  const gridYs = [0, 0.25, 0.5, 0.75, 1].map(fraction => PAD_T + geom.plotH - fraction * geom.plotH)
   // tooltip 靠左半边时显示在指针右侧，反之左侧，避免出界。
   const tooltipLeftPct = hoverIndex != null ? (geom.x(hoverIndex) / WIDTH) * 100 : 0
   const tooltipFlip = tooltipLeftPct > 55
 
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-center gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-1">
         {TREND_SERIES.map(series => (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             key={series.key}
             type="button"
             onClick={() => toggleSeries(series.key)}
             data-tauri-drag-region="false"
-            className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-opacity ${
-              hidden.has(series.key)
-                ? 'border-[var(--border)] text-[var(--text-faint)] opacity-55'
-                : 'border-[var(--border)] text-[var(--text-muted)]'
-            }`}
+            aria-pressed={!hidden.has(series.key)}
           >
             <span
-              className="h-2 w-2 rounded-full"
+              className={`h-2 w-2 rounded-full ${hidden.has(series.key) ? 'opacity-30' : ''}`}
               style={{ backgroundColor: isDark ? series.darkStroke : series.stroke }}
             />
             {lang === 'zh' ? series.labelZh : series.labelEn}
-          </button>
+          </Button>
         ))}
-        <button
+        <Button
+          variant="ghost"
+          size="sm"
           type="button"
           onClick={() => toggleSeries('hitRate')}
           data-tauri-drag-region="false"
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] transition-opacity ${
-            rateHidden
-              ? 'border-[var(--border)] text-[var(--text-faint)] opacity-55'
-              : 'border-[var(--border)] text-[var(--text-muted)]'
-          }`}
+          aria-pressed={!rateHidden}
         >
           <span
-            className="h-0.5 w-3 rounded-full"
+            className={`h-0.5 w-3 rounded-full ${rateHidden ? 'opacity-30' : ''}`}
             style={{
               backgroundImage: `repeating-linear-gradient(90deg, ${isDark ? HIT_RATE_COLOR.darkStroke : HIT_RATE_COLOR.stroke} 0 3px, transparent 3px 5px)`,
             }}
           />
           {lang === 'zh' ? '缓存命中率' : 'Cache hit rate'}
-        </button>
+        </Button>
       </div>
       <div className="relative">
         <svg
@@ -337,10 +339,20 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
           className="block w-full overflow-visible"
           style={{ aspectRatio: `${WIDTH} / ${HEIGHT}` }}
           role="img"
-          aria-label="token usage trend"
+          aria-label={lang === 'zh' ? 'Token 用量趋势' : 'Token usage trend'}
           onMouseMove={onMove}
           onMouseLeave={() => setHoverIndex(null)}
         >
+          <defs>
+            {geom.seriesPaths.map(series => (
+              <linearGradient key={series.key} id={`${gradientId}-${series.key}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={isDark ? series.darkStroke : series.stroke} stopOpacity={isDark ? 0.18 : 0.12} />
+                <stop offset="100%" stopColor={isDark ? series.darkStroke : series.stroke} stopOpacity="0" />
+              </linearGradient>
+            ))}
+          </defs>
+          <text x={PAD_L} y="12" className="fill-[var(--text-faint)] text-[10px]">Tokens</text>
+          {!rateHidden && <text x={WIDTH - PAD_R} y="12" textAnchor="end" className="fill-[var(--text-faint)] text-[10px]">{lang === 'zh' ? '命中率' : 'Hit rate'}</text>}
           {gridYs.map(y => (
             <line
               key={y}
@@ -348,19 +360,20 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
               y1={y}
               x2={WIDTH - PAD_R}
               y2={y}
-              stroke="currentColor"
-              className="text-neutral-200 dark:text-neutral-800"
+              stroke="var(--theme-surface-border)"
               strokeWidth="1"
+              strokeDasharray={y === HEIGHT - PAD_B ? undefined : '3 5'}
+              vectorEffect="non-scaling-stroke"
             />
           ))}
           {/* 左轴 token 刻度 */}
-          {[0, 0.5, 1].map(fraction => (
+          {[0, 0.25, 0.5, 0.75, 1].map(fraction => (
             <text
               key={`l-${fraction}`}
-              x={PAD_L + 4}
-              y={PAD_T + geom.plotH - fraction * geom.plotH + (fraction === 1 ? 12 : -4)}
-              textAnchor="start"
-              className="fill-neutral-400 text-[10px] tabular-nums dark:fill-neutral-500"
+              x={PAD_L - 12}
+              y={PAD_T + geom.plotH - fraction * geom.plotH + 3}
+              textAnchor="end"
+              className="fill-[var(--text-faint)] text-[10px] tabular-nums"
             >
               {formatTokens(geom.maxTokens * fraction)}
             </text>
@@ -370,15 +383,17 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
             [0, 0.5, 1].map(fraction => (
               <text
                 key={`r-${fraction}`}
-                x={WIDTH - PAD_R - 4}
-                y={PAD_T + geom.plotH - fraction * geom.plotH + (fraction === 1 ? 12 : -4)}
-                textAnchor="end"
-                className="text-[10px] tabular-nums"
-                style={{ fill: isDark ? HIT_RATE_COLOR.darkStroke : HIT_RATE_COLOR.stroke }}
+                x={WIDTH - PAD_R + 12}
+                y={PAD_T + geom.plotH - fraction * geom.plotH + 3}
+                textAnchor="start"
+                className="fill-[var(--text-faint)] text-[10px] tabular-nums"
               >
                 {Math.round(fraction * 100)}%
               </text>
             ))}
+          {points.length > 1 && geom.seriesPaths.map(series => series.path && (
+            <path key={`area-${series.key}`} d={`${series.path} L ${geom.x(points.length - 1)} ${HEIGHT - PAD_B} L ${geom.x(0)} ${HEIGHT - PAD_B} Z`} fill={`url(#${gradientId}-${series.key})`} />
+          ))}
           {geom.seriesPaths.map(series =>
             series.path ? (
               <path
@@ -386,7 +401,8 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
                 d={series.path}
                 fill="none"
                 stroke={isDark ? series.darkStroke : series.stroke}
-                strokeWidth="2"
+                strokeWidth="2.25"
+                vectorEffect="non-scaling-stroke"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
@@ -408,8 +424,9 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
               d={geom.ratePath}
               fill="none"
               stroke={isDark ? HIT_RATE_COLOR.darkStroke : HIT_RATE_COLOR.stroke}
-              strokeWidth="2"
-              strokeDasharray="5 4"
+              strokeWidth="1.75"
+              vectorEffect="non-scaling-stroke"
+              strokeDasharray="4 5"
               strokeLinecap="round"
             />
           )}
@@ -419,8 +436,7 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
               y1={PAD_T}
               x2={geom.x(hoverIndex)}
               y2={PAD_T + geom.plotH}
-              stroke="currentColor"
-              className="text-neutral-300 dark:text-neutral-700"
+              stroke="var(--theme-surface-border-strong)"
               strokeWidth="1"
             />
           )}
@@ -432,21 +448,21 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
                 cy={geom.yTokens(points[hoverIndex][series.key])}
                 r="3"
                 fill={isDark ? series.darkStroke : series.stroke}
-                stroke={isDark ? '#0a0a0a' : '#ffffff'}
+                stroke="var(--theme-surface)"
                 strokeWidth="1.5"
               />
             ))}
         </svg>
         {hoverPoint && (
           <div
-            className="pointer-events-none absolute top-1 z-10 min-w-36 rounded-md border border-[var(--border)] bg-[var(--bg-input)] px-2.5 py-2 text-[11px] shadow-sm"
+            className="pointer-events-none absolute top-1 z-10 min-w-44 rounded-xl border border-[var(--border)] bg-[var(--bg-input)] px-3 py-2.5 text-[11px] shadow-lg"
             style={tooltipFlip ? { right: `${100 - tooltipLeftPct + 2}%` } : { left: `${tooltipLeftPct + 2}%` }}
           >
-            <div className="mb-1 font-medium text-neutral-800 dark:text-neutral-100">
+            <div className="mb-2 font-medium text-[var(--text)]">
               {hoverPoint.label} · {formatCount(hoverPoint.requests)} {lang === 'zh' ? '次' : 'req'}
             </div>
-            {TREND_SERIES.map(series => (
-              <div key={series.key} className="flex items-center justify-between gap-3 text-neutral-600 dark:text-neutral-300">
+            {TREND_SERIES.filter(series => !hidden.has(series.key)).map(series => (
+              <div key={series.key} className="flex items-center justify-between gap-3 text-[var(--text-muted)]">
                 <span className="inline-flex items-center gap-1.5">
                   <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: isDark ? series.darkStroke : series.stroke }} />
                   {lang === 'zh' ? series.labelZh : series.labelEn}
@@ -454,10 +470,10 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
                 <span className="tabular-nums">{formatTokens(hoverPoint[series.key])}</span>
               </div>
             ))}
-            <div className="flex items-center justify-between gap-3 text-neutral-600 dark:text-neutral-300">
+            {!rateHidden && <div className="flex items-center justify-between gap-3 text-[var(--text-muted)]">
               <span>{lang === 'zh' ? '命中率' : 'Hit rate'}</span>
               <span className="tabular-nums">{hoverRate == null ? '--' : formatPercent(hoverRate)}</span>
-            </div>
+            </div>}
             <div className="mt-0.5 flex items-center justify-between gap-3 border-t border-[var(--divider)] pt-0.5 text-[var(--text-muted)]">
               <span>{lang === 'zh' ? '成本' : 'Cost'}</span>
               <span className="tabular-nums">{formatCost(hoverPoint.costUsd)}</span>
@@ -466,16 +482,16 @@ function TrendChart({ points, lang }: { points: UsageTrendPoint[]; lang: string 
         )}
       </div>
       <div
-        className="relative mt-1 h-4 text-[10.5px] text-neutral-500 dark:text-neutral-500"
+        className="relative mt-2 h-4 text-[10.5px] text-[var(--text-muted)]"
         style={{ marginLeft: `${(PAD_L / WIDTH) * 100}%`, marginRight: `${(PAD_R / WIDTH) * 100}%` }}
       >
         {trendAxisLabels(points, lang).map(item => {
-          const shift = item.index === 0 ? '0' : item.index === points.length - 1 ? '-100%' : '-50%'
+          const shift = points.length === 1 ? '-50%' : item.index === 0 ? '0' : item.index === points.length - 1 ? '-100%' : '-50%'
           return (
             <span
               key={item.index}
               className="absolute whitespace-nowrap"
-              style={{ left: `${item.pct}%`, transform: `translateX(${shift})` }}
+              style={{ left: `${points.length === 1 ? 50 : item.pct}%`, transform: `translateX(${shift})` }}
             >
               {item.text}
             </span>
@@ -573,7 +589,7 @@ function donutArcPath(cx: number, cy: number, rOuter: number, rInner: number, st
 
 function ModelDonut({ rows, lang }: { rows: UsageGroupStats[]; lang: string }) {
   const [hover, setHover] = useState<number | null>(null)
-  const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
+  const isDark = useDocumentDark()
   const slices = useMemo(() => buildPieSlices(rows, isDark, lang), [rows, isDark, lang])
   const total = useMemo(() => slices.reduce((sum, slice) => sum + slice.value, 0), [slices])
 
@@ -645,14 +661,14 @@ function ModelDonut({ rows, lang }: { rows: UsageGroupStats[]; lang: string }) {
           >
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: slice.color }} />
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[12px] font-medium text-neutral-800 dark:text-neutral-100">{slice.label}</div>
-              <div className="truncate text-[10.5px] text-neutral-500 dark:text-neutral-500">
+              <div className="truncate text-[12px] font-medium text-neutral-800">{slice.label}</div>
+              <div className="truncate text-[10.5px] text-[var(--text-muted)]">
                 {formatTokens(slice.value)} tokens{slice.sub ? ` · ${slice.sub}` : ''}
               </div>
             </div>
             <div className="shrink-0 text-right">
-              <div className="text-[12px] tabular-nums text-neutral-800 dark:text-neutral-100">{formatPercent(slice.value / total)}</div>
-              <div className="text-[10.5px] tabular-nums text-neutral-500">{formatCost(slice.cost)}</div>
+              <div className="text-[12px] tabular-nums text-neutral-800">{formatPercent(slice.value / total)}</div>
+              <div className="text-[10.5px] tabular-nums text-[var(--text-muted)]">{formatCost(slice.cost)}</div>
             </div>
           </div>
         ))}
@@ -685,15 +701,15 @@ function GroupTable({ rows, lang, type }: { rows: UsageGroupStats[]; lang: strin
             <th className="px-3 py-2 font-semibold">{lang === 'zh' ? '最近' : 'Last'}</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+        <tbody className="divide-y divide-[var(--theme-surface-border)]">
           {rows.map(row => {
             const successRate = row.requestCount > 0 ? row.successCount / row.requestCount : 0
             return (
-              <tr key={row.id} className="text-neutral-800 dark:text-neutral-100">
+              <tr key={row.id} className="text-neutral-800">
                 <td className="max-w-[220px] px-3 py-2">
                   <div className="truncate font-medium">{row.label}</div>
                   {type === 'model' && row.providerName && (
-                    <div className="truncate text-[10.5px] text-neutral-500 dark:text-neutral-500">{row.providerName}</div>
+                    <div className="truncate text-[10.5px] text-[var(--text-muted)]">{row.providerName}</div>
                   )}
                 </td>
                 <td className="px-3 py-2 tabular-nums">{formatCount(row.requestCount)}</td>
@@ -738,7 +754,14 @@ function UsageSeg<T extends string>({ options, value, onChange }: {
   )
 }
 
-const ACTIVITY_LEVELS = ['#e7e5e4', '#d6e6f8', '#93c2f0', '#3b82d6', '#1d4f91']
+/// 0 档是空活动纸面；1–4 用 accent 混 surface，同明暗换色走 CSS，档差仍能分开。
+const ACTIVITY_LEVELS = [
+  'var(--theme-surface-muted)',
+  'color-mix(in srgb, var(--accent) 24%, var(--theme-surface))',
+  'color-mix(in srgb, var(--accent) 48%, var(--theme-surface))',
+  'color-mix(in srgb, var(--accent) 72%, var(--theme-surface))',
+  'color-mix(in srgb, var(--accent) 100%, var(--theme-surface))',
+]
 
 function dayKey(date: Date) {
   const y = date.getFullYear()
@@ -827,7 +850,7 @@ function TokenActivity({ points, lang }: { points: UsageTrendPoint[]; lang: stri
   }, [])
 
   return (
-    <section className="relative rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3">
+    <section className="relative rounded-xl border border-[var(--border)] bg-[var(--theme-surface)] px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="text-[13px] font-medium text-[var(--text)]">{zh ? 'Token 活动' : 'Token activity'}</div>
         <UsageSeg
@@ -860,7 +883,7 @@ function TokenActivity({ points, lang }: { points: UsageTrendPoint[]; lang: stri
                     className="aspect-square w-full rounded-[3px]"
                     style={{
                       backgroundColor: future ? 'transparent' : ACTIVITY_LEVELS[activityLevel(value, max)],
-                      boxShadow: selected ? '0 0 0 1px var(--bg), 0 0 0 2.5px #7eb6ea' : undefined,
+                      boxShadow: selected ? '0 0 0 1px var(--theme-surface), 0 0 0 2.5px var(--accent)' : undefined,
                       transform: selected ? 'scale(1.45)' : undefined,
                       position: selected ? 'relative' : undefined,
                       zIndex: selected ? 1 : undefined,
@@ -924,7 +947,7 @@ function LogsTable({ logs, lang }: { logs: UsageRecord[]; lang: string }) {
   return (
     <div className="divide-y divide-[var(--border)] rounded-md border border-[var(--border)] bg-[var(--bg-input)] text-[12px]">
       {logs.map(record => (
-        <div key={record.id} className="px-3 py-2 text-neutral-800 dark:text-neutral-100">
+        <div key={record.id} className="px-3 py-2 text-neutral-800">
           <div className="flex min-w-0 items-center gap-2">
             <span className="shrink-0 tabular-nums text-[var(--text-muted)]">{formatTime(record.createdAt, lang)}</span>
             <span className="shrink-0 font-medium">{sourceLabel(record.source, lang)}</span>
@@ -938,14 +961,14 @@ function LogsTable({ logs, lang }: { logs: UsageRecord[]; lang: string }) {
               {record.providerName || record.providerId}
               {record.operation ? ` · ${record.operation}` : ''}
             </span>
-            <span className="text-neutral-700 dark:text-neutral-200">{formatReasoningEffort(record.reasoningEffort)}</span>
+            <span className="text-neutral-700">{formatReasoningEffort(record.reasoningEffort)}</span>
             <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400" title={lang === 'zh' ? '输入 Token' : 'Input tokens'}>
               <ArrowDown aria-hidden="true" size={12} strokeWidth={1.8} />
-              <span className="text-neutral-800 dark:text-neutral-100">{formatOptionalTokens(record.inputTokens)}</span>
+              <span className="text-neutral-800">{formatOptionalTokens(record.inputTokens)}</span>
             </span>
             <span className="inline-flex items-center gap-1 text-violet-600 dark:text-violet-400" title={lang === 'zh' ? '输出 Token' : 'Output tokens'}>
               <ArrowUp aria-hidden="true" size={12} strokeWidth={1.8} />
-              <span className="text-neutral-800 dark:text-neutral-100">
+              <span className="text-neutral-800">
                 {record.source === 'knowledge_base' ? '--' : formatOptionalTokens(record.outputTokens)}
               </span>
             </span>
@@ -1149,7 +1172,7 @@ export function UsageStatsPanel({ lang, view }: UsageStatsPanelProps) {
       {viewMode === 'models' && <GroupTable rows={stats?.modelStats ?? []} lang={lang} type="model" />}
 
       {stats && viewMode === 'logs' && (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-neutral-500 dark:text-neutral-500">
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] text-[var(--text-muted)]">
           <span>
             {zh
               ? `显示 ${pageRangeLabel(logPageIndex, LOG_PAGE_SIZE, totalLogs)} 条`
@@ -1206,7 +1229,7 @@ export function UsageStatsPanel({ lang, view }: UsageStatsPanelProps) {
         </div>
       )}
 
-      <div className="grid grid-cols-2 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] sm:grid-cols-4">
+      <div className="grid grid-cols-2 rounded-xl border border-[var(--border)] bg-[var(--theme-surface)] sm:grid-cols-4">
         {metricItems.map(item => (
           <div key={item.label} className="min-w-0 border-[var(--border)] px-3 py-3 text-center even:border-l sm:border-l sm:first:border-l-0">
             <div className="text-[17px] font-semibold tabular-nums text-[var(--text)]">{item.value}</div>
@@ -1239,14 +1262,14 @@ export function UsageStatsPanel({ lang, view }: UsageStatsPanelProps) {
         </div>
       </div>
 
-      <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3">
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--theme-surface)] px-4 py-3">
         <div className="mb-2 text-[13px] font-medium text-[var(--text)]">
           {range === 'today' ? (zh ? '今日 Token 趋势' : 'Today token trend') : (zh ? '每日 Token 趋势图' : 'Daily token trend')}
         </div>
         <TrendChart points={stats?.trend ?? []} lang={lang} />
       </section>
 
-      <section className="rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-4 py-3">
+      <section className="rounded-xl border border-[var(--border)] bg-[var(--theme-surface)] px-4 py-3">
         <div className="mb-2 text-[13px] font-medium text-[var(--text)]">{zh ? '模型用量' : 'Model usage'}</div>
         <ModelDonut rows={stats?.modelStats ?? []} lang={lang} />
       </section>

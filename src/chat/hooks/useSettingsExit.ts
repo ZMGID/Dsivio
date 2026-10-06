@@ -19,6 +19,7 @@ export interface UseSettingsExitOptions {
   currentConversationIdRef: MutableRefObject<string | null>
   syncConversationRoute: (conversationId: string | null) => void
   /** 从技能 / MCP / 专家 / 知识库 / 设置回到会话时刷新技能与工具指示器。 */
+  requestLeave?: () => Promise<boolean>
   onReturnedToConversation: () => void
 }
 
@@ -32,6 +33,7 @@ export function useSettingsExit({
   currentConversationIdRef,
   syncConversationRoute,
   onReturnedToConversation,
+  requestLeave,
 }: UseSettingsExitOptions) {
   const [settingsExiting, setSettingsExiting] = useState(false)
   const pendingAfterSettingsCloseRef = useRef<PendingSettingsAction | null>(null)
@@ -83,7 +85,7 @@ export function useSettingsExit({
     }
   }, [chatView, onReturnedToConversation])
 
-  const runAfterLeavingSettings = useCallback((
+  const leaveSettings = useCallback((
     action: () => void,
     options?: { restoreCurrentRoute?: boolean },
   ) => {
@@ -102,5 +104,9 @@ export function useSettingsExit({
     else finishExit()
   }, [chatView, finishExit, settingsRef])
 
+  const runAfterLeavingSettings = useCallback((action: () => void, options?: { restoreCurrentRoute?: boolean }) => {
+    if (!requestLeave) { leaveSettings(action, options); return }
+    void requestLeave().then(allowed => { if (allowed) leaveSettings(action, options) })
+  }, [leaveSettings, requestLeave])
   return { settingsExiting, closeSettings, runAfterLeavingSettings }
 }

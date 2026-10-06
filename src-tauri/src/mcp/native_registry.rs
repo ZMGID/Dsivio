@@ -515,6 +515,56 @@ pub static NATIVE_TOOLS: &[NativeToolEntry] = &[
         requires_session_consent: false,
         call: NativeToolCall::Conversation(crate::chat::goal::handle_conversation_tool_call),
     },
+    // Scheduled-task tools are conversation-bound; appended in chat reply
+    // preparation (`scheduled_tasks::tools::append_tools`) when enabled.
+    NativeToolEntry {
+        name: crate::scheduled_tasks::tools::LIST_TOOL,
+        def: crate::scheduled_tasks::tools::list_tool,
+        enabled: |_, _, _| false,
+        parallel_safe: false,
+        bypasses_approval: true,
+        read_only: true,
+        requires_session_consent: false,
+        call: NativeToolCall::Conversation(
+            crate::scheduled_tasks::tools::handle_conversation_tool_call,
+        ),
+    },
+    NativeToolEntry {
+        name: crate::scheduled_tasks::tools::CREATE_TOOL,
+        def: crate::scheduled_tasks::tools::create_tool,
+        enabled: |_, _, _| false,
+        parallel_safe: false,
+        bypasses_approval: false,
+        read_only: false,
+        requires_session_consent: false,
+        call: NativeToolCall::Conversation(
+            crate::scheduled_tasks::tools::handle_conversation_tool_call,
+        ),
+    },
+    NativeToolEntry {
+        name: crate::scheduled_tasks::tools::UPDATE_TOOL,
+        def: crate::scheduled_tasks::tools::update_tool,
+        enabled: |_, _, _| false,
+        parallel_safe: false,
+        bypasses_approval: false,
+        read_only: false,
+        requires_session_consent: false,
+        call: NativeToolCall::Conversation(
+            crate::scheduled_tasks::tools::handle_conversation_tool_call,
+        ),
+    },
+    NativeToolEntry {
+        name: crate::scheduled_tasks::tools::DELETE_TOOL,
+        def: crate::scheduled_tasks::tools::delete_tool,
+        enabled: |_, _, _| false,
+        parallel_safe: false,
+        bypasses_approval: false,
+        read_only: false,
+        requires_session_consent: false,
+        call: NativeToolCall::Conversation(
+            crate::scheduled_tasks::tools::handle_conversation_tool_call,
+        ),
+    },
     NativeToolEntry {
         name: crate::chat::ask_user::ASK_USER_TOOL_NAME,
         def: crate::chat::ask_user::ask_user_tool,
@@ -1086,8 +1136,8 @@ fn call_advisor(ctx: NativeCallCtx<'_>) -> NativeToolFuture<'_> {
         let Some(provider) = ctx.settings.get_provider(&provider_id).cloned() else {
             return Err("Advisor provider is missing or disabled.".to_string());
         };
-        if !provider.has_credentials() {
-            return Err("Advisor provider has no API key configured.".to_string());
+        if !provider.authentication_ready() {
+            return Err("Please log in to the advisor provider.".to_string());
         }
 
         let language = crate::settings::resolve_chat_language(ctx.settings);
@@ -1610,6 +1660,10 @@ mod tests {
         "goal_complete",
         "goal_blocked",
         "goal_wait",
+        "schedule_list",
+        "schedule_create",
+        "schedule_update",
+        "schedule_delete",
         "ask_user",
         "agent",
         "agent_control",
@@ -1721,6 +1775,7 @@ mod tests {
                 "goal_complete",
                 "goal_blocked",
                 "goal_wait",
+                "schedule_list",
                 "ask_user",
                 "agent",
                 "agent_control",
@@ -1755,6 +1810,7 @@ mod tests {
                 "memory_read",
                 "memory_search",
                 "get_goal",
+                "schedule_list",
             ],
             "memory_read/memory_search are read-only but deliberately not parallel-safe"
         );
@@ -1772,6 +1828,7 @@ mod tests {
             run_command: true,
             knowledge_search: true,
             automation: true,
+            scheduled_tasks: true,
             working_directory: String::new(),
             workspace_roots: Vec::new(),
         };
@@ -1821,6 +1878,7 @@ mod tests {
             run_command: false,
             knowledge_search: false,
             automation: false,
+            scheduled_tasks: false,
             working_directory: String::new(),
             workspace_roots: Vec::new(),
         };
@@ -1894,6 +1952,7 @@ mod tests {
             run_command: true,
             knowledge_search: true,
             automation: true,
+            scheduled_tasks: true,
             working_directory: String::new(),
             workspace_roots: Vec::new(),
         };

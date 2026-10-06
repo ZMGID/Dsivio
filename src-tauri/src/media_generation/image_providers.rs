@@ -360,7 +360,7 @@ fn validate_provider(provider: &ModelProvider) -> Result<(), String> {
             return Err("Mixer image generation requires an OpenAI-compatible provider".to_string())
         }
     }
-    if !provider.has_credentials() {
+    if !provider.authentication_ready() {
         return Err(format!(
             "Image generation provider `{}` has no API key configured",
             provider.name

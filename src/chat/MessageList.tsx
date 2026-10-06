@@ -19,7 +19,6 @@ import type { MarkdownHeadingOutlineItem } from './markdownHeadingOutline'
 import { MessageContextMenu, type MessageMenuAnchor } from './MessageContextMenu'
 import { AddSelectionToChat } from './AddSelectionToChat'
 import { copyToClipboard } from '../utils/clipboard'
-import { Button } from '../components/Button'
 import { CompactionDivider } from './CompactionDivider'
 import { CompactionInProgress } from './CompactionInProgress'
 import { CompactionSummaryPanel } from './CompactionSummaryPanel'
@@ -38,7 +37,7 @@ import {
 import { useStreamCoarse, useStreamSnapshot } from './streamingStore'
 import { StreamStatusLine } from './StreamStatusLine'
 import { getActiveGroup, useGroupVersion } from './groupStreamingStore'
-import { useScrollFollow } from './scroll/useScrollFollow'
+import { ScrollFollowingContext, useScrollFollow } from './scroll/useScrollFollow'
 import {
   chatMessageLayoutRevision,
   estimateMessageRenderHeight,
@@ -552,6 +551,10 @@ function MessageListBase({
     trackKeys: true,
     growthSignal: streamGrowthSignal,
   })
+  const followContext = useMemo(() => ({
+    following,
+    isFollowing: followHandle.isFollowing,
+  }), [following, followHandle])
   const { contentWidth, widthReady, anchorRef: widthAnchorRef, prepareWidthChange, restoreAnchor: restoreWidthAnchor } = useChatWidthLayout(
     contentEl, viewportEl, followHandle, navigationLockRef,
   )
@@ -1069,21 +1072,42 @@ function MessageListBase({
   const previousHistoryRef = useRef({ conversationId, historyStart })
   const capturePageAnchor = useCallback(() => {
     if (!viewportEl || historyStart === 0) return
-    const row = virtualizer.getVirtualItems().find((item) => item.end > viewportEl.scrollTop
-      && itemAt(item.index)?.kind !== 'spacer')
-      ?? virtualizer.measurementsCache.find((item) => itemAt(item.index)?.kind !== 'spacer')
+    // Use the measurement at the actual offset, as ZCode does. The mounted
+    // overscan window can still describe the previous position during a wheel.
+    const atOffset = virtualizer.getVirtualItemForOffset(viewportEl.scrollTop)
+    const row = atOffset && itemAt(atOffset.index)?.kind !== 'spacer' ? atOffset
+      : virtualizer.measurementsCache.find((item) => item.end > viewportEl.scrollTop
+        && itemAt(item.index)?.kind !== 'spacer')
     const item = row ? itemAt(row.index) : null
     if (row && item) pageAnchorRef.current = {
       key: item.key, revision: measurementKey(item), offset: viewportEl.scrollTop - row.start,
     }
   }, [historyStart, itemAt, viewportEl, virtualizer])
+  const olderHistoryRequestRef = useRef<{ conversationId: string | null | undefined } | null>(null)
   const requestOlderHistory = useCallback(() => {
-    if (!viewportEl || !onLoadOlder) return
+    if (!viewportEl || !onLoadOlder || historyStart === 0
+      || (olderHistoryRequestRef.current && olderHistoryRequestRef.current.conversationId === conversationId)) return
     cancelHistoryNavigation()
     capturePageAnchor()
     followHandle.releaseFollow()
-    void onLoadOlder()
-  }, [cancelHistoryNavigation, capturePageAnchor, followHandle, onLoadOlder, viewportEl])
+    const request = { conversationId }
+    olderHistoryRequestRef.current = request
+    void (async () => {
+      try {
+        await onLoadOlder()
+      } finally {
+        if (olderHistoryRequestRef.current === request) olderHistoryRequestRef.current = null
+      }
+    })()
+  }, [cancelHistoryNavigation, capturePageAnchor, conversationId, followHandle, historyStart, onLoadOlder, viewportEl])
+
+  // ZCode prefetches two viewports before the loaded history edge. Keep paging
+  // out of initial bottom restoration and explicit message-navigation holds.
+  const prefetchOlderHistory = useCallback((allowUnscrollable = false) => {
+    if (!viewportEl || (followHandle.isFollowing() && !allowUnscrollable) || navigationLockRef.current
+      || historyNavigationRef.current) return
+    if (viewportEl.scrollTop <= Math.max(64, viewportEl.clientHeight * 2)) requestOlderHistory()
+  }, [followHandle, requestOlderHistory, viewportEl])
 
   useLayoutEffect(() => {
     const previous = previousHistoryRef.current
@@ -1099,6 +1123,9 @@ function MessageListBase({
     const index = historyItems.findIndex((item) => item.key === anchor.key
       && measurementKey(item) === anchor.revision)
     if (index < 0) return
+    // Ref measurements may have invalidated cached positions in this commit.
+    // ZCode resolves total size before reading the prepend anchor as well.
+    virtualizer.getTotalSize()
     const start = virtualizer.measurementsCache[index]?.start
       ?? virtualizer.getOffsetForIndex(index, 'start')?.[0]
     if (start !== undefined) followHandle.restoreReadingPosition(start + anchor.offset)
@@ -1909,8 +1936,9 @@ function MessageListBase({
       }
     }
     if (!followHandle.isFollowing()) capturePageAnchor()
+    prefetchOlderHistory()
     scheduleNavigatorSync()
-  }, [alignViewportToNavigationTarget, capturePageAnchor, followHandle, scheduleNavigatorSync])
+  }, [alignViewportToNavigationTarget, capturePageAnchor, followHandle, prefetchOlderHistory, scheduleNavigatorSync])
 
   // 用户滚轮 = 用户接管视口。回底/导航 hold 期间若继续硬钉：wheel(up) 先解除跟随，
   // 下一个 scroll 事件又被 handleNavigatorScroll 的 jumpToBottom()（forceFollow）钉回，
@@ -1928,9 +1956,24 @@ function MessageListBase({
         || navigatorSettleRafRef.current !== null
         || navigatorHoldRef.current !== null
         || bottomHoldRef.current !== null
-      if (!sessionActive) return
-      cancelNavigatorSettle()
-      endNavigatorSession(navigatorSettleGenerationRef.current)
+      if (sessionActive) {
+        cancelNavigatorSettle()
+        endNavigatorSession(navigatorSettleGenerationRef.current)
+      }
+      // At the top an upward wheel may produce no scroll event; it must still
+      // allow retrying a failed page (or reading a window shorter than a screen).
+      if (event.deltaY < 0) {
+        if (viewportEl.scrollTop <= 0) {
+          let target = event.target instanceof Element ? event.target : null
+          while (target && target !== viewportEl) {
+            // A nested process/code panel may consume the upward gesture.
+            if (target instanceof HTMLElement && target.scrollTop > 0
+              && target.scrollHeight - target.clientHeight > 4) return
+            target = target.parentElement
+          }
+          prefetchOlderHistory(viewportEl.scrollHeight - viewportEl.clientHeight <= 4)
+        }
+      }
     }
     viewportEl.addEventListener('wheel', handleWheel, { passive: true })
     viewportEl.addEventListener('pointerdown', cancelHistoryNavigation)
@@ -1947,7 +1990,7 @@ function MessageListBase({
       viewportEl.removeEventListener('touchstart', cancelHistoryNavigation)
       window.removeEventListener('keydown', handleKey)
     }
-  }, [cancelHistoryNavigation, cancelNavigatorSettle, endNavigatorSession, viewportEl])
+  }, [cancelHistoryNavigation, cancelNavigatorSettle, endNavigatorSession, prefetchOlderHistory, viewportEl])
 
 
   const handleDisclosureClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -2045,11 +2088,16 @@ function MessageListBase({
 
   // After the row ref measures the handoff, keep following while heavy content hydrates.
   const liveScrollHandoffRef = useRef(liveRowActive)
+  // WebKit can reset scrollTop when the live row leaves normal flow, before
+  // layout effects run. Snapshot the detached reader before that DOM commit.
+  const handoffReadingOffset = liveScrollHandoffRef.current && !liveRowActive
+    && !followHandle.isFollowing() ? viewportEl?.scrollTop ?? null : null
   useLayoutEffect(() => {
     const wasLive = liveScrollHandoffRef.current
     liveScrollHandoffRef.current = liveRowActive
     if (!wasLive || liveRowActive) return
     if (!streamFollowIntentRef.current && !followHandle.isFollowing()) {
+      if (handoffReadingOffset !== null) followHandle.restoreReadingPosition(handoffReadingOffset)
       beginStreamSettleEagerHydrate()
       return
     }
@@ -2079,6 +2127,7 @@ function MessageListBase({
     cancelNavigatorSettle,
     followHandle,
     historyItems.length,
+    handoffReadingOffset,
     liveRowActive,
     setNavigationLock,
   ])
@@ -2209,7 +2258,7 @@ function MessageListBase({
                   : undefined
               }
               onForkMessage={streaming || streamFrozen ? undefined : onForkMessage}
-              onDeleteMessage={onDeleteMessage}
+              onDeleteMessage={streaming || streamFrozen ? undefined : onDeleteMessage}
               onSaveMessageToNote={onSaveMessageToNote}
               outlineEligible={!streamFrozen}
               onOutlineSourceChange={handleOutlineSourceChange}
@@ -2272,7 +2321,7 @@ function MessageListBase({
                 <button
                   type="button"
                   onClick={() => onRetryLastUser(item.retryMessageId!)}
-                  className="inline-flex items-center gap-1 rounded-full border border-[var(--border-input)] bg-[var(--bg-input)] px-3 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-50 active:scale-95 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+                  className="inline-flex items-center gap-1 rounded-full border border-[var(--border-input)] bg-[var(--bg-input)] px-3 py-1 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-50 active:scale-95 bg-neutral-100"
                 >
                   <RotateCw size={13} strokeWidth={2} />
                   重试
@@ -2379,11 +2428,6 @@ function MessageListBase({
         />
       )}
       {historyLoadError && <div role="alert" className="absolute left-1/2 top-14 z-10 -translate-x-1/2 rounded-md bg-destructive px-3 py-2 text-sm text-destructive-foreground">{historyLoadError}</div>}
-      {historyStart > 0 && onLoadOlder && (
-        <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2">
-          <Button size="sm" onClick={requestOlderHistory}>加载更早消息</Button>
-        </div>
-      )}
       <div
         ref={setScrollEl}
         onContextMenu={handleContextMenu}
@@ -2399,6 +2443,7 @@ function MessageListBase({
 
 
       >
+        <ScrollFollowingContext.Provider value={followContext}>
         <div ref={setContentEl} className={`chat-message-list-inner mx-auto w-full px-6 ${hasWideGroups ? 'chat-message-list-inner--wide' : 'max-w-4xl'}`}>
           <div data-chat-rows-root className="relative w-full">
             <div aria-hidden="true" style={{ height: virtualizer.getTotalSize() }} />
@@ -2407,19 +2452,20 @@ function MessageListBase({
             </div>
           </div>
         </div>
+        </ScrollFollowingContext.Provider>
       </div>
-      {/* 上下边界渐变遮罩，纯覆盖层。颜色必须跟 .chat-main-pane 的底色走（浅色 --theme-surface-soft，暗色 #262629）——
+      {/* 上下边界渐变遮罩，纯覆盖层。颜色必须跟 .chat-main-pane 的底色走（--theme-surface）——
           别用 var(--bg)，那个只在 .kv / .settings-embedded 作用域里定义，在聊天区是未定义值，整条 linear-gradient
           会静默失效（表现就是「加了没效果」）。不走 mask-image：那会让整个滚动容器每帧走遮罩合成，长列表上白给。 */}
-      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-6 bg-gradient-to-b from-[var(--theme-surface-soft)] to-transparent dark:from-[#262629]" />
-      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-8 bg-gradient-to-t from-[var(--theme-surface-soft)] to-transparent dark:from-[#262629]" />
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-6 bg-gradient-to-b from-[var(--theme-surface)] to-transparent" />
+      <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 z-[1] h-8 bg-gradient-to-t from-[var(--theme-surface)] to-transparent" />
       {showJumpButton && (
         <button
           type="button"
           onClick={handleJumpToBottom}
           aria-label="回到底部"
           title="回到底部"
-          className="chat-motion-pop absolute bottom-4 left-1/2 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--border-input)] bg-[var(--bg-input)] text-neutral-600 shadow-md backdrop-blur transition-transform duration-[var(--kv-dur-instant)] ease-[var(--kv-ease-spring)] hover:text-neutral-900 active:scale-90 dark:text-neutral-300 dark:hover:text-neutral-100"
+          className="chat-motion-pop absolute bottom-4 left-1/2 z-10 flex h-9 w-9 -translate-x-1/2 items-center justify-center rounded-full border border-[var(--border-input)] bg-[var(--bg-input)] text-neutral-600 shadow-md backdrop-blur transition-transform duration-[var(--kv-dur-instant)] ease-[var(--kv-ease-spring)] hover:text-neutral-900 active:scale-90"
         >
           <ChevronDown size={18} strokeWidth={2} />
         </button>

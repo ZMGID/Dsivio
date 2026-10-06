@@ -491,7 +491,8 @@ mod tests {
             assert!(!response.contains(state));
         }
         assert!(task.await.unwrap().err().unwrap().contains("declined"));
-        let _listener = callback_listener(address).unwrap();
+        // TIME_WAIT may prevent a rebind even though the listener is closed.
+        assert!(tokio::net::TcpStream::connect(address).await.is_err());
     }
     #[test]
     fn validates_callback() {

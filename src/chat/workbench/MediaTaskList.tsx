@@ -81,7 +81,11 @@ export function MediaTaskRow({
               {output.mime.startsWith('image/')
                 ? <img className="h-auto max-w-full rounded-lg" src={convertFileSrc(output.path)} alt={alt} loading="lazy" />
                 : output.mime.startsWith('video/')
-                  ? <video className="h-auto max-w-full rounded-lg" src={convertFileSrc(output.path)} controls preload="metadata" />
+                  ? <video className="h-auto max-w-full rounded-lg" src={convertFileSrc(output.path)} controls preload="metadata" onLoadedMetadata={event => {
+                    // WebKit needs a tiny seek to decode an unplayed local video's first frame.
+                    const video = event.currentTarget
+                    if (video.currentTime === 0 && video.duration > 0) video.currentTime = Math.min(0.001, video.duration / 2)
+                  }} />
                   : output.mime.startsWith('audio/')
                     ? <audio className="max-w-full" src={convertFileSrc(output.path)} controls preload="metadata" aria-label={alt} />
                     : <p className="kv-row-desc [overflow-wrap:anywhere]">{output.mime} · {output.path}</p>}

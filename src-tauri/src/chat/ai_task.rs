@@ -160,7 +160,7 @@ pub(crate) fn resolve_model(settings: &Settings, request: &AiTaskRequest) -> Res
     let Some(provider) = settings.get_provider(&provider_id) else {
         return Err(localize(&language, "未找到可用模型，请先在混音器或模型设置里配置", "No usable model. Configure one in Mixer or Models first."));
     };
-    if !provider.enabled || !provider.has_credentials() || model.trim().is_empty() {
+    if !provider.enabled || !provider.authentication_ready() || model.trim().is_empty() {
         return Err(localize(&language, "当前模型没有 API Key，请先在设置里填写", "This model has no API key. Add one in Settings."));
     }
     if model_can_generate_images_directly(provider, &model) {
@@ -283,6 +283,7 @@ fn assemble<'a>(
         retry_attempts,
         assistant_snapshot: None,
         provider_tools_fallback_system_prompt: system.clone(),
+        initial_cache_usage: None,
         initial_anchor_total_tokens: None,
         initial_anchor_trailing_estimate: 0,
         skill_project_cwd: workdir,

@@ -1,3 +1,4 @@
+import { GenerationPlaceholder } from '../../../studio/GenerationPlaceholder'
 import { useStudioNavigation } from '../../../studio/useStudioNavigation'
 import { useChatRouteActive } from '../../../chatRouteVisibility'
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
@@ -925,7 +926,7 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
                       </Button>
                     </div>
                   )}
-                  {!results.length ? (
+                  {!results.length && running ? <GenerationPlaceholder ratio={brief.ratio} label="正在生成图片…" /> : !results.length ? (
                     <EmptyState
                       icon={<ImageIcon size={36} />}
                       title={running ? '正在把方案变成图片' : '你的成图会出现在这里'}
@@ -1124,6 +1125,14 @@ export default function ImageProjectWorkspace({ feature = 'gen', Form = FreeImag
                   </p>
                 </div>
               )}
+              <Button size="sm" onClick={() => {
+                if (!selected.path) return
+                const sourcePath = selected.path
+                switchView('gen', undefined, true)
+                setBrief({ ...newImageDraftBrief('gen'), ratio: brief.ratio, resolution: brief.resolution,
+                  products: [{ id: crypto.randomUUID(), name: '参考成图', category: '', kind: 'single', facts: '', front: sourcePath, back: null,
+                    assets: [{ id: crypto.randomUUID(), name: '参考成图', path: sourcePath }], templateId: null }] })
+              }}>以此图创建新任务</Button>
               <Field label="只修改这一张">
                 <textarea
                   className="kv-textarea custom-scrollbar"

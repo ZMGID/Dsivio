@@ -98,7 +98,7 @@ pub fn workbench_image_bootstrap(app: AppHandle) -> Result<Value, String> {
     }
     tasks.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     let settings = app.state::<AppState>().settings_read().clone();
-    let providers:Vec<_>=settings.providers.iter().filter(|p|p.enabled).map(|p|json!({"id":p.id,"name":p.name,"models":p.available_models,"ready":p.has_credentials()})).collect();
+    let providers:Vec<_>=settings.providers.iter().filter(|p|p.enabled).map(|p|json!({"id":p.id,"name":p.name,"models":p.available_models,"ready":p.authentication_ready()})).collect();
     let mut config = storage::config()?;
     config.output_root = output::root(&config)?.to_string_lossy().into();
     Ok(

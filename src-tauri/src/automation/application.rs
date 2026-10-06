@@ -258,7 +258,7 @@ async fn run_builtin_agent_node(
     let (provider_id, model) = resolve_kivio_model(&settings, spec)?;
     let provider = settings
         .get_provider(&provider_id)
-        .filter(|p| p.enabled && p.has_credentials())
+        .filter(|p| p.enabled && p.authentication_ready())
         .cloned()
         .ok_or_else(|| {
             "Configure a chat provider and model in Settings before running an Agent step"
@@ -393,6 +393,7 @@ async fn run_builtin_agent_node(
         retry_attempts,
         assistant_snapshot: None,
         provider_tools_fallback_system_prompt: system_prompt,
+        initial_cache_usage: None,
         initial_anchor_total_tokens: None,
         initial_anchor_trailing_estimate: 0,
         skill_project_cwd: workdir,

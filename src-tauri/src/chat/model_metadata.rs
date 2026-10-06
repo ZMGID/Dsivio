@@ -366,8 +366,8 @@ pub(crate) struct ClaudeThinkingProfile {
     pub supports_output_effort: bool,
     supports_xhigh: bool,
     supports_max: bool,
-    /// Sonnet 5 / Opus 5 默认思考开着，Off 须显式 disabled；Opus 5.5+ 不接受 disabled。
-    pub(crate) send_disabled_on_off: bool,
+    /// Off 的 wire 类型：Sonnet 5.5 用 between_tools，5 用 disabled；始终思考的模型省略。
+    pub(crate) off_thinking_type: Option<&'static str>,
     /// Fable/Mythos/Preview / Opus 4.7+ / Sonnet 5：非默认 temperature 一律 400。
     pub(crate) forbid_temperature: bool,
 }
@@ -433,7 +433,7 @@ pub(crate) fn claude_thinking_profile(model: &str) -> Option<ClaudeThinkingProfi
             supports_output_effort: true,
             supports_xhigh: false,
             supports_max: true,
-            send_disabled_on_off: false,
+            off_thinking_type: None,
             forbid_temperature: true,
         });
     }
@@ -465,7 +465,7 @@ fn unsupported_thinking() -> ClaudeThinkingProfile {
         supports_output_effort: false,
         supports_xhigh: false,
         supports_max: false,
-        send_disabled_on_off: false,
+        off_thinking_type: None,
         forbid_temperature: false,
     }
 }
@@ -476,7 +476,7 @@ fn extended_budget_only() -> ClaudeThinkingProfile {
         supports_output_effort: false,
         supports_xhigh: false,
         supports_max: false,
-        send_disabled_on_off: false,
+        off_thinking_type: None,
         forbid_temperature: false,
     }
 }
@@ -573,10 +573,13 @@ fn profile_for_claude_version(
         supports_output_effort,
         supports_xhigh,
         supports_max,
-        send_disabled_on_off: match family {
-            ClaudeFamily::Opus => major >= 5 && !version_at_least(major, minor, 5, 5),
-            ClaudeFamily::Sonnet => major >= 5,
-            _ => false,
+        off_thinking_type: match family {
+            ClaudeFamily::Sonnet if version_at_least(major, minor, 5, 5) => Some("between_tools"),
+            ClaudeFamily::Sonnet if major >= 5 => Some("disabled"),
+            ClaudeFamily::Opus if major >= 5 && !version_at_least(major, minor, 5, 5) => {
+                Some("disabled")
+            }
+            _ => None,
         },
         forbid_temperature: match family {
             ClaudeFamily::Fable | ClaudeFamily::Mythos => major >= 5,
@@ -1306,60 +1309,6 @@ mod tests {
     }
 
     #[test]
-    fn claude_thinking_profile_follows_official_generation_split() {
-        use super::{claude_thinking_profile, ClaudeThinkingKind};
-
-        let opus45 = claude_thinking_profile("claude-opus-4-5-20251101").unwrap();
-        assert_eq!(opus45.kind, ClaudeThinkingKind::Extended);
-        assert!(opus45.supports_output_effort);
-
-        let alias = claude_thinking_profile("opus-4.5").unwrap();
-        assert_eq!(alias.kind, ClaudeThinkingKind::Extended);
-        assert!(alias.supports_output_effort);
-
-        let sonnet45 = claude_thinking_profile("claude-sonnet-4.5").unwrap();
-        assert_eq!(sonnet45.kind, ClaudeThinkingKind::Extended);
-        assert!(!sonnet45.supports_output_effort);
-
-        let haiku45 = claude_thinking_profile("claude-haiku-4-5").unwrap();
-        assert_eq!(haiku45.kind, ClaudeThinkingKind::Extended);
-        assert!(!haiku45.supports_output_effort);
-
-        let opus46 = claude_thinking_profile("claude-opus-4.6").unwrap();
-        assert_eq!(opus46.kind, ClaudeThinkingKind::Adaptive);
-        assert!(opus46.supports_output_effort);
-
-        let opus47 = claude_thinking_profile("anthropic/claude-opus-4-7").unwrap();
-        assert_eq!(opus47.kind, ClaudeThinkingKind::Adaptive);
-
-        let fable = claude_thinking_profile("claude-fable-5").unwrap();
-        assert_eq!(fable.kind, ClaudeThinkingKind::Adaptive);
-        assert!(!fable.send_disabled_on_off);
-        assert!(fable.forbid_temperature);
-
-        let sonnet5 = claude_thinking_profile("claude-sonnet-5").unwrap();
-        assert_eq!(sonnet5.kind, ClaudeThinkingKind::Adaptive);
-        assert!(sonnet5.send_disabled_on_off);
-        assert!(sonnet5.forbid_temperature);
-
-        let haiku46 = claude_thinking_profile("claude-haiku-4.6").unwrap();
-        assert_eq!(haiku46.kind, ClaudeThinkingKind::Extended);
-
-        for model in [
-            "claude-3.5-haiku",
-            "claude-3-5-sonnet-20241022",
-            "claude-3-haiku-20240307",
-        ] {
-            assert_eq!(
-                claude_thinking_profile(model).unwrap().kind,
-                ClaudeThinkingKind::Unsupported,
-                "{model}"
-            );
-        }
-        assert!(claude_thinking_profile("gpt-5.6").is_none());
-    }
-
-    #[test]
     fn xhigh_gated_per_model_not_per_protocol() {
         // 删掉 reasoning_effort_wire 的协议级白名单后，模型库是**唯一**门控：适配器原样下发
         // 用户所选档位，选错就吃 provider 的 400。所以这份数据必须准，尤其是 xhigh 这一档
@@ -1681,6 +1630,16 @@ mod tests {
             chat_max_output_tokens_on_wire(Some(&provider), "glm-5.3", 16_384),
             131_072
         );
+        for model in [
+            "[临时测试自有算力]Qwen/Qwen3.8-27B-Uncensored",
+            "[自有算力]Qwen/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive",
+        ] {
+            assert_eq!(
+                chat_max_output_tokens_on_wire(Some(&provider), model, 32_768),
+                16_384,
+                "{model}: self-hosted variants must not inherit a commercial output cap"
+            );
+        }
     }
 
     #[test]

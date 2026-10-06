@@ -674,3 +674,22 @@ it('stops multi-step image creation at the editable plan until human confirmatio
   expect(screen.getByRole('tab', { name: /生成结果/ })).toHaveAttribute('aria-selected', 'false')
   expect(api.workbenchImageAction).toHaveBeenCalledTimes(1)
 })
+
+it('starts a new draft from a finished image without changing or submitting the original task', async () => {
+  const t = fixture()
+  t.results = [result('a')]
+  vi.mocked(api.workbenchImageBootstrap).mockResolvedValue(bootstrap([t]))
+  vi.mocked(api.workbenchImageGet).mockResolvedValue(t)
+  render(<ImageStudio />)
+  await openSavedTask('背包秋季套图')
+  fireEvent.click((await screen.findAllByRole('button', { name: '查看 / 修改' }))[0])
+  fireEvent.click(await screen.findByRole('button', { name: '以此图创建新任务' }))
+  await waitFor(() => {
+    const draft = JSON.parse(localStorage.getItem('dsivio-image-draft-v1')!)
+    expect(draft.taskId).toBeUndefined()
+    expect(draft.brief.products[0].front).toBe(t.results[0].path)
+  })
+  expect(api.workbenchImageSave).not.toHaveBeenCalled()
+  expect(api.workbenchImageAction).not.toHaveBeenCalled()
+  expect(JSON.parse(localStorage.getItem('dsivio-image-draft-v1:task:job')!).taskId).toBe('job')
+})

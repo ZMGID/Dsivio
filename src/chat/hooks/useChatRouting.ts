@@ -1,10 +1,11 @@
-import { useCallback, useEffect, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
 import {
   conversationHash,
   getRouteConversationId,
   hashPath,
   isChatAssistantCenterPath,
   isChatAutomationsPath,
+  isChatSchedulesPath,
   isChatKnowledgeCenterPath,
   isChatMcpCenterPath,
   isChatNotesPath,
@@ -21,8 +22,10 @@ import {
   setHash,
   type ChatExtensionsNavItem,
 } from '../chatRoutes'
+import { getRememberedTasksTab, rememberTasksTab } from '../persistence'
 
-type ChatView = import('../routeCodec').ChatView
+import type { ChatView } from '../routeCodec'
+import { pathFromHash } from '../routeCodec'
 
 interface UseChatRoutingParams {
   onViewChange: (view: ChatView) => void
@@ -42,9 +45,12 @@ interface UseChatRoutingParams {
   setSettingsInitialTab: (tab: SettingsOpenTab) => void
   /** 扩展 nav 选中项；openExtensionsItem 写入。 */
   setExtensionsNavItem: Dispatch<SetStateAction<ChatExtensionsNavItem | null>>
+  /** Scheduled editor permission; checked before hash listeners can replace or unmount Chat. */
+  tasksLeaveGuardRef?: MutableRefObject<(() => Promise<boolean>) | null>
+  requestTasksLeave?: () => Promise<boolean>
 }
 
-type SettingsOpenTab = 'chat' | 'plugins' | 'sessions' | 'usage'
+type SettingsOpenTab = 'chat' | 'plugins' | 'sessions' | 'usage' | 'media'
 
 /**
  * 聊天窗口的 hash 路由。
@@ -64,7 +70,10 @@ export function useChatRouting({
   onOpenSessionsSettings,
   setSettingsInitialTab,
   setExtensionsNavItem,
+  tasksLeaveGuardRef,
+  requestTasksLeave,
 }: UseChatRoutingParams) {
+  const acceptedHashRef = useRef(window.location.hash)
   const syncConversationRoute = useCallback((conversationId: string | null) => {
     if (!conversationId) onLeaveConversation()
     setHash(conversationHash(conversationId))
@@ -81,10 +90,10 @@ export function useChatRouting({
   const syncMcpCenterRoute = useCallback(() => syncNonConversationRoute('#chat/mcp'), [syncNonConversationRoute])
   const syncKnowledgeCenterRoute = useCallback(() => syncNonConversationRoute('#chat/knowledge'), [syncNonConversationRoute])
   const syncNotesRoute = useCallback(() => syncNonConversationRoute('#chat/notes'), [syncNonConversationRoute])
-  const syncAutomationsRoute = useCallback(() => syncNonConversationRoute('#chat/automations'), [syncNonConversationRoute])
 
   useEffect(() => {
     const loadFromRoute = () => {
+      acceptedHashRef.current = window.location.hash
       const path = hashPath()
       if (isChatOnboardingRoute(path)) {
         onLeaveConversation()
@@ -125,14 +134,22 @@ export function useChatRouting({
       if (isChatImagesPath(path)) { window.location.hash = '#chat/workbench/free-image'; onLeaveConversation(); onViewChange('workbench'); return }
       if (isChatVideosPath(path)) { window.location.hash = '#chat/workbench/shorts'; onLeaveConversation(); onViewChange('workbench'); return }
       if (isChatMarketPath(path)) { onLeaveConversation(); onViewChange('market'); return }
+      if (path === 'chat/media') { onLeaveConversation(); onViewChange('media'); return }
       if (isChatArtifactsPath(path)) {
         onLeaveConversation()
         onViewChange('artifacts')
         return
       }
       if (isChatAutomationsPath(path)) {
+        rememberTasksTab('automations')
         onLeaveConversation()
         onViewChange('automations')
+        return
+      }
+      if (isChatSchedulesPath(path)) {
+        rememberTasksTab('schedules')
+        onLeaveConversation()
+        onViewChange('schedules')
         return
       }
       // 对话库已迁入设置；旧链接 `#chat/sessions` 重定向
@@ -162,8 +179,51 @@ export function useChatRouting({
       onLoadConversation(conversationId)
     }
     loadFromRoute()
-    window.addEventListener('hashchange', loadFromRoute)
-    return () => window.removeEventListener('hashchange', loadFromRoute)
+    let disposed = false
+    let pendingTasksHash: string | null = null
+    const handleHashChange = (event: HashChangeEvent) => {
+      const previousHash = acceptedHashRef.current
+      const nextHash = window.location.hash
+      if (nextHash === previousHash && pendingTasksHash !== null) {
+        event.stopImmediatePropagation()
+        return
+      }
+      if (
+        tasksLeaveGuardRef?.current
+        && requestTasksLeave
+        && isChatSchedulesPath(pathFromHash(previousHash))
+        && !isChatSchedulesPath(pathFromHash(nextHash))
+      ) {
+        // Capture runs before App's mode listener. Keep the editor mounted while
+        // confirmation is pending, including browser back and external hashes.
+        event.stopImmediatePropagation()
+        window.history.replaceState(window.history.state, '', previousHash || window.location.pathname + window.location.search)
+        const alreadyPending = pendingTasksHash !== null
+        pendingTasksHash = nextHash
+        if (alreadyPending) return
+        void requestTasksLeave().then((allowed) => {
+          if (disposed) return
+          const targetHash = pendingTasksHash
+          pendingTasksHash = null
+          if (!allowed || targetHash === null) return
+          window.history.replaceState(window.history.state, '', targetHash || window.location.pathname + window.location.search)
+          acceptedHashRef.current = targetHash
+          // replaceState has no hashchange; notify the existing App route owner
+          // only after permission, without re-entering this leave decision.
+          window.dispatchEvent(new HashChangeEvent('hashchange', {
+            oldURL: new URL(previousHash, window.location.href).href,
+            newURL: window.location.href,
+          }))
+        })
+        return
+      }
+      loadFromRoute()
+    }
+    window.addEventListener('hashchange', handleHashChange, true)
+    return () => {
+      disposed = true
+      window.removeEventListener('hashchange', handleHashChange, true)
+    }
   }, [
     currentConversationIdRef,
     onLoadConversation,
@@ -172,6 +232,8 @@ export function useChatRouting({
     onOpenSessionsSettings,
     onResetConversation,
     onViewChange,
+    requestTasksLeave,
+    tasksLeaveGuardRef,
   ])
 
   const openEmbeddedSettings = useCallback((tab: SettingsOpenTab = 'chat') => {
@@ -209,19 +271,24 @@ export function useChatRouting({
     syncNotesRoute()
   }, [onViewChange, syncNotesRoute])
 
-  const openAutomationsCenter = useCallback(() => {
-    onViewChange('automations')
-    syncAutomationsRoute()
-  }, [onViewChange, syncAutomationsRoute])
+  const openTasksCenter = useCallback(() => {
+    const tab = getRememberedTasksTab()
+    onViewChange(tab)
+    syncNonConversationRoute(`#chat/${tab}`)
+  }, [onViewChange, syncNonConversationRoute])
 
   const openExtensionsItem = useCallback((item: ChatExtensionsNavItem) => {
     setExtensionsNavItem(item)
+    if (item === 'tasks') {
+      openTasksCenter()
+      return
+    }
     if (item === 'workbench' || item.startsWith('workbench/')) {
       onViewChange('workbench')
       syncNonConversationRoute(`#chat/${item}`)
       return
     }
-    if (item === 'images' || item === 'videos' || item === 'market') {
+    if (item === 'images' || item === 'videos' || item === 'market' || item === 'media') {
       onViewChange(item)
       syncNonConversationRoute(`#chat/${item}`)
       return
@@ -251,13 +318,9 @@ export function useChatRouting({
       openNotesCenter()
       return
     }
-    if (item === 'automations') {
-      openAutomationsCenter()
-      return
-    }
   }, [
     openAssistantCenter, openSkillCenter, openMcpCenter, openKnowledgeCenter,
-    openNotesCenter, openAutomationsCenter, setExtensionsNavItem, onViewChange, syncNonConversationRoute,
+    openNotesCenter, openTasksCenter, setExtensionsNavItem, onViewChange, syncNonConversationRoute,
   ])
 
   return {
@@ -269,7 +332,6 @@ export function useChatRouting({
     syncMcpCenterRoute,
     syncKnowledgeCenterRoute,
     syncNotesRoute,
-    syncAutomationsRoute,
     openEmbeddedSettings,
     openChatSettings,
     openAssistantCenter,
@@ -277,7 +339,7 @@ export function useChatRouting({
     openMcpCenter,
     openKnowledgeCenter,
     openNotesCenter,
-    openAutomationsCenter,
+    openTasksCenter,
     openExtensionsItem,
   }
 }

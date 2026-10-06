@@ -3,6 +3,7 @@ mod fetch;
 mod files;
 mod sandbox_exports;
 mod shell;
+mod shell_log;
 
 pub(crate) use fetch::html_to_text;
 pub use fetch::web_fetch;

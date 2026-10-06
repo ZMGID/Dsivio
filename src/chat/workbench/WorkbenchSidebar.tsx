@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useState } from 'react'
-import { ChevronRight, Home } from 'lucide-react'
+import { ChevronRight, Home, Images } from 'lucide-react'
 import { useT } from '../../components/i18n'
 import { ChatTitlebarActions } from '../ChatTitlebarActions'
 import { ProductModeSwitcher } from '../ProductModeSwitcher'
@@ -190,6 +190,8 @@ export const WorkbenchSidebar = memo(function WorkbenchSidebar({
           active={activeItem === 'workbench'}
           onClick={() => openPage('home')}
         />
+
+        <NavRow icon={<Images size={17} />} label={t.chatNavMedia} active={activeItem === 'media'} onClick={() => onOpenExtensionsItem('media')} />
 
         {WORKBENCH_NAV.groups.map((group) => {
           const open = openGroups[group.id] ?? true

@@ -1,18 +1,18 @@
-import { useRef, useState } from 'react'
+import { createWindowStore, useWindowStore } from '../../utils/windowStore'
 import type { Lang } from '../../components/i18n'
 import { primaryAction, type MarketItem } from './types'
 import type { MarketActions } from './MarketPage'
 export const marketText = (lang: Lang, zh: string, en: string) => lang === 'en' ? en : zh
+const actionState = createWindowStore({ busyIds: new Set<string>(), error: '' })
+
+/** Installation survives navigation; remounts observe the same in-flight action. */
 export function useMarketAction(actions: Pick<MarketActions, 'onInstall' | 'onUse'>) {
-  const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
-  const locks = useRef(new Set<string>())
-  const [error, setError] = useState('')
-  const run = async (id: string, task: () => Promise<unknown>) => {
-    if (locks.current.has(id)) return
-    locks.current.add(id); setBusyIds(new Set(locks.current)); setError('')
-    try { await task() } catch (e) { setError(String(e)) }
-    finally { locks.current.delete(id); setBusyIds(new Set(locks.current)) }
-  }
+  const [{ busyIds, error }] = useWindowStore(actionState)
+  const run = (id: string, task: () => Promise<unknown>) => actionState.run(id, async () => {
+    actionState.setState(s => ({ ...s, busyIds: new Set([...s.busyIds, id]), error: '' }))
+    try { await task() } catch (e) { actionState.setState(s => ({ ...s, error: String(e) })) }
+    finally { actionState.setState(s => { const next = new Set(s.busyIds); next.delete(id); return { ...s, busyIds: next } }) }
+  })
   const use = (item: MarketItem, newChat = true) => run(item.id, async () => {
     if (item.local?.status === 'ready' && primaryAction(item) !== 'repair') {
       await actions.onUse(item.local, newChat)

@@ -207,3 +207,21 @@ it('does not create a second project when a failed snapshot has resumed before r
  expect((await screen.findAllByText(/任务仍在运行，请查询原任务结果/))[0]).toBeVisible()
  expect(vi.mocked(api.workbenchVideoTask).mock.calls.some(([action]) => ['create', 'submit', 'retry'].includes(action))).toBe(false)
 })
+
+it('reuses video parameters in a new draft without overwriting or resubmitting the completed task', async () => {
+  task = { ...task, approved: true, status: 'succeeded', output: '/tmp/completed.mp4', script: '原脚本' }
+  const prior = { brief: task.brief, task, script: task.script, step: 2, dirty: false }
+  localStorage.setItem('dsivio-video-drafts-v1', JSON.stringify({ creation: prior }))
+  vi.mocked(api.workbenchVideoBootstrap).mockResolvedValue({ tasks: [task], templates: [], config: {}, root: '', configPath: '', dependencies: {} } as never)
+  render(<ShortsPage />)
+  fireEvent.click(await screen.findByRole('button', { name: '复用参数创建新任务' }))
+  await waitFor(() => {
+    const draft = JSON.parse(localStorage.getItem('dsivio-video-drafts-v1')!).creation
+    expect(draft.task).toBeUndefined()
+    expect(draft.brief.request).toBe(prior.brief.request)
+    expect(draft.script).toBe('原脚本')
+  })
+  expect(task.output).toBe('/tmp/completed.mp4')
+  expect(task.status).toBe('succeeded')
+  expect(vi.mocked(api.workbenchVideoTask).mock.calls.some(([action]) => ['create', 'save', 'submit'].includes(action))).toBe(false)
+})

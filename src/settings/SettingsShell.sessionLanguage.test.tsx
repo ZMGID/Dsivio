@@ -40,16 +40,23 @@ vi.mock('../api/tauri', async (importOriginal) => {
 })
 
 describe('SettingsShell session center language slot', () => {
+  it('keeps Dsivio plugin and connector navigation in its existing owner', async () => {
+    const user = userEvent.setup()
+    render(<SettingsShell renderPluginCenter={({ connectors }) => <div data-testid="plugin-center">{connectors}</div>} variant="embedded" initialTab="connectors" onClose={vi.fn()} onSettingsChange={vi.fn()} renderReleaseNotes={() => null} />)
+    expect(await screen.findByTestId('plugin-center')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '插件' }))
+    expect(screen.getByTestId('plugin-center')).toBeInTheDocument()
+  })
+
   it('renders the unsaved language draft before the canonical snapshot changes', async () => {
     const user = userEvent.setup()
     const renderSessionCenter = (lang: 'zh' | 'en') => <p data-testid="session-language">{lang}</p>
     render(
-      <SettingsShell
+      <SettingsShell renderPluginCenter={() => null}
         variant="embedded"
         onClose={vi.fn()}
         onSettingsChange={vi.fn()}
         renderSessionCenter={renderSessionCenter}
-        renderPluginCenter={() => null}
         renderReleaseNotes={() => null}
       />,
     )

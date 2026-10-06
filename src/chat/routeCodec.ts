@@ -9,10 +9,12 @@ export type ChatRouteKind =
   | 'plugins'
   | 'sessions'
   | 'automations'
+  | 'schedules'
   | 'mcp'
   | 'knowledge'
   | 'notes'
   | 'artifacts'
+  | 'media'
   | 'workbench'
   | 'images'
   | 'videos'
@@ -23,6 +25,7 @@ export type ChatRouteKind =
 
 type ChatCenterRouteKind = Exclude<ChatRouteKind, 'root' | 'conversation' | 'other'>
 export type ChatView = Exclude<ChatRouteKind, 'root' | 'plugins' | 'sessions' | 'popout' | 'other'>
+export type TasksTab = Extract<ChatView, 'schedules' | 'automations'>
 
 /**
  * Route vocabulary is declared once in routeContract.json and consumed by both this codec and

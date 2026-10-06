@@ -34,6 +34,7 @@ pub mod provider_oauth;
 pub mod provider_request;
 pub mod rapidocr;
 pub mod replace_translation;
+pub mod scheduled_tasks;
 #[cfg(target_os = "macos")]
 pub mod sck;
 pub mod screenshot;
@@ -375,6 +376,12 @@ pub fn run() {
                 rapidocr::RapidOcrClient::new(offline_models),
             ));
             app.manage(chat::repository::ConversationRepository::default());
+            app.manage(scheduled_tasks::ScheduledTasks::load(
+                app.path()
+                    .app_data_dir()
+                    .map_err(|err| format!("app_data_dir unavailable: {err}"))?
+                    .join("scheduled_tasks"),
+            ));
             app.manage(connectors::OAuthFlows::default());
 
             // 崩溃残留的中断草稿日志:按每个 message_id 的最后一行合并回会话文件后删除。
@@ -414,6 +421,7 @@ pub fn run() {
                 );
             }
             crate::automation::spawn_scheduler(app.handle().clone());
+            crate::scheduled_tasks::spawn_scheduler(app.handle().clone());
             if let Err(err) = setup_tray(&app.handle()) {
                 eprintln!("Failed to setup tray: {err}");
             }
@@ -548,10 +556,13 @@ pub fn run() {
             media_runtime::migration::legacy_video_outputs,
             comfyui::validate_comfy_workflow,
             comfyui::test_comfy_connection,
+            generation_workflow::check_workflow,
             generation_workflow::start_workflow_run,
             generation_workflow::list_workflow_runs,
             generation_workflow::cancel_workflow_run,
             generation_workflow::resume_workflow_run,
+            media_generation::describe_media_model,
+            media_generation::media_task_request,
             media_generation::start_media_generation,
             media_generation::get_media_task,
             media_generation::list_media_tasks,
@@ -657,6 +668,7 @@ pub fn run() {
             commands::replace_translation_pack_status,
             commands::replace_translation_pack_install,
             usage::usage_get_stats,
+            usage::usage_get_conversation_cost,
             usage::usage_clear,
             chat::commands::interaction::get_request_debug_records,
             chat::commands::interaction::clear_request_debug_records,
@@ -678,6 +690,8 @@ pub fn run() {
             chat::commands::catalog::chat_get_conversation_page,
             chat::commands::catalog::chat_get_conversation_revision,
             chat::export::chat_export_conversation_markdown,
+            chat::export::chat_export_set_backup,
+            chat::export::chat_import_set_backup,
             chat::commands::catalog::chat_create_conversation,
             chat::commands::catalog::chat_import_external_conversation,
             chat::commands::catalog::chat_create_builder_conversation,
@@ -775,6 +789,13 @@ pub fn run() {
             plugins::plugins_list,
             media_runtime::projects::dsvideo_projects,
             media_runtime::projects::dsvideo_project_bind,
+            plugins::packages::details::plugin_packages_describe,
+            plugins::marketplaces::plugin_marketplaces_list,
+            plugins::marketplaces::plugin_marketplaces_add,
+            plugins::marketplaces::plugin_marketplaces_refresh,
+            plugins::marketplaces::plugin_marketplaces_remove,
+            plugins::marketplaces::plugin_marketplaces_install,
+            plugins::marketplaces::plugin_marketplaces_describe,
             plugins::packages::plugin_packages_list,
             plugins::packages::plugin_packages_import,
             plugins::packages::plugin_packages_set_enabled,
@@ -811,6 +832,14 @@ pub fn run() {
             automation::commands::automation_import,
             automation::commands::automation_runs_list,
             automation::commands::automation_run_get,
+            scheduled_tasks::commands::scheduled_tasks_list,
+            scheduled_tasks::commands::scheduled_task_save,
+            scheduled_tasks::commands::scheduled_task_delete,
+            scheduled_tasks::commands::scheduled_task_set_enabled,
+            scheduled_tasks::commands::scheduled_task_run_now,
+            scheduled_tasks::commands::scheduled_task_runs,
+            scheduled_tasks::commands::scheduled_task_preview,
+            scheduled_tasks::commands::scheduled_task_run_delete,
             skills::chat_skills_list,
             skills::chat_skills_read,
             skills::chat_skills_import,
@@ -834,6 +863,7 @@ pub fn run() {
             dock::fs::dock_fs_list,
             dock::fs::dock_fs_search,
             dock::fs::dock_fs_read,
+            dock::fs::dock_project_icon,
             dock::fs::dock_fs_write,
             dock::fs::dock_fs_create,
             dock::fs::dock_fs_rename,
@@ -937,6 +967,10 @@ pub fn run() {
                     // OfficeCLI live preview (`officecli watch`) 等插件附属进程
                     crate::plugins::stop_all_previews();
                 }
+            }
+            // 桌宠只在最终退出时拆掉。ExitRequested 在用户关窗（code 为空）
+            // 和子进程清理未完成时都会 prevent_exit，那种路径进程还活着。
+            tauri::RunEvent::Exit => {
             }
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen {

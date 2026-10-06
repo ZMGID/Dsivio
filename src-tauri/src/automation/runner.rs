@@ -52,6 +52,9 @@ fn enqueue_mode(
     single_node_id: Option<String>,
 ) -> Result<AutomationRunStarted, String> {
     let automation = storage::get(&app, &id)?;
+    if single_node_id.is_none() {
+        super::validate::ensure_runnable(&automation)?;
+    }
     execution_start(&automation, origin, single_node_id.as_deref())?;
     if origin.is_production() && !automation.enabled {
         return Err("automation is not enabled".to_string());
@@ -410,7 +413,7 @@ async fn execute_node(
             let body = interpolate(template, prev);
             let language = application::settings_language(app);
             let title = if language == "en" {
-                "Kivio automation"
+                "Dsivio automation"
             } else {
                 "Kivio 自动化"
             };

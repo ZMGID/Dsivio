@@ -37,7 +37,8 @@ struct BuiltIn {
     adapter_files: Vec<(String, String)>,
     project: Option<ProjectSpec>,
     project_prompt: Option<String>,
-    icon: String,
+    icon: Vec<u8>,
+    icon_mime: &'static str,
     icon_path: String,
     required_files: Vec<String>,
     repository: String,
@@ -120,12 +121,16 @@ fn validate_archive_relative_path(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn catalog_text(dir: &Path, relative: &str) -> Result<String, String> {
+fn catalog_bytes(dir: &Path, relative: &str) -> Result<Vec<u8>, String> {
     if relative.is_empty()
         || relative.starts_with('/')
         || relative.split(['/', '\\']).any(|part| part.is_empty() || part == "." || part == "..")
     { return Err(format!("目录文件路径无效：{relative}")); }
-    fs::read_to_string(dir.join(relative)).map_err(|e| format!("无法读取 {relative}：{e}"))
+    fs::read(dir.join(relative)).map_err(|e| format!("无法读取 {relative}：{e}"))
+}
+
+fn catalog_text(dir: &Path, relative: &str) -> Result<String, String> {
+    String::from_utf8(catalog_bytes(dir, relative)?).map_err(|e| format!("无法读取 {relative}：{e}"))
 }
 
 /// Shared reference about Dsivio. Only setups that ask to read it get a copy,
@@ -179,7 +184,8 @@ fn load_catalog_from(dir: &Path) -> Result<Catalog, String> {
             dsivio_reference,
             adapter_files,
             entry: plugin.entry.as_deref().map(|path| catalog_text(dir, path)).transpose()?,
-            icon: catalog_text(dir, &plugin.icon)?,
+            icon: catalog_bytes(dir, &plugin.icon)?,
+            icon_mime: if plugin.icon.ends_with(".png") { "image/png" } else { "image/svg+xml" },
             id: plugin.id,
             name: plugin.name,
             skill_id: plugin.skill_id,
@@ -1315,7 +1321,7 @@ fn built_in_command(item: &BuiltIn, request: &Value) -> Result<Value, String> {
     match action {
         "icon" => {
             use base64::Engine;
-            Ok(json!(format!("data:image/svg+xml;base64,{}", base64::engine::general_purpose::STANDARD.encode(item.icon.as_bytes()))))
+            Ok(json!(format!("data:{};base64,{}", item.icon_mime, base64::engine::general_purpose::STANDARD.encode(&item.icon))))
         }
         "setup_state" => {
             // Read right before the plugin is used: refresh shipped setup files first, so an app
@@ -1780,28 +1786,29 @@ mod tests {
         assert_eq!(snapshot["entries"][3]["manifest"]["startPrompt"], "使用飞书 CLI，告诉我可以做什么。");
         assert_eq!(snapshot["entries"][3]["manifest"]["categoryIds"][0], "productivity");
         assert_eq!(snapshot["entries"][3]["manifest"]["skillIds"].as_array().unwrap().len(), 1);
-        assert!(hypit.icon.contains("viewBox=\"54.9 170.6 252.6 252.6\""));
-        assert!(remotion.icon.contains("viewBox=\"0 0 410 425\""));
-        assert!(whiteboard.icon.contains("viewBox=\"0 0 64 64\""));
-        assert!(feishu.icon.contains("viewBox=\"0 0 24 24\""));
+        assert!(String::from_utf8_lossy(&hypit.icon).contains("viewBox=\"54.9 170.6 252.6 252.6\""));
+        assert!(String::from_utf8_lossy(&remotion.icon).contains("viewBox=\"0 0 410 425\""));
+        assert!(String::from_utf8_lossy(&whiteboard.icon).contains("viewBox=\"0 0 64 64\""));
+        assert!(feishu.icon.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(feishu.icon_mime, "image/png");
         assert_eq!(snapshot["entries"][4]["id"], "davinci-resolve");
         assert_eq!(snapshot["entries"][4]["manifest"]["categoryIds"][0], "videos");
         assert_eq!(snapshot["entries"][4]["manifest"]["icon"], "assets/davinci-resolve-logo.svg");
-        assert!(resolve.icon.contains("viewBox=\"0 0 24 24\""));
+        assert!(String::from_utf8_lossy(&resolve.icon).contains("viewBox=\"0 0 24 24\""));
         let fanpai = plugin("daihuo-fanpai");
         assert!(fanpai.setup.contains("github.com/wangcanyu/daihuo-fanpai"));
         assert!(fanpai.setup.contains("python3 doctor.py"));
         assert_eq!(snapshot["entries"][5]["id"], "daihuo-fanpai");
         assert_eq!(snapshot["entries"][5]["manifest"]["categoryIds"][0], "videos");
         assert_eq!(snapshot["entries"][5]["manifest"]["icon"], "assets/daihuo-fanpai-logo.svg");
-        assert!(fanpai.icon.contains("viewBox=\"0 0 48 48\""));
+        assert!(String::from_utf8_lossy(&fanpai.icon).contains("viewBox=\"0 0 48 48\""));
         let jianying = plugin("jianying-editor");
         assert!(jianying.setup.contains("github.com/luoluoluo22/jianying-editor-skill"));
         assert!(jianying.setup.contains("scripts/jy_wrapper.py"));
         assert_eq!(snapshot["entries"][6]["id"], "jianying-editor");
         assert_eq!(snapshot["entries"][6]["manifest"]["categoryIds"][0], "videos");
         assert_eq!(snapshot["entries"][6]["manifest"]["icon"], "assets/jianying-editor-logo.svg");
-        assert!(jianying.icon.contains("viewBox=\"0 0 32 32\""));
+        assert!(String::from_utf8_lossy(&jianying.icon).contains("viewBox=\"0 0 32 32\""));
         let wecom = plugin("wecom-cli");
         assert!(wecom.setup.contains("npx skills add WeComTeam/wecom-cli -y -g"));
         assert!(wecom.setup.contains("wecom-cli auth show --status"));
@@ -1811,7 +1818,8 @@ mod tests {
         assert_eq!(snapshot["entries"][7]["manifest"]["categoryIds"][0], "productivity");
         assert_eq!(snapshot["entries"][7]["manifest"]["icon"], "assets/wecom-logo.svg");
         assert_eq!(snapshot["entries"][7]["manifest"]["skillIds"].as_array().unwrap().len(), 1);
-        assert!(wecom.icon.contains("viewBox=\"0 0 24 24\""));
+        assert!(wecom.icon.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert_eq!(wecom.icon_mime, "image/png");
         let ziniao = plugin("ziniao-cli");
         assert_eq!(ziniao.preset_plugin_id.as_deref(), Some("ziniao-cli"));
         assert!(ziniao.setup.contains("ziniao-cli doctor"));
@@ -1831,7 +1839,7 @@ mod tests {
         assert_eq!(shopify.skill_id, "shopify-use-shopify-cli");
         assert_eq!(shopify.skills, ["shopify-use-shopify-cli", "shopify-admin", "shopify-shopifyql"]);
         assert!(shopify.setup.contains("shopify store auth list"));
-        assert!(shopify.icon.contains("viewBox=\"0 0 109.5 124.5\""));
+        assert!(String::from_utf8_lossy(&shopify.icon).contains("viewBox=\"0 0 109.5 124.5\""));
         assert_eq!(snapshot["entries"][10]["id"], "shopify-ai-toolkit");
         assert_eq!(snapshot["entries"][10]["manifest"]["categoryIds"][0], "commerce");
         assert_eq!(snapshot["entries"][10]["manifest"]["icon"], "assets/shopify-ai-toolkit-logo.svg");

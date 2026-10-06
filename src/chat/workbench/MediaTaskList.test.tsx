@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { save } from '@tauri-apps/plugin-dialog'
@@ -51,4 +51,16 @@ describe('Media task cancellation and artifact presentation', () => {
     expect(view.container.querySelector('audio')).toHaveAttribute('src', '/fixture/speech.wav')
     expect(view.container.querySelector('video')).toBeNull()
   })
+})
+
+it('decodes a first video frame without autoplay and does not reset a started video', () => {
+  const view = render(<MediaTaskRow task={{ ...task, kind: 'video', status: 'succeeded', outputs: [{ path: '/fixture/out.mp4', mime: 'video/mp4' }] }} alt="Video" onResume={vi.fn()} onError={vi.fn()} onCancel={vi.fn()} />)
+  const video = view.container.querySelector('video')!
+  Object.defineProperty(video, 'duration', { configurable: true, value: 2 })
+  fireEvent.loadedMetadata(video)
+  expect(video.currentTime).toBe(0.001)
+  expect(video.autoplay).toBe(false)
+  video.currentTime = 1
+  fireEvent.loadedMetadata(video)
+  expect(video.currentTime).toBe(1)
 })

@@ -29,6 +29,7 @@ path = "build_support/resources.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+croner = "4"
 # Tauri 核心及插件
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "protocol-asset"] }
 serde = { version = "1", features = ["derive"] }

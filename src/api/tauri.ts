@@ -48,8 +48,10 @@ import type {
   ChatSegmentPayload as GeneratedChatSegmentPayload,
 } from '../generated/chatProtocol'
 import type { Automation, AutomationChangedEvent, AutomationMeta, AutomationRun, AutomationRunEvent, AutomationRunStarted, AutomationRunSummary, NodeOutput, ValidationIssue } from './automationContracts'
+import type { ScheduleRule, ScheduledTask, ScheduledTaskInput, ScheduledTaskRun, ScheduledTasksChangedEvent } from './scheduledTaskContracts'
 import type { GoalState } from './goalContracts'
 import { normalizeGitDiffStat, normalizeGitRepoState, type GitSnapshot } from './dockContracts'
+import type { ThemeDefinition } from '../theme/types'
 
 // ========== 类型定义 ==========
 
@@ -132,6 +134,7 @@ export type ChatContextUsageSegment = {
   label: string
   estimated_tokens?: number
   estimatedTokens?: number
+  chars?: number
   color?: string | null
 }
 
@@ -178,10 +181,25 @@ export type ChatContextState = {
   autoCompactThresholdTokens?: number | null
   context_window_estimated?: boolean
   contextWindowEstimated?: boolean
+  context_source?: string | null
+  contextSource?: string | null
+  token_count_source?: string | null
+  tokenCountSource?: string | null
+  session_input_tokens?: number | null
+  sessionInputTokens?: number | null
   usage_ratio?: number | null
   usageRatio?: number | null
   status?: string
   segments?: ChatContextUsageSegment[]
+  reported_context_tokens?: number | null
+  reportedContextTokens?: number | null
+  /** Backend measurement order. Full snapshots and live reports share it. */
+  measurement_seq?: number | null
+  measurementSeq?: number | null
+  lifecycle_id?: number | null
+  lifecycleId?: number | null
+  cache_hit_rate?: number | null
+  cacheHitRate?: number | null
   last_measured_at?: number
   lastMeasuredAt?: number
   last_compressed_at?: number | null
@@ -198,18 +216,29 @@ export type ChatContextState = {
 }
 
 export type ChatContextLiveUsage = {
-  /** 此刻已用（分子）。口径与轮末权威值一致，真源在 Rust 侧。 */
+  /** 最近主请求的 API 实报输入＋输出；无来源的事件清除失效实报。 */
   usedTokens: number
-  /** 实报、实报加新增估算或无实报；不能继承上一条快照的来源。 */
+  /** `provider_context_reported` 或空值（历史已改写）；不能继承旧快照来源。 */
   tokenCountSource?: string | null
   /** 上下文窗口（分母）。`null` = 本次上报没带窗口，前端必须保留已知的旧值（分母粘滞）。 */
   contextWindowTokens?: number | null
+  cacheInputTokens?: number | null
+  cacheReadTokens?: number | null
+  /**
+   * 与完整快照共用的后端测量序号。更小的序号不能覆盖已应用的测量；
+   * 失效（改写、压缩、清空、换模型）使用更大的序号。
+   */
+  measurementSeq?: number | null
+  /** Bumped on model change, compaction, and context clear. A higher id invalidates omitted fields. */
+  lifecycleId?: number | null
+  /** Null or omitted keeps the previous categories. An empty array clears them. */
+  segments?: ChatContextUsageSegment[] | null
 }
 
 /**
  * 上下文状态更新。两种形态共用这一条通道：
- * - `contextState` —— 轮末/手动刷新的**权威快照**（含分段、压缩计数、来源标签）。
- * - `live` —— 生成过程中的**活数**（分子 + 分母 + 来源）。完整快照的分段计算不在增量通道执行。
+ * - `contextState` —— 轮末/手动刷新的快照（内部估算与 API 实报分开存放）。
+ * - `live` —— API 实报占用、主请求累计缓存计数或压缩后的失效通知，不传入本地估算。
  */
 export type ChatContextPayload = {
   conversationId: string
@@ -241,6 +270,8 @@ export type ChatTodoState = {
 export type ChatTodoPayload = {
   conversationId: string
   todoState: ChatTodoState
+  /** Conversation revision of a persisted update; absent for run-scoped replays. */
+  revision?: number
 }
 
 export type ChatPlanMode = 'act' | 'plan'
@@ -508,6 +539,7 @@ export type ChatNativeToolsConfig = {
   runCommand?: boolean
   knowledgeSearch?: boolean
   automation?: boolean
+  scheduledTasks?: boolean
   workingDirectory?: string
   /** Legacy settings compatibility only. */
   workspaceRoots?: string[]
@@ -696,11 +728,12 @@ export type ChatToolsConfig = {
   approvalPolicy: 'readonly_auto_sensitive_confirm' | 'always_confirm' | 'auto' | string
   /** 同一时刻最多并行运行的子 agent 数（后端钳制 1..64，默认 12）。 */
   subAgentConcurrency?: number
-  /** 子代理全局模型覆盖（providerId+model，皆空 = 跟随主对话模型）。agent 定义的 model 字段仍优先。 */
-  subAgentProviderId?: string
-  subAgentModel?: string
+  /** 子代理角色的模型与推理强度；SMOL/SLOW 未配置时跟随 TASK，TASK 跟随主对话。 */
+  subAgentModels?: Record<string, SubAgentModelSelection>
   /** 开发者「请求调试」开关：开启后每次 provider 调用被记录到内存环形缓冲（脱敏）。默认关。 */
   requestDebugEnabled?: boolean
+  /** Browser extension credential, passed to Playwright CLI through its environment. */
+  playwrightExtensionToken?: string
   nativeTools: ChatNativeToolsConfig
 }
 
@@ -1002,9 +1035,9 @@ export function isOpenCodeFree(provider: ModelProvider): boolean {
     && provider.apiKeys.every(key => !key.trim())
 }
 
-export function providerHasCredentials(provider: ModelProvider): boolean {
-  if (isOpenCodeFree(provider)) return true
-  return provider.request.oauth ? Boolean(provider.request.oauth.credentialId) : provider.apiKeys.some(key => key.trim() !== '')
+export function providerAuthenticationReady(provider: ModelProvider): boolean {
+  // API keys are optional for local/anonymous endpoints; OAuth still requires login.
+  return !provider.request.oauth || Boolean(provider.request.oauth.credentialId)
 }
 
 export type ProviderRequestConfig = {
@@ -1060,6 +1093,12 @@ export type ProviderConnectionInput = {
   apiFormat?: string
   /** 编辑中（可能尚未保存）的请求配置。不传则后端回落已保存的那份。 */
   request?: ProviderRequestConfig
+}
+
+export type SubAgentModelSelection = {
+  providerId: string
+  model: string
+  thinkingLevel?: string | null
 }
 
 export type DefaultModelsConfig = {
@@ -1185,7 +1224,10 @@ export type Settings = {
   /** 关闭 AI 客户端（chat 窗口）的全局热键。 */
   closeChatHotkey: string
   theme: 'system' | 'light' | 'dark'
-  themeColor: 'neutral' | 'warm' | 'cool'
+  /** 主题 id：内置主题或 customThemes 中的自定义 id。非法选择由后端收成 neutral。 */
+  themeColor: string
+  /** 自定义主题。旧快照可省略；后端 canonical 响应总是返回完整数组。 */
+  customThemes?: ThemeDefinition[]
   translucentSidebar: boolean
   uiFontScale?: number
   uiFontFamily?: string
@@ -1410,6 +1452,12 @@ export type PluginInstallBrief = {
 }
 
 export type UsageRange = 'today' | '1d' | '7d' | '30d' | '90d' | '365d'
+
+export type ConversationCost = {
+  costUsd: number | null
+  unpricedRequests: number
+  skippedRecords: number
+}
 
 export type UsageStatsQuery = {
   range?: UsageRange
@@ -1883,6 +1931,8 @@ export const api = {
   cancelWorkflowRun: (id: string) => invoke<void>('cancel_workflow_run', { id }),
   validateComfyWorkflow: (workflow: ComfyWorkflow) => invoke<void>('validate_comfy_workflow', { workflow }),
   testComfyConnection: (baseUrl: string, workflow: ComfyWorkflow | null = null) => invoke<ComfyConnection>('test_comfy_connection', { baseUrl, workflow }),
+  describeMediaModel: (providerId: string, model: string, kind: 'image' | 'video') => invoke<import('../generated/mediaGeneration').MediaModelInfo>('describe_media_model', { providerId, model, kind }),
+  mediaTaskRequest: (id: string) => invoke<MediaRequest>('media_task_request', { id }),
   startMediaGeneration: (request: MediaRequest) => invoke<MediaTask>('start_media_generation', { request }),
   runAiTask: (request: AiTaskRequest) => invoke<AiTaskResult>('run_ai_task', { request }),
   cancelAiTask: (taskId: string) => invoke<void>('cancel_ai_task', { taskId }),
@@ -1892,7 +1942,7 @@ export const api = {
   deleteMediaTask: (id: string) => invoke<void>('delete_media_task', { id }),
   recordMediaOutput: (request: RecordOutputRequest) => invoke<MediaTask>('record_media_output', { request }),
   importMediaArtifact: (origin: string, path: string, title?: string | null) => invoke<MediaTask>('import_media_artifact', { origin, path, title: title ?? null }),
-  exportMediaOutput: (id: string, destination: string) => invoke<string>('export_media_output', { id, destination }),
+  exportMediaOutput: (id: string, destination: string, index = 0) => invoke<string>('export_media_output', { id, destination, index }),
   revealGeneratedFile: (path: string) => invoke<void>('chat_reveal_generated_artifact', { path }),
   listMediaVoices: () => invoke<VoiceReference[]>('list_media_voices'),
   deleteMediaVoice: (id: string) => invoke<void>('delete_media_voice', { id }),
@@ -1961,7 +2011,6 @@ export const api = {
   providerOAuthAccount: (provider: ModelProvider) => invoke<ProviderOAuthAccount>('provider_oauth_account', { provider }),
   providerOAuthUsage: (provider: ModelProvider) => invoke<ProviderOAuthUsage>('provider_oauth_usage', { provider }),
   providerOAuthDisconnect: (credentialId: string) => invoke<void>('provider_oauth_disconnect', { credentialId }),
-  // 设置相关
   getSettings: async () => normalizeSettingsSnapshot(await invoke<SettingsSnapshot>('get_settings')),
   onKivioSettingsChanged: (listener: (event: SettingsChangedEvent) => void) =>
     on<SettingsChangedEvent>('kivio-settings-changed', listener),
@@ -1983,6 +2032,8 @@ export const api = {
     normalizeSettingsSnapshot(await invoke<SettingsSnapshot>('import_settings', { path, expectedVersion })),
   usageGetStats: (query?: UsageStatsQuery) =>
     invoke<UsageStatsResponse>('usage_get_stats', { query }),
+  usageGetConversationCost: (conversationId: string) =>
+    invoke<ConversationCost>('usage_get_conversation_cost', { conversationId }),
   usageClear: () => invoke<void>('usage_clear'),
   getRequestDebugRecords: () =>
     invoke<RequestDebugRecord[]>('get_request_debug_records'),
@@ -2110,6 +2161,19 @@ export const api = {
   onAutomationChanged: (listener: (payload: AutomationChangedEvent) => void) =>
     on<AutomationChangedEvent>('automation-changed', listener),
 
+  scheduledTasksList: () => invoke<ScheduledTask[]>('scheduled_tasks_list'),
+  scheduledTaskSave: (task: ScheduledTaskInput) =>
+    invoke<ScheduledTask>('scheduled_task_save', { task }),
+  scheduledTaskDelete: (id: string) => invoke<void>('scheduled_task_delete', { id }),
+  scheduledTaskSetEnabled: (id: string, enabled: boolean) =>
+    invoke<ScheduledTask>('scheduled_task_set_enabled', { id, enabled }),
+  scheduledTaskRunNow: (id: string) => invoke<ScheduledTaskRun>('scheduled_task_run_now', { id }),
+  scheduledTaskRuns: (id: string) => invoke<ScheduledTaskRun[]>('scheduled_task_runs', { id }),
+  scheduledTaskRunDelete: (taskId: string, runId: string) => invoke<void>('scheduled_task_run_delete', { taskId, runId }),
+  scheduledTaskPreview: (schedule: ScheduleRule) => invoke<number[]>('scheduled_task_preview', { schedule }),
+  onScheduledTasksChanged: (handler: (payload: ScheduledTasksChangedEvent) => void) =>
+    on<ScheduledTasksChangedEvent>('scheduled-tasks-changed', handler),
+
   // 窗口控制
   /** 给当前（chat）窗口上 Mica，返回材质是否真的生效。Win10 没有 Mica 时为 false —— 这条
    *  路走后端而不是 window.setEffects()，因为 tauri 把 apply_mica 的失败静默吞掉了。 */
@@ -2120,8 +2184,8 @@ export const api = {
   chatWindowSetOpaque: (opaque: boolean): Promise<void> =>
     invoke('chat_window_set_opaque', { opaque }),
   /** macOS 交通灯中心距内容顶缘的真实距离（CSS px）。取不到返回 null，前端退回默认值。 */
-  chatTrafficLightCenterY: (): Promise<number | null> =>
-    invoke('chat_traffic_light_center_y'),
+  chatTrafficLightCenterY: (centerY: number): Promise<number | null> =>
+    invoke('chat_traffic_light_center_y', { centerY }),
   chatReportNotificationView: (route: string, viewing: boolean): Promise<void> =>
     invoke('chat_report_notification_view', { route, viewing }),
   resizeWindow: async (width: number, height: number) => {
@@ -2210,7 +2274,11 @@ export const api = {
     if (!isTauriRuntime()) return Promise.resolve(() => {})
     return onChatProtocol((event) => {
       if (event.type !== 'todo_updated') return
-      listener({ conversationId: event.conversationId, todoState: event.todoState as ChatTodoState })
+      listener({
+        conversationId: event.conversationId,
+        todoState: event.todoState as ChatTodoState,
+        revision: event.scope === 'conversation' ? event.revision : undefined,
+      })
     })
   },
   onChatPlan: (listener: (payload: ChatPlanPayload) => void) => {
