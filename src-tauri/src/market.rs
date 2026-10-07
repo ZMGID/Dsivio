@@ -1481,8 +1481,12 @@ fn built_in_skill_plan(item: &BuiltIn, state: &BuiltInState, root: &Path) -> Res
         }
         let complete = dir.join("SKILL.md").is_file()
             && (skill != &item.skill_id || item.required_files.iter().all(|file| dir.join(file).is_file()));
-        if complete { continue; }
-        if !market_owned_skill(item, state, root, skill) {
+        let owned = market_owned_skill(item, state, root, skill);
+        let bundled_update = item.bundled_skills.is_some()
+            && state.revision.as_deref() != Some(item.revision.as_str())
+            && owned;
+        if complete && !bundled_update { continue; }
+        if !owned {
             return Err(format!("{} 已存在不完整的用户 Skill，请先检查", dir.display()));
         }
         missing.push(skill.clone());
@@ -1911,6 +1915,54 @@ mod tests {
         assert!(built_in_ready_at(&item, &state, dir.path()));
         fs::remove_file(dir.path().join("remotion-render/SKILL.md")).unwrap();
         assert!(!built_in_ready_at(&item, &state, dir.path()));
+    }
+
+    #[test]
+    fn bundled_skill_upgrade_replaces_owned_complete_skills_only() {
+        let mut item = plugin("shopee-research");
+        let root = tempfile::tempdir().unwrap();
+        stage_bundled_skills(&item, root.path()).unwrap();
+        sync_setup_files(&item, &root.path().join(built_in_setup_id(&item))).unwrap();
+        let skill = root.path().join(&item.skill_id);
+        let state = BuiltInState {
+            revision: Some(item.revision.clone()),
+            owned_skills: vec![item.skill_id.clone()],
+            ..Default::default()
+        };
+        fs::write(skill.join(".kivio-market-owner.json"),
+            serde_json::to_vec(&json!({"id": item.id, "revision": item.revision})).unwrap()).unwrap();
+        assert_eq!(built_in_skill_plan(&item, &state, root.path()).unwrap(), (vec![], vec![]));
+
+        item.revision = "bundled-next".into();
+        assert!(!built_in_ready_at(&item, &state, root.path()));
+        let expected = vec![item.skill_id.clone()];
+        assert_eq!(built_in_skill_plan(&item, &state, root.path()).unwrap(),
+            (expected.clone(), expected));
+
+        // A complete user-owned Skill must never be replaced by a catalog update.
+        fs::remove_file(skill.join(".kivio-market-owner.json")).unwrap();
+        assert_eq!(built_in_skill_plan(&item, &state, root.path()).unwrap(), (vec![], vec![]));
+    }
+
+    #[test]
+    fn bundled_shopee_research_installs_and_detects_missing_report_format() {
+        let item = plugin("shopee-research");
+        assert!(item.repository.is_empty());
+        let root = tempfile::tempdir().unwrap();
+        stage_bundled_skills(&item, root.path()).unwrap();
+        sync_setup_files(&item, &root.path().join(built_in_setup_id(&item))).unwrap();
+        let state = BuiltInState { revision: Some(item.revision.clone()), ..Default::default() };
+        assert!(built_in_ready_at(&item, &state, root.path()));
+        assert_eq!(built_in_skill_plan(&item, &state, root.path()).unwrap(), (vec![], vec![]));
+        let reference = "shopee-research/references/report-format.md";
+        assert_eq!(fs::read(root.path().join(reference)).unwrap(),
+            fs::read(item.bundled_skills.as_ref().unwrap().join(reference)).unwrap());
+        let manifest = built_in_manifest(&item);
+        assert_eq!(manifest["categoryIds"][0], "commerce");
+        assert_eq!(manifest["mainSkillId"], "shopee-research");
+        assert_eq!(manifest["setupSkillId"], "shopee-research-setup");
+        fs::remove_file(root.path().join(reference)).unwrap();
+        assert!(!built_in_ready_at(&item, &state, root.path()));
     }
 
     #[test]

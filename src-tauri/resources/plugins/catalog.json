@@ -270,6 +270,25 @@
       ],
       "unpack": "skills",
       "bundledSkills": "dscraw-report/skills"
+    },
+    {
+      "id": "shopee-research",
+      "name": "虾皮商品调研",
+      "skillId": "shopee-research",
+      "summary": "用 CUA 操作你已有的 Chrome，筛选虾皮竞品、核对规格价格，并生成带图调研表。",
+      "welcome": "发来商品图片、名称或链接，告诉我要调研的站点。首次使用时选择结果保存目录。",
+      "inputHint": "调研这个商品在虾皮巴西站的竞品，按默认格式生成调研表。",
+      "startPrompt": "使用虾皮商品调研，用 CUA 操作我已打开的 Chrome。先读取已有配置，缺少时让我选择站点和结果目录，再根据我提供的商品做调研。",
+      "setup": "shopee-research-setup/SKILL.md",
+      "icon": "shopee-research-logo.svg",
+      "iconPath": "assets/shopee-research-logo.svg",
+      "requiredFiles": ["references/report-format.md", "scripts/prepare_images.py", "scripts/embed_images.py"],
+      "repository": "",
+      "revision": "bundled-2026-10-08.5",
+      "skills": ["shopee-research"],
+      "categoryIds": ["commerce"],
+      "unpack": "skills",
+      "bundledSkills": "shopee-research/skills"
     }
   ]
 }

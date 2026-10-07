@@ -65,7 +65,7 @@ it('使用插件新建对话时不复用（也不受）当前运行中的对话'
 })
 
 it('内置插件使用直接安装和卸载流程', () => {
-  for (const id of ['hypit', 'remotion-agent-skills', 'srt-whiteboard-animation', 'feishu-cli', 'davinci-resolve', 'daihuo-fanpai', 'jianying-editor', 'wecom-cli', '1688-shopkeeper', 'ziniao-cli', 'shopify-ai-toolkit', 'dscraw-report']) {
+  for (const id of ['hypit', 'remotion-agent-skills', 'srt-whiteboard-animation', 'feishu-cli', 'davinci-resolve', 'daihuo-fanpai', 'jianying-editor', 'wecom-cli', '1688-shopkeeper', 'ziniao-cli', 'shopify-ai-toolkit', 'dscraw-report', 'shopee-research']) {
     expect(isBuiltInMarketId(id), id).toBe(true)
   }
   expect(isBuiltInMarketId('external-plugin')).toBe(false)
