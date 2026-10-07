@@ -1,0 +1,4 @@
+interface:
+  display_name: "紫鸟店铺日报"
+  short_description: "每份日报独立配置店铺与模板，共享多平台取数、日期核验与归档流程"
+  default_prompt: "使用 $dscraw-report，首次选择要做日报的店铺、数据目录和每日执行时间；已有配置则直接复用。"

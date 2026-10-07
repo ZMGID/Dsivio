@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__DOCUMENT_TITLE__</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:1136px;min-height:645px}body{font-family:"Microsoft YaHei",Arial,sans-serif;background:#f5f6f8;color:#192537}.report{padding:32px 36px;min-height:645px}.top{border-bottom:3px solid #267f77;padding-bottom:18px}.top h1{font-size:27px;margin:0;overflow-wrap:anywhere}.summary{display:flex;flex-wrap:wrap;gap:8px 24px;margin-top:12px;font-size:14px;line-height:22px}.summary span{white-space:nowrap}table{table-layout:fixed;border-collapse:collapse;width:100%;margin-top:24px;background:#fff;font-size:14px}th{background:#e3efed;color:#255c55;font-weight:700;text-align:left}th,td{padding:14px 12px;border-bottom:1px solid #d9e0e5;vertical-align:top;overflow-wrap:anywhere;line-height:23px}.number{text-align:right;font-variant-numeric:tabular-nums}.store-name{font-weight:700}.sub{display:block;font-size:11px;line-height:18px;color:#697887}.status{color:#28754d}.partial{color:#aa680b}.missing,.reason{color:#a34d45}.reason{font-size:11px;line-height:17px;margin-top:4px}
+</style>
+</head>
+<body><main class="report"><header class="top"><h1 id="report-title"></h1><div class="summary" id="summary"></div></header><table aria-label="店铺日报"><colgroup><col style="width:20%"><col style="width:19%"><col style="width:16%"><col style="width:16%"><col style="width:10%"><col style="width:19%"></colgroup><thead><tr><th>店铺</th><th class="number">销售额</th><th class="number">数量</th><th class="number">广告花费</th><th class="number">ROI</th><th>状态</th></tr></thead><tbody id="store-grid"></tbody></table></main>
+<script>
+const report=__REPORT_JSON__;
+/* [Sources]
+__SOURCES__
+*/
+const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
+document.getElementById('report-title').textContent=`${report.title} ${report.dateText} 日报`;
+const partial=report.capturedCount<report.expectedCount?'已获取':'';
+const summary=[`${partial}店铺 ${report.capturedCount}/${report.expectedCount}`,...Object.entries(report.salesTotals).map(([currency,value])=>`${partial}销售额 ${currency} ${value}`),...Object.values(report.quantityTotals).map(item=>`${partial}${item.label} ${item.value}`)];
+document.getElementById('summary').innerHTML=summary.map(value=>`<span>${escapeHtml(value)}</span>`).join('');
+document.getElementById('store-grid').innerHTML=report.stores.map(store=>{
+  const state=store.status==='未获取'?'missing':store.status==='部分获取'?'partial':'';
+  const reason=[store.missingReason,store.adMissingReason].filter(Boolean).join('；');
+  return `<tr class="store-row"><td><div class="store-name">${escapeHtml(store.name)}</div><span class="sub">${escapeHtml(store.platformName)}</span></td><td class="number">${store.sales==null?'未获取':escapeHtml(store.sales)}<span class="sub">${escapeHtml(store.currency)}</span></td><td class="number">${store.orders==null?'未获取':escapeHtml(store.orders)}<span class="sub">${escapeHtml(store.orderLabel)}</span></td><td class="number">${store.collectAds?(store.adCost==null?'未获取':escapeHtml(store.adCost)):'—'}${store.collectAds?`<span class="sub">${escapeHtml(store.currency)}</span>`:''}</td><td class="number">${store.collectAds?(store.roi==null?'未获取':escapeHtml(store.roi)):'—'}</td><td><span class="status ${state}">${store.status==='成功'?'已获取':store.status}</span>${reason?`<div class="reason">${escapeHtml(reason)}</div>`:''}</td></tr>`;
+}).join('');
+</script>
+</body></html>

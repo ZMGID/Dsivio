@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 64 64" role="img" aria-label="紫鸟店铺日报">
+  <defs>
+    <linearGradient id="daily-report-purple" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9B6BFF"/>
+      <stop offset="1" stop-color="#5B21B6"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#daily-report-purple)"/>
+  <path d="M12 34C12 24 21 16 32 16C36 16 39 18 39 22L49 25L40 29C38 39 31 47 19 48H13C21 42 25 35 25 28C22 31 17 33 12 34Z" fill="#fff"/>
+  <circle cx="34" cy="22" r="1.7" fill="#6D28D9"/>
+  <rect x="32" y="40" width="4.5" height="9" rx="1.5" fill="#DDD6FE"/>
+  <rect x="40" y="35" width="4.5" height="14" rx="1.5" fill="#EDE9FE"/>
+  <rect x="48" y="30" width="4.5" height="19" rx="1.5" fill="#fff"/>
+</svg>

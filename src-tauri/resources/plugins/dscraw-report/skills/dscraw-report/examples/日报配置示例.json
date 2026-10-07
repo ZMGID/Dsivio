@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "report": {
+    "title": "示例类目",
+    "filePrefix": "示例日报",
+    "outputRoot": "C:/REPLACE_WITH_YOUR_OUTPUT/示例日报",
+    "workbookName": "示例日报数据汇总.xlsx",
+    "dateUtcOffsetMinutes": -180,
+    "delivery": "local_links",
+    "outputs": [
+      {
+        "id": "甲方简版",
+        "template": "cards",
+        "renderer": "summary",
+        "formats": [
+          "html",
+          "png"
+        ],
+        "directory": "日报"
+      },
+      {
+        "id": "内部运营",
+        "template": "operations",
+        "renderer": "operations",
+        "formats": [
+          "html"
+        ],
+        "directory": "运营分析",
+        "suffix": "运营分析"
+      }
+    ]
+  },
+  "requirements": [
+    "仅采接收方确认店铺；Excel目标日行为主来源，缺项null。"
+  ],
+  "stores": [
+    {
+      "storeId": "10001",
+      "name": "虚构示例-shopee",
+      "expectedName": "替换为紫鸟准确店名-shopee",
+      "platform": "shopee",
+      "enabled": false,
+      "region": "BR",
+      "currency": "BRL",
+      "timeZone": "America/Sao_Paulo",
+      "expectedAccount": "",
+      "collectAds": false,
+      "orderMetric": "orders",
+      "requirements": []
+    },
+    {
+      "storeId": "10002",
+      "name": "虚构示例-tiktok",
+      "expectedName": "替换为紫鸟准确店名-tiktok",
+      "platform": "tiktok",
+      "enabled": false,
+      "region": "BR",
+      "currency": "BRL",
+      "timeZone": "America/Sao_Paulo",
+      "expectedAccount": "",
+      "collectAds": false,
+      "orderMetric": "orders",
+      "requirements": []
+    },
+    {
+      "storeId": "10003",
+      "name": "虚构示例-shein",
+      "expectedName": "替换为紫鸟准确店名-shein",
+      "platform": "shein",
+      "enabled": false,
+      "region": "BR",
+      "currency": "BRL",
+      "timeZone": "America/Sao_Paulo",
+      "expectedAccount": "",
+      "collectAds": false,
+      "orderMetric": "unitsSold",
+      "requirements": []
+    }
+  ],
+  "lastRun": null
+}

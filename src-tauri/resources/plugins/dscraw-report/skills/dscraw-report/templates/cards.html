@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__DOCUMENT_TITLE__</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:1136px;min-height:645px}body{font-family:"Microsoft YaHei","PingFang SC",Arial,sans-serif;color:#142033;background:#f6f7f6}.report{width:1136px;min-height:645px}.top{min-height:98px;padding:16px 44px;color:#fff;background:#17365d;border-bottom:4px solid #2f7fbd}.top h1{margin:0;font-size:25px;line-height:1.25;font-weight:800;overflow-wrap:anywhere}.summary{display:flex;flex-wrap:wrap;gap:6px 22px;margin-top:8px;font-size:14px;line-height:20px}.summary span{white-space:nowrap}.grid{display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:minmax(145px,auto);column-gap:32px;row-gap:16px;padding:22px 44px 20px}.store{min-width:0;padding:0 14px 10px;background:#fff;border:1px solid #cfd6da}.store-head{min-height:44px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border-bottom:1px solid #cfd6da;padding:8px 0}.store-name{font-size:17px;font-weight:800;line-height:22px;overflow-wrap:anywhere}.status{padding:5px 8px;border-radius:3px;color:#fff;background:#247a58;text-align:center;font-size:11px;font-weight:800;white-space:nowrap}.status.partial{background:#bd7b18}.status.missing{background:#b94a42}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:0}.metric{min-width:0;padding:10px 5px}.metric+.metric{padding-left:20px;border-left:1px solid #dfe4e6}.metric small{display:block;color:#6e7d86;font-size:11px;font-weight:700}.metric b{display:block;margin-top:4px;color:#17283a;font-size:26px;line-height:1.1;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.ads{font-size:12px;font-weight:700;line-height:18px;overflow-wrap:anywhere;color:#29577e}.reason{font-size:11px;line-height:16px;color:#8c433b;overflow-wrap:anywhere;margin-top:4px}
+</style>
+</head>
+<body><main class="report"><header class="top"><h1 id="report-title"></h1><div class="summary" id="summary"></div></header><section class="grid" id="store-grid" aria-label="店铺日报"></section></main>
+<script>
+const report=__REPORT_JSON__;
+/* [Sources]
+__SOURCES__
+*/
+const escapeHtml=value=>String(value??"").replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
+document.getElementById('report-title').textContent=`${report.title} ${report.dateText} 日报`;
+const partial=report.capturedCount<report.expectedCount?'已获取':'';
+const summary=[`${partial}店铺 ${report.capturedCount}/${report.expectedCount}`,
+  ...Object.entries(report.salesTotals).map(([currency,value])=>`${partial}销售额 ${currency} ${value}`),
+  ...Object.values(report.quantityTotals).map(item=>`${partial}${item.label} ${item.value}`)];
+document.getElementById('summary').innerHTML=summary.map(value=>`<span>${escapeHtml(value)}</span>`).join('');
+document.getElementById('store-grid').innerHTML=report.stores.map(store=>{
+  const state=store.status==='未获取'?'missing':store.status==='部分获取'?'partial':'';
+  const stateText=store.status==='成功'?'已获取':store.status;
+  const reason=[store.missingReason,store.adMissingReason].filter(Boolean).join('；');
+  const ads=store.collectAds?`<div class="ads">广告费 ${store.adCost==null?'未获取':`${escapeHtml(store.currency)} ${escapeHtml(store.adCost)}`}　ROI ${store.roi==null?'未获取':escapeHtml(store.roi)}</div>`:'';
+  return `<article class="store store-row"><div class="store-head"><span class="store-name">${escapeHtml(store.name)}</span><span class="status ${state}">${stateText}</span></div><div class="metrics"><div class="metric"><small>销售额 (${escapeHtml(store.currency)})</small><b>${store.sales==null?'未获取':escapeHtml(store.sales)}</b></div><div class="metric"><small>${escapeHtml(store.orderLabel)}</small><b>${store.orders==null?'未获取':escapeHtml(store.orders)}</b></div></div>${ads}${reason?`<div class="reason">${escapeHtml(reason)}</div>`:''}</article>`;
+}).join('');
+</script>
+</body></html>

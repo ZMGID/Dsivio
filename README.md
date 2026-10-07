@@ -45,6 +45,8 @@ Dsvideo 随 App 打包并在启动时注册，默认启用；可在「插件」�
 
 宿主的媒体生成、语音、本地 ASR、通用模型参数和取消能力独立于插件市场入口，继续由 Dsivio 持有凭证与任务；移除 Dsivio Video 不移除这些共用能力。
 
+内置插件市场的「电商运营」提供「紫鸟店铺日报」。它复用随 App 打包的 `dscraw-report` Skill 和现有定时任务；首次使用由 Agent 检查依赖，让用户选择店铺、数据目录和每日时间，完成首轮采集后按约定设置定时执行。配置、日报和累计台账保存到用户选择的目录，后续直接复用。当前采集范围为 Shopee、TikTok Shop、SHEIN 巴西站，紫鸟登录与必要的 Python/Node 依赖在本机准备。
+
 ## 开发
 
 需要 Node.js、npm、Rust，以及 [Tauri 2](https://tauri.app/) 在当前系统上的依赖。macOS 上 OCR 辅助程序还需要 Swift。

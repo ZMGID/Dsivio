@@ -49,6 +49,8 @@ struct BuiltIn {
     unpack: String,
     skip: Vec<String>,
     preset_plugin_id: Option<String>,
+    /// App-shipped Skills use the same staged install as downloaded Skills.
+    bundled_skills: Option<PathBuf>,
 }
 
 struct Catalog {
@@ -104,6 +106,8 @@ struct CatalogPlugin {
     skip: Vec<String>,
     #[serde(default)]
     preset_plugin_id: Option<String>,
+    #[serde(default)]
+    bundled_skills: Option<String>,
 }
 
 fn default_unpack() -> String { "skills".into() }
@@ -179,6 +183,14 @@ fn load_catalog_from(dir: &Path) -> Result<Catalog, String> {
         let setup = catalog_text(dir, &plugin.setup)?;
         let dsivio_reference = setup.contains(DSIVIO_REFERENCE_PATH).then(|| reference.clone());
         let adapter_files = adapter_files(dir, &setup, &plugin.setup)?;
+        let bundled_skills = plugin.bundled_skills.as_deref().map(|relative| {
+            validate_archive_relative_path(relative)?;
+            if plugin.unpack != "skills" || plugin.skills.is_empty() || !plugin.repository.is_empty()
+                || plugin.skills.iter().any(|skill| !id_ok(skill)) {
+                return Err("内置 Skill 目录不能与下载来源混用".into());
+            }
+            crate::plugins::packages::contained(dir, relative)
+        }).transpose()?;
         plugins.push(BuiltIn {
             setup,
             dsivio_reference,
@@ -206,6 +218,7 @@ fn load_catalog_from(dir: &Path) -> Result<Catalog, String> {
             unpack: plugin.unpack,
             skip: plugin.skip,
             preset_plugin_id: plugin.preset_plugin_id,
+            bundled_skills,
         });
     }
     Ok(Catalog { categories: file.categories.into_iter().map(|category| (category.id, category.name)).collect(), plugins })
@@ -1387,17 +1400,48 @@ fn unpack_built_in_skills(item: &BuiltIn, bytes: Vec<u8>, stage: &Path) -> Resul
         let mut output = fs::File::create(&target).map_err(|e| e.to_string())?;
         std::io::copy(&mut file, &mut output).map_err(|e| e.to_string())?;
     }
+    validate_staged_skills(item, stage)
+}
+
+fn validate_staged_skills(item: &BuiltIn, stage: &Path) -> Result<(), String> {
     for skill in &item.skills {
         let dir = stage.join(skill);
         if !dir.join("SKILL.md").is_file() { return Err(format!("官方包缺少 {skill}/SKILL.md")); }
     }
-    if item.unpack == "root" {
+    if item.unpack == "root" || item.bundled_skills.is_some() {
         let dir = stage.join(&item.skill_id);
         for relative in &item.required_files {
             if !dir.join(relative).is_file() { return Err(format!("官方包缺少 {relative}")); }
         }
     }
     Ok(())
+}
+
+/// Copy the shipped Skill resources into the existing installation transaction;
+/// no dependency installation or browser operation happens here.
+fn stage_bundled_skills(item: &BuiltIn, stage: &Path) -> Result<(), String> {
+    let root = item.bundled_skills.as_deref().ok_or("缺少内置 Skill 目录")?;
+    let mut pending: Vec<(PathBuf, PathBuf)> = item.skills.iter()
+        .map(|skill| (root.join(skill), stage.join(skill))).collect();
+    let mut total = 0u64;
+    let mut count = 0usize;
+    while let Some((source, target)) = pending.pop() {
+        let metadata = fs::symlink_metadata(&source).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_symlink() { return Err("内置 Skill 包含符号链接".into()); }
+        if metadata.is_dir() {
+            fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+            for entry in fs::read_dir(&source).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                pending.push((entry.path(), target.join(entry.file_name())));
+            }
+        } else if metadata.is_file() {
+            total = total.checked_add(metadata.len()).ok_or("Skill 内容过大")?;
+            count += 1;
+            if total > 30 * 1024 * 1024 || count > 2000 { return Err("Skill 内容超过限制".into()); }
+            fs::copy(&source, &target).map_err(|e| e.to_string())?;
+        } else { return Err("内置 Skill 包含非普通文件".into()); }
+    }
+    validate_staged_skills(item, stage)
 }
 
 fn market_companion_package(item: &BuiltIn, id: &str) -> Result<Option<crate::plugins::packages::Package>, String> {
@@ -1496,9 +1540,13 @@ async fn install_plugin(app: &AppHandle, item: &BuiltIn) -> Result<Value, String
         .is_some_and(|root| market_skill_installed_at(&root.join(&item.skill_id)));
     let mut result: Result<Value, String> = async {
         if !missing.is_empty() {
-            let url = format!("https://codeload.github.com/{}/zip/{}", item.repository, item.revision);
-            let bytes = download(&url, 30 * 1024 * 1024).await?;
-            unpack_built_in_skills(item, bytes, &stage)?;
+            if item.bundled_skills.is_some() {
+                stage_bundled_skills(item, &stage)?;
+            } else {
+                let url = format!("https://codeload.github.com/{}/zip/{}", item.repository, item.revision);
+                let bytes = download(&url, 30 * 1024 * 1024).await?;
+                unpack_built_in_skills(item, bytes, &stage)?;
+            }
             for skill in &missing {
                 let from = stage.join(skill);
                 fs::write(from.join(".kivio-market-owner.json"), serde_json::to_vec(&json!({"id":item.id,"revision":item.revision})).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -1863,6 +1911,74 @@ mod tests {
         assert!(built_in_ready_at(&item, &state, dir.path()));
         fs::remove_file(dir.path().join("remotion-render/SKILL.md")).unwrap();
         assert!(!built_in_ready_at(&item, &state, dir.path()));
+    }
+
+    #[test]
+    fn bundled_daily_report_installs_complete_resources_without_downloading() {
+        let item = plugin("dscraw-report");
+        assert!(item.repository.is_empty());
+        let root = tempfile::tempdir().unwrap();
+        stage_bundled_skills(&item, root.path()).unwrap();
+        let skill = root.path().join("dscraw-report");
+        let source = item.bundled_skills.as_ref().unwrap().join("dscraw-report");
+        for file in ["assets/store-ledger.xlsx", "scripts/collect_batch.py", "scripts/assemble_report.py",
+            "references/daily-workflow.md", "templates/cards.html", "package-lock.json"] {
+            assert_eq!(fs::read(skill.join(file)).unwrap(), fs::read(source.join(file)).unwrap(), "{file}");
+        }
+        assert!(!skill.join("reports").exists(), "no personal configuration ships with the plugin");
+        sync_setup_files(&item, &root.path().join(built_in_setup_id(&item))).unwrap();
+        let state = BuiltInState { revision: Some(item.revision.clone()), ..BuiltInState::default() };
+        assert!(built_in_ready_at(&item, &state, root.path()));
+        assert_eq!(built_in_skill_plan(&item, &state, root.path()).unwrap(), (vec![], vec![]));
+        fs::remove_file(skill.join("scripts/assemble_report.py")).unwrap();
+        assert!(!built_in_ready_at(&item, &state, root.path()));
+        let manifest = built_in_manifest(&item);
+        assert_eq!(manifest["categoryIds"][0], "commerce");
+        assert_eq!(manifest["mainSkillId"], "dscraw-report");
+        assert_eq!(manifest["setupSkillId"], "dscraw-report-setup");
+    }
+
+    #[test]
+    fn bundled_daily_report_requires_renderers_and_all_templates() {
+        let item = plugin("dscraw-report");
+        let root = tempfile::tempdir().unwrap();
+        stage_bundled_skills(&item, root.path()).unwrap();
+        let setup = root.path().join(built_in_setup_id(&item));
+        sync_setup_files(&item, &setup).unwrap();
+        let state = BuiltInState { revision: Some(item.revision.clone()), ..Default::default() };
+        for file in ["scripts/render_reports.py", "scripts/render-report.cjs", "scripts/history_ledger.py",
+            "platforms/registry.json", "templates/table.html", "templates/kidswear-cards.html", "templates/operations.html"] {
+            let path = root.path().join(&item.skill_id).join(file);
+            let original = fs::read(&path).unwrap();
+            fs::remove_file(&path).unwrap();
+            assert!(!built_in_ready_at(&item, &state, root.path()), "missing {file} must require repair");
+            fs::write(&path, original).unwrap();
+        }
+    }
+
+    #[test]
+    fn bundled_daily_report_rejects_missing_required_files() {
+        let mut item = plugin("dscraw-report");
+        let source = tempfile::tempdir().unwrap();
+        let skill = source.path().join("dscraw-report");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "---\nname: dscraw-report\n---\n").unwrap();
+        item.bundled_skills = Some(source.path().into());
+        assert!(stage_bundled_skills(&item, tempfile::tempdir().unwrap().path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundled_skills_reject_symlinks_before_copying() {
+        let mut item = plugin("dscraw-report");
+        let source = tempfile::tempdir().unwrap();
+        let skill = source.path().join("dscraw-report");
+        fs::create_dir_all(&skill).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", skill.join("SKILL.md")).unwrap();
+        item.bundled_skills = Some(source.path().into());
+        let stage = tempfile::tempdir().unwrap();
+        assert!(stage_bundled_skills(&item, stage.path()).is_err());
+        assert!(!stage.path().join("dscraw-report/SKILL.md").exists());
     }
     #[test]
     fn hypit_adapter_ships_with_its_setup_and_is_removed_with_it() {

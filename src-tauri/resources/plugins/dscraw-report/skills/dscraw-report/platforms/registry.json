@@ -1,0 +1,36 @@
+{
+  "shopee": {
+    "name": "Shopee",
+    "guide": "../SKILL.md",
+    "regions": [
+      "BR"
+    ],
+    "supportsAds": true,
+    "orderMetrics": {
+      "orders": "订单数"
+    }
+  },
+  "shein": {
+    "name": "SHEIN",
+    "guide": "../SKILL.md",
+    "regions": [
+      "BR"
+    ],
+    "supportsAds": false,
+    "orderMetrics": {
+      "paidOrders": "支付订单数",
+      "unitsSold": "总销量"
+    }
+  },
+  "tiktok": {
+    "name": "TikTok Shop",
+    "guide": "../SKILL.md",
+    "regions": [
+      "BR"
+    ],
+    "supportsAds": true,
+    "orderMetrics": {
+      "orders": "订单数"
+    }
+  }
+}
