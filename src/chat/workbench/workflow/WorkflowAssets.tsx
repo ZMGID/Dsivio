@@ -18,6 +18,8 @@ export function WorkflowAssets({ assets, onChange, many = false, video = false, 
   const [previews, setPreviews] = useState<Record<string, string>>({})
   const change = useRef(onChange)
   change.current = onChange
+  const assetsRef = useRef(assets)
+  assetsRef.current = assets
   const mounted = useRef(true), pending = useRef(false)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const paths = JSON.stringify(assets.map(a => a.path))
@@ -43,21 +45,32 @@ export function WorkflowAssets({ assets, onChange, many = false, video = false, 
     catch (failure) { if (mounted.current) setError(String(failure)) }
     finally { pending.current = false; if (mounted.current) setBusy(false) }
   }
-  async function adopt(selected: string[]) {
+  async function adopt(selected: string[], baseline: string[]) {
     const items = await api.chatInspectAttachmentPaths(selected)
     if (!mounted.current) return
     if (items.some(item => item.type !== (video ? 'video' : 'image')) || !items.length) throw new Error('素材不可访问或类型不匹配，请重新选择')
-    change.current(items.map(item => ({ path: item.path, name: item.name, description: assets.find(a => a.path === item.path)?.description ?? '' })))
+    const current = assetsRef.current
+    const removed = new Set(baseline.filter(path => !current.some(asset => asset.path === path)))
+    const next = current.map(asset => {
+      const picked = items.find(item => item.path === asset.path)
+      return picked ? { ...asset, name: picked.name } : asset
+    })
+    for (const item of items) {
+      if (removed.has(item.path) || next.some(asset => asset.path === item.path)) continue
+      next.push({ path: item.path, name: item.name, description: '' })
+    }
+    change.current(next)
   }
   const pick = () => guarded(async () => {
+    const baseline = assetsRef.current.map(asset => asset.path)
     if (!isTauriRuntime()) throw new Error('请在桌面应用中选择本机素材')
     const selected = await open({ multiple: many, filters: [{ name: video ? '视频' : '图片', extensions: video ? WORKFLOW_VIDEO_EXTENSIONS : [...STORE_IMAGE_EXTENSIONS] }] })
     if (!selected || !mounted.current) return
-    await adopt(Array.isArray(selected) ? selected : [selected])
+    await adopt(Array.isArray(selected) ? selected : [selected], baseline)
   })
   const zone = useRef<HTMLDivElement>(null)
   const over = useFileDrop(zone, video ? WORKFLOW_VIDEO_EXTENSIONS : STORE_IMAGE_EXTENSIONS, (accepted, rejected) => {
-    if (accepted.length > 0) void guarded(() => adopt(many ? accepted : accepted.slice(0, 1)))
+    if (accepted.length > 0) void guarded(() => adopt(many ? accepted : accepted.slice(0, 1), assetsRef.current.map(asset => asset.path)))
     else if (rejected.length > 0) setError('只能拖入此类文件：' + (video ? WORKFLOW_VIDEO_EXTENSIONS : STORE_IMAGE_EXTENSIONS).join(' / '))
   }, disabled)
   return <div ref={zone} className={`workbench-flow-fields workbench-drop-zone${over ? ' is-drop-over' : ''}`}>

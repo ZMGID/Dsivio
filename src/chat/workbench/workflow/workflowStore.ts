@@ -2,6 +2,8 @@ import { parseConfig } from './workflowConfig'
 import { blankWorkflow, type GenerationWorkflow, type WorkflowEdge, type WorkflowNode, type WorkflowNodeKind } from './workflowModel'
 
 const KEY = 'kivio.workbench.workflows'
+// Failed writes remain recoverable in this window, including after the canvas unmounts.
+const unsaved = new Map<string, { flow: GenerationWorkflow; error: string }>()
 
 const KINDS = new Set<WorkflowNodeKind>([
   'image.upload', 'image.uploadMany', 'video.upload', 'prompt.input',
@@ -66,19 +68,36 @@ function storage(): Storage | null {
   }
 }
 
-function readAll(): GenerationWorkflow[] {
+/** Throws when the key is unreadable so save/remove cannot overwrite it. */
+function readStored(): unknown[] {
+  const target = storage()
+  if (!target) throw new Error('本机存储不可用，草稿未保存')
+  const raw = target.getItem(KEY)
+  if (!raw) return []
+  let parsed: unknown
   try {
-    const raw = storage()?.getItem(KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as unknown
-    if (!Array.isArray(parsed)) return []
-    return parsed.map(parseWorkflow).filter((item): item is GenerationWorkflow => item !== null)
+    parsed = JSON.parse(raw)
   } catch {
-    return []
+    throw new Error('本机草稿数据损坏，已停止写入')
   }
+  if (!Array.isArray(parsed)) throw new Error('本机草稿数据损坏，已停止写入')
+  return parsed
 }
 
-function writeAll(items: GenerationWorkflow[]): void {
+function readAll(): GenerationWorkflow[] {
+  let items: GenerationWorkflow[]
+  try {
+    items = readStored().flatMap(item => {
+      const flow = parseWorkflow(item)
+      return flow ? [flow] : []
+    })
+  } catch {
+    items = []
+  }
+  return [...items.filter(item => !unsaved.has(item.id)), ...[...unsaved.values()].map(item => item.flow)]
+}
+
+function writeAll(items: unknown[]): void {
   const target = storage()
   if (!target) throw new Error('本机存储不可用，草稿未保存')
   target.setItem(KEY, JSON.stringify(items))
@@ -93,13 +112,24 @@ export const workflowStore = {
   },
   save(flow: GenerationWorkflow): GenerationWorkflow {
     const next = { ...flow, updatedAt: new Date().toISOString() }
-    const items = readAll().filter((item) => item.id !== flow.id)
-    items.push(next)
-    writeAll(items)
+    try {
+      const stored = readStored()
+      const items = stored.filter(item => parseWorkflow(item)?.id !== flow.id)
+      items.push(next)
+      writeAll(items)
+    } catch (failure) {
+      unsaved.set(flow.id, { flow, error: `保存失败：${String(failure)}` })
+      throw failure
+    }
+    unsaved.delete(flow.id)
     return next
   },
+  saveError(id: string): string {
+    return unsaved.get(id)?.error ?? ''
+  },
   remove(id: string): void {
-    writeAll(readAll().filter((item) => item.id !== id))
+    writeAll(readStored().filter(item => parseWorkflow(item)?.id !== id))
+    unsaved.delete(id)
   },
   create(name: string): GenerationWorkflow {
     return workflowStore.save(blankWorkflow(name))

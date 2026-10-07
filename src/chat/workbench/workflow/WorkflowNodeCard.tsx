@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import type { WorkflowStatus } from '../../../generated/generationWorkflow'
 import { runStatus } from './workflowModel'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
@@ -7,7 +8,7 @@ import { nodeConfig } from './workflowConfig'
 import type { WorkflowNode } from './workflowModel'
 
 export type GenerationRfNode = Node<{ node: WorkflowNode; problems: string[]; status?: WorkflowStatus }, 'gen'>
-export function WorkflowNodeCard({ data, selected }: NodeProps<GenerationRfNode>) {
+export const WorkflowNodeCard = memo(function WorkflowNodeCard({ data, selected }: NodeProps<GenerationRfNode>) {
   const t = useT(), entry = paletteEntry(data.node.kind), config = nodeConfig(data.node)
   const summary = config.type === 'prompt' || config.type === 'text' ? config.text : config.type === 'understand' ? config.instruction : config.type === 'generate' ? `${config.model?.model || '未选模型'} · ${Object.values(config.options).join(' · ')}` : config.type === 'assets' ? config.assets.map(a => a.name).join('、') : ''
   return <article className={`workbench-gen-node${selected ? ' is-selected' : ''} ${data.status ? `is-${data.status}` : ''}`}>
@@ -30,4 +31,4 @@ export function WorkflowNodeCard({ data, selected }: NodeProps<GenerationRfNode>
       </div>)}
     </div>)}
   </article>
-}
+})

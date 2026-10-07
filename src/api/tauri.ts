@@ -1925,6 +1925,7 @@ export const api = {
   sourcingListPicks: (filter: PickFilter) => invoke<PickPage>('sourcing_list_picks', { filter }),
   sourcingSavePick: (request: SavePickRequest) => invoke<PickItem>('sourcing_save_pick', { request }),
   sourcingDeletePick: (id: string, revision: number) => invoke<void>('sourcing_delete_pick', { id, revision }),
+  checkWorkflow: (workflow: GenerationWorkflow) => invoke<string[]>('check_workflow', { workflow }),
   startWorkflowRun: (workflow: GenerationWorkflow) => invoke<WorkflowRun>('start_workflow_run', { workflow }),
   listWorkflowRuns: (workflowId: string) => invoke<WorkflowRun[]>('list_workflow_runs', { workflowId }),
   resumeWorkflowRun: (id: string) => invoke<WorkflowRun>('resume_workflow_run', { id }),

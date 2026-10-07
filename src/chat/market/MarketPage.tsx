@@ -1,4 +1,3 @@
-import { ExternalMarketplace } from './ExternalMarketplace'
 import { marketText, useMarketAction, actionLabel } from './marketActions'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, Film, Image, LayoutGrid, Loader2, MoreHorizontal, RefreshCw, Search } from 'lucide-react'
@@ -66,7 +65,10 @@ export function LoadSwitch({ item, busy, onChange, lang }: { item: MarketItem; b
 function detailId() {
   const match = window.location.hash.match(/^#chat\/market\/([^/?]+)/)
   if (!match) return null
-  try { return decodeURIComponent(match[1]) } catch { return null }
+  try {
+    const id = decodeURIComponent(match[1])
+    return id === 'external' ? null : id
+  } catch { return null }
 }
 function Example({ id, lang, local }: { id: string; lang: Lang; local: boolean }) {
   const [detail, setDetail] = useState<{ example: MarketExample; assetBase: string } | null>(null)
@@ -180,13 +182,6 @@ export function MarketPage({ lang, onInstall, onUse, onUninstall, heading }: Mar
     : item.local?.phase === 'removing'
     ? <Button variant={variant} size="sm" disabled={busyIds.has(item.id)} onClick={() => void run(item.id, () => onUninstall(item.id))}>{marketText(lang, '继续卸载', 'Continue removal')}</Button>
     : <Button variant={variant} size="sm" disabled={busyIds.has(item.id) || primaryAction(item) === 'unavailable'} onClick={() => void use(item)}>{busyIds.has(item.id) && <Loader2 size={14} className="animate-spin" />}{actionLabel(item, lang)}</Button>
-  if (selected === 'external') return <ExternalMarketplace onUsePackage={async plugin => {
-    await onUse({ id: plugin.id, enabled: plugin.enabled, status: 'ready', error: null, pluginId: plugin.id, skillId: null, conversationId: null,
-      source: { kind: 'local-draft', directory: plugin.source, revision: plugin.revision ?? '' },
-      manifest: { schemaVersion: 1, id: plugin.id, name: plugin.name, summary: plugin.description, version: plugin.version ?? '', categoryIds: [],
-        compatibility: { minAppVersion: '', platforms: [] }, notices: [], welcome: '', inputHint: '', verification: [] } }, true)
-  }} onSkillsChanged={() => { void refreshSettings() }}
-    heading={<Button variant="ghost" onClick={() => { window.location.hash = '#chat/market' }}><ArrowLeft size={15} />{marketText(lang, '返回插件', 'Back to plugins')}</Button>} />
   return <section className="market-page" data-tauri-drag-region="false">
     {projectItem && <DsvideoProjects lang={lang} onClose={() => setProjectItem(null)} onChoose={project => { const item = projectItem; setProjectItem(null); startNative(item, project) }} />}
     <div className="market-scroll custom-scrollbar" ref={scroller} onScroll={e => { if (!selected) viewState.scroll = e.currentTarget.scrollTop }}>
@@ -212,7 +207,6 @@ export function MarketPage({ lang, onInstall, onUse, onUninstall, heading }: Mar
           <div className="min-w-0">{heading ?? <h1>{marketText(lang, '插件市场', 'Plugin market')}</h1>}<p>{marketText(lang, '用插件扩展对话里的技能与能力。', 'Use plugins to extend what chat can do.')}</p></div>
           <IconButton label={marketText(lang, '刷新', 'Refresh')} disabled={loading} onClick={() => void marketApi.refresh()}><RefreshCw size={16} className={loading ? 'animate-spin' : ''} /></IconButton>
         </header>
-        <Button size="sm" onClick={() => openDetail('external')}>{marketText(lang, '外部插件市场与导入', 'External marketplaces and imports')}</Button>
         <label className="market-search"><Search size={16} /><Input value={query} onChange={setQuery} placeholder={marketText(lang, '搜索插件', 'Search plugins')} aria-label={marketText(lang, '搜索插件', 'Search plugins')} /></label>
         <section className="market-installed">
           <h2>{marketText(lang, '已安装', 'Installed')}</h2>

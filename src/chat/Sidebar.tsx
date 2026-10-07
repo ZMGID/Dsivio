@@ -70,6 +70,7 @@ const extensionSubItems: Array<{
   { id: 'assistants', label: (t) => t.chatNavAssistants, icon: AgentIcon },
   { id: 'knowledge', label: (t) => t.chatNavKnowledge, icon: KnowledgeIcon },
   { id: 'notes', label: (t) => t.chatNavNotes, icon: NotesIcon },
+  { id: 'media', label: (t) => t.chatNavMedia, icon: (props) => <Images {...props} /> },
 ]
 
 const PROJECT_PREVIEW_LIMIT = 5
@@ -1328,7 +1329,6 @@ export const Sidebar = memo(function Sidebar({
           onClick={() => onOpenExtensionsItem('artifacts')}
           active={extensionsActive === 'artifacts'}
         />
-        <NavRow icon={<Images size={17} />} label={t.chatNavMedia} onClick={() => onOpenExtensionsItem('media')} active={extensionsActive === 'media'} />
         <NavRow icon={<Store size={17} />} label={t.chatNavMarket} onClick={() => onOpenExtensionsItem('market')} active={extensionsActive === 'market'} />
         <ExtensionsNav
           activeItem={extensionSubItems.some((item) => item.id === extensionsActive) ? extensionsActive : null}

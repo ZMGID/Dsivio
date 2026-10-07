@@ -56,10 +56,6 @@ export function paletteEntry(kind: WorkflowNodeKind): PaletteNode | undefined {
   return WORKFLOW_PALETTE.find((item) => item.kind === kind)
 }
 
-export function canConnectPorts(from: WorkflowPort['kind'], to: WorkflowPort['kind']): boolean {
-  return from === to
-}
-
 /**
  * 图片复刻：参考站模板实测 5 节点 / 4 边。
  * 参考图 → 图片理解 → 图片生成（提示词），产品图 → 图片生成，生成结果 → 单图下载。

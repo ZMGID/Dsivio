@@ -48,8 +48,9 @@ describe('workflow editing invariants', () => {
     expect(connectionProblem(flow, { ...edge, sourceHandle: 'wrong' })).toContain('端口不存在')
     expect(connectionProblem(flow, { ...edge, source: edge.target })).toContain('自身')
     expect(connectionProblem(flow, { ...edge, source: flow.nodes[2].id })).toContain('一条线')
+    expect(connectionProblem({ ...flow, edges: [] }, { source: flow.nodes[1].id, target: flow.nodes[3].id, sourceHandle: 'text', targetHandle: 'image' })).toBe('端口类型不匹配：text不能接到image')
     flow.nodes[0].kind = 'image.uploadMany'
-    expect(connectionProblem({ ...flow, edges: [] }, edge)).toContain('单张与多张')
+    expect(connectionProblem({ ...flow, edges: [] }, edge)).toBe('端口类型不匹配：单张与多张图片不能直接相连')
     const cycle = { ...flow.edges[0], source: flow.nodes[3].id, target: flow.nodes[1].id, sourceHandle: 'image', targetHandle: 'image' }
     expect(connectionProblem({ ...flow, edges: flow.edges.slice(1) }, cycle)).toContain('环')
   })
@@ -78,4 +79,8 @@ it('copies a selected subgraph with its own connections and arranges dependencie
   expect(arranged.edges).toEqual(flow.edges)
   for (const edge of arranged.edges) expect(arranged.nodes.find(n => n.id === edge.source)!.position.x).toBeLessThan(arranged.nodes.find(n => n.id === edge.target)!.position.x)
   expect(new Set(arranged.nodes.map(n => JSON.stringify(n.position))).size).toBe(arranged.nodes.length)
+  expect(arrangeNodes(arranged)).toBe(arranged)
+  expect(removeSelection(flow, [], [])).toBe(flow)
+  expect(removeSelection(flow, ['missing'], ['missing'])).toBe(flow)
+  expect(duplicateNodes(flow, [])).toBe(flow)
 })

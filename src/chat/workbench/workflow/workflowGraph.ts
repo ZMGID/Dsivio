@@ -10,7 +10,8 @@ export function connectionProblem(flow: GenerationWorkflow, edge: Omit<WorkflowE
   const from = paletteEntry(source.kind)?.outputs.find(p => p.id === edge.sourceHandle)
   const to = paletteEntry(target.kind)?.inputs.find(p => p.id === edge.targetHandle)
   if (!from || !to) return '端口不存在，请重新连线'
-  if (from.kind !== to.kind || !!from.many !== !!to.many) return '端口类型不匹配：单张与多张图片不能直接相连'
+  if (from.kind !== to.kind) return `端口类型不匹配：${from.kind}不能接到${to.kind}`
+  if (!!from.many !== !!to.many) return '端口类型不匹配：单张与多张图片不能直接相连'
   if (flow.edges.some(e => e.source === edge.source && e.target === edge.target && e.sourceHandle === edge.sourceHandle && e.targetHandle === edge.targetHandle)) return '这条连接已存在'
   if (flow.edges.some(e => e.target === edge.target && e.targetHandle === edge.targetHandle)) return '每个输入只能接一条线，请先断开已有连接'
   const visited = new Set<string>(), queue = [edge.target]
@@ -57,10 +58,15 @@ export function graphProblems(flow: GenerationWorkflow): string[] {
   return problems
 }
 export function removeSelection(flow: GenerationWorkflow, nodes: string[], edges: string[]): GenerationWorkflow {
-  return { ...flow, nodes: flow.nodes.filter(n => !nodes.includes(n.id)), edges: flow.edges.filter(e => !edges.includes(e.id) && !nodes.includes(e.source) && !nodes.includes(e.target)) }
+  if (!nodes.length && !edges.length) return flow
+  const nextNodes = flow.nodes.filter(n => !nodes.includes(n.id))
+  const nextEdges = flow.edges.filter(e => !edges.includes(e.id) && !nodes.includes(e.source) && !nodes.includes(e.target))
+  if (nextNodes.length === flow.nodes.length && nextEdges.length === flow.edges.length) return flow
+  return { ...flow, nodes: nextNodes, edges: nextEdges }
 }
 export function duplicateNodes(flow: GenerationWorkflow, ids: string[]): GenerationWorkflow {
   const mapping = new Map(flow.nodes.filter(n => ids.includes(n.id)).map(n => [n.id, crypto.randomUUID()]))
+  if (!mapping.size) return flow
   return { ...flow,
     nodes: [...flow.nodes, ...flow.nodes.filter(n => mapping.has(n.id)).map(n => ({ ...structuredClone(n), id: mapping.get(n.id)!, title: `${n.title} 副本`, position: { x: n.position.x + 48, y: n.position.y + 48 } }))],
     edges: [...flow.edges, ...flow.edges.filter(e => mapping.has(e.source) && mapping.has(e.target)).map(e => ({ ...e, id: crypto.randomUUID(), source: mapping.get(e.source)!, target: mapping.get(e.target)! }))],
@@ -78,9 +84,14 @@ export function arrangeNodes(flow: GenerationWorkflow): GenerationWorkflow {
     }
   }
   const rows = new Map<number, number>()
-  return { ...flow, nodes: flow.nodes.map(node => {
+  let moved = false
+  const nodes = flow.nodes.map(node => {
     const column = levels.get(node.id) ?? 0, row = rows.get(column) ?? 0
     rows.set(column, row + 1)
-    return { ...node, position: { x: 48 + column * 320, y: 48 + row * 300 } }
-  }) }
+    const position = { x: 48 + column * 320, y: 48 + row * 300 }
+    if (position.x === node.position.x && position.y === node.position.y) return node
+    moved = true
+    return { ...node, position }
+  })
+  return moved ? { ...flow, nodes } : flow
 }

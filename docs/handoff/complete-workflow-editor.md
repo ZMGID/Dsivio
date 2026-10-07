@@ -139,3 +139,16 @@
 - 34 项聚焦前端测试通过；TypeScript、局部 ESLint、架构检查、diff-check 通过。浏览器 DOM 交互检查无嵌套或无名动作。布局报告对 ReactFlow 的平移视口和背景 SVG 报裁剪/文字重叠，经元素路径与截图核对属于画布背景/视口的误报；共享控件 27–32px 高度与字号警告保留，不用页面 CSS 覆盖全局控件。截图和原始报告位于 .ui-guard/workflow-repair/。
 
 补充：列表在 768/1000/1280/1440 宽度无布局 error；报告将独立的“我的工作流”和“官方模板库”两区高度不同标为 card-height/card-actions，属于内容区而非同类卡片行，保留各自自然高度。1000 宽度打开节点配置后无页面横向溢出，面板完整处于窗口内。新增浅色/深色截图已逐张查看。
+
+
+## 2026-10-03 审查修复
+
+依据三路只读审查（前端、Rust 运行器、ADR/目录）修复：
+
+- 草稿存储：存储键损坏时 `save/remove` 拒绝写入并报错；解析失败的单条草稿原样保留，不再被后续保存覆盖。文本编辑 300ms 合并落盘（结束编辑、撤销、重做、卸载时 flush），移除整图 `JSON.stringify` 比较；列表删除撤销改为栈。素材选择合并当前列表，不用旧闭包整表覆盖。
+- 运行器：停止 AI 时保留已完成文本并标成功；媒体等待 30 分钟截止，超时标 Interrupted 并保留回执；停止时调用 `cancel_media_task`，已成功产物先于停止判断写入；无活动运行时 `cancel_workflow_run` 返回错误；节点终态与运行终态同一次落盘，`recover` 不覆盖已有失败原因；每工作流最多保留 50 条运行目录；`list` 不再持锁读盘；AI 节点按种类设超时，图片读取走 `spawn_blocking` 并检查取消。
+- 规则单一：新增 `check_workflow`，桌面端“检查配置”和运行前检查只用后端结果（含节点/边/素材上限、模型池、素材路径）；前端仅在浏览器保留图检查。删除 `canConnectPorts` 与过期 `wfRunSoon` 文案；连线不匹配提示区分类型与单/多张。
+- 事件与性能：后端每次落盘发 `workflow-run-updated`，前端订阅并合并，轮询降为 5s 兜底；画布节点问题/节点/边 `useMemo`，`WorkflowNodeCard` `memo`，回调引用稳定；`fitView` 仅在选中节点变化时触发；底栏拖动/待存时显示“正在编辑”。
+- UI：画布角标跟随活动运行并补 pending/cancelled/interrupted 样式；失败媒体回执按钮改为“查询已有结果”；清理重复/无用 CSS 与禁用态透明度覆盖。
+
+验证：`npx tsc --noEmit`、`eslint`（workbench、api、i18n，零警告）、`vitest run src/chat/workbench`（74 文件 356 项）、`npm run architecture:check`、`cargo test generation_workflow`（15 项，新增 9 项）通过。未做：实机/浏览器视觉验收、真实供应商生成；运行记录损坏仅 `eprintln!` 日志；i18n 迁移、节点同层并发执行、下载节点另存未做。

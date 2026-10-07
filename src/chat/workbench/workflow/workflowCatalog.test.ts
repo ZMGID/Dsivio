@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { graphProblems } from './workflowGraph'
+import { connectionProblem, graphProblems } from './workflowGraph'
 import { i18n } from '../../../components/i18n'
-import { canConnectPorts, imageReplicaTemplate, officialTemplates, paletteEntry } from './workflowCatalog'
+import { imageReplicaTemplate, officialTemplates, paletteEntry } from './workflowCatalog'
 
 describe('workflowCatalog', () => {
   it('maps the live image-replica graph: 5 nodes and 4 typed edges', () => {
@@ -20,8 +20,10 @@ describe('workflowCatalog', () => {
   })
 
   it('only connects matching port kinds', () => {
-    expect(canConnectPorts('image', 'image')).toBe(true)
-    expect(canConnectPorts('text', 'image')).toBe(false)
+    const flow = imageReplicaTemplate(i18n.zh)
+    const open = { ...flow, edges: [] }
+    expect(connectionProblem(open, { source: flow.nodes[0].id, target: flow.nodes[1].id, sourceHandle: 'image', targetHandle: 'image' })).toBeNull()
+    expect(connectionProblem(open, { source: flow.nodes[1].id, target: flow.nodes[3].id, sourceHandle: 'text', targetHandle: 'image' })).toBe('端口类型不匹配：text不能接到image')
     expect(paletteEntry('image.understand')?.outputs[0]?.kind).toBe('text')
     expect(paletteEntry('image.generate')?.inputs.map((port) => port.kind)).toEqual(['text', 'image'])
   })

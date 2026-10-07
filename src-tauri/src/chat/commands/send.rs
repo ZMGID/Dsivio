@@ -110,17 +110,25 @@ pub(crate) async fn chat_send_message(
 
 /// Backend-initiated user send (scheduled tasks). Unlike the command it does
 /// not reject a busy conversation: it waits until every reply has finished,
-/// then runs the normal send transaction. `on_user_message_saved` runs once the
+/// then admits the owner before running the normal send transaction. Cancellation
+/// only interrupts waiting; an admitted transaction is never dropped mid-write.
+/// `on_user_message_saved` runs once the
 /// user message is committed, before the reply starts.
 pub(crate) async fn send_user_message_when_idle(
     app: &AppHandle,
     conversation_id: &str,
     content: String,
+    cancellation: impl std::future::Future<Output = String>,
+    admit: &(dyn Fn() -> Result<(), String> + Send + Sync),
     on_user_message_saved: &(dyn Fn() + Send + Sync),
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let _send_reservation =
-        ChatSendReservation::acquire_when_idle(state.inner(), conversation_id).await;
+    let _send_reservation = tokio::select! {
+        biased;
+        reason = cancellation => return Err(reason),
+        reserved = ChatSendReservation::acquire_when_idle(state.inner(), conversation_id) => reserved,
+    };
+    admit()?;
     let outcome = send_reserved(
         app.clone(),
         app.state::<AppState>(),

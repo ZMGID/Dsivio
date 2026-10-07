@@ -415,7 +415,7 @@ async fn execute_node(
             let title = if language == "en" {
                 "Dsivio automation"
             } else {
-                "Kivio 自动化"
+                "Dsivio 自动化"
             };
             notify::show(app, title, &body);
             Ok((NodeOutput::from_text(body), None))

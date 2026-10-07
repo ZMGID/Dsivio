@@ -10,6 +10,8 @@ import type { useWorkflowRun } from './useWorkflowRun'
 export function WorkflowRunPanel({ execution, onClose }: { execution: ReturnType<typeof useWorkflowRun>; onClose: () => void }) {
   const { runs, selected: run } = execution
   const [fileError, setFileError] = useState('')
+  const resumable = !!run && ['failed', 'interrupted', 'cancelled'].includes(run.status)
+  const lookupExisting = resumable && !!run?.nodes.some(node => node.status === 'failed' && node.mediaTaskId)
   return <aside className="workbench-flow-config custom-scrollbar" aria-label="运行记录">
     <div className="workbench-flow-config-head"><h3>运行记录</h3><Button size="sm" onClick={onClose}>关闭</Button></div>
     {execution.loading ? <p>正在读取…</p> : !runs.length ? <p>运行后会显示每个节点的状态和结果。离开页面不会中止运行。</p> : null}
@@ -19,7 +21,8 @@ export function WorkflowRunPanel({ execution, onClose }: { execution: ReturnType
       <p>{run.workflow.name} · {runStatus[run.status]}</p>
       <p className="workbench-page-sub">此记录使用运行时的配置快照。继续运行会保留已完成节点；修改草稿后请重新运行。</p>
       {run.error && <p role="alert">{run.error}</p>}
-      {['failed', 'interrupted', 'cancelled'].includes(run.status) && <Button size="sm" disabled={execution.busy} onClick={() => void execution.resume(run.id)}>继续此运行</Button>}
+      {lookupExisting && <p className="workbench-page-sub">将查询已有结果，不会重新生成。</p>}
+      {resumable && <Button size="sm" disabled={execution.busy} onClick={() => void execution.resume(run.id)}>{lookupExisting ? '查询已有结果' : '继续此运行'}</Button>}
       {run.nodes.map(node => {
         const definition = run.workflow.nodes.find(n => n.id === node.nodeId)
         return <section className="workbench-flow-run-node" key={node.nodeId}>

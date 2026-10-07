@@ -9,7 +9,7 @@ use crate::{
     state::AppState,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -17,8 +17,17 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use types::*;
+
+const MAX_RUNS_PER_WORKFLOW: usize = 50;
+const MEDIA_WAIT_DEADLINE: Duration = Duration::from_secs(30 * 60);
+const AI_TIMEOUT_VISION_SECS: u32 = 180;
+const AI_TIMEOUT_TEXT_SECS: u32 = 120;
+const AI_TIMEOUT_PROMPT_SECS: u32 = 90;
+const MEDIA_WAIT_TIMEOUT: &str = "等待媒体任务超时，可继续运行查询已有回执";
+const STOPPED: &str = "已停止工作流；已提交的媒体任务仍保留，可在继续运行时查询结果";
+const RUN_EVENT: &str = "workflow-run-updated";
 
 struct Control {
     id: String,
@@ -38,14 +47,21 @@ fn directory(root: &Path, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "无效运行编号")?;
     Ok(root.join(id))
 }
-fn save(root: &Path, run: &WorkflowRun) -> Result<(), String> {
+fn save(root: &Path, run: &WorkflowRun, app: Option<&AppHandle>) -> Result<(), String> {
     let dir = directory(root, &run.id)?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     crate::chat::storage::atomic_write(
         &dir.join("run.json"),
         &serde_json::to_string(run).map_err(|e| e.to_string())?,
         "workflow run",
-    )
+    )?;
+    if let Some(app) = app {
+        let _ = app.emit(RUN_EVENT, run.clone());
+    }
+    Ok(())
+}
+fn note_unreadable(path: &Path) {
+    eprintln!("workflow run unreadable: {}", path.display());
 }
 fn read(root: &Path, id: &str) -> Result<WorkflowRun, String> {
     serde_json::from_slice(
@@ -81,31 +97,60 @@ fn recover(run: &mut WorkflowRun) {
     if run.status != WorkflowStatus::Running {
         return;
     }
-    run.status = WorkflowStatus::Interrupted;
-    run.error = Some(
-        "应用关闭导致执行中断。继续运行会复用已完成节点，并查询已有媒体任务，不会自动重新生成。"
-            .into(),
-    );
     for node in &mut run.nodes {
         if node.status == WorkflowStatus::Running {
             node.status = WorkflowStatus::Interrupted;
         }
     }
+    if let Some(node) = run.nodes.iter().find(|node| {
+        matches!(
+            node.status,
+            WorkflowStatus::Failed | WorkflowStatus::Cancelled
+        )
+    }) {
+        run.status = node.status.clone();
+        if run.error.is_none() {
+            run.error = node.error.clone();
+        }
+    } else if !run.nodes.is_empty()
+        && run
+            .nodes
+            .iter()
+            .all(|node| node.status == WorkflowStatus::Succeeded)
+    {
+        run.status = WorkflowStatus::Succeeded;
+        run.error = None;
+    } else {
+        run.status = WorkflowStatus::Interrupted;
+        run.error = Some(
+            "应用关闭导致执行中断。继续运行会复用已完成节点，并查询已有媒体任务，不会自动重新生成。"
+                .into(),
+        );
+    }
     run.updated_at = now();
 }
+#[cfg(test)]
 fn claim(run: &WorkflowRun, root: &Path) -> Result<Arc<AtomicBool>, String> {
+    claim_in(run, root, None)
+}
+fn claim_in(
+    run: &WorkflowRun,
+    root: &Path,
+    app: Option<&AppHandle>,
+) -> Result<Arc<AtomicBool>, String> {
     let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
-    claim_locked(run, root, &mut active)
+    claim_locked(run, root, &mut active, app)
 }
 fn claim_locked(
     run: &WorkflowRun,
     root: &Path,
     active: &mut HashMap<String, Control>,
+    app: Option<&AppHandle>,
 ) -> Result<Arc<AtomicBool>, String> {
     if active.contains_key(&run.workflow.id) {
         return Err("这个工作流正在运行，请先停止或等待完成".into());
     }
-    save(root, run)?;
+    save(root, run, app)?;
     let cancelled = Arc::new(AtomicBool::new(false));
     active.insert(
         run.workflow.id.clone(),
@@ -126,10 +171,101 @@ impl Drop for Claim {
     }
 }
 
+fn active_ids() -> HashSet<String> {
+    ACTIVE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .map(|control| control.id.clone())
+        .collect()
+}
+fn terminal_run(run: &WorkflowRun, active: &HashSet<String>) -> bool {
+    run.status != WorkflowStatus::Running && !active.contains(&run.id)
+}
+fn prune_workflow_runs(root: &Path, workflow_id: &str) -> Result<(), String> {
+    if !root.exists() {
+        return Ok(());
+    }
+    let active = active_ids();
+    let mut runs = Vec::new();
+    for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let id = entry.file_name().to_string_lossy().into_owned();
+        match read(root, &id) {
+            Ok(run) if run.workflow.id == workflow_id => runs.push(run),
+            Ok(_) => {}
+            Err(_) => note_unreadable(&entry.path()),
+        }
+    }
+    if runs.len() <= MAX_RUNS_PER_WORKFLOW {
+        return Ok(());
+    }
+    runs.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    let mut excess = runs.len() - MAX_RUNS_PER_WORKFLOW;
+    for run in runs {
+        if excess == 0 {
+            break;
+        }
+        if terminal_run(&run, &active) {
+            std::fs::remove_dir_all(directory(root, &run.id)?).map_err(|e| e.to_string())?;
+            excess -= 1;
+        }
+    }
+    Ok(())
+}
+fn push_issue(issues: &mut Vec<String>, issue: String) {
+    if !issues.iter().any(|existing| existing == &issue) {
+        issues.push(issue);
+    }
+}
+pub(crate) fn check_workflow_issues(
+    app: Option<&AppHandle>,
+    workflow: &GenerationWorkflow,
+) -> Vec<String> {
+    let mut issues = Vec::new();
+    if let Err(error) = graph::validate(workflow) {
+        push_issue(&mut issues, error);
+    }
+    if let Some(app) = app {
+        if let Err(error) = validate_resources(app, workflow) {
+            push_issue(&mut issues, error);
+        }
+    }
+    for node in &workflow.nodes {
+        if !matches!(
+            node.kind.as_str(),
+            "image.upload" | "image.uploadMany" | "video.upload"
+        ) {
+            continue;
+        }
+        let kind = if node.kind == "video.upload" {
+            "video"
+        } else {
+            "image"
+        };
+        let Some(config) = node.config.as_ref() else {
+            push_issue(&mut issues, format!("{}：节点缺少配置", node.title));
+            continue;
+        };
+        for asset in asset_paths(config) {
+            if let Err(error) = inspect_asset(&asset.path, kind) {
+                push_issue(&mut issues, format!("{}：{error}", node.title));
+            }
+        }
+    }
+    issues
+}
 #[tauri::command]
-pub fn list_workflow_runs(workflow_id: String) -> Result<Vec<WorkflowRun>, String> {
+pub fn check_workflow(
+    app: AppHandle,
+    workflow: GenerationWorkflow,
+) -> Result<Vec<String>, String> {
+    Ok(check_workflow_issues(Some(&app), &workflow))
+}
+#[tauri::command]
+pub fn list_workflow_runs(app: AppHandle, workflow_id: String) -> Result<Vec<WorkflowRun>, String> {
     let root = root()?;
-    let active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let active = active_ids();
     let mut runs = Vec::new();
     if !root.exists() {
         return Ok(runs);
@@ -137,19 +273,21 @@ pub fn list_workflow_runs(workflow_id: String) -> Result<Vec<WorkflowRun>, Strin
     for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let id = entry.file_name().to_string_lossy().into_owned();
-        if let Ok(mut run) = read(&root, &id) {
-            if run.workflow.id != workflow_id {
-                continue;
-            }
-            if run.status == WorkflowStatus::Running && !active.values().any(|c| c.id == run.id) {
-                recover(&mut run);
-                save(&root, &run)?;
-            }
-            runs.push(run);
+        let Ok(mut run) = read(&root, &id) else {
+            note_unreadable(&entry.path());
+            continue;
+        };
+        if run.workflow.id != workflow_id {
+            continue;
         }
+        if run.status == WorkflowStatus::Running && !active.contains(&run.id) {
+            recover(&mut run);
+            save(&root, &run, Some(&app))?;
+        }
+        runs.push(run);
     }
     runs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    runs.truncate(50);
+    runs.truncate(MAX_RUNS_PER_WORKFLOW);
     Ok(runs)
 }
 #[tauri::command]
@@ -161,16 +299,24 @@ pub fn start_workflow_run(
     validate_resources(&app, &workflow)?;
     let run = new_run(workflow);
     let root = root()?;
-    let cancelled = claim(&run, &root)?;
+    let cancelled = claim_in(&run, &root, Some(&app))?;
+    if let Err(error) = prune_workflow_runs(&root, &run.workflow.id) {
+        ACTIVE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&run.workflow.id);
+        return Err(error);
+    }
     spawn(app, run.clone(), root, cancelled);
     Ok(run)
 }
-#[tauri::command]
-pub fn resume_workflow_run(app: AppHandle, id: String) -> Result<WorkflowRun, String> {
-    let root = root()?;
-    // Hold the claim lock while reading: a finishing worker cannot be resumed from a stale checkpoint.
-    let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
-    let mut run = read(&root, &id)?;
+fn resume_claimed(
+    root: &Path,
+    id: &str,
+    active: &mut HashMap<String, Control>,
+    app: Option<&AppHandle>,
+) -> Result<(WorkflowRun, Arc<AtomicBool>), String> {
+    let mut run = read(root, id)?;
     if run.status == WorkflowStatus::Succeeded {
         return Err("该次运行已经完成".into());
     }
@@ -179,7 +325,15 @@ pub fn resume_workflow_run(app: AppHandle, id: String) -> Result<WorkflowRun, St
     run.status = WorkflowStatus::Running;
     run.error = None;
     run.updated_at = now();
-    let cancelled = claim_locked(&run, &root, &mut active)?;
+    let cancelled = claim_locked(&run, root, active, app)?;
+    Ok((run, cancelled))
+}
+#[tauri::command]
+pub fn resume_workflow_run(app: AppHandle, id: String) -> Result<WorkflowRun, String> {
+    let root = root()?;
+    // Hold the claim lock while reading: a finishing worker cannot be resumed from a stale checkpoint.
+    let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let (run, cancelled) = resume_claimed(&root, &id, &mut active, Some(&app))?;
     drop(active);
     spawn(app, run.clone(), root, cancelled);
     Ok(run)
@@ -187,26 +341,42 @@ pub fn resume_workflow_run(app: AppHandle, id: String) -> Result<WorkflowRun, St
 #[tauri::command]
 pub fn cancel_workflow_run(id: String) -> Result<(), String> {
     let active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(control) = active.values().find(|c| c.id == id) {
-        control.cancelled.store(true, Ordering::SeqCst);
-    }
+    let Some(control) = active.values().find(|control| control.id == id) else {
+        return Err("没有正在运行的记录".into());
+    };
+    control.cancelled.store(true, Ordering::SeqCst);
     Ok(())
 }
 fn spawn(app: AppHandle, mut run: WorkflowRun, root: PathBuf, cancelled: Arc<AtomicBool>) {
     tauri::async_runtime::spawn(async move {
         let _claim = Claim(run.workflow.id.clone());
-        let result = execute(&mut run, &root, &cancelled, &DesktopExecutor(app)).await;
-        if let Err(error) = result {
-            run.status = if cancelled.load(Ordering::SeqCst) {
-                WorkflowStatus::Cancelled
-            } else {
-                WorkflowStatus::Failed
-            };
-            run.error = Some(error);
-        }
-        run.updated_at = now();
-        if let Err(error) = save(&root, &run) {
-            eprintln!("workflow checkpoint failed: {error}");
+        let result = execute(
+            &mut run,
+            &root,
+            &cancelled,
+            &DesktopExecutor(app.clone()),
+            Some(&app),
+        )
+        .await;
+        if run.status == WorkflowStatus::Running {
+            match result {
+                Ok(()) => {
+                    run.status = WorkflowStatus::Succeeded;
+                    run.error = None;
+                }
+                Err(error) => {
+                    run.status = if cancelled.load(Ordering::SeqCst) {
+                        WorkflowStatus::Cancelled
+                    } else {
+                        WorkflowStatus::Failed
+                    };
+                    run.error = Some(error);
+                }
+            }
+            run.updated_at = now();
+            if let Err(error) = save(&root, &run, Some(&app)) {
+                eprintln!("workflow checkpoint failed: {error}");
+            }
         }
     });
 }
@@ -309,10 +479,57 @@ fn output(handle: &str, value: WorkflowValue) -> BTreeMap<String, WorkflowValue>
 }
 fn stopped(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::SeqCst) {
-        Err("已停止工作流；已提交的媒体任务仍保留，可在继续运行时查询结果".into())
+        Err(STOPPED.into())
     } else {
         Ok(())
     }
+}
+fn halt(
+    run: &mut WorkflowRun,
+    root: &Path,
+    app: Option<&AppHandle>,
+    index: Option<usize>,
+    error: String,
+    cancelled: &AtomicBool,
+) -> Result<(), String> {
+    let previous = run.status.clone();
+    let interrupted =
+        index.is_some_and(|index| run.nodes[index].status == WorkflowStatus::Interrupted);
+    let status = if interrupted {
+        WorkflowStatus::Interrupted
+    } else if cancelled.load(Ordering::SeqCst) {
+        WorkflowStatus::Cancelled
+    } else {
+        WorkflowStatus::Failed
+    };
+    let stored = if let Some(index) = index {
+        if run.nodes[index].status != WorkflowStatus::Interrupted {
+            run.nodes[index].status = status.clone();
+        }
+        run.nodes[index].error = Some(error.clone());
+        let node_id = run.nodes[index].node_id.clone();
+        let title = run
+            .workflow
+            .nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .map(|node| node.title.as_str())
+            .unwrap_or("节点");
+        let stamp = now();
+        run.nodes[index].finished_at = Some(stamp.clone());
+        run.updated_at = stamp;
+        format!("{title}：{error}")
+    } else {
+        run.updated_at = now();
+        error
+    };
+    run.status = status;
+    run.error = Some(stored.clone());
+    if let Err(error) = save(root, run, app) {
+        run.status = previous;
+        return Err(error);
+    }
+    Err(stored)
 }
 
 // The executor seam isolates network/desktop I/O. Tests run the same checkpointed scheduler.
@@ -337,10 +554,13 @@ async fn execute(
     root: &Path,
     cancelled: &AtomicBool,
     executor: &impl Executor,
+    app: Option<&AppHandle>,
 ) -> Result<(), String> {
     let order = graph::validate(&run.workflow)?;
     for id in order {
-        stopped(cancelled)?;
+        if let Err(error) = stopped(cancelled) {
+            return halt(run, root, app, None, error, cancelled);
+        }
         let index = run
             .nodes
             .iter()
@@ -361,32 +581,25 @@ async fn execute(
         run.nodes[index].finished_at = None;
         run.nodes[index].error = None;
         run.updated_at = now();
-        save(root, run)?;
+        save(root, run, app)?;
         match executor.run(&node, run, root, index, cancelled).await {
             Ok(outputs) => {
                 run.nodes[index].outputs = outputs;
                 run.nodes[index].status = WorkflowStatus::Succeeded;
             }
-            Err(error) => {
-                run.nodes[index].status = if cancelled.load(Ordering::SeqCst) {
-                    WorkflowStatus::Cancelled
-                } else {
-                    WorkflowStatus::Failed
-                };
-                run.nodes[index].error = Some(error.clone());
-                run.nodes[index].finished_at = Some(now());
-                run.updated_at = now();
-                save(root, run)?;
-                return Err(format!("{}：{error}", node.title));
-            }
+            Err(error) => return halt(run, root, app, Some(index), error, cancelled),
         }
         run.nodes[index].finished_at = Some(now());
         run.updated_at = now();
-        save(root, run)?;
+        save(root, run, app)?;
     }
-    stopped(cancelled)?;
+    if let Err(error) = stopped(cancelled) {
+        return halt(run, root, app, None, error, cancelled);
+    }
     run.status = WorkflowStatus::Succeeded;
     run.error = None;
+    run.updated_at = now();
+    save(root, run, app)?;
     Ok(())
 }
 struct DesktopExecutor(AppHandle);
@@ -483,6 +696,7 @@ async fn execute_node(
                 prompt,
                 images,
                 crate::chat::ai_task::AiTaskSlot::Vision,
+                AI_TIMEOUT_VISION_SECS,
                 cancelled,
             )
             .await
@@ -509,17 +723,22 @@ async fn execute_node(
                     },
                 ));
             }
+            let (slot, timeout) = if node.kind == "prompt.optimize" {
+                (
+                    crate::chat::ai_task::AiTaskSlot::PromptOptimize,
+                    AI_TIMEOUT_PROMPT_SECS,
+                )
+            } else {
+                (crate::chat::ai_task::AiTaskSlot::Chat, AI_TIMEOUT_TEXT_SECS)
+            };
             ai(
                 app,
                 &format!("{}-{index}", run.id),
                 model.as_ref(),
                 prompt,
                 vec![],
-                if node.kind == "prompt.optimize" {
-                    crate::chat::ai_task::AiTaskSlot::PromptOptimize
-                } else {
-                    crate::chat::ai_task::AiTaskSlot::Chat
-                },
+                slot,
+                timeout,
                 cancelled,
             )
             .await
@@ -547,88 +766,147 @@ async fn execute_node(
                 )?;
                 if let Some(task) = tasks.first() {
                     run.nodes[index].media_task_id = Some(task.id.clone());
-                    save(root, run)?;
+                    save(root, run, Some(app))?;
                 }
             }
-            let task_id = if let Some(id) = &run.nodes[index].media_task_id {
-                id.clone()
-            } else {
-                let prompt = input(run, node, "prompt")
-                    .and_then(|v| v.text)
-                    .unwrap_or_else(|| prompt.clone());
-                let mut images: Vec<String> = input(run, node, "image")
-                    .map(|v| v.files)
-                    .unwrap_or_else(|| assets.iter().map(|a| a.path.clone()).collect());
-                let mut media_options = media_options(app, model, options, &node.kind)?;
-                let is_comfy = app
-                    .state::<AppState>()
-                    .settings_read()
-                    .get_provider(&model.provider_id)
-                    .is_some_and(|p| p.request.comfy.is_some());
-                bind_video_images(
-                    &node.kind,
-                    is_comfy,
-                    options,
-                    &mut images,
-                    &mut media_options,
-                );
-                let request = MediaRequest {
-                    provider_id: model.provider_id.clone(),
-                    model: model.model.clone(),
-                    kind: if node.kind == "image.generate" {
-                        MediaKind::Image
-                    } else {
-                        MediaKind::Video
-                    },
-                    prompt,
-                    images,
-                    options: media_options,
-                    origin: Some(origin),
-                    description_revision: None,
-                };
-                let task = media_generation::start_media_generation(app.clone(), request).await?;
-                run.nodes[index].media_task_id = Some(task.id.clone());
-                run.updated_at = now();
-                save(root, run)?;
-                task.id
+            let task_id = match receipt_action(&run.nodes[index].media_task_id) {
+                Receipt::Existing(id) => id,
+                Receipt::NeedsSubmit => {
+                    stopped(cancelled)?;
+                    let prompt = input(run, node, "prompt")
+                        .and_then(|v| v.text)
+                        .unwrap_or_else(|| prompt.clone());
+                    let mut images: Vec<String> = input(run, node, "image")
+                        .map(|v| v.files)
+                        .unwrap_or_else(|| assets.iter().map(|a| a.path.clone()).collect());
+                    let mut media_options = media_options(app, model, options, &node.kind)?;
+                    let is_comfy = app
+                        .state::<AppState>()
+                        .settings_read()
+                        .get_provider(&model.provider_id)
+                        .is_some_and(|p| p.request.comfy.is_some());
+                    bind_video_images(
+                        &node.kind,
+                        is_comfy,
+                        options,
+                        &mut images,
+                        &mut media_options,
+                    );
+                    let request = MediaRequest {
+                        provider_id: model.provider_id.clone(),
+                        model: model.model.clone(),
+                        kind: if node.kind == "image.generate" {
+                            MediaKind::Image
+                        } else {
+                            MediaKind::Video
+                        },
+                        prompt,
+                        images,
+                        options: media_options,
+                        origin: Some(origin),
+                        description_revision: None,
+                    };
+                    let task = media_generation::start_media_generation(app.clone(), request).await?;
+                    run.nodes[index].media_task_id = Some(task.id.clone());
+                    run.updated_at = now();
+                    save(root, run, Some(app))?;
+                    task.id
+                }
             };
             // Recovery resumes the saved receipt once, then only reads. A failed receipt is never
             // silently resubmitted.
             media_generation::get_media_task(app.clone(), task_id.clone(), Some(true))?;
-            let task =
-                media_generation::wait(app, &task_id, None, &|| cancelled.load(Ordering::SeqCst))
-                    .await?;
-            stopped(cancelled)?;
-            match task.status {
-                MediaStatus::Succeeded => {
-                    // Single-file ports intentionally use the first artifact; all artifacts remain in MediaTask.
-                    let file = task
-                        .outputs
-                        .into_iter()
-                        .next()
-                        .ok_or("生成任务没有返回文件")?;
-                    let port = if node.kind == "image.generate" {
-                        "image"
-                    } else {
-                        "video"
-                    };
-                    Ok(output(
-                        port,
-                        WorkflowValue {
-                            text: None,
-                            files: vec![file.path],
-                        },
-                    ))
+            let task = media_generation::wait(app, &task_id, Some(MEDIA_WAIT_DEADLINE), &|| {
+                cancelled.load(Ordering::SeqCst)
+            })
+            .await?;
+            if task.status == MediaStatus::Succeeded {
+                return media_files(&node.kind, task);
+            }
+            if cancelled.load(Ordering::SeqCst) {
+                if let Ok(result) = media_generation::cancel_media_task(app.clone(), task_id).await {
+                    if result.task.status == MediaStatus::Succeeded {
+                        return media_files(&node.kind, result.task);
+                    }
                 }
+                return Err(STOPPED.into());
+            }
+            match task.status {
+                MediaStatus::Succeeded => return media_files(&node.kind, task),
                 MediaStatus::Failed => Err(task
                     .error
                     .unwrap_or_else(|| "媒体生成失败；可继续查询，或新建一次运行重新生成".into())),
                 MediaStatus::Cancelled => Err("媒体任务已取消".into()),
-                MediaStatus::Running => Err("媒体任务仍在运行；可稍后继续运行以查询结果".into()),
+                MediaStatus::Running => {
+                    run.nodes[index].status = WorkflowStatus::Interrupted;
+                    Err(MEDIA_WAIT_TIMEOUT.into())
+                }
             }
         }
         WorkflowConfig::Placeholder => Err("节点尚未实现".into()),
     }
+}
+enum Receipt {
+    Existing(String),
+    NeedsSubmit,
+}
+fn receipt_action(existing: &Option<String>) -> Receipt {
+    match existing {
+        Some(id) => Receipt::Existing(id.clone()),
+        None => Receipt::NeedsSubmit,
+    }
+}
+fn media_files(
+    kind: &str,
+    task: media_generation::MediaTask,
+) -> Result<BTreeMap<String, WorkflowValue>, String> {
+    // Single-file ports intentionally use the first artifact; all artifacts remain in MediaTask.
+    let file = task
+        .outputs
+        .into_iter()
+        .next()
+        .ok_or("生成任务没有返回文件")?;
+    let port = if kind == "image.generate" {
+        "image"
+    } else {
+        "video"
+    };
+    Ok(output(
+        port,
+        WorkflowValue {
+            text: None,
+            files: vec![file.path],
+        },
+    ))
+}
+fn text_output(text: String) -> BTreeMap<String, WorkflowValue> {
+    output(
+        "text",
+        WorkflowValue {
+            text: Some(text),
+            files: vec![],
+        },
+    )
+}
+async fn load_image_urls(images: Vec<String>, cancelled: &AtomicBool) -> Result<Vec<String>, String> {
+    if cancelled.load(Ordering::SeqCst) {
+        return Err("AI 节点已停止".into());
+    }
+    if images.is_empty() {
+        return Ok(Vec::new());
+    }
+    let loaded = tauri::async_runtime::spawn_blocking(move || {
+        images
+            .iter()
+            .map(|path| crate::chat::attachments::read_attachment_as_data_url(Path::new(path)))
+            .collect::<Result<Vec<_>, _>>()
+    })
+    .await
+    .map_err(|join| join.to_string())??;
+    if cancelled.load(Ordering::SeqCst) {
+        return Err("AI 节点已停止".into());
+    }
+    Ok(loaded)
 }
 async fn ai(
     app: &AppHandle,
@@ -637,13 +915,11 @@ async fn ai(
     prompt: String,
     images: Vec<String>,
     slot: crate::chat::ai_task::AiTaskSlot,
+    timeout_secs: u32,
     cancelled: &AtomicBool,
 ) -> Result<BTreeMap<String, WorkflowValue>, String> {
     use crate::chat::ai_task::{cancel_ai_task, run_ai_task, AiTaskMode, AiTaskRequest};
-    let images = images
-        .iter()
-        .map(|p| crate::chat::attachments::read_attachment_as_data_url(Path::new(p)))
-        .collect::<Result<Vec<_>, _>>()?;
+    let images = load_image_urls(images, cancelled).await?;
     let request = AiTaskRequest {
         task_id: task_id.into(),
         mode: AiTaskMode::Once,
@@ -656,16 +932,22 @@ async fn ai(
         provider_id: model.map(|m| m.provider_id.clone()),
         model: model.map(|m| m.model.clone()),
         cwd: None,
-        timeout_secs: None,
+        timeout_secs: Some(timeout_secs),
         stream: false,
     };
     let future = run_ai_task(app.clone(), app.state::<AppState>(), request);
     tokio::pin!(future);
     loop {
         tokio::select! {
-            result = &mut future => return result.map(|result| output("text", WorkflowValue { text: Some(result.text), files: vec![] })),
+            result = &mut future => return result.map(|result| text_output(result.text)),
             _ = tokio::time::sleep(Duration::from_millis(150)) => {
-                if cancelled.load(Ordering::SeqCst) { cancel_ai_task(app.state::<AppState>(), task_id.into())?; let _ = future.await; return Err("AI 节点已停止".into()); }
+                if cancelled.load(Ordering::SeqCst) {
+                    let _ = cancel_ai_task(app.state::<AppState>(), task_id.into());
+                    return match future.await {
+                        Ok(result) => Ok(text_output(result.text)),
+                        Err(error) => Err(error),
+                    };
+                }
             }
         }
     }
@@ -819,7 +1101,7 @@ pub(crate) async fn probe_local_workflow(
     let run = start_workflow_run(app.clone(), workflow)?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        if let Some(current) = list_workflow_runs(run.workflow.id.clone())?
+        if let Some(current) = list_workflow_runs(app.clone(), run.workflow.id.clone())?
             .into_iter()
             .find(|r| r.id == run.id)
         {
@@ -828,7 +1110,7 @@ pub(crate) async fn probe_local_workflow(
             }
         }
         if tokio::time::Instant::now() >= deadline {
-            cancel_workflow_run(run.id)?;
+            let _ = cancel_workflow_run(run.id);
             return Err("探针超时".into());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

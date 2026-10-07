@@ -1,6 +1,6 @@
 import { checkWorkflow } from './workflowValidation'
-import { useEffect, useRef, useState } from 'react'
-import { applyNodeChanges, Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, type ReactFlowInstance, type Edge, type Connection, type EdgeChange, type NodeChange } from '@xyflow/react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { applyNodeChanges, Background, BackgroundVariant, Controls, ReactFlow, ReactFlowProvider, type ReactFlowInstance, type Edge, type Connection, type EdgeChange, type IsValidConnection, type NodeChange, type OnConnectEnd } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { ArrowLeft, PanelLeft, Undo2, Redo2, Copy, Trash2, LayoutGrid, Plus, Search, Type, Image, Video, Box, Wrench, Download, Upload, Play, History, CheckCheck, Square, X } from 'lucide-react'
 import { Button, IconButton } from '../../../components/Button'
@@ -19,6 +19,7 @@ import { isTextEditing, useWorkflowEditor } from './useWorkflowEditor'
 import type { GenerationWorkflow, WorkflowEdge, WorkflowNodeKind } from './workflowModel'
 
 const nodeTypes = { gen: WorkflowNodeCard }
+const proOptions = { hideAttribution: true }
 const groupIcons = { input: Upload, tool: Wrench, text: Type, image: Image, video: Video, mesh: Box, output: Download }
 function CanvasInner({ initial }: { initial: GenerationWorkflow }) {
   const t = useT(), editor = useWorkflowEditor(initial), { flow, change } = editor
@@ -33,11 +34,12 @@ function CanvasInner({ initial }: { initial: GenerationWorkflow }) {
   async function check() {
     if (checkLock.current) return
     checkLock.current = true; setChecking(true)
-    const issues = await checkWorkflow(flow)
+    const checked = flow
+    const issues = await checkWorkflow(checked)
     checkLock.current = false
     if (!mounted.current) return
     setChecking(false)
-    if (snapshot.current !== flow) { setNotice('检查期间配置发生变化，请重新检查。'); return }
+    if (snapshot.current !== checked) { setNotice('检查期间配置发生变化，请重新检查。'); return }
     setNotice(issues.length ? issues.join('；') : '配置检查通过，可以运行。')
   }
   const [group, setGroup] = useState<PaletteGroupId>('input')
@@ -47,18 +49,28 @@ function CanvasInner({ initial }: { initial: GenerationWorkflow }) {
   // ReactFlow measurements belong to this mounted canvas, never to saved business snapshots.
   const [measured, setMeasured] = useState<Record<string, GenerationRfNode['measured']>>({})
   const dragActive = useRef(false)
+  const [nodeDrag, setNodeDrag] = useState(false)
   const connectionNotice = useRef('')
   const [notice, setNotice] = useState('点击节点配置 · 拖动端口连线 · 拖动空白框选 · 滚轮平移')
-  const nodes: GenerationRfNode[] = flow.nodes.map(node => ({ id: node.id, type: 'gen', position: node.position, measured: measured[node.id], selected: selectedNodes.includes(node.id), data: { node, problems: nodeProblems(flow, node), status: execution.selected?.nodes.find(n => n.nodeId === node.id)?.status } }))
-  const edges: Edge[] = flow.edges.map(edge => ({ ...edge, selected: selectedEdges.includes(edge.id) }))
+  const statusRun = execution.active ?? execution.selected
+  const problemsByNode = useMemo(() => new Map(flow.nodes.map(node => [node.id, nodeProblems(flow, node)])), [flow])
+  const nodes = useMemo<GenerationRfNode[]>(() => flow.nodes.map(node => ({ id: node.id, type: 'gen' as const, position: node.position, measured: measured[node.id], selected: selectedNodes.includes(node.id), data: { node, problems: problemsByNode.get(node.id) ?? [], status: statusRun?.nodes.find(item => item.nodeId === node.id)?.status } })), [flow.nodes, measured, selectedNodes, problemsByNode, statusRun])
+  const edges = useMemo<Edge[]>(() => flow.edges.map(edge => ({ ...edge, selected: selectedEdges.includes(edge.id) })), [flow.edges, selectedEdges])
   const selected = flow.nodes.find(node => selectedNodes.length === 1 && node.id === selectedNodes[0])
   const focusedNodeId = selected?.id
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
-      if (focusedNodeId && !showRuns) void instance.current?.fitView({ nodes: [{ id: focusedNodeId }], padding: 0.25, maxZoom: 1 })
+      if (focusedNodeId) void instance.current?.fitView({ nodes: [{ id: focusedNodeId }], padding: 0.25, maxZoom: 1 })
     })
     return () => cancelAnimationFrame(frame)
-  }, [focusedNodeId, showRuns, showPalette])
+  }, [focusedNodeId])
+  const isValidConnection = useCallback<IsValidConnection>(connection => {
+    connectionNotice.current = connectionProblem(snapshot.current, { ...connection, sourceHandle: connection.sourceHandle ?? undefined, targetHandle: connection.targetHandle ?? undefined }) ?? ''
+    return !connectionNotice.current
+  }, [])
+  const onConnectEnd = useCallback<OnConnectEnd>((_, state) => {
+    if (state.isValid === false) setNotice(connectionNotice.current || '连接方向无效，请将输出端口连接到输入端口。')
+  }, [])
   function onNodesChange(changes: NodeChange<GenerationRfNode>[]) {
     const dimensions = changes.filter(c => c.type === 'dimensions')
     if (dimensions.length) setMeasured(current => Object.fromEntries(
@@ -73,6 +85,7 @@ function CanvasInner({ initial }: { initial: GenerationWorkflow }) {
     const positions = changes.filter(c => c.type === 'position')
     if (!removed.length && !positions.length) return
     const dragging = positions.some(p => p.dragging)
+    if (dragging !== dragActive.current) setNodeDrag(dragging)
     const isDrag = dragging || dragActive.current
     dragActive.current = dragging
     const moveKey = isDrag ? 'drag:selection' : `move:${positions.map(p => p.id).sort().join(',')}`
@@ -135,7 +148,7 @@ function CanvasInner({ initial }: { initial: GenerationWorkflow }) {
       <div className="workbench-flow-run-actions" role="group" aria-label="运行操作">
         <Button disabled={checking} onClick={() => void check()}><CheckCheck size={14} />{checking ? '正在检查…' : '检查配置'}</Button>
         <Button aria-pressed={showRuns} onClick={() => { setShowRuns(v => !v); setSelectedNodes([]) }}><History size={14} />运行记录</Button>
-        {execution.active ? <Button disabled={execution.pending} onClick={() => void execution.cancel()}><Square size={14} />{execution.pending ? '正在停止…' : '停止运行'}</Button> : <Button variant="primary" disabled={execution.busy || checking} onClick={() => { if (editor.save()) { setShowRuns(true); setSelectedNodes([]); void execution.start(structuredClone(flow)) } }}><Play size={14} />{execution.pending ? '正在启动…' : t.wfRun}</Button>}
+        {execution.active ? <Button disabled={execution.pending} onClick={() => void execution.cancel()}><Square size={14} />{execution.pending ? '正在停止…' : '停止运行'}</Button> : <Button variant="primary" disabled={execution.busy || checking} onClick={() => { if (editor.save()) { setShowRuns(true); setSelectedNodes([]); void execution.start(() => snapshot.current) } }}><Play size={14} />{execution.pending ? '正在启动…' : t.wfRun}</Button>}
       </div>
     </header>
     <div className="workbench-flow-tools">
@@ -180,12 +193,9 @@ function CanvasInner({ initial }: { initial: GenerationWorkflow }) {
       }} className="workbench-flow-canvas" tabIndex={0} aria-label="工作流画布">
         <ReactFlow onInit={api => { instance.current = api }} onNodeClick={() => setShowRuns(false)} panOnScroll selectionOnDrag panOnDrag={[1, 2]} minZoom={0.2} maxZoom={2} nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={connect}
           onConnectStart={() => { connectionNotice.current = '' }}
-          isValidConnection={connection => {
-            connectionNotice.current = connectionProblem(flow, { ...connection, sourceHandle: connection.sourceHandle ?? undefined, targetHandle: connection.targetHandle ?? undefined }) ?? ''
-            return !connectionNotice.current
-          }}
-          onConnectEnd={(_, state) => { if (state.isValid === false) setNotice(connectionNotice.current || '连接方向无效，请将输出端口连接到输入端口。') }}
-          fitViewOptions={{ padding: 0.15, maxZoom: 1 }} onNodeDragStop={() => { editor.save(); editor.endGroup() }} onPaneClick={() => { setSelectedNodes([]); setSelectedEdges([]) }} fitView deleteKeyCode={null} proOptions={{ hideAttribution: true }}>
+          isValidConnection={isValidConnection}
+          onConnectEnd={onConnectEnd}
+          fitViewOptions={{ padding: 0.15, maxZoom: 1 }} onNodeDragStop={() => { editor.save(); editor.endGroup() }} onPaneClick={() => { setSelectedNodes([]); setSelectedEdges([]) }} fitView deleteKeyCode={null} proOptions={proOptions}>
           <Background variant={BackgroundVariant.Dots} gap={18} size={1} /><Controls showInteractive={false} />
         </ReactFlow>
       </div>
@@ -193,7 +203,7 @@ function CanvasInner({ initial }: { initial: GenerationWorkflow }) {
       {selected && !showRuns && <div className="workbench-flow-config-wrap" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) editor.endGroup() }}><WorkflowNodePanel key={selected.id} flow={flow} node={selected} onChange={(node, field) => change(current => ({ ...current, nodes: current.nodes.map(n => n.id === node.id ? node : n) }), `${node.id}:${field}`)} onDisconnect={port => change(current => ({ ...current, edges: current.edges.filter(e => !(e.target === selected.id && e.targetHandle === port)) }))} onClose={closePanel} /></div>}
     </div>
     <div className="workbench-flow-log custom-scrollbar">
-      {editor.saveError ? <p role="alert">{editor.saveError}<Button size="sm" onClick={() => editor.save()}>重试保存</Button></p> : <span>已保存到本机</span>}
+      {editor.saveError ? <p role="alert">{editor.saveError}<Button size="sm" onClick={() => editor.save()}>重试保存</Button></p> : <span>{editor.dirty || nodeDrag ? '正在编辑…' : '已保存到本机'}</span>}
       <p role="status">{notice}</p>
       {execution.error && <p role="alert">{execution.error}<Button size="sm" disabled={execution.pending} onClick={() => void execution.refresh()}>刷新记录</Button></p>}
     </div>

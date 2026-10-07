@@ -31,7 +31,7 @@ function WorkflowList() {
   const [items, setItems] = useState<GenerationWorkflow[]>(() => workflowStore.list())
   const [query, setQuery] = useState('')
   const [error, setError] = useState('')
-  const [removed, setRemoved] = useState<GenerationWorkflow | null>(null)
+  const [removed, setRemoved] = useState<GenerationWorkflow[]>([])
   const [importing, setImporting] = useState(false)
   const importLock = useRef(false)
 
@@ -80,6 +80,16 @@ function WorkflowList() {
     URL.revokeObjectURL(url)
   }, [])
 
+  const undoDelete = () => {
+    const item = removed[removed.length - 1]
+    if (!item) return
+    try {
+      workflowStore.save(item)
+      setRemoved(stack => stack.slice(0, -1))
+      load()
+    } catch (failure) { setError(String(failure)) }
+  }
+
   const visible = items.filter((item) => item.name.toLowerCase().includes(query.trim().toLowerCase()))
   const templates = officialTemplates(t)
 
@@ -124,7 +134,7 @@ function WorkflowList() {
         </>
       )}
     >
-      {removed && <p className="workbench-inline-note">已删除“{removed.name}”<Button size="sm" onClick={() => { try { workflowStore.save(removed); setRemoved(null); load() } catch (failure) { setError(String(failure)) } }}>撤销删除</Button></p>}
+      {removed.length > 0 && <p className="workbench-inline-note">已删除“{removed[removed.length - 1].name}”{removed.length > 1 ? `（${removed.length} 个可撤销）` : ''}<Button size="sm" onClick={undoDelete}>撤销删除</Button></p>}
       <div className="workbench-workflows-columns">
         <WorkbenchCard
           title={t.workbenchWorkflowsMine}
@@ -153,7 +163,7 @@ function WorkflowList() {
                   <div className="workbench-flow-card-actions" role="group" aria-label={`${item.name}的操作`}>
                     <Button onClick={() => exportFlow(item)}><Download size={14} />{t.wfExport}</Button>
                     <Button onClick={() => { try { workflowStore.save({ ...structuredClone(item), id: crypto.randomUUID(), name: `${item.name} 副本`, createdAt: new Date().toISOString() }); load() } catch (failure) { setError(String(failure)) } }}><Copy size={14} />复制</Button>
-                    <Button onClick={() => { try { workflowStore.remove(item.id); setRemoved(item); load() } catch (failure) { setError(String(failure)) } }}><Trash2 size={14} />删除</Button>
+                    <Button onClick={() => { try { workflowStore.remove(item.id); setRemoved(stack => [...stack, item]); load() } catch (failure) { setError(String(failure)) } }}><Trash2 size={14} />删除</Button>
                   </div>
                 </article>
               ))}

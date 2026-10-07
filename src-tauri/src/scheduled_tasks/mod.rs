@@ -45,9 +45,14 @@ pub struct ScheduledTasks {
     runs_lock: Mutex<()>,
     wake: tokio::sync::Notify,
     /// Tasks whose bound-conversation run is still waiting in line.
-    queued_tasks: Mutex<HashMap<String, String>>,
+    queued_tasks: Mutex<HashMap<String, QueuedRun>>,
     /// Conversations currently handling a scheduled prompt (recursion guard for chat tools).
     busy_conversations: Mutex<HashMap<String, usize>>,
+}
+
+struct QueuedRun {
+    id: String,
+    cancelled: tokio::sync::watch::Sender<bool>,
 }
 
 pub(crate) struct Fire {
@@ -197,6 +202,9 @@ impl ScheduledTasks {
             }
             Ok(())
         })?;
+        if let Some(waiting) = self.lock_queued().remove(id) {
+            waiting.cancelled.send_replace(true);
+        }
         let _runs = self.lock_runs();
         self.store.delete_runs(id);
         Ok(())
@@ -317,6 +325,11 @@ impl ScheduledTasks {
     }
 
     fn record_run(&self, run: &TaskRun) {
+        // Serialize existence and the write with deletion: late callbacks cannot resurrect history.
+        let tasks = self.lock_tasks();
+        if !tasks.iter().any(|task| task.id == run.task_id) {
+            return;
+        }
         let _runs = self.lock_runs();
         if let Err(err) = self.store.upsert_run(run) {
             eprintln!("[scheduled-tasks] save run failed: {err}");
@@ -384,22 +397,58 @@ impl ScheduledTasks {
     }
 
     fn claim_queue(&self, task_id: &str, run_id: &str) -> bool {
+        let tasks = self.lock_tasks();
+        if !tasks.iter().any(|task| task.id == task_id) {
+            return false;
+        }
         let mut queued = self.lock_queued();
         if queued.contains_key(task_id) {
             return false;
         }
-        queued.insert(task_id.to_string(), run_id.to_string());
+        queued.insert(
+            task_id.to_string(),
+            QueuedRun {
+                id: run_id.to_string(),
+                cancelled: tokio::sync::watch::channel(false).0,
+            },
+        );
         true
     }
 
     fn release_queue(&self, task_id: &str, run_id: &str) {
         let mut queued = self.lock_queued();
-        if queued.get(task_id).is_some_and(|owner| owner == run_id) {
+        if queued.get(task_id).is_some_and(|owner| owner.id == run_id) {
             queued.remove(task_id);
         }
     }
 
-    fn lock_queued(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
+    fn queued_cancellation(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<tokio::sync::watch::Receiver<bool>, String> {
+        self.lock_queued()
+            .get(task_id)
+            .filter(|owner| owner.id == run_id)
+            .map(|owner| owner.cancelled.subscribe())
+            .ok_or_else(|| "任务已删除或本次排队已结束".into())
+    }
+
+    /// Admission is atomic with task deletion. After admission the normal chat transaction owns the send.
+    fn admit_send(&self, task_id: &str, run_id: &str) -> Result<(), String> {
+        let tasks = self.lock_tasks();
+        if !tasks.iter().any(|task| task.id == task_id) {
+            return Err("任务已删除，本次未发送".into());
+        }
+        let mut queued = self.lock_queued();
+        if !queued.get(task_id).is_some_and(|owner| owner.id == run_id) {
+            return Err("本次排队已结束".into());
+        }
+        queued.remove(task_id);
+        Ok(())
+    }
+
+    fn lock_queued(&self) -> std::sync::MutexGuard<'_, HashMap<String, QueuedRun>> {
         self.queued_tasks
             .lock()
             .unwrap_or_else(|err| err.into_inner())
@@ -572,7 +621,12 @@ pub fn spawn_scheduler(app: AppHandle) {
                 emit_changed(&app, &run.task_id, Some(run));
             }
             for fire in fires {
-                start_run(&app, fire.task, RunTrigger::Schedule, Some(fire.scheduled_at));
+                start_run(
+                    &app,
+                    fire.task,
+                    RunTrigger::Schedule,
+                    Some(fire.scheduled_at),
+                );
             }
             let wait = svc
                 .next_wake()
@@ -676,7 +730,7 @@ async fn execute(
     let conversation_id = service(app)
         .get(&task.id)
         .map(|latest| latest.conversation_id)
-        .unwrap_or_else(|_| task.conversation_id.clone());
+        .map_err(RunError::from)?;
     if crate::chat::storage::load_conversation(app, &conversation_id).is_err() {
         return Err(RunError {
             message: "绑定的对话已不存在，任务已停用".into(),
@@ -685,6 +739,8 @@ async fn execute(
     }
     run.conversation_id = Some(conversation_id.clone());
     let svc = service(app);
+    let mut cancelled = svc.queued_cancellation(&task.id, &run.id)?;
+    let run_id = run.id.clone();
     svc.record_run(run);
     emit_changed(app, &task.id, Some(run));
 
@@ -705,10 +761,23 @@ async fn execute(
     };
 
     svc.enter_conversation(&conversation_id);
+    let cancellation = async move {
+        loop {
+            if *cancelled.borrow() {
+                return "任务已删除，本次未发送".to_string();
+            }
+            if cancelled.changed().await.is_err() {
+                return "本次排队已结束，未发送".to_string();
+            }
+        }
+    };
+    let admit = || svc.admit_send(&task.id, &run_id);
     let outcome = crate::chat::commands::send::send_user_message_when_idle(
         app,
         &conversation_id,
         task.prompt.clone(),
+        cancellation,
+        &admit,
         &on_user_message_saved,
     )
     .await;
@@ -781,7 +850,10 @@ mod tests {
         let svc = service_in(dir.path());
         let task = svc
             .save(
-                input(ScheduleRule::Interval { minutes: 10, anchor_at: None }),
+                input(ScheduleRule::Interval {
+                    minutes: 10,
+                    anchor_at: None,
+                }),
                 TaskSource::User,
                 1_000,
             )
@@ -796,7 +868,10 @@ mod tests {
         assert_eq!(fires[0].scheduled_at, 1_600);
         assert!(missed.is_empty());
         assert_eq!(svc.get(&task.id).unwrap().next_run_at, Some(2_200));
-        assert!(svc.claim_due(1_620).0.is_empty(), "the same slot must not fire twice");
+        assert!(
+            svc.claim_due(1_620).0.is_empty(),
+            "the same slot must not fire twice"
+        );
     }
 
     #[test]
@@ -804,7 +879,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let svc = service_in(dir.path());
         let task = svc
-            .save(input(ScheduleRule::Once { at: 5_000 }), TaskSource::User, 1_000)
+            .save(
+                input(ScheduleRule::Once { at: 5_000 }),
+                TaskSource::User,
+                1_000,
+            )
             .unwrap();
 
         let (fires, missed) = svc.claim_due(5_000 + MISFIRE_GRACE_SECS + 1);
@@ -823,7 +902,10 @@ mod tests {
         let svc = service_in(dir.path());
         let task = svc
             .save(
-                input(ScheduleRule::Interval { minutes: 10, anchor_at: Some(1_600) }),
+                input(ScheduleRule::Interval {
+                    minutes: 10,
+                    anchor_at: Some(1_600),
+                }),
                 TaskSource::User,
                 1_000,
             )
@@ -840,7 +922,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let svc = service_in(dir.path());
         assert!(svc
-            .save(input(ScheduleRule::Once { at: 500 }), TaskSource::User, 1_000)
+            .save(
+                input(ScheduleRule::Once { at: 500 }),
+                TaskSource::User,
+                1_000
+            )
             .is_err());
     }
 
@@ -849,7 +935,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let svc = service_in(dir.path());
         let task = svc
-            .save(input(ScheduleRule::Daily { hour: 9, minute: 0 }), TaskSource::User, 1_000)
+            .save(
+                input(ScheduleRule::Daily { hour: 9, minute: 0 }),
+                TaskSource::User,
+                1_000,
+            )
             .unwrap();
         svc.note_fired(&task.id, 1_010);
         svc.record_run(&TaskRun {
@@ -864,7 +954,10 @@ mod tests {
             started_at: Some(1_011),
             finished_at: None,
         });
-        let mut edit = input(ScheduleRule::Daily { hour: 10, minute: 0 });
+        let mut edit = input(ScheduleRule::Daily {
+            hour: 10,
+            minute: 0,
+        });
         edit.id = Some(task.id.clone());
         let edited = svc.save(edit, TaskSource::User, 1_020).unwrap();
         assert_eq!(edited.run_count, 1);
@@ -965,14 +1058,86 @@ mod tests {
     fn old_run_completion_cannot_release_a_new_waiter() {
         let dir = tempfile::tempdir().unwrap();
         let svc = service_in(dir.path());
-        assert!(svc.claim_queue("task", "run_a"));
-        assert!(!svc.claim_queue("task", "run_b"));
-        svc.release_queue("task", "run_a"); // A begins sending.
-        assert!(svc.claim_queue("task", "run_b"));
-        svc.release_queue("task", "run_a"); // A finishes while B still waits.
-        assert!(!svc.claim_queue("task", "run_c"));
-        assert!(svc.claim_queue("other_task", "run_c"));
-        svc.release_queue("task", "run_b");
-        assert!(svc.claim_queue("task", "run_c"));
+        let task = svc
+            .save(
+                input(ScheduleRule::Once { at: 2000 }),
+                TaskSource::User,
+                1000,
+            )
+            .unwrap();
+        let other_task = svc
+            .save(
+                input(ScheduleRule::Once { at: 2000 }),
+                TaskSource::User,
+                1000,
+            )
+            .unwrap();
+        assert!(svc.claim_queue(&task.id, "run_a"));
+        assert!(!svc.claim_queue(&task.id, "run_b"));
+        svc.release_queue(&task.id, "run_a"); // A begins sending.
+        assert!(svc.claim_queue(&task.id, "run_b"));
+        svc.release_queue(&task.id, "run_a"); // A finishes while B still waits.
+        assert!(!svc.claim_queue(&task.id, "run_c"));
+        assert!(svc.claim_queue(&other_task.id, "run_c"));
+        svc.release_queue(&task.id, "run_b");
+        assert!(svc.claim_queue(&task.id, "run_c"));
+    }
+    #[tokio::test]
+    async fn deleting_a_waiting_task_revokes_dispatch_and_discards_late_records() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service_in(dir.path());
+        let task = svc
+            .save(
+                input(ScheduleRule::Once { at: 2000 }),
+                TaskSource::User,
+                1000,
+            )
+            .unwrap();
+        assert!(svc.claim_queue(&task.id, "waiting"));
+        let mut cancelled = svc.queued_cancellation(&task.id, "waiting").unwrap();
+        svc.delete(&task.id).unwrap();
+        assert!(*cancelled.wait_for(|value| *value).await.unwrap());
+        assert!(svc.admit_send(&task.id, "waiting").is_err());
+        assert!(!svc.lock_queued().contains_key(&task.id));
+        let run = TaskRun {
+            id: "waiting".into(),
+            task_id: task.id.clone(),
+            trigger: RunTrigger::Schedule,
+            scheduled_at: Some(2000),
+            status: RunStatus::Running,
+            conversation_id: Some(task.conversation_id),
+            error: None,
+            created_at: 2000,
+            started_at: Some(2001),
+            finished_at: None,
+        };
+        svc.record_run(&run);
+        assert!(svc.runs(&task.id).is_empty());
+        assert!(!svc.claim_queue(&task.id, "late_fire"));
+    }
+
+    #[test]
+    fn failed_delete_keeps_waiting_send_admissible() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service_in(dir.path());
+        let task = svc
+            .save(
+                input(ScheduleRule::Once { at: 2000 }),
+                TaskSource::User,
+                1000,
+            )
+            .unwrap();
+        assert!(svc.claim_queue(&task.id, "waiting"));
+        let cancelled = svc.queued_cancellation(&task.id, "waiting").unwrap();
+        let path = dir.path().join("tasks.json");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(svc.delete(&task.id).is_err());
+        assert!(!*cancelled.borrow());
+        assert!(svc.admit_send(&task.id, "waiting").is_ok());
+        assert!(svc.admit_send(&task.id, "waiting").is_err());
+        assert!(svc.claim_queue(&task.id, "next"));
+        svc.release_queue(&task.id, "waiting");
+        assert!(svc.queued_cancellation(&task.id, "next").is_ok());
     }
 }
