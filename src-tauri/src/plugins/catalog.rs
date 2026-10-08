@@ -168,6 +168,9 @@ Activate the `ego-browser` skill, then run browser work via run_command as `ego-
     homepage: "https://open.ziniao.com/ziniaoCli",
     repo: "https://open.ziniao.com/ziniaoCli",
     known_binary_paths: &[
+        // `dsivio npm install -g` (bundled Node) installs into the Dsivio-private prefix.
+        r"%USERPROFILE%\.kivio\npm-global\ziniao-cli.cmd",
+        "$HOME/.kivio/npm-global/bin/ziniao-cli",
         r"%APPDATA%\npm\ziniao-cli.cmd",
         r"%APPDATA%\npm\ziniao-cli",
         "$HOME/.npm-global/bin/ziniao-cli",
@@ -340,6 +343,10 @@ mod tests {
         assert!(ziniao.install_doc.contains("ziniao-cli config init --new"));
         assert!(ziniao.install_doc.contains("ziniao-cli doctor"));
         assert!(ziniao.install_doc.contains("memberAuth?cliRequestId="));
+        assert!(ziniao.install_doc.contains("dsivio npm install -g @ziniao-open/cli"));
+        assert!(ziniao
+            .known_binary_paths
+            .contains(&"$HOME/.kivio/npm-global/bin/ziniao-cli"));
         #[cfg(windows)]
         {
             assert_eq!(

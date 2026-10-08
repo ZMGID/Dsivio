@@ -24,7 +24,7 @@ for (const file of ['versions.json', 'package.json', 'package-lock.json', 'requi
 fingerprint.update(readFileSync(fileURLToPath(import.meta.url)))
 const identity = fingerprint.digest('hex')
 const marker = join(destination, 'runtime.json')
-const required = ['python-packages/comfy_mcp/server.py', 'analyzer/node_modules/mcp-video-analyzer/dist/index.js',
+const required = ['python-packages/comfy_mcp/server.py', 'python-packages/openpyxl/__init__.py', 'analyzer/node_modules/mcp-video-analyzer/dist/index.js',
   process.platform === 'win32' ? 'python/python.exe' : 'python/bin/python3',
   process.platform === 'win32' ? 'node/node.exe' : 'node/bin/node',
   process.platform === 'win32' ? 'node/node_modules/npm/bin/npm-cli.js' : 'node/lib/node_modules/npm/bin/npm-cli.js',

@@ -15,7 +15,7 @@
 先解析三份归档，确保目标日行存在、表头类型正确。用 CLI 选准确目标单日核验 GMV、销量、支付订单数，三项必须与各自 Excel 目标日行相同。已有 `scripts/resolve_shein_single_day.py` 支持：
 
 ```text
-python scripts/resolve_shein_single_day.py --capture "本店capture.json" --checkpoint "本店checkpoint.json" --date YYYY-MM-DD --gmv "现场单日GMV" --units "现场单日销量" --paid-orders "现场单日支付订单数"
+dsivio python scripts/resolve_shein_single_day.py --capture "本店capture.json" --checkpoint "本店checkpoint.json" --date YYYY-MM-DD --gmv "现场单日GMV" --units "现场单日销量" --paid-orders "现场单日支付订单数"
 ```
 
 该脚本重读归档文件验证相等后才更新候选；页面仅作核验，不代替 Excel。不得为了通过校验而改传入读数或编辑归档。失败则继续查对应表头、日期或重新导出准确单日。

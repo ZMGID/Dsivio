@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import sys
 import unittest
+from unittest import mock
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
@@ -112,8 +113,19 @@ class BuilderTests(unittest.TestCase):
 
     def test_runtime_check_reports_missing_without_creating_environment(self):
         target = self.root/'runtime'
-        self.assertFalse(setup(target, check=True)['ready'])
+        # A host Python without the report libraries and no private venv yet.
+        with mock.patch('setup_runtime.probe_current', return_value=None):
+            self.assertFalse(setup(target, check=True)['ready'])
         self.assertFalse(target.exists())
+
+    def test_runtime_reuses_an_interpreter_that_ships_the_libraries(self):
+        # Dsivio's bundled Python (`dsivio python`) already has openpyxl, Pillow and lxml.
+        target = self.root/'runtime'
+        result = setup(target)
+        self.assertTrue(result['ready'])
+        self.assertEqual(Path(result['python']), Path(sys.executable))
+        self.assertFalse((target/'venv').exists())
+        self.assertEqual(json.loads((target/'runtime.json').read_text(encoding='utf-8'))['python'], result['python'])
 
     def test_amazon_sku_report_without_sales(self):
         data = fixture()

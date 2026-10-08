@@ -571,6 +571,32 @@ fn shim_script(exe: &Path) -> (&'static str, String) {
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
+fn git_bash_shim_script(exe: &Path) -> String {
+    let exe = crate::utils::strip_windows_verbatim_prefix(exe.to_path_buf())
+        .to_string_lossy()
+        .replace('\\', "/");
+    format!("#!/bin/sh\nexec '{}' \"$@\"\n", exe.replace('\'', r"'\''"))
+}
+
+fn write_shim(dir: &Path, name: &str, script: &str) -> bool {
+    let path = dir.join(name);
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(script) {
+        return true;
+    }
+    let written = std::fs::create_dir_all(dir).and_then(|_| std::fs::write(&path, script));
+    #[cfg(unix)]
+    if written.is_ok() {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+    }
+    if let Err(error) = written {
+        eprintln!("dsivio launcher not installed: {error}");
+        return false;
+    }
+    true
+}
+
 /// Put `dsivio` on this process's PATH (inherited by chat shell, MCP and plugin processes) and
 /// keep the launcher pointing at the App that is running now.
 pub fn install_launcher() {
@@ -578,19 +604,13 @@ pub fn install_launcher() {
         return;
     };
     let (name, script) = shim_script(&exe);
-    let path = dir.join(name);
-    if std::fs::read_to_string(&path).ok().as_deref() != Some(script.as_str()) {
-        let written = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, &script));
-        #[cfg(unix)]
-        if written.is_ok() {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
-        }
-        if let Err(error) = written {
-            eprintln!("dsivio launcher not installed: {error}");
-            return;
-        }
+    if !write_shim(&dir, name, &script) {
+        return;
     }
+    // Git Bash (the Windows chat shell when installed) ignores PATHEXT and cannot run
+    // `dsivio.cmd` as `dsivio`; an extensionless sh launcher covers it.
+    #[cfg(windows)]
+    let _ = write_shim(&dir, "dsivio", &git_bash_shim_script(&exe));
     let key = if cfg!(windows) { "Path" } else { "PATH" };
     let current = std::env::var_os(key).unwrap_or_default();
     if std::env::split_paths(&current).any(|p| p == dir) {
@@ -2060,6 +2080,14 @@ mod tests {
                 "#!/bin/sh\nexec '/Applications/it'\\''s here/dsivio' \"$@\"\n"
             );
         }
+    }
+
+    #[test]
+    fn git_bash_launcher_uses_forward_slashes_and_quotes_the_app_path() {
+        assert_eq!(
+            git_bash_shim_script(Path::new(r"C:\Users\it's me\AppData\Local\dsivio\dsivio.exe")),
+            "#!/bin/sh\nexec 'C:/Users/it'\\''s me/AppData/Local/dsivio/dsivio.exe' \"$@\"\n"
+        );
     }
 
     fn local_asr(languages: &[&str], auto_install: bool) -> crate::settings::LocalAsrConfig {

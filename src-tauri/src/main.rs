@@ -33,6 +33,11 @@ fn main() -> ExitCode {
             attach_parent_console();
             return kivio::media_runtime::cli::run(args);
         }
+        // `dsivio python|node|npm`: the bundled runtimes for Skills on machines without them.
+        if let Some(tool) = kivio::media_runtime::launch::Tool::from_subcommand(&first) {
+            attach_parent_console();
+            return kivio::media_runtime::launch::run(tool, args);
+        }
     }
 
     kivio::run();

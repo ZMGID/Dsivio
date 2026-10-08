@@ -111,7 +111,8 @@ try {
   assert.equal(run(node, ['-p', 'require("dsivio-runtime-smoke-dependency")']).trim(), node)
   const bundledScripts = join(dirname(root), 'video-studio/scripts')
   const scripts = existsSync(bundledScripts) ? bundledScripts : join(repo, 'src-tauri/resources/video-studio/scripts')
-  const directImports = `import comfy_mcp, comfy_cli, yt_dlp${win ? ', pywintypes' : ''}`
+  // openpyxl/Pillow/lxml back the bundled report Skills (`dsivio python`): import their native parts.
+  const directImports = `import comfy_mcp, comfy_cli, yt_dlp, openpyxl, PIL.Image, lxml.etree${win ? ', pywintypes' : ''}`
   const directPython = spawnSync(python, ['-s', '-B', '-c', directImports], { cwd: scratch, env: { ...env, PYTHONPATH: '' }, encoding: 'utf8', timeout: 45000 })
   assert.equal(directPython.status, 0, `bundled Python must work without PYTHONPATH: ${directPython.stderr}`)
   run(join(root, 'bin', win ? 'comfy.exe' : 'comfy'), ['--help'])

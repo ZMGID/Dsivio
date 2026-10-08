@@ -7,11 +7,18 @@ import subprocess
 import sys
 
 
+# `dsivio npm install -g` installs into this Dsivio-private npm prefix instead of a system Node.
+PRIVATE_PREFIX = Path.home() / ".kivio" / "npm-global"
+
+
 def find_cli():
     if os.name != "nt":
         executable = shutil.which("ziniao-cli")
         if executable:
             return executable
+        executable = PRIVATE_PREFIX / "lib/node_modules/@ziniao-open/cli/bin/ziniao-cli"
+        if executable.is_file():
+            return str(executable)
     else:
         executable = shutil.which("ziniao-cli.exe")
         if executable:
@@ -20,6 +27,7 @@ def find_cli():
         roots = [Path(shim).parent] if shim else []
         if os.environ.get("APPDATA"):
             roots.append(Path(os.environ["APPDATA"]) / "npm")
+        roots.append(PRIVATE_PREFIX)
         for root in roots:
             executable = root / "node_modules/@ziniao-open/cli/bin/ziniao-cli.exe"
             if executable.is_file():
