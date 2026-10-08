@@ -6,7 +6,7 @@
 > `按 https://raw.githubusercontent.com/ZMGID/dsimage/main/skills/dsimage/SETUP.md 安装并配置 dsimage`
 
 用户说「更新 dsimage」→ 直接看第 4 节。
-下面所有命令都在**技能目录**跑（Windows `python`，macOS/Linux `python3`）。
+下面所有命令都在**技能目录**用 Dsivio 内置 Python 跑：`dsivio python scripts/dsimage.py …`（bash 与 PowerShell 通用）。只有 `dsivio python` 报告内置运行时缺失（退出码 127）时，才把 `dsivio python` 换成系统 Python 3（Windows `python`，macOS/Linux `python3`）跑同一命令。
 
 ## 1. 装文件
 
