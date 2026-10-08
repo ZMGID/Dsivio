@@ -28,7 +28,9 @@
 
 `id`唯一且仅用英文字母、数字、下划线、连字符；实际SKU／变体写`sku`。`qty`是所选价格包含的基础商品数量，`unit`是台／件／双等，`salesUnit`是件／套等；套装内容可加`packContents`。商品图出现多件不等于套装数量，以所选SKU和描述判断。金额存数字，评价数存整数；仅展示“1k”等约数时存入本地`reviewsDisplay`，不转换为精确评价数。图片路径相对任务目录或使用绝对路径。
 
-可选字段还包括`size/material/platform/seller/unitPrice/sales`，`unitPrice`由脚本按价格除数量计算。跨币种分开出表。缺厘米尺寸直接省略，图文可判断的功能、颜色、材质写实用结论；关键价格、数量、链接和图片必须完整。
+可选字段还包括`size/material/platform/seller/unitPrice/sales/opportunityId`，`unitPrice`由脚本按价格除数量计算。跨币种分开出表。缺厘米尺寸直接省略，图文可判断的功能、颜色、材质写实用结论；关键价格、数量、图片和回查标识必须完整。
+
+TK商品机会结果用`opportunityId`替代`url`列，ID以数字字符串保存，避免Excel长整数精度丢失；有实际商品链接可同时保留`url`。按原图货号对应各个匹配结果，机会ID用于回查候选。参考价格在摘要中说明口径，区间上限可写入`features`；销售单位无法判断的候选继续核对或换掉。
 
 在主skill目录执行：
 

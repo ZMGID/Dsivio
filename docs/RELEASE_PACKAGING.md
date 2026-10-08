@@ -43,11 +43,11 @@ GitHub release packaging (this is the official path — do not build installers 
    git push origin main
    git push origin -f vX.Y.Z
    ```
-   Pushing the `v*` tag is what starts packaging. To rebuild an existing tag after a workflow change:
+   Pushing the `v*` tag is what starts packaging. To retry an unpublished draft tag after a workflow change:
    ```bash
    gh workflow run release.yml --repo ZMGID/kivio --ref main -f tag=vX.Y.Z -f ref=vX.Y.Z
    ```
-5. `.github/workflows/release.yml` builds **both** installers on GitHub Actions and uploads them to the tag's release:
+5. `.github/workflows/release.yml` creates or reuses a **draft** release, builds both installers on GitHub Actions, and uploads them to that draft. Both platform jobs must pass resource verification and the Windows portable ZIP must be present before the final job publishes it. Published versions cannot be rebuilt in place; use a new version. Failed draft builds can be retried.
    - `macos-latest` (Apple Silicon / aarch64) with `--bundles dmg` → `Kivio.Desktop_X.Y.Z_aarch64.dmg`
    - `windows-latest` (x64) with `--bundles nsis` → `Kivio.Desktop_X.Y.Z_x64-setup.exe`
    - After the NSIS build, Windows also packs `scripts/package-windows-portable.ps1` → `Kivio.Desktop_X.Y.Z_x64-portable.zip` (unzip and run `Kivio Desktop.exe`; no Start Menu). In-app update still downloads the NSIS installer.

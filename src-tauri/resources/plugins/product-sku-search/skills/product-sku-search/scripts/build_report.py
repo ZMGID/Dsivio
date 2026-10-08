@@ -25,6 +25,7 @@ FIELDS = {
     'source': ('原图／货号', 155), 'sku': ('商品ID／SKU', 155), 'platform': ('平台／站点', 130),
     'rating': ('评分', 85), 'reviews': ('评价数', 100), 'match': ('匹配判断', 170),
     'seller': ('店铺／卖家', 160), 'unitPrice': ('折合单价', 135),
+    'opportunityId': ('机会 ID', 190),
 }
 DEFAULT_COLUMNS = ['name', 'image', 'size', 'material', 'package', 'color', 'price', 'url', 'sales']
 
@@ -33,7 +34,8 @@ def layout(data):
     keys = data.get('columns', DEFAULT_COLUMNS)
     if (not isinstance(keys, list) or any(not isinstance(k, str) or k not in FIELDS for k in keys)
             or len(set(keys)) != len(keys)
-            or not set(('name', 'image', 'package', 'price', 'url')).issubset(keys)):
+            or not set(('name', 'image', 'package', 'price')).issubset(keys)
+            or not {'url', 'opportunityId'}.intersection(keys)):
         raise ValueError('Invalid report columns')
     return [(k, FIELDS[k][0] + (f'（{data["currency"]}）' if k == 'price' else
                               f'（{data["currency"]}）' if k == 'unitPrice' else
@@ -54,7 +56,7 @@ def validate(data):
         raise ValueError('No candidates')
     seen = set()
     for c in data['candidates']:
-        for key in ('id', 'name', 'unit', 'salesUnit', 'url', 'image'):
+        for key in ('id', 'name', 'unit', 'salesUnit', 'image'):
             if not isinstance(c.get(key), str) or not c[key].strip():
                 raise ValueError(f'Missing candidate {key}')
         if not c['id'].isascii() or not all(ch.isalnum() or ch in '_-' for ch in c['id']) or c['id'] in seen:
@@ -73,8 +75,15 @@ def validate(data):
                                       or value < 0 or (maximum is not None and value > maximum)
                                       or (key == 'reviews' and type(value) is not int)):
                 raise ValueError(f'Invalid {key}')
-        if urlparse(c['url']).scheme not in ('http', 'https') or not urlparse(c['url']).netloc:
-            raise ValueError('Invalid URL')
+        keys = data.get('columns', DEFAULT_COLUMNS)
+        if 'opportunityId' in keys:
+            opportunity_id = c.get('opportunityId')
+            if not isinstance(opportunity_id, str) or not opportunity_id.isascii() or not opportunity_id.isdigit():
+                raise ValueError('Use a digit string for opportunityId')
+        if 'url' in keys:
+            url = c.get('url')
+            if not isinstance(url, str) or urlparse(url).scheme not in ('http', 'https') or not urlparse(url).netloc:
+                raise ValueError('Invalid URL')
     return data
 
 

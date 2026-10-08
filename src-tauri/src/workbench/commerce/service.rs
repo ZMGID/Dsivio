@@ -10,7 +10,7 @@ use crate::workbench::shops::{self, Platform};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 pub struct Runtime {
     pub db: PathBuf,
@@ -70,10 +70,8 @@ impl ShopSource {
     }
 }
 
-fn gate() -> &'static tokio::sync::Mutex<()> {
-    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-}
+/// Serializes duplicate checks with record creation; never held across platform calls.
+static GATE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 pub async fn execute(op: &Value) -> Result<Value, CommerceError> {
     let runtime = Runtime::production()?;
@@ -195,43 +193,47 @@ pub async fn submit(
     targets: Vec<ListingTarget>,
     group_id: Option<String>,
 ) -> Result<Vec<ListingRecord>, CommerceError> {
-    let _guard = gate().lock().await;
     validate_draft(&draft)?;
     validate_targets(&targets)?;
     let mut resolved = Vec::new();
     for target in &targets {
         let shop = runtime.shops.resolve(&target.shop_id).await?;
         adapter::require_listing(shop.platform)?;
+        validate_category(shop.platform, &target.category_id)?;
         resolved.push(shop);
     }
-    let group_id = group_id.filter(|value| !value.trim().is_empty()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let existing = store::with_store(&runtime.db, |store| store.list(&ListingFilter::default()))?;
-    for target in &targets {
-        reject_duplicate(&existing, &group_id, &target.shop_id, &draft.title)?;
-    }
     let images = read_images(&draft.images)?;
-    let stamp = stamp(runtime.now);
-    let mut created = Vec::new();
-    for target in &targets {
-        let record = ListingRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            group_id: group_id.clone(),
-            shop_id: target.shop_id.clone(),
-            platform: Platform::Shopee,
-            status: ListingStatus::Submitting,
-            reason: None,
-            remote_id: None,
-            title: draft.title.clone(),
-            currency: draft.currency.clone(),
-            draft: draft.clone(),
-            target: target.clone(),
-            attempts: 1,
-            created_at: stamp.clone(),
-            updated_at: stamp.clone(),
-        };
-        store::with_store(&runtime.db, |store| store.insert(&record))?;
-        created.push(record);
-    }
+    let group_id = group_id.filter(|value| !value.trim().is_empty()).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let created = {
+        let _guard = GATE.lock().await;
+        let existing = store::with_store(&runtime.db, |store| store.list(&ListingFilter::default()))?;
+        for target in &targets {
+            reject_duplicate(&existing, &group_id, &target.shop_id, &draft.title)?;
+        }
+        let stamp = stamp(runtime.now);
+        let mut created = Vec::new();
+        for (target, shop) in targets.iter().zip(&resolved) {
+            let record = ListingRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                group_id: group_id.clone(),
+                shop_id: target.shop_id.clone(),
+                platform: shop.platform,
+                status: ListingStatus::Submitting,
+                reason: None,
+                remote_id: None,
+                title: draft.title.clone(),
+                currency: draft.currency.clone(),
+                draft: draft.clone(),
+                target: target.clone(),
+                attempts: 1,
+                created_at: stamp.clone(),
+                updated_at: stamp.clone(),
+            };
+            store::with_store(&runtime.db, |store| store.insert(&record))?;
+            created.push(record);
+        }
+        created
+    };
     let mut finished = Vec::new();
     for (record, shop) in created.into_iter().zip(resolved) {
         finished.push(run_push(runtime, record, &shop, &images, None).await?);
@@ -245,37 +247,45 @@ pub async fn resubmit(
     draft: Option<ListingDraft>,
     target: Option<ListingTarget>,
 ) -> Result<ListingRecord, CommerceError> {
-    let _guard = gate().lock().await;
-    let mut record = store::with_store(&runtime.db, |store| store.get(id))?;
-    if record.status == ListingStatus::Uncertain {
-        return Err(CommerceError::uncertain("提交结果不确定，只能查询，不能重新提交"));
-    }
-    if !record.status.can_resubmit() {
-        return Err(CommerceError::duplicate("只能从已拒绝或失败的记录重新提交"));
-    }
-    if let Some(draft) = draft {
-        record.title = draft.title.clone();
-        record.currency = draft.currency.clone();
-        record.draft = draft;
-    }
-    if let Some(target) = target {
-        if target.shop_id != record.shop_id {
-            return Err(CommerceError::invalid("重新提交不能更换店铺"));
-        }
-        record.target = target;
-    }
-    validate_draft(&record.draft)?;
-    validate_targets(std::slice::from_ref(&record.target))?;
-    let shop = runtime.shops.resolve(&record.shop_id).await?;
+    let shop = runtime.shops.resolve(&record_shop_id(runtime, id)?).await?;
     adapter::require_listing(shop.platform)?;
-    record.attempts = record.attempts.saturating_add(1);
-    record.status = ListingStatus::Submitting;
-    record.reason = None;
-    record.updated_at = stamp(runtime.now);
-    store::with_store(&runtime.db, |store| store.update(&record))?;
-    let images = read_images(&record.draft.images)?;
+    let (record, images) = {
+        let _guard = GATE.lock().await;
+        let mut record = store::with_store(&runtime.db, |store| store.get(id))?;
+        if record.status == ListingStatus::Uncertain {
+            return Err(CommerceError::uncertain("提交结果不确定，只能查询，不能重新提交"));
+        }
+        if !record.status.can_resubmit() {
+            return Err(CommerceError::duplicate("只能从已拒绝或失败的记录重新提交"));
+        }
+        if let Some(draft) = draft {
+            record.title = draft.title.clone();
+            record.currency = draft.currency.clone();
+            record.draft = draft;
+        }
+        if let Some(target) = target {
+            if target.shop_id != record.shop_id {
+                return Err(CommerceError::invalid("重新提交不能更换店铺"));
+            }
+            record.target = target;
+        }
+        validate_draft(&record.draft)?;
+        validate_targets(std::slice::from_ref(&record.target))?;
+        validate_category(shop.platform, &record.target.category_id)?;
+        let images = read_images(&record.draft.images)?;
+        record.attempts = record.attempts.saturating_add(1);
+        record.status = ListingStatus::Submitting;
+        record.reason = None;
+        record.updated_at = stamp(runtime.now);
+        store::with_store(&runtime.db, |store| store.update(&record))?;
+        (record, images)
+    };
     let remote = record.remote_id.clone();
     run_push(runtime, record, &shop, &images, remote.as_deref()).await
+}
+
+fn record_shop_id(runtime: &Runtime, id: &str) -> Result<String, CommerceError> {
+    store::with_store(&runtime.db, |store| store.get(id)).map(|record| record.shop_id)
 }
 
 pub async fn refresh(runtime: &Runtime, id: &str) -> Result<ListingRecord, CommerceError> {
@@ -363,9 +373,17 @@ fn validate_targets(targets: &[ListingTarget]) -> Result<(), CommerceError> {
         if !seen.insert(target.shop_id.clone()) {
             return Err(CommerceError::invalid("同一批次不能重复选择同一店铺"));
         }
-        if target.category_id.parse::<u64>().is_err() {
-            return Err(CommerceError::invalid("类目 ID 无效"));
-        }
+    }
+    Ok(())
+}
+
+fn validate_category(platform: Platform, category_id: &str) -> Result<(), CommerceError> {
+    let valid = match platform {
+        Platform::Mercadolibre => !category_id.is_empty() && category_id.chars().all(|c| c.is_ascii_alphanumeric()),
+        _ => category_id.parse::<u64>().is_ok(),
+    };
+    if !valid {
+        return Err(CommerceError::invalid("类目 ID 无效"));
     }
     Ok(())
 }

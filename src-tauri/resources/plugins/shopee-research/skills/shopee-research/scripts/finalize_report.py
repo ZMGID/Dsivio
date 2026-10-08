@@ -29,18 +29,19 @@ def finalize(input_path, base, output, columns):
     root = xml(parts[sheet_path])
     rel_path = posixpath.join(posixpath.dirname(sheet_path), '_rels', posixpath.basename(sheet_path) + '.rels')
     rels = xml(parts[rel_path]) if rel_path in parts else xml(f'<Relationships xmlns="{P}"/>'.encode())
-    links = child(root, S, 'hyperlinks')
-    # OOXML requires hyperlinks before print settings and page margins.
-    root.remove(links)
-    later = {'printOptions', 'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks', 'colBreaks',
-             'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing', 'extLst'}
-    at = next((i for i, node in enumerate(root) if node.tag.split('}')[-1] in later), len(root))
-    root.insert(at, links)
-    for i, c in enumerate(candidates):
-        rid = f'researchLink{i}'
-        link = child(links, S, 'hyperlink', ref=f'{columns["url"]}{i+7}')
-        link.set(f'{{{R}}}id', rid)
-        child(rels, P, 'Relationship', Id=rid, Type=R+'/hyperlink', Target=c['url'], TargetMode='External')
+    if 'url' in columns:
+        links = child(root, S, 'hyperlinks')
+        # OOXML requires hyperlinks before print settings and page margins.
+        root.remove(links)
+        later = {'printOptions', 'pageMargins', 'pageSetup', 'headerFooter', 'rowBreaks', 'colBreaks',
+                 'customProperties', 'cellWatches', 'ignoredErrors', 'smartTags', 'drawing', 'extLst'}
+        at = next((i for i, node in enumerate(root) if node.tag.split('}')[-1] in later), len(root))
+        root.insert(at, links)
+        for i, c in enumerate(candidates):
+            rid = f'researchLink{i}'
+            link = child(links, S, 'hyperlink', ref=f'{columns["url"]}{i+7}')
+            link.set(f'{{{R}}}id', rid)
+            child(rels, P, 'Relationship', Id=rid, Type=R+'/hyperlink', Target=c['url'], TargetMode='External')
     parts[sheet_path], parts[rel_path] = serialize(root), serialize(rels)
     linked = work / 'linked.xlsx'
     with ZipFile(linked, 'w', ZIP_DEFLATED) as archive:
@@ -70,8 +71,11 @@ def verify(output, candidates, columns):
 
     for i, c in enumerate(candidates):
         row = i+7
-        if float(value(f'{columns["price"]}{row}')) != c['price'] or value(f'{columns["url"]}{row}') != c['url']:
-            raise ValueError(f'Price/link mismatch: {c["id"]}')
+        if float(value(f'{columns["price"]}{row}')) != c['price']:
+            raise ValueError(f'Price mismatch: {c["id"]}')
+        for key in ('url', 'opportunityId'):
+            if key in columns and value(f'{columns[key]}{row}') != c[key]:
+                raise ValueError(f'{key} mismatch: {c["id"]}')
         if not value(f'{columns["package"]}{row}').startswith(f'{c["qty"]}{c["unit"]}／{c["salesUnit"]}'):
             raise ValueError(f'Package mismatch: {c["id"]}')
     for name, content in parts.items():
@@ -84,7 +88,8 @@ def verify(output, candidates, columns):
                         raise ValueError(f'Broken relationship: {target}')
     anchors = [a for name in parts if name.startswith('xl/drawings/') and '/_rels/' not in name and name.endswith('.xml')
                for a in xml(parts[name]).findall(f'{{{X}}}twoCellAnchor')]
-    if len(anchors) != len(candidates) or len(root.findall(f'.//{{{S}}}hyperlink')) != len(candidates):
+    expected_links = len(candidates) if 'url' in columns else 0
+    if len(anchors) != len(candidates) or len(root.findall(f'.//{{{S}}}hyperlink')) != expected_links:
         raise ValueError('Picture/link count mismatch')
     for i, anchor in enumerate(anchors):
         marker = anchor.find(f'{{{X}}}from')

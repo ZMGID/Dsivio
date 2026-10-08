@@ -72,7 +72,9 @@ it('shows a price error and saves on the next try', async () => {
 })
 
 it('keeps the newer list when an older load resolves late', async () => {
-  const first = Promise.withResolvers<Product[]>()
+  let resolve!: (value: Product[]) => void
+  const promise = new Promise<Product[]>((done) => { resolve = done })
+  const first = { promise, resolve }
   vi.mocked(api.productsList).mockImplementationOnce(() => first.promise)
   render(<ProductArchivePage />)
   await waitFor(() => expect(api.productsList).toHaveBeenCalledTimes(1))
