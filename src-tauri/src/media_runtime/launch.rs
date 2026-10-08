@@ -165,6 +165,10 @@ pub(crate) fn python_command(root: &Path, args: impl IntoIterator<Item = OsStrin
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .env("PYTHONUTF8", "1")
         .env("PYTHONIOENCODING", "utf-8");
+    // `pip install` would write into the App bundle; packages belong in a venv.
+    if std::env::var_os("PIP_REQUIRE_VIRTUALENV").is_none() {
+        command.env("PIP_REQUIRE_VIRTUALENV", "1");
+    }
     let mut front = vec![python.parent().ok_or("无效的 Python 路径")?.to_path_buf()];
     if let Ok(node) = tool(root, "node", Tool::Node) {
         front.push(node.parent().ok_or("无效的 Node 路径")?.to_path_buf());
@@ -280,34 +284,123 @@ pub fn run(tool: Tool, args: impl Iterator<Item = OsString>) -> ExitCode {
     last
 }
 
-/// Make the App-private npm executables and the bundled Node findable by the App's own
-/// children (agent shell, MCP servers, computer-control installers). Both go to the END of
-/// PATH, so a runtime the user installed keeps priority; on a clean machine `node`,
-/// `playwright-cli` and `ziniao-cli` (whose npm shims need `node`) still resolve.
+/// PATH directories the bundled runtime contributes, see `scripts/video-runtime/shim.rs`.
+pub(crate) const TOOL_SHIMS_DIR: &str = "shims/tools";
+pub(crate) const PYTHON_SHIMS_DIR: &str = "shims/python";
+
+/// Make the bundled runtimes findable by bare name for the App's own children (agent shell,
+/// Git Bash, PowerShell, MCP servers, plugin scripts): `shims/tools` (npm, npx, ffmpeg,
+/// ffprobe), the bundled Node directory (node), `shims/python` (python, python3) and the
+/// App-private npm prefix (`ziniao-cli`, `playwright-cli`, ... installed with `-g`).
+///
+/// Ordering: all of them go to the END of PATH, so a runtime the user installed keeps priority
+/// and its globally installed packages/pip site stay the ones in use. The single exception is an
+/// OS placeholder that would otherwise win for `python`/`python3` without running Python:
+/// macOS `/usr/bin/python3` without the Command Line Tools (it only opens the CLT installer) and
+/// the Windows Store "App execution alias" in `%LOCALAPPDATA%\Microsoft\WindowsApps` (it only
+/// opens the Store). Then `shims/python` goes directly before that directory; everything that
+/// already precedes it keeps priority, and nothing else is shadowed.
 pub(crate) fn extend_process_path(root: &Path) {
-    let mut extra = Vec::new();
+    let mut appended = Vec::new();
+    let tools = root.join(TOOL_SHIMS_DIR);
+    if tools.is_dir() {
+        appended.push(tools);
+    }
     if let Ok(node) = tool(root, "node", Tool::Node) {
         if let Some(dir) = node.parent() {
-            extra.push(dir.to_path_buf());
+            appended.push(dir.to_path_buf());
         }
     }
-    if let Some(prefix) = npm_prefix() {
-        extra.push(npm_bin_dir(&prefix));
-    }
+    let python = Some(root.join(PYTHON_SHIMS_DIR)).filter(|dir| dir.is_dir());
+    let npm_bin = npm_prefix().map(|prefix| npm_bin_dir(&prefix));
     let key = if cfg!(windows) { "Path" } else { "PATH" };
     let current = std::env::var_os(key).unwrap_or_default();
-    if let Some(joined) = appended_path(&current, &extra) {
+    let stub = python_placeholder_dir(&current);
+    if let Some(joined) = runtime_path(&current, &appended, python.as_deref(), npm_bin.as_deref(), stub.as_deref()) {
         std::env::set_var(key, joined);
     }
 }
 
-fn appended_path(current: &OsStr, extra: &[PathBuf]) -> Option<OsString> {
-    let existing: Vec<PathBuf> = std::env::split_paths(current).collect();
-    let missing: Vec<&PathBuf> = extra.iter().filter(|dir| !existing.contains(dir)).collect();
-    if missing.is_empty() {
-        return None;
+fn same_dir(a: &Path, b: &Path) -> bool {
+    let normalize = |path: &Path| {
+        let text = path.to_string_lossy();
+        let text = text.trim_end_matches(['/', '\\']);
+        if cfg!(windows) {
+            text.replace('/', "\\").to_lowercase()
+        } else {
+            text.to_string()
+        }
+    };
+    normalize(a) == normalize(b)
+}
+
+/// The new PATH (None when unchanged). Our directories are removed from `current` first, so the
+/// result is idempotent and a placeholder that appears later still gets `python` placed before it.
+fn runtime_path(
+    current: &OsStr,
+    appended: &[PathBuf],
+    python: Option<&Path>,
+    npm_bin: Option<&Path>,
+    placeholder: Option<&Path>,
+) -> Option<OsString> {
+    let ours: Vec<&Path> = appended.iter().map(PathBuf::as_path).chain(python).chain(npm_bin).collect();
+    let mut entries: Vec<PathBuf> = std::env::split_paths(current)
+        .filter(|entry| !ours.iter().any(|dir| same_dir(entry, dir)))
+        .collect();
+    let before_placeholder = python.and_then(|_| placeholder).and_then(|stub| entries.iter().position(|entry| same_dir(entry, stub)));
+    entries.extend(appended.iter().cloned());
+    match (python, before_placeholder) {
+        (Some(python), Some(index)) => entries.insert(index, python.to_path_buf()),
+        (Some(python), None) => entries.push(python.to_path_buf()),
+        (None, _) => {}
     }
-    std::env::join_paths(existing.iter().chain(missing)).ok()
+    entries.extend(npm_bin.map(Path::to_path_buf));
+    let joined = std::env::join_paths(entries).ok()?;
+    (joined != current).then_some(joined)
+}
+
+/// The PATH directory whose `python`/`python3` is only an OS installer placeholder, if any.
+#[cfg(target_os = "macos")]
+fn python_placeholder_dir(_current: &OsStr) -> Option<PathBuf> {
+    let xcode_select = std::fs::read_link("/var/db/xcode_select_link").ok();
+    let developer_dirs = std::env::var_os("DEVELOPER_DIR")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(xcode_select)
+        .chain([
+            PathBuf::from("/Library/Developer/CommandLineTools"),
+            PathBuf::from("/Applications/Xcode.app/Contents/Developer"),
+        ]);
+    macos_placeholder(Path::new("/usr/bin/python3").exists(), developer_dirs.map(|dir| dir.join("usr/bin/python3").is_file()))
+}
+
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+fn macos_placeholder(usr_bin_python3: bool, mut developer_python: impl Iterator<Item = bool>) -> Option<PathBuf> {
+    (usr_bin_python3 && !developer_python.any(|present| present)).then(|| PathBuf::from("/usr/bin"))
+}
+
+#[cfg(windows)]
+fn python_placeholder_dir(_current: &OsStr) -> Option<PathBuf> {
+    let apps = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Microsoft").join("WindowsApps");
+    // Aliases are reparse points: probe without following them.
+    let alias = ["python.exe", "python3.exe"].iter().any(|name| apps.join(name).symlink_metadata().is_ok());
+    let names: Vec<String> = std::fs::read_dir(&apps)
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    windows_placeholder(&apps, alias, &names)
+}
+
+/// The aliases belong to the Store installer unless a Python Software Foundation package
+/// (a real Store Python) is installed.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
+fn windows_placeholder(apps: &Path, alias: bool, names: &[String]) -> Option<PathBuf> {
+    let store_python = names.iter().any(|name| name.starts_with("PythonSoftwareFoundation.Python."));
+    (alias && !store_python).then(|| apps.to_path_buf())
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn python_placeholder_dir(_current: &OsStr) -> Option<PathBuf> {
+    None
 }
 
 /// True when `program` resolves (first on PATH) inside `dir`.
@@ -322,6 +415,13 @@ pub(crate) fn resolves_inside(program: &str, dir: &Path) -> bool {
         .find(|entry| names.iter().any(|name| entry.join(name).is_file()))
         .is_some_and(|entry| entry == dir)
 }
+
+/// The PATH launchers are built from `scripts/video-runtime/shim.rs` with plain `rustc`;
+/// compiled here only so their pure helpers are unit-tested against this module.
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../../scripts/video-runtime/shim.rs"]
+mod shim;
 
 #[cfg(test)]
 mod tests {
@@ -451,14 +551,147 @@ mod tests {
         assert_eq!(npm_bin_dir(prefix), if cfg!(windows) { prefix.to_path_buf() } else { prefix.join("bin") });
     }
 
+    fn paths(entries: &[&str]) -> OsString {
+        std::env::join_paths(entries.iter().map(PathBuf::from)).unwrap()
+    }
+
+    fn split(value: &OsStr) -> Vec<PathBuf> {
+        std::env::split_paths(value).collect()
+    }
+
     #[test]
-    fn app_path_appends_once_and_keeps_user_runtimes_first() {
-        let user = std::env::join_paths([PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")]).unwrap();
-        let extra = [PathBuf::from("/app/video-runtime/node/bin"), PathBuf::from("/home/u/.kivio/npm-global/bin")];
-        let joined = appended_path(&user, &extra).unwrap();
-        let entries: Vec<PathBuf> = std::env::split_paths(&joined).collect();
-        assert_eq!(entries[0], PathBuf::from("/usr/local/bin"));
-        assert_eq!(&entries[2..], &extra[..]);
-        assert!(appended_path(&joined, &extra).is_none(), "idempotent");
+    fn runtime_dirs_are_appended_after_user_runtimes_and_idempotent() {
+        let user = paths(&["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]);
+        let appended = [PathBuf::from("/app/video-runtime/shims/tools"), PathBuf::from("/app/video-runtime/node/bin")];
+        let python = PathBuf::from("/app/video-runtime/shims/python");
+        let npm_bin = PathBuf::from("/home/u/.kivio/npm-global/bin");
+        let joined = runtime_path(&user, &appended, Some(&python), Some(&npm_bin), None).unwrap();
+        assert_eq!(
+            split(&joined),
+            [
+                "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/app/video-runtime/shims/tools",
+                "/app/video-runtime/node/bin", "/app/video-runtime/shims/python", "/home/u/.kivio/npm-global/bin",
+            ]
+            .map(PathBuf::from)
+        );
+        assert!(runtime_path(&joined, &appended, Some(&python), Some(&npm_bin), None).is_none(), "idempotent");
+    }
+
+    #[test]
+    fn python_goes_only_before_an_os_placeholder() {
+        let user = paths(&["/usr/bin", "/bin", "/usr/local/bin"]);
+        let appended = [PathBuf::from("/app/shims/tools")];
+        let python = PathBuf::from("/app/shims/python");
+        let joined = runtime_path(&user, &appended, Some(&python), None, Some(Path::new("/usr/bin/"))).unwrap();
+        assert_eq!(split(&joined), ["/app/shims/python", "/usr/bin", "/bin", "/usr/local/bin", "/app/shims/tools"].map(PathBuf::from));
+        assert!(runtime_path(&joined, &appended, Some(&python), None, Some(Path::new("/usr/bin"))).is_none(), "idempotent");
+        // A placeholder that is not on PATH changes nothing; stale copies of our entries are re-placed.
+        let old = paths(&["/usr/local/bin", "/app/shims/python"]);
+        let moved = runtime_path(&old, &appended, Some(&python), None, Some(Path::new("/nowhere"))).unwrap();
+        assert_eq!(split(&moved), ["/usr/local/bin", "/app/shims/tools", "/app/shims/python"].map(PathBuf::from));
+        // Without a bundled Python nothing is inserted before the placeholder.
+        let none = runtime_path(&user, &appended, None, None, Some(Path::new("/usr/bin"))).unwrap();
+        assert_eq!(split(&none)[0], PathBuf::from("/usr/bin"));
+    }
+
+    #[test]
+    fn placeholder_detection_rules() {
+        assert_eq!(macos_placeholder(true, [false, false].into_iter()), Some(PathBuf::from("/usr/bin")));
+        assert_eq!(macos_placeholder(true, [false, true].into_iter()), None, "CLT or Xcode installed");
+        assert_eq!(macos_placeholder(false, std::iter::empty()), None);
+        let apps = Path::new("C:/Users/u/AppData/Local/Microsoft/WindowsApps");
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        assert_eq!(windows_placeholder(apps, true, &names(&["python.exe", "winget.exe"])), Some(apps.to_path_buf()));
+        assert_eq!(windows_placeholder(apps, true, &names(&["python.exe", "PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0"])), None);
+        assert_eq!(windows_placeholder(apps, false, &names(&[])), None, "aliases turned off");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_compare_case_and_separator_insensitively() {
+        assert!(same_dir(Path::new(r"C:\Users\U\AppData\Local\Microsoft\WindowsApps\"), Path::new("c:/users/u/appdata/local/microsoft/windowsapps")));
+    }
+
+    #[test]
+    fn shim_names_and_targets_match_the_bundled_layout() {
+        for (name, tool) in [("npm", shim::Tool::Npm), ("npx", shim::Tool::Npx), ("python", shim::Tool::Python), ("python3", shim::Tool::Python), ("PYTHON3", shim::Tool::Python), ("ffmpeg", shim::Tool::Ffmpeg), ("ffprobe", shim::Tool::Ffprobe)] {
+            assert_eq!(shim::tool_for(name), Some(tool), "{name}");
+        }
+        assert_eq!(shim::tool_for("node"), None, "node is reached through the bundled Node directory");
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("moved app/video-runtime");
+        let (python, node, npm) = fixture(&root);
+        let shim_file = root.join(TOOL_SHIMS_DIR).join(if cfg!(windows) { "npm.exe" } else { "npm" });
+        assert_eq!(shim::runtime_root(&shim_file).unwrap(), root);
+        assert_eq!(shim::runtime_root(&root.join(PYTHON_SHIMS_DIR).join("python3")).unwrap(), root);
+        assert_eq!(shim::target(&root, shim::Tool::Npm, cfg!(windows)), (node.clone(), vec![npm.clone()]));
+        assert_eq!(shim::target(&root, shim::Tool::Npx, cfg!(windows)).1, vec![npm.with_file_name("npx-cli.js")]);
+        assert_eq!(shim::target(&root, shim::Tool::Python, cfg!(windows)).0, python);
+        let tools = runtime::tools_at(&root).unwrap();
+        assert_eq!(tools.get("npm"), Some(&npm), "same npm entry as `dsivio npm`");
+        let ffmpeg = shim::target(&root, shim::Tool::Ffmpeg, cfg!(windows)).0;
+        let ffprobe = shim::target(&root, shim::Tool::Ffprobe, cfg!(windows)).0;
+        for file in [&ffmpeg, &ffprobe] {
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "fixture").unwrap();
+        }
+        let tools = runtime::tools_at(&root).unwrap();
+        assert_eq!(tools.get("ffmpeg"), Some(&ffmpeg));
+        assert_eq!(tools.get("ffprobe"), Some(&ffprobe));
+    }
+
+    #[test]
+    fn shim_npm_policy_matches_dsivio_npm() {
+        assert_eq!(shim::NPM_MIRROR_REGISTRY, NPM_MIRROR_REGISTRY);
+        assert_eq!(shim::NPM_OFFICIAL_REGISTRY, NPM_OFFICIAL_REGISTRY);
+        assert_eq!(shim::PLAYWRIGHT_MIRROR_HOST, PLAYWRIGHT_MIRROR_HOST);
+        assert_eq!(shim::FETCH_COMMANDS, FETCH_COMMANDS);
+        assert_eq!(shim::MISSING_RUNTIME_EXIT, i32::from(MISSING_RUNTIME_EXIT));
+        let none = |_: &str| None;
+        for args in [&["install", "-g", "@hypit/hypit"][..], &["ci"], &["view", "x"], &["run", "build"], &["config", "list"], &[]] {
+            let expected: Vec<shim::Source> = npm_sources(&os(args), none)
+                .into_iter()
+                .map(|source| match source {
+                    NpmSource::Mirror => shim::Source::Mirror,
+                    NpmSource::Official => shim::Source::Official,
+                    NpmSource::AsConfigured => shim::Source::AsConfigured,
+                })
+                .collect();
+            assert_eq!(shim::sources(shim::Tool::Npm, &os(args), &none, false), expected, "{args:?}");
+        }
+        assert_eq!(shim::sources(shim::Tool::Npx, &os(&["remotion", "render"]), &none, false), vec![shim::Source::Mirror], "npx never runs twice");
+        assert_eq!(shim::sources(shim::Tool::Npm, &os(&["install"]), &none, true), vec![shim::Source::AsConfigured], ".npmrc registry");
+        let configured = |key: &str| (key == "NPM_CONFIG_REGISTRY").then(|| OsString::from("https://r.example/"));
+        assert_eq!(shim::sources(shim::Tool::Npx, &os(&["x"]), &configured, false), vec![shim::Source::AsConfigured]);
+        assert_eq!(shim::sources(shim::Tool::Python, &os(&["-m", "pip", "install", "x"]), &none, false), vec![shim::Source::AsConfigured]);
+        assert!(shim::npmrc_sets_registry("fund=false\n registry = https://r.example/\n"));
+        assert!(!shim::npmrc_sets_registry("@corp:registry=https://r.example/\n//r.example/:_authToken=${TOKEN}\n"));
+    }
+
+    #[test]
+    fn shim_environment_keeps_the_bundle_read_only() {
+        let none = |_: &str| None;
+        let home = Path::new("/home/u");
+        let (set, remove) = shim::environment(shim::Tool::Npm, shim::Source::Mirror, &os(&["install", "-g", "x"]), &none, Some(home));
+        let value = |key: &str| set.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
+        assert_eq!(value("npm_config_prefix"), Some(home.join(".kivio").join("npm-global").into_os_string()));
+        assert_eq!(value("npm_config_registry"), Some(OsString::from(NPM_MIRROR_REGISTRY)));
+        assert!(remove.is_empty());
+        let user_prefix = |key: &str| (key == "npm_config_prefix").then(|| OsString::from("/opt/npm"));
+        let (set, _) = shim::environment(shim::Tool::Npm, shim::Source::Official, &os(&["i", "-g", "x"]), &user_prefix, Some(home));
+        assert!(set.iter().all(|(key, _)| *key != "npm_config_prefix"), "a configured prefix is kept");
+        assert!(set.iter().any(|(key, value)| *key == "npm_config_registry" && value == NPM_OFFICIAL_REGISTRY));
+        let (set, _) = shim::environment(shim::Tool::Npx, shim::Source::AsConfigured, &os(&["--prefix=/p", "x"]), &none, Some(home));
+        assert!(set.iter().all(|(key, _)| *key != "npm_config_prefix" && *key != "npm_config_registry"));
+        let (set, remove) = shim::environment(shim::Tool::Python, shim::Source::AsConfigured, &[], &none, Some(home));
+        assert_eq!(remove, ["PYTHONHOME", "PYTHONPATH"]);
+        for key in ["PYTHONNOUSERSITE", "PYTHONUTF8", "PIP_REQUIRE_VIRTUALENV"] {
+            assert!(set.iter().any(|(k, v)| *k == key && v == "1"), "{key}");
+        }
+        let opted_out = |key: &str| (key == "PIP_REQUIRE_VIRTUALENV").then(|| OsString::from("0"));
+        let (set, _) = shim::environment(shim::Tool::Python, shim::Source::AsConfigured, &[], &opted_out, Some(home));
+        assert!(set.iter().all(|(key, _)| *key != "PIP_REQUIRE_VIRTUALENV"));
+        let (set, remove) = shim::environment(shim::Tool::Ffmpeg, shim::Source::AsConfigured, &[], &none, Some(home));
+        assert!(set.is_empty() && remove.is_empty());
     }
 }
