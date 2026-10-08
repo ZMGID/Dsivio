@@ -32,7 +32,7 @@ def main():
     parser.add_argument("manifest", type=Path, help="JSON list: sheet, cell, productId, path")
     parser.add_argument("output_dir", type=Path)
     args = parser.parse_args()
-    entries = json.loads(args.manifest.read_text())
+    entries = json.loads(args.manifest.read_text(encoding='utf-8'))
     total = 0
     prepared = {}
     for entry in entries:
@@ -50,7 +50,7 @@ def main():
             prepared[product_id] = source.resolve()
         entry["path"] = str(target)
     output = args.output_dir / "images.json"
-    output.write_text(json.dumps(entries, ensure_ascii=False, indent=2))
+    output.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"manifest": str(output), "images": len(entries), "imageBytes": total}))
 
 
