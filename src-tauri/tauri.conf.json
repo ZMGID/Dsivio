@@ -34,6 +34,7 @@
       "resources/dsivio-video-asr": "dsivio-video-asr"
     },
     "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper", "silent": true },
       "nsis": {
         "installerIcon": "icons/icon.ico",
         "installMode": "currentUser"
