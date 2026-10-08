@@ -35,6 +35,9 @@ class BuilderTests(unittest.TestCase):
 
     def test_validation_before_export(self):
         validate(fixture())
+        for period in (None, "", 12):
+            with self.subTest(salesPeriod=period), self.assertRaises(ValueError):
+                validate(dict(fixture(), salesPeriod=period))
         for key in ('qty', 'price', 'unit', 'salesUnit', 'image'):
             data = fixture()
             del data['candidates'][0][key]
@@ -111,6 +114,35 @@ class BuilderTests(unittest.TestCase):
         target = self.root/'runtime'
         self.assertFalse(setup(target, check=True)['ready'])
         self.assertFalse(target.exists())
+
+    def test_amazon_sku_report_without_sales(self):
+        data = fixture()
+        del data['salesPeriod']
+        data['currency'] = 'USD'
+        data['columns'] = ['name', 'image', 'sku', 'features', 'package', 'price', 'unitPrice', 'rating', 'reviews', 'match', 'url', 'source']
+        candidate = data['candidates'][0]
+        del candidate['sales']
+        candidate.update(source='480017.jpg', id='B0D4VX3RF2', sku='B0D4VX3RF2; White', qty=2, price=11,
+                         rating=3.9, reviews=51, match='外观同款', url='https://www.amazon.com/dp/B0D4VX3RF2')
+        self.run_build(data)
+        workbook = load_workbook(self.output)
+        self.addCleanup(workbook.close)
+        sheet = workbook.active
+        self.assertEqual(sheet['L6'].value, '原图／货号')
+        self.assertEqual(sheet['L7'].value, '480017.jpg')
+        self.assertEqual(sheet['C7'].value, 'B0D4VX3RF2; White')
+        self.assertEqual(sheet['F7'].value, 11)
+        self.assertEqual(sheet['G7'].value, 5.5)
+        self.assertEqual(sheet['H7'].value, 3.9)
+        self.assertEqual(sheet['I7'].value, 51)
+        self.assertEqual(sheet['K7'].hyperlink.target, candidate['url'])
+        self.assertEqual(len(sheet._images), 1)
+        self.assertNotIn('销量', [cell.value for cell in sheet[6]])
+        original = self.output.read_bytes()
+        candidate['reviews'] = 'unknown'
+        with self.assertRaises(ValueError):
+            self.run_build(data)
+        self.assertEqual(self.output.read_bytes(), original)
 
 
 if __name__ == '__main__':

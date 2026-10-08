@@ -1945,24 +1945,26 @@ mod tests {
     }
 
     #[test]
-    fn bundled_shopee_research_installs_and_detects_missing_report_format() {
-        let item = plugin("shopee-research");
-        assert!(item.repository.is_empty());
-        let root = tempfile::tempdir().unwrap();
-        stage_bundled_skills(&item, root.path()).unwrap();
-        sync_setup_files(&item, &root.path().join(built_in_setup_id(&item))).unwrap();
-        let state = BuiltInState { revision: Some(item.revision.clone()), ..Default::default() };
-        assert!(built_in_ready_at(&item, &state, root.path()));
-        assert_eq!(built_in_skill_plan(&item, &state, root.path()).unwrap(), (vec![], vec![]));
-        let reference = "shopee-research/references/report-format.md";
-        assert_eq!(fs::read(root.path().join(reference)).unwrap(),
-            fs::read(item.bundled_skills.as_ref().unwrap().join(reference)).unwrap());
-        let manifest = built_in_manifest(&item);
-        assert_eq!(manifest["categoryIds"][0], "commerce");
-        assert_eq!(manifest["mainSkillId"], "shopee-research");
-        assert_eq!(manifest["setupSkillId"], "shopee-research-setup");
-        fs::remove_file(root.path().join(reference)).unwrap();
-        assert!(!built_in_ready_at(&item, &state, root.path()));
+    fn bundled_research_plugins_install_and_detect_missing_report_format() {
+        for id in ["shopee-research", "product-sku-search"] {
+            let item = plugin(id);
+            assert!(item.repository.is_empty());
+            let root = tempfile::tempdir().unwrap();
+            stage_bundled_skills(&item, root.path()).unwrap();
+            sync_setup_files(&item, &root.path().join(built_in_setup_id(&item))).unwrap();
+            let state = BuiltInState { revision: Some(item.revision.clone()), ..Default::default() };
+            assert!(built_in_ready_at(&item, &state, root.path()));
+            assert_eq!(built_in_skill_plan(&item, &state, root.path()).unwrap(), (vec![], vec![]));
+            let reference = format!("{id}/references/report-format.md");
+            assert_eq!(fs::read(root.path().join(&reference)).unwrap(),
+                fs::read(item.bundled_skills.as_ref().unwrap().join(&reference)).unwrap());
+            let manifest = built_in_manifest(&item);
+            assert_eq!(manifest["categoryIds"][0], "commerce");
+            assert_eq!(manifest["mainSkillId"], id);
+            assert_eq!(manifest["setupSkillId"], format!("{id}-setup"));
+            fs::remove_file(root.path().join(reference)).unwrap();
+            assert!(!built_in_ready_at(&item, &state, root.path()));
+        }
     }
 
     #[test]

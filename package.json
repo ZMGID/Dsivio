@@ -17,7 +17,7 @@
     "build:swift": "node scripts/build-swift-sidecar.js",
     "icons:generate": "node scripts/generate-windows-icons.mjs",
     "icons:check": "node scripts/generate-windows-icons.mjs --check",
-    "package:check": "node scripts/check-desktop-package.mjs",
+    "package:check": "node scripts/sync-product-sku-report.mjs --check && node scripts/check-desktop-package.mjs",
     "test:packaging": "node --test scripts/check-desktop-package.test.mjs",
     "test:adapters": "node --test src-tauri/resources/plugins/hypit-setup/adapter/test/provider.test.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
