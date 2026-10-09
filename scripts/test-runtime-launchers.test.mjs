@@ -65,10 +65,11 @@ for (const [label, binary] of launchers) {
     const userconfig = join(home, '.npmrc')
     writeFileSync(userconfig, '')
     writeFileSync(join(cwd, 'package.json'), '{"name":"dsivio-regression","version":"1.0.0","private":true}')
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_config_/iu.test(key)))
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^npm_config_/iu.test(key) && key.toLowerCase() !== 'path'))
     Object.assign(env, { DSIVIO_TEST_HOME: home, DSIVIO_TEST_RESOURCES: dirname(runtime),
       npm_config_userconfig: userconfig, npm_config_globalconfig: join(home, 'global.npmrc'),
       npm_config_cache: join(cwd, 'npm-cache'), npm_config_offline: 'true',
+      PATH: `${dirname(node)}${win ? ';' : ':'}${process.env.PATH || process.env.Path || ''}`,
       npm_config_script_shell: win ? process.env.ComSpec : '/bin/sh' })
     return { cwd, home, userconfig, env }
   }
@@ -80,8 +81,9 @@ for (const [label, binary] of launchers) {
   function execute(f, code, command = "exec") {
     const script = join(f.cwd, 'command.cjs')
     writeFileSync(script, code)
-    // npm exec -c executes a local command and does not fetch any package.
-    return run(f, [command, '-c', `"${node}" "${script}"`])
+    // Use a bare executable and a relative script: cmd /s strips leading quotes
+    // differently from sh. PATH selects the bundled Node and no package is fetched.
+    return run(f, [command, '-c', 'node command.cjs'])
   }
   test(`${label}: failed local command runs exactly once`, () => {
     const f = fixture()
