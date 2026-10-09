@@ -93,6 +93,15 @@ for (const [label, binary] of launchers) {
     assert.equal(readFileSync(effect, 'utf8'), 'ran\n')
     assert.doesNotMatch(result.stderr, /重试/u)
   })
+  test(`${label}: option values named like download commands do not cause retries`, () => {
+    const f = fixture()
+    const effect = join(f.cwd, 'effects.txt')
+    writeFileSync(join(f.cwd, 'view'), '')
+    writeFileSync(join(f.cwd, 'command.cjs'), `require('node:fs').appendFileSync(${JSON.stringify(effect)}, 'ran\\n'); process.exit(7)`)
+    const result = run(f, ['--userconfig', 'view', 'exec', '-c', 'node command.cjs'])
+    assert.equal(result.status, 7, result.stderr)
+    assert.equal(readFileSync(effect, 'utf8'), 'ran\n')
+  })
   test(`${label}: npm x alias also runs a failed command once`, () => {
     const f = fixture()
     const effect = join(f.cwd, 'effects.txt')
