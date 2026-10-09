@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Lang } from '../components/i18n'
+import { isSettingsVersionConflict, settingsCommandErrorMessage } from '../api/tauri'
 
 export interface SettingsBackupPort {
   pickImport(): Promise<string | null>
@@ -45,7 +46,10 @@ export function useSettingsBackupController(port: SettingsBackupPort, lang: Lang
       const prefix = kind === 'import'
         ? (langRef.current === 'zh' ? '导入失败：' : 'Import failed: ')
         : (langRef.current === 'zh' ? '导出失败：' : 'Export failed: ')
-      setStatus({ kind: 'err', msg: `${prefix}${error instanceof Error ? error.message : String(error)}` })
+      const message = isSettingsVersionConflict(error)
+        ? (langRef.current === 'zh' ? '设置已发生变化，本次未导入。请再次选择备份重试。' : 'Settings changed. Nothing was imported; select the backup again to retry.')
+        : settingsCommandErrorMessage(error)
+      setStatus({ kind: 'err', msg: `${prefix}${message}` })
     } finally {
       inFlight.current = false
       if (live.current) setBusy(false)

@@ -316,6 +316,41 @@ describe('SettingsEditorController', () => {
     controller.dispose()
   })
 
+  it('refreshes after an import conflict and allows an explicit retry against current settings', async () => {
+    const initial = snapshot(settings(), 1)
+    const remote = snapshot({ ...settings(), favoriteModels: ['remote'] }, 2)
+    const imported = snapshot(settings('dark'), 3)
+    const importSettings = vi.fn()
+      .mockRejectedValueOnce({ code: 'versionConflict', message: 'stale' })
+      .mockResolvedValueOnce(imported)
+    const refresh = vi.fn().mockResolvedValueOnce(initial).mockResolvedValue(remote)
+    const controller = new SettingsEditorController({ ...port(initial, vi.fn()), refresh, import: importSettings })
+    controller.start()
+    await Promise.resolve()
+    await expect(controller.import('company.json')).rejects.toMatchObject({ code: 'versionConflict' })
+    expect(importSettings).toHaveBeenCalledOnce()
+    expect(controller.snapshot.settings?.favoriteModels).toEqual(['remote'])
+    await controller.import('company.json')
+    expect(importSettings.mock.calls[1][1]).toEqual(remote.version)
+    expect(controller.snapshot.settings?.theme).toBe('dark')
+    expect(controller.snapshot.hasUnsavedChanges).toBe(false)
+    controller.dispose()
+  })
+
+  it('preserves the import conflict when refreshing fails and never retries automatically', async () => {
+    const initial = snapshot(settings(), 1)
+    const conflict = { code: 'versionConflict', message: 'stale' }
+    const importSettings = vi.fn(async () => { throw conflict })
+    const refresh = vi.fn().mockResolvedValueOnce(initial).mockRejectedValue(new Error('unavailable'))
+    const controller = new SettingsEditorController({ ...port(initial, vi.fn()), refresh, import: importSettings })
+    controller.start()
+    await Promise.resolve()
+    await expect(controller.import('company.json')).rejects.toBe(conflict)
+    expect(importSettings).toHaveBeenCalledOnce()
+    expect(controller.snapshot.settings).toEqual(initial.settings)
+    controller.dispose()
+  })
+
   it('retries a version conflict against the fresh snapshot without losing unrelated remote edits', async () => {
     const initial = snapshot(settings(), 1)
     const remote = snapshot({ ...settings(), favoriteModels: ['one'] }, 2)

@@ -219,7 +219,17 @@ export class SettingsEditorController {
     if (!this.port.import) throw new Error('Settings import is unavailable')
     if (!await this.flush()) throw new Error(this.view.saveError || 'Save failed: unsaved settings remain')
     if (!this.version) throw new Error('Settings version is unavailable')
-    const imported = await this.port.import(path, this.version)
+    let imported: SettingsSnapshot
+    try {
+      imported = await this.port.import(path, this.version)
+    } catch (error) {
+      if (isSettingsVersionConflict(error)) {
+        // Full replacement cannot be retried over a concurrent edit. Refresh the
+        // editor's base so another explicit import does not reuse the stale version.
+        try { this.acceptDirect(await this.port.refresh()) } catch { /* Keep the import failure visible. */ }
+      }
+      throw error
+    }
     this.replace(imported)
     this.onSettingsChange()
   }

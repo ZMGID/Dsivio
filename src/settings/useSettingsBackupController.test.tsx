@@ -46,4 +46,27 @@ describe('useSettingsBackupController', () => {
     await act(async () => { await result.current.importBackup() })
     expect(result.current.status).toEqual({ kind: 'ok', msg: 'Backup imported and applied.' })
   })
+
+  it.each([
+    { code: 'operationFailed', message: 'Failed to migrate conversation workspaces: permission denied' },
+    JSON.stringify({ code: 'operationFailed', message: 'Failed to migrate conversation workspaces: permission denied' }),
+    new Error(JSON.stringify({ code: 'operationFailed', message: 'Failed to migrate conversation workspaces: permission denied' })),
+  ])('shows the backend failure message rather than an object or JSON payload', async (error) => {
+    const { result } = renderHook(() => useSettingsBackupController({
+      pickImport: async () => 'company.json', pickExport: async () => null,
+      import: async () => { throw error }, export: async () => {},
+    }, 'zh'))
+    await act(async () => { await result.current.importBackup() })
+    expect(result.current.status).toEqual({ kind: 'err', msg: '导入失败：Failed to migrate conversation workspaces: permission denied' })
+  })
+
+  it('explains a settings conflict in the selected language', async () => {
+    const { result } = renderHook(() => useSettingsBackupController({
+      pickImport: async () => 'company.json', pickExport: async () => null,
+      import: async () => { throw { code: 'versionConflict', message: 'settings changed since this edit began' } },
+      export: async () => {},
+    }, 'zh'))
+    await act(async () => { await result.current.importBackup() })
+    expect(result.current.status?.msg).toBe('导入失败：设置已发生变化，本次未导入。请再次选择备份重试。')
+  })
 })

@@ -1787,6 +1787,15 @@ export function isSettingsVersionConflict(error: unknown): error is Extract<Sett
     && (payload as { code?: unknown }).code === 'versionConflict'
 }
 
+/** Decode settings command failures at the same boundary as their error codes. */
+export function settingsCommandErrorMessage(error: unknown): string {
+  const payload = settingsCommandErrorPayload(error)
+  if (typeof payload === 'object' && payload !== null && 'message' in payload && typeof payload.message === 'string') {
+    return payload.message
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
 // 默认提示词模板
 export type DefaultPromptTemplates = {
   translationTemplate: string

@@ -122,11 +122,19 @@ pub fn merge_directory_without_overwrite(source: &Path, target: &Path) -> Result
             source.display()
         ));
     }
+    // Settings backups can spell the current workspace through a symlink, `.`
+    // or an expanded home path. It is already restored; never move it onto itself.
+    if canonicalize_lenient(source) == canonicalize_lenient(target) {
+        return Ok(());
+    }
     preflight_directory_merge(source, target)?;
     merge_directory_entries(source, target)
 }
 
 pub(crate) fn preflight_directory_merge(source: &Path, target: &Path) -> Result<(), String> {
+    if canonicalize_lenient(source) == canonicalize_lenient(target) {
+        return Ok(());
+    }
     if target.exists() && !target.is_dir() {
         return Err(format!(
             "Workspace migration conflict: target is not a directory: {}",
@@ -622,6 +630,32 @@ mod tests {
         assert!(path_under_directory(&dir, &dir.join("nested/file.txt")));
         assert!(!path_under_directory(&dir, &dir.join("../outside.txt")));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn merge_directory_into_itself_preserves_populated_and_empty_workspaces() {
+        let root = temp_dir("merge_same_workspace");
+        fs::create_dir_all(&root).unwrap();
+        let alias = root.join(".");
+        for populated in [true, false] {
+            if populated {
+                fs::write(root.join("artifact.txt"), "existing conversation artifact").unwrap();
+            }
+            preflight_directory_merge(&root, &alias).expect("same workspace preflight");
+            merge_directory_without_overwrite(&root, &alias).expect("same workspace import");
+            assert!(
+                root.is_dir(),
+                "import must never delete an existing workspace"
+            );
+            if populated {
+                assert_eq!(
+                    fs::read_to_string(root.join("artifact.txt")).unwrap(),
+                    "existing conversation artifact"
+                );
+                fs::remove_file(root.join("artifact.txt")).unwrap();
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
