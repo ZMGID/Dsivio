@@ -69,12 +69,16 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            // Tests run in parallel and macOS clocks tick in microseconds, so the time alone can
+            // give two fixtures the same directory; the counter keeps them apart.
+            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let index = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let nonce = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
             let root = std::env::temp_dir().join(format!(
-                "kivio-resource-test-{}-{nonce}",
+                "kivio-resource-test-{}-{index}-{nonce}",
                 std::process::id()
             ));
             fs::create_dir_all(root.join("source/current")).unwrap();
