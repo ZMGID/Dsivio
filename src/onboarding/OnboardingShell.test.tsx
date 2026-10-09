@@ -5,6 +5,7 @@ import { OnboardingShell } from './OnboardingShell'
 
 vi.mock('../api/settingsCache', () => ({
   getSettingsSnapshotCached: vi.fn(),
+  refreshSettingsSnapshot: vi.fn(),
   saveSettingsSnapshotCached: vi.fn(),
   updateSettingsCached: vi.fn(),
 }))

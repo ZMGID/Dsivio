@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_store::StoreBuilder;
 
+pub(crate) mod backup;
+
 // 设置存储文件名
 const SETTINGS_STORE: &str = "settings.json";
 const LEGACY_APPLE_INTELLIGENCE_BASE_URL: &str = "applefoundation://local";

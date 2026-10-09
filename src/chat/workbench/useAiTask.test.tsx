@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { api } from '../../api/tauri'
+import { listen } from '@tauri-apps/api/event'
 import { useAiTask } from './useAiTask'
 
 vi.mock('../../api/tauri', () => ({ api: { runAiTask: vi.fn(), cancelAiTask: vi.fn() } }))
@@ -9,6 +10,33 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) })
 beforeEach(() => {
   vi.mocked(api.runAiTask).mockReset()
   vi.mocked(api.cancelAiTask).mockReset()
+})
+
+it('rolls back only the failed stream attempt and ignores late resets from cancelled tasks', async () => {
+  let receive!: (event: { payload: { taskId: string; delta: string; text?: string } }) => void
+  vi.mocked(listen).mockImplementationOnce(async (_name, handler) => {
+    receive = handler as typeof receive
+    return () => {}
+  })
+  let finish!: (value: { text: string; toolCalls: []; usage: null }) => void
+  vi.mocked(api.runAiTask).mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const { result } = renderHook(() => useAiTask())
+  let run!: Promise<string | null>
+  act(() => { run = result.current.run({ mode: 'agent', prompt: 'write', stream: true }) })
+  const taskId = vi.mocked(api.runAiTask).mock.calls[0][0].taskId
+  act(() => { receive({ payload: { taskId, delta: 'prior🌱broken' } }) })
+  expect(result.current.partial).toBe('prior🌱broken')
+  act(() => { receive({ payload: { taskId, delta: '', text: 'prior🌱' } }) })
+  expect(result.current.partial).toBe('prior🌱')
+  act(() => { receive({ payload: { taskId, delta: 'recovered' } }) })
+  expect(result.current.partial).toBe('prior🌱recovered')
+  act(() => { result.current.cancel() })
+  act(() => { receive({ payload: { taskId, delta: '', text: 'late' } }) })
+  expect(result.current.partial).toBe('prior🌱recovered')
+  await act(async () => {
+    finish({ text: 'late', toolCalls: [], usage: null })
+    expect(await run).toBeNull()
+  })
 })
 
 it('reports an error and stays idle after a rejected call', async () => {

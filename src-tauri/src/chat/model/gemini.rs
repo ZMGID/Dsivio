@@ -216,7 +216,7 @@ impl GeminiProvider<'_> {
         // 模型生成的图片：逐 chunk 的 inlineData part 累积，finish 后并入 output。
         let mut images: Vec<GeneratedImageData> = Vec::new();
 
-        loop {
+        'stream: loop {
             let chunk = response.chunk().await.map_err(|err| {
                 let model_error = stream_read_error(&label, &err);
                 self.record_usage_failure(
@@ -259,18 +259,12 @@ impl GeminiProvider<'_> {
                     value = antigravity::unwrap_response(value);
                 }
                 if let Some(err) = gemini_error_message(&value) {
-                    if super::is_missing_stream_terminal_error(&err)
-                        && (!full.trim().is_empty()
-                            || !reasoning_full.trim().is_empty()
-                            || !tool_calls.is_empty()
-                            || !images.is_empty())
-                    {
-                        continue;
-                    }
                     sink.emit(StreamPart::Error {
                         message: err.clone(),
                     })?;
-                    return Err(ModelError::new(format!("Gemini stream error: {err}")));
+                    return Err(ModelError::provider_stream_error(format!(
+                        "Gemini stream error: {err}"
+                    )));
                 }
                 // 逐 part：text/thought → 增量；functionCall → 完整工具调用。
                 // 先整块预扫一个候选签名（thoughtSignature 可能在 functionCall 兄弟 part 上、
@@ -333,15 +327,30 @@ impl GeminiProvider<'_> {
                     }
                 }
                 merge_gemini_web_search(&mut web_search, chunk_ws);
+                if saw_terminal {
+                    break 'stream;
+                }
             }
         }
 
-        if antigravity::is_provider(self.provider) && !saw_terminal {
-            let error =
-                "Antigravity stream ended before a finish reason was received; retry the request";
-            self.record_usage_failure(&request, &label, started_at, started.elapsed(), error);
-            self.record_debug_failure(&request, &label, true, error, started_at, started.elapsed());
-            return Err(ModelError::new(error));
+        if !saw_terminal {
+            let err = ModelError::stream_ended_early(&label);
+            self.record_usage_failure(
+                &request,
+                &label,
+                started_at,
+                started.elapsed(),
+                &err.to_string(),
+            );
+            self.record_debug_failure(
+                &request,
+                &label,
+                true,
+                &err.to_string(),
+                started_at,
+                started.elapsed(),
+            );
+            return Err(err);
         }
         // 有工具调用则结束原因归一为 tool_calls（Gemini 常仍返回 STOP）。
         let finish_reason = normalize_finish_reason(&finish_reason, !tool_calls.is_empty());
@@ -431,19 +440,27 @@ impl GeminiProvider<'_> {
         if !tools_arr.is_empty() {
             body["tools"] = Value::Array(tools_arr);
         }
-        // 思考等级 → thinkingConfig，原样下发（档位由模型库 reasoningEfforts 门控）。
+        // 思考等级 → thinkingConfig（档位由模型能力门控）。
         // 版本分叉:Gemini 3.x 用 `thinkingLevel`(字符串档位),2.5 系只认 `thinkingBudget`(数值),
-        // 两者互斥、传错会 400。故 thinkingLevel 只对 3.x 下发;其余(2.5/未知)回退到仅 `includeThoughts`
-        // (开思维输出、不强加档位)。开思考但无档（空 reasoningEfforts / 副调用）仍要
+        // 两者互斥、传错会 400。2.5 使用应用预算预设，未知版本仅下发 includeThoughts。
+        // 开思考但无档（空 reasoningEfforts / 副调用）仍要
         // includeThoughts，否则思维摘要整段丢掉。
         if request.options.thinking_enabled {
             let mut thinking = serde_json::json!({ "includeThoughts": true });
             if let Some(level) = request.options.thinking_level.as_deref() {
                 if gemini_supports_thinking_level(&request.model) {
                     thinking["thinkingLevel"] = Value::String(level.to_string());
+                } else if let Some(budget) =
+                    crate::chat::model_metadata::gemini_thinking_budget(&request.model, level)
+                {
+                    thinking["thinkingBudget"] = serde_json::json!(budget);
                 }
             }
             body["generationConfig"]["thinkingConfig"] = thinking;
+        } else if crate::chat::model_metadata::gemini_thinking_profile(&request.model)
+            .is_some_and(|profile| profile.supports_off)
+        {
+            body["generationConfig"]["thinkingConfig"] = serde_json::json!({ "thinkingBudget": 0 });
         }
         if let Some(overrides) = request.options.provider_options.as_object() {
             for (key, value) in overrides {
@@ -1256,11 +1273,12 @@ fn gemini_usage(value: &Value) -> Option<ModelUsage> {
 }
 
 fn gemini_error_message(value: &Value) -> Option<String> {
-    value
-        .get("error")
-        .and_then(|err| err.get("message"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    let error = value.get("error")?;
+    let message = error.get("message")?.as_str()?;
+    Some(match error.get("status").and_then(Value::as_str) {
+        Some(status) => format!("{message} ({status})"),
+        None => message.to_string(),
+    })
 }
 
 fn openai_compatible_message(
@@ -1493,6 +1511,39 @@ mod tests {
         assert_eq!(
             g25["generationConfig"]["thinkingConfig"]["includeThoughts"], true,
             "body: {g25}"
+        );
+    }
+
+    #[test]
+    fn gemini_25_off_disables_thinking_and_levels_set_a_budget() {
+        let mut req = GenerateRequest {
+            model: "gemini-2.5-flash".into(),
+            system: String::new(),
+            messages: vec![ModelMessage::text(ModelRole::User, "hi")],
+            tools: vec![],
+            options: GenerateOptions {
+                thinking_enabled: false,
+                ..Default::default()
+            },
+            metadata: Default::default(),
+        };
+        let off = body_for(&req, false);
+        assert_eq!(
+            off["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
+        req.options.thinking_enabled = true;
+        req.options.thinking_level = Some("high".into());
+        let on = body_for(&req, false);
+        assert_eq!(
+            on["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            24576
+        );
+        req.model = "gemini-2.5-pro".into();
+        let pro = body_for(&req, false);
+        assert_eq!(
+            pro["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            32768
         );
     }
 

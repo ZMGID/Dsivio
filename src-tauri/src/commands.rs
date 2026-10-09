@@ -284,44 +284,33 @@ async fn apply_settings(
     Ok(committed)
 }
 
-/// 设置备份文件格式版本。结构变化不兼容时递增。
-const SETTINGS_BACKUP_VERSION: u32 = 1;
-
-/// 导出全部设置（含供应商/模型配置与 API Key）到指定路径的 JSON 备份文件。
+/// 导出设置（含聊天和统一媒体创作的供应商、模型池及 API Key）。
 #[tauri::command]
 pub(crate) fn export_settings(state: State<AppState>, path: String) -> Result<(), String> {
     let settings = sanitize_settings(state.settings_read().clone());
-    let backup = serde_json::json!({
-        "app": "kivio",
-        "type": "settings-backup",
-        "version": SETTINGS_BACKUP_VERSION,
-        "settings": serde_json::to_value(&settings).map_err(|e| e.to_string())?,
-    });
+    let backup = crate::settings::backup::export(&settings);
     let json = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| format!("写入失败: {e}"))?;
     Ok(())
 }
 
-/// 从备份文件导入设置，覆盖当前全部设置并立即生效（与保存同样走 sanitize/回滚）。
+/// 普通备份恢复和首次公司配置导入共用格式解析及 CAS 保存入口。
 #[tauri::command]
 pub(crate) async fn import_settings(
     app: AppHandle,
     state: State<'_, AppState>,
     path: String,
     expected_version: SettingsVersion,
+    complete_onboarding: Option<bool>,
 ) -> Result<SettingsSnapshot, SettingsError> {
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取失败: {e}"))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|_| "文件不是有效的 JSON".to_string())?;
-    if value.get("type").and_then(|v| v.as_str()) != Some("settings-backup") {
-        return Err("这不是 Kivio 设置备份文件".into());
+    let local = settings_snapshot(&state);
+    if local.version != expected_version {
+        return Err(SettingsError::version_conflict(expected_version, local.version));
     }
-    let settings_value = value
-        .get("settings")
-        .ok_or_else(|| "备份文件缺少 settings 字段".to_string())?;
-    let settings: Settings = serde_json::from_value(settings_value.clone())
-        .map_err(|e| format!("备份内容无法解析: {e}"))?;
-    apply_settings(&app, &state, settings, expected_version, false).await
+    let imported = crate::settings::backup::parse(&raw, &local.settings, complete_onboarding.unwrap_or(false))?;
+    // Parsing has no file side effects: media pools and onboarding status commit together.
+    apply_settings(&app, &state, imported, expected_version, false).await
 }
 
 #[tauri::command]
@@ -345,6 +334,15 @@ pub(crate) fn close_translator_window(app: AppHandle, _state: State<'_, AppState
     }
 }
 
+/// 输入翻译浮窗展示实际目标语言，复用翻译请求的同一解析规则。
+#[tauri::command]
+pub(crate) fn resolve_translation_target_lang(
+    state: State<'_, AppState>,
+    text: String,
+) -> String {
+    resolve_target_lang(&state.settings_read().target_lang, text.trim())
+}
+
 /// 翻译文本命令
 /// 根据设置中的翻译供应商和模型进行翻译；OAuth 模式仍需先登录
 #[tauri::command]
@@ -363,10 +361,10 @@ pub(crate) async fn translate_text(
         .ok_or_else(|| "Translator provider not found".to_string())?;
 
     if !provider.authentication_ready() {
-        return Ok("Please log in to the provider first".to_string());
+        return Err("Please log in to the provider first".to_string());
     }
     if settings.translator_model.trim().is_empty() {
-        return Ok("Please select a model first".to_string());
+        return Err("Please select a model first".to_string());
     }
 
     let target_lang = resolve_target_lang(&settings.target_lang, trimmed);

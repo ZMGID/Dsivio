@@ -3,10 +3,11 @@ import { listen } from '@tauri-apps/api/event'
 import { api } from '../../api/tauri'
 import type { AiTaskRequest, AiTaskResult } from '../../generated/aiTask'
 
-export type AiTaskDelta = { taskId: string; delta: string }
+export type AiTaskDelta = { taskId: string; delta: string; text?: string }
 
 export type AiTaskOptions = Pick<AiTaskRequest, 'mode' | 'prompt'> & Partial<Omit<AiTaskRequest, 'taskId' | 'mode' | 'prompt'>> & {
   onDelta?: (delta: string) => void
+  onReset?: (text: string) => void
 }
 
 /**
@@ -16,6 +17,7 @@ export type AiTaskOptions = Pick<AiTaskRequest, 'mode' | 'prompt'> & Partial<Omi
 export function useAiTask() {
   const currentId = useRef<string | null>(null)
   const onDelta = useRef<((delta: string) => void) | undefined>(undefined)
+  const onReset = useRef<((text: string) => void) | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [partial, setPartial] = useState('')
@@ -25,6 +27,11 @@ export function useAiTask() {
     let stopped = false
     void listen<AiTaskDelta>('ai-task-delta', (event) => {
       if (event.payload.taskId !== currentId.current) return
+      if (event.payload.text !== undefined) {
+        setPartial(event.payload.text)
+        onReset.current?.(event.payload.text)
+        return
+      }
       setPartial((text) => text + event.payload.delta)
       onDelta.current?.(event.payload.delta)
     }).then((stop) => {
@@ -58,6 +65,7 @@ export function useAiTask() {
       const options = typeof input === 'function' ? await input() : input
       if (currentId.current !== taskId) return null
       onDelta.current = options.onDelta
+      onReset.current = options.onReset
       const result: AiTaskResult = await api.runAiTask({
         taskId,
         mode: options.mode,

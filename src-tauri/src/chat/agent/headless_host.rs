@@ -60,6 +60,25 @@ impl AgentHost for HeadlessAgentHost {
         }
     }
 
+    fn discard_stream_attempt(
+        &self,
+        _run_id: &str,
+        text_chars: u32,
+        _reasoning_chars: u32,
+        _segment_ids: Vec<String>,
+        _tool_ids: Vec<String>,
+    ) {
+        let text = {
+            let mut guard = self.text.lock().unwrap_or_else(|error| error.into_inner());
+            crate::chat::protocol::truncate_stream_tail(&mut guard, text_chars);
+            guard.clone()
+        };
+        if let Some(task_id) = &self.stream_task_id {
+            // A replacement snapshot lets the workbench drop only the failed attempt.
+            let _ = self.app.emit(AI_TASK_DELTA_EVENT, json!({ "taskId": task_id, "delta": "", "text": text }));
+        }
+    }
+
     fn emit_tool_record(
         &self,
         _conversation_id: &str,

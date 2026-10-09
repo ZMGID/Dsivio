@@ -29,6 +29,7 @@ import {
   getSettingsCached,
   getSettingsSnapshotCached,
   importSettingsCached,
+  importSettingsSnapshotCached,
   peekSettings,
   peekSettingsSnapshot,
   refreshSettings,
@@ -132,6 +133,24 @@ describe('settingsCache versioned snapshots', () => {
     expect(saveSettingsMock).toHaveBeenCalledWith(settingsB, editedFrom)
     await expect(importSettingsCached('/tmp/x.json', version(4))).resolves.toBe(settingsA)
     expect(importSettingsMock).toHaveBeenCalledWith('/tmp/x.json', version(4))
+  })
+
+  it('passes company completion through the same versioned import and publishes only the committed settings', async () => {
+    getSettingsMock.mockResolvedValue(snapshot(settingsA, 1))
+    await getSettingsSnapshotCached()
+    const listener = vi.fn()
+    const unsubscribe = subscribeSettingsSnapshot(listener)
+    importSettingsMock.mockRejectedValueOnce(new Error('invalid company file'))
+    await expect(importSettingsSnapshotCached('/tmp/company.json', version(1), true)).rejects.toThrow('invalid company file')
+    expect(peekSettings()).toBe(settingsA)
+    expect(listener).not.toHaveBeenCalled()
+    const completed = { ...settingsB, onboardingStatus: 'completed' as const }
+    importSettingsMock.mockResolvedValueOnce(snapshot(completed, 2))
+    await expect(importSettingsSnapshotCached('/tmp/company.json', version(1), true)).resolves.toEqual(snapshot(completed, 2))
+    expect(importSettingsMock).toHaveBeenLastCalledWith('/tmp/company.json', version(1), true)
+    expect(peekSettings()).toBe(completed)
+    expect(listener).toHaveBeenCalledOnce()
+    unsubscribe()
   })
 
   it('does not mutate or notify the cache when a full save fails', async () => {

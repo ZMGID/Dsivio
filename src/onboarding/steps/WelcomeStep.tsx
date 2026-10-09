@@ -4,18 +4,22 @@ import {
   BookOpen,
   CalendarClock,
   ChevronRight,
-  FolderGit2,
   MessageSquare,
   Images,
   ScanSearch,
-  Terminal,
+  Upload,
 } from 'lucide-react'
+import { Button } from '../../components/Button'
 import type { LucideIcon } from 'lucide-react'
 import type { I18n } from '../../components/i18n'
 import { OnboardingStepFrame } from '../OnboardingStepFrame'
 
 type WelcomeStepProps = {
   t: I18n
+  onImportConfig: () => void
+  importing: boolean
+  disabled: boolean
+  importError: string | null
 }
 
 type FeatureCard = {
@@ -24,14 +28,12 @@ type FeatureCard = {
   desc: string
 }
 
-export function WelcomeStep({ t }: WelcomeStepProps) {
+export function WelcomeStep({ t, onImportConfig, importing, disabled, importError }: WelcomeStepProps) {
   const features: FeatureCard[] = [
     { icon: MessageSquare, title: t.onboardingWelcomeChatTitle, desc: t.onboardingWelcomeChatDesc },
-    { icon: Terminal, title: t.onboardingWelcomeCliAgentTitle, desc: t.onboardingWelcomeCliAgentDesc },
     { icon: Blocks, title: t.onboardingWelcomeExtensionsTitle, desc: t.onboardingWelcomeExtensionsDesc },
     { icon: BookOpen, title: t.onboardingWelcomeKnowledgeTitle, desc: t.onboardingWelcomeKnowledgeDesc },
     { icon: ScanSearch, title: t.onboardingWelcomeLensTitle, desc: t.onboardingWelcomeLensDesc },
-    { icon: FolderGit2, title: t.onboardingWelcomeWorkspaceTitle, desc: t.onboardingWelcomeWorkspaceDesc },
     { icon: CalendarClock, title: t.onboardingWelcomeTasksTitle, desc: t.onboardingWelcomeTasksDesc },
     { icon: Images, title: t.onboardingWelcomeMediaTitle, desc: t.onboardingWelcomeMediaDesc },
   ]
@@ -44,6 +46,19 @@ export function WelcomeStep({ t }: WelcomeStepProps) {
 
   return (
     <OnboardingStepFrame title={t.onboardingWelcomeTitle} subtitle={t.onboardingWelcomeSubtitle}>
+      <section className="onboarding-card flex flex-col gap-3" aria-busy={importing}>
+        <div className="onboarding-field-copy">
+          <h2 className="onboarding-field-label">{t.onboardingImportTitle}</h2>
+          <p className="onboarding-field-hint">{t.onboardingImportDesc}</p>
+        </div>
+        <div>
+          <Button variant="primary" onClick={onImportConfig} disabled={disabled}>
+            <Upload size={15} />
+            {importing ? t.onboardingImportBusy : t.onboardingImportButton}
+          </Button>
+        </div>
+        {importError ? <p className="onboarding-panel-note" role="alert">{t.onboardingImportFailed} {importError}</p> : null}
+      </section>
       <div className="onboarding-section">
         <div className="onboarding-section-label">{t.onboardingWelcomeSectionFeatures}</div>
         <div className="onboarding-feature-grid">

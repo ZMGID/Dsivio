@@ -55,6 +55,12 @@ import type { ThemeDefinition } from '../theme/types'
 
 // ========== 类型定义 ==========
 
+export interface ThinkingCapabilities {
+  levels: string[]
+  offMode: 'supported' | 'upfront_only' | 'not_applicable' | 'unsupported' | 'unknown'
+}
+
+
 /** 是否运行在 Tauri 运行时(而非纯浏览器/SSR) */
 export const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -111,7 +117,7 @@ export type ChatStreamSegment = GeneratedChatSegmentPayload
 
 export type ChatStreamPayload = Extract<
   ChatRunEventEnvelope,
-  { type: 'run_started' | 'text_delta' | 'reasoning_delta' | 'run_completed' | 'run_cancelled' | 'run_failed' }
+  { type: 'run_started' | 'text_delta' | 'reasoning_delta' | 'stream_attempt_discarded' | 'run_completed' | 'run_cancelled' | 'run_failed' }
 > & { restoredFromSnapshot?: boolean }
 
 export type ChatExternalSendAttachment = {
@@ -2018,8 +2024,8 @@ export const api = {
   onKivioSettingsChanged: (listener: (event: SettingsChangedEvent) => void) =>
     on<SettingsChangedEvent>('kivio-settings-changed', listener),
   // 某模型可选的思考等级列表（用户覆盖 modelOverrides → 模型库 reasoningEfforts → 家族兜底）。
-  reasoningEffortsForModel: (model: string, providerId?: string) =>
-    invoke<string[]>('chat_reasoning_efforts_for_model', { model, providerId }),
+  thinkingCapabilitiesForModel: (model: string, providerId?: string) =>
+    invoke<ThinkingCapabilities>('chat_thinking_capabilities_for_model', { model, providerId }),
   getDefaultPromptTemplates: () => invoke<DefaultPromptTemplates>('get_default_prompt_templates'),
   listSystemFonts: () => invoke<string[]>('list_system_fonts').catch(() => [] as string[]),
   saveSettings: async (settings: Settings, expectedVersion: SettingsVersion) =>
@@ -2031,8 +2037,8 @@ export const api = {
   setTranslateCardSize: (width: number) =>
     invoke<SettingsSnapshot>('set_translate_card_size', { width }).then(normalizeSettingsSnapshot),
   exportSettings: (path: string) => invoke<void>('export_settings', { path }),
-  importSettings: async (path: string, expectedVersion: SettingsVersion) =>
-    normalizeSettingsSnapshot(await invoke<SettingsSnapshot>('import_settings', { path, expectedVersion })),
+  importSettings: async (path: string, expectedVersion: SettingsVersion, completeOnboarding = false) =>
+    normalizeSettingsSnapshot(await invoke<SettingsSnapshot>('import_settings', { path, expectedVersion, completeOnboarding })),
   usageGetStats: (query?: UsageStatsQuery) =>
     invoke<UsageStatsResponse>('usage_get_stats', { query }),
   usageGetConversationCost: (conversationId: string) =>
@@ -2070,6 +2076,7 @@ export const api = {
   closeTranslatorWindow: () => invoke<void>('close_translator_window'),
 
   // 文本翻译
+  resolveTranslationTargetLang: (text: string) => invoke<string>('resolve_translation_target_lang', { text }),
   translateText: (text: string) => invoke<string>('translate_text', { text }),
   commitTranslation: (text: string) => invoke<void>('commit_translation', { text }),
 
@@ -2243,6 +2250,7 @@ export const api = {
         event.type === 'run_started'
         || event.type === 'text_delta'
         || event.type === 'reasoning_delta'
+        || event.type === 'stream_attempt_discarded'
         || event.type === 'run_completed'
         || event.type === 'run_cancelled'
         || event.type === 'run_failed'
