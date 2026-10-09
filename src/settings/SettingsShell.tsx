@@ -1,7 +1,7 @@
 import { forwardRef, useImperativeHandle, useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore, type ReactNode, type SetStateAction } from 'react'
 import {
   X, RefreshCw, Monitor, Images,
-  Download, Upload, ArrowLeft, Palette,
+  Download, Upload, ArrowLeft, Palette, MessageSquare,
 } from 'lucide-react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import {
@@ -47,6 +47,7 @@ import { MixerTab } from './tabs/MixerTab'
 import { TranslateTab } from './tabs/TranslateTab'
 import { MemoryTab } from './tabs/MemoryTab'
 import { ChatTab } from './tabs/ChatTab'
+import { ImTab } from './tabs/ImTab'
 import { ProvidersTab } from './tabs/ProvidersTab'
 import { HooksTab } from './tabs/HooksTab'
 import { ComputerControlTab } from './tabs/ComputerControlTab'
@@ -76,7 +77,13 @@ import {
 import { ConnectorsPanel } from './ConnectorsPanel'
 import { WebSearchPanel } from './WebSearchPanel'
 
-export type SettingsTab = 'general' | 'themes' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'memory' | 'mixer' | 'media' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
+export type SettingsTab = 'general' | 'themes' | 'hotkeys' | 'translate' | 'lens' | 'chat' | 'im' | 'memory' | 'mixer' | 'media' | 'computerControl' | 'hooks' | 'webSearch' | 'connectors' | 'plugins' | 'sessions' | 'usage' | 'providers' | 'about'
+
+function readImConfig(settings: SettingsData) {
+  const im = settings.im
+  if (!im?.feishu || !im.wecom || !im.wecomCallback || !im.agent) return null
+  return im
+}
 
 type SettingsData = SettingsType
 // UI 字号：以 px 展示、以整体缩放（zoom）实现。CSS 全是 px 硬编码，做不了真正的 rem 基准字号，
@@ -846,6 +853,7 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     { id: 'translate' as const, label: t.tabTranslation, icon: TranslateIcon },
     { id: 'lens' as const, label: t.lensTabLabel, icon: LensIcon },
     { id: 'chat' as const, label: t.tabChatClient, icon: ChatIcon },
+    { id: 'im' as const, label: lang === 'zh' ? '即时通讯' : 'Messaging', icon: MessageSquare },
     { id: 'memory' as const, label: t.tabMemory, icon: MemoryIcon },
     { id: 'mixer' as const, label: t.tabMixer, icon: MixerIcon },
     { id: 'media' as const, label: lang === 'zh' ? '媒体创作' : 'Media creation', icon: Images },
@@ -884,6 +892,12 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
       subtitle: lang === 'zh'
         ? '主对话模型、流式/思考、系统提示词。'
         : 'Main chat model, streaming/thinking, and system prompt.',
+    },
+    im: {
+      title: lang === 'zh' ? '即时通讯' : 'Messaging',
+      subtitle: lang === 'zh'
+        ? '飞书、企业微信机器人和自建应用。'
+        : 'Feishu, WeCom bot, and the self-built app.',
     },
     memory: {
       title: t.tabMemory,
@@ -1229,6 +1243,16 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
                 onUpdateChat={updateChat}
                 onUpdateNativeTools={updateNativeTools}
                 onNavigateTab={navigateToSettingsTab}
+              />
+            )}
+
+            {activeTab === 'im' && (
+              <ImTab
+                lang={lang}
+                config={readImConfig(settings)}
+                providers={settings?.providers ?? []}
+                onChange={(im) => setSettings((prev) => prev ? { ...prev, im } : prev)}
+                onFlush={() => editorController.flush()}
               />
             )}
 

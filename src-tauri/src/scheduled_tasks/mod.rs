@@ -701,6 +701,7 @@ pub fn start_run(
         svc.record_run(&run);
         svc.note_outcome(&task.id, error, disable);
         emit_changed(&app, &task.id, Some(&run));
+        crate::im::notify_task_finished(&app, &task.name, &run).await;
     });
     initial
 }

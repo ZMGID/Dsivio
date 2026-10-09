@@ -325,6 +325,13 @@ impl AgentHost for SubAgentHost {
         self.emit_progress("running", true);
     }
 
+    fn desktop_prompts_unavailable(&self) -> bool {
+        self.app
+            .state::<AppState>()
+            .chat_runtime()
+            .im_turn_active(&self.parent_conversation_id)
+    }
+
     fn request_tool_approval<'a>(
         &'a self,
         _ctx: &'a ToolExecutionContext<'a>,
@@ -332,8 +339,14 @@ impl AgentHost for SubAgentHost {
     ) -> AgentHostFuture<'a, bool> {
         // depth > 0: a sub-agent can never escalate to the user for approval,
         // so any approval-gated (sensitive) tool is auto-denied. Read-only /
-        // bypass-approval tools never reach this method.
-        Box::pin(async move { false })
+        // bypass-approval tools never reach this method. An admitted IM parent
+        // turn is the exception: that turn already authorized tools.
+        let im_turn = self
+            .app
+            .state::<AppState>()
+            .chat_runtime()
+            .im_turn_active(&self.parent_conversation_id);
+        Box::pin(async move { crate::chat::runtime_state::im_turn_allows_tools(im_turn) })
     }
 
     fn request_session_consent<'a>(
@@ -344,11 +357,15 @@ impl AgentHost for SubAgentHost {
         // conversation's session consent: if the user already authorized
         // file/shell tools for this conversation, the sub-agent reuses that
         // grant. Otherwise it denies (the parent must consent first).
+        // An IM parent turn allows the same tools without storing that grant.
         Box::pin(async move {
-            self.app
-                .state::<AppState>()
-                .chat_interactions()
-                .has_session_consent(&self.parent_conversation_id)
+            let state = self.app.state::<AppState>();
+            crate::chat::runtime_state::im_session_consent(
+                state.chat_runtime().im_turn_active(&self.parent_conversation_id),
+                state
+                    .chat_interactions()
+                    .has_session_consent(&self.parent_conversation_id),
+            )
         })
     }
 

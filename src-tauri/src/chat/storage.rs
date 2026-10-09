@@ -258,6 +258,68 @@ pub fn conversation_attachments_dir(app: &AppHandle, id: &str) -> Result<PathBuf
     Ok(dir)
 }
 
+fn im_working_directories_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(conversations_dir(app)?.join("im-working-directories.json"))
+}
+
+fn im_workdir_lock() -> &'static parking_lot::Mutex<()> {
+    static LOCK: std::sync::LazyLock<parking_lot::Mutex<()>> =
+        std::sync::LazyLock::new(|| parking_lot::Mutex::new(()));
+    &LOCK
+}
+
+pub(crate) fn im_working_directory(app: &AppHandle, conversation_id: &str) -> Option<String> {
+    let path = im_working_directories_path(app).ok()?;
+    read_im_working_directory_at(&path, conversation_id)
+}
+
+pub(crate) fn set_im_working_directory(
+    app: &AppHandle,
+    conversation_id: &str,
+    directory: Option<&str>,
+) -> Result<(), String> {
+    validate_conversation_id(conversation_id)?;
+    let path = im_working_directories_path(app)?;
+    let _guard = im_workdir_lock().lock();
+    write_im_working_directory_at(&path, conversation_id, directory)
+}
+
+pub(crate) fn read_im_working_directory_at(path: &Path, conversation_id: &str) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let map: HashMap<String, String> = serde_json::from_str(&content).ok()?;
+    map.get(conversation_id)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn write_im_working_directory_at(
+    path: &Path,
+    conversation_id: &str,
+    directory: Option<&str>,
+) -> Result<(), String> {
+    let mut map: HashMap<String, String> = fs::read_to_string(path)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default();
+    match directory.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(directory) => {
+            map.insert(conversation_id.to_string(), directory.to_string());
+        }
+        None => {
+            map.remove(conversation_id);
+        }
+    }
+    if map.is_empty() {
+        if path.exists() {
+            fs::remove_file(path).map_err(|error| format!("remove IM working directories: {error}"))?;
+        }
+        return Ok(());
+    }
+    let content = serde_json::to_string(&map)
+        .map_err(|error| format!("serialize IM working directories: {error}"))?;
+    atomic_write(path, &content, "IM working directories")
+}
+
 #[cfg(test)]
 mod conversation_workspace_tests {
     use super::*;

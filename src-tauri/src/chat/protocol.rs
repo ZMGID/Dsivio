@@ -956,6 +956,7 @@ pub struct ChatProtocolSubscriber {
 pub(crate) struct ChatProtocolState {
     hub: Mutex<ChatProtocolHub>,
     subscribers: Mutex<HashMap<String, ChatProtocolSubscriber>>,
+    im_streams: parking_lot::Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<ImVisibleText>>>,
 }
 
 impl ChatProtocolState {
@@ -967,6 +968,20 @@ impl ChatProtocolState {
         self.subscribers
             .lock()
             .unwrap_or_else(|error| error.into_inner())
+    }
+
+    pub(crate) fn bind_im_text_stream(
+        &self,
+        conversation_id: &str,
+        sender: tokio::sync::mpsc::UnboundedSender<ImVisibleText>,
+    ) {
+        self.im_streams
+            .lock()
+            .insert(conversation_id.to_string(), sender);
+    }
+
+    pub(crate) fn unbind_im_text_stream(&self, conversation_id: &str) {
+        self.im_streams.lock().remove(conversation_id);
     }
 
     pub(crate) fn running_snapshot(
@@ -1912,12 +1927,47 @@ fn upsert_segment(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ImVisibleText {
+    Append(String),
+    DiscardChars(u32),
+}
+
+pub(crate) fn im_visible_text(event: &ChatRunEvent) -> Option<ImVisibleText> {
+    match event {
+        ChatRunEvent::TextDelta { delta, .. } if !delta.is_empty() => {
+            Some(ImVisibleText::Append(delta.clone()))
+        }
+        ChatRunEvent::StreamAttemptDiscarded { text_chars, .. } if *text_chars > 0 => {
+            Some(ImVisibleText::DiscardChars(*text_chars))
+        }
+        _ => None,
+    }
+}
+
+fn forward_im_visible_text(protocol: &ChatProtocolState, event: &ChatProtocolEvent) {
+    let ChatProtocolEvent::Run(envelope) = event else {
+        return;
+    };
+    let Some(update) = im_visible_text(&envelope.event) else {
+        return;
+    };
+    let sender = {
+        let slots = protocol.im_streams.lock();
+        slots.get(event.conversation_id()).cloned()
+    };
+    if let Some(sender) = sender {
+        let _ = sender.send(update);
+    }
+}
+
 /// 实时协议的唯一出口。生产路径走 Tauri ipc `Channel`(点对点、保序、绕过全局事件总线,
 /// 不再向每个 WebView 广播+反序列化);无人订阅时事件直接丢弃——协议本就为此设计了
 /// sync/replay,前端挂载时 `chat_sync_state` 全量对账补齐。
 /// 多窗口：按 label 分槽，弹出窗只收自己那条对话；仅当该对话已有活着的 `Conversation`
 /// 订阅者时，才跳过主窗 All 的高频事件。按「窗口已打开」跳过会在通道未订上/已死时黑洞。
 /// debug 构建额外广播到全局事件总线,喂 chat probe(probe.rs 靠 `app.listen` 收实时载荷)。
+/// IM 文本监听在无人订阅时仍然转发，桌面窗口关闭不影响回传。
 fn emit_protocol(app: &AppHandle, event: ChatProtocolEvent) {
     #[cfg(debug_assertions)]
     notify_protocol_debug_sink(&event);
@@ -1935,6 +1985,7 @@ fn emit_protocol(app: &AppHandle, event: ChatProtocolEvent) {
             })
             .collect()
     };
+    forward_im_visible_text(state.chat_protocol(), &event);
     if targets.is_empty() {
         return;
     }

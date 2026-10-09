@@ -24,6 +24,8 @@ pub(crate) struct ChatRuntimeState {
     reply_idle: tokio::sync::Notify,
     popout_create_lock: tokio::sync::Mutex<()>,
     conversation_create_lock: tokio::sync::Mutex<()>,
+    /// Conversations whose current turn was admitted from IM. Desktop sends never set this.
+    im_turns: parking_lot::Mutex<HashSet<String>>,
 }
 
 #[derive(Default)]
@@ -162,7 +164,20 @@ impl ChatRuntimeState {
             .contains(conversation_id)
     }
 
+    pub(crate) fn begin_im_turn(&self, conversation_id: &str) {
+        self.im_turns.lock().insert(conversation_id.to_string());
+    }
+
+    pub(crate) fn end_im_turn(&self, conversation_id: &str) {
+        self.im_turns.lock().remove(conversation_id);
+    }
+
+    pub(crate) fn im_turn_active(&self, conversation_id: &str) -> bool {
+        self.im_turns.lock().contains(conversation_id)
+    }
+
     pub(crate) fn forget_conversation(&self, conversation_id: &str) {
+        self.end_im_turn(conversation_id);
         {
             let mut indexes = self.indexes();
             indexes.active_generations.remove(conversation_id);
@@ -435,6 +450,15 @@ fn retire_generation(indexes: &mut ChatRunIndexes, conversation_id: &str, genera
     }
 }
 
+/// IM turns approve tools without writing session consent. Desktop keeps its own grant.
+pub(crate) fn im_turn_allows_tools(im_turn_active: bool) -> bool {
+    im_turn_active
+}
+
+pub(crate) fn im_session_consent(im_turn_active: bool, desktop_session_consent: bool) -> bool {
+    im_turn_active || desktop_session_consent
+}
+
 /// Returns true when this retired the conversation's last reply slot.
 fn retire_reply(indexes: &mut ChatRunIndexes, conversation_id: &str, run_id: &str) -> bool {
     if let Some(runs) = indexes.active_replies.get_mut(conversation_id) {
@@ -468,6 +492,26 @@ mod tests {
         runtime.cancel_conversation("a");
         assert!(!runtime.is_generation_active("a", sibling));
         assert!(runtime.is_generation_active("b", other));
+    }
+
+    #[test]
+    fn im_turn_scope_does_not_cover_another_conversation() {
+        let runtime = ChatRuntimeState::default();
+        runtime.begin_im_turn("conv_im");
+        assert!(runtime.im_turn_active("conv_im"));
+        assert!(!runtime.im_turn_active("conv_desktop"));
+        assert!(im_turn_allows_tools(runtime.im_turn_active("conv_im")));
+        assert!(!im_turn_allows_tools(runtime.im_turn_active("conv_desktop")));
+        assert_eq!(
+            im_session_consent(true, false),
+            true,
+            "an IM turn allows tools without a stored desktop grant"
+        );
+        assert_eq!(im_session_consent(false, false), false);
+        assert_eq!(im_session_consent(false, true), true);
+        runtime.end_im_turn("conv_im");
+        assert!(!runtime.im_turn_active("conv_im"));
+        assert!(!im_turn_allows_tools(false));
     }
 
     #[test]

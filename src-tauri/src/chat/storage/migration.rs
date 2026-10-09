@@ -159,6 +159,12 @@ pub fn resolve_conversation_working_directory(
     conversation: &Conversation,
     ordinary_working_root: &str,
 ) -> Result<PathBuf, String> {
+    if let Some(directory) = super::im_working_directory(app, &conversation.id) {
+        let path = PathBuf::from(directory);
+        if path.is_dir() {
+            return Ok(path);
+        }
+    }
     if let Some(project) = resolve_conversation_project(app, conversation)? {
         let root = project
             .root_path

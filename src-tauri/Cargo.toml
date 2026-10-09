@@ -72,6 +72,11 @@ tokio = { version = "1", features = ["time", "process", "io-util", "net", "sync"
 parking_lot = "0.12"
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 scraper = "0.23"
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+axum = "0.8"
+sha1 = "0.10"
+quick-xml = "0.38"
 html-escape = "0.2"
 regex = "1"
 ignore = "0.4"

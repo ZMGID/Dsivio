@@ -15,6 +15,7 @@ use super::messages::persist_partial_assistant_snapshot;
 pub(super) struct ChatAgentHost<'a> {
     pub(super) app: AppHandle,
     pub(super) state: &'a AppState,
+    pub(super) conversation_id: String,
     pub(super) run_id: String,
     /// 多模型臂置 true：抑制 mid-run 部分快照落盘（协调者统一落盘）。默认 false（现状）。
     pub(super) suppress_partial_persist: bool,
@@ -277,11 +278,22 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         })
     }
 
+    fn desktop_prompts_unavailable(&self) -> bool {
+        self.state
+            .chat_runtime()
+            .im_turn_active(&self.conversation_id)
+    }
+
     fn request_tool_approval<'a>(
         &'a self,
         ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
         record: &'a ToolCallRecord,
     ) -> crate::chat::agent::AgentHostFuture<'a, bool> {
+        if crate::chat::runtime_state::im_turn_allows_tools(
+            self.state.chat_runtime().im_turn_active(&self.conversation_id),
+        ) {
+            return Box::pin(async { true });
+        }
         Box::pin(async move {
             request_tool_approval(
                 &self.app,
@@ -299,6 +311,12 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         &'a self,
         ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
     ) -> crate::chat::agent::AgentHostFuture<'a, bool> {
+        if crate::chat::runtime_state::im_session_consent(
+            self.state.chat_runtime().im_turn_active(&self.conversation_id),
+            false,
+        ) {
+            return Box::pin(async { true });
+        }
         Box::pin(async move {
             request_session_consent(
                 &self.app,
@@ -317,6 +335,9 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         record: &'a ToolCallRecord,
         prompt: crate::chat::ask_user::AskUserPromptPayload,
     ) -> crate::chat::agent::AgentHostFuture<'a, crate::chat::ask_user::AskUserResponseResult> {
+        if self.desktop_prompts_unavailable() {
+            return Box::pin(async { crate::chat::ask_user::cancelled_response() });
+        }
         Box::pin(async move {
             request_user_response(
                 &self.app,

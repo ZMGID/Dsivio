@@ -666,6 +666,7 @@ pub(super) async fn complete_assistant_reply_inner(
     );
 
     let chat_host = ChatAgentHost {
+        conversation_id: conversation.id.clone(),
         workflow_hooks: if chat_mode {
             Default::default()
         } else {

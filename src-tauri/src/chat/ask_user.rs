@@ -16,6 +16,9 @@ pub const ASK_USER_PHASE_SKIPPED: &str = "skipped";
 pub const ASK_USER_PHASE_TIMEOUT: &str = "timeout";
 pub const ASK_USER_PHASE_CANCELLED: &str = "cancelled";
 
+/// Shown to the model when an IM turn cancels `ask_user` instead of opening a desktop card.
+pub const IM_ASK_USER_GUIDANCE: &str = "ask_user cannot wait for a desktop card in this instant-message turn. The card was cancelled. Ask the user in your ordinary reply text.";
+
 const MAX_TITLE_CHARS: usize = 120;
 const MAX_QUESTIONS: usize = 4;
 const MAX_QUESTION_ID_CHARS: usize = 40;

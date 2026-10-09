@@ -13,6 +13,23 @@ Dsivio Agent 是当前唯一的内置运行时，负责对话、工具执行和�
 
 右侧可以打开文件、Git、终端和任务。设置里配置模型、Skills、MCP、知识库，以及本机工具。
 
+## 即时通讯
+
+「设置 → 即时通讯」可以把飞书 / Lark、企业微信智能机器人和企业微信自建应用接到 Dsivio Agent。实现参考 [Hermes Agent](https://github.com/NousResearch/hermes-agent)，运行时不依赖 Hermes 或 Python。
+
+- **飞书 / Lark**：扫码设置或填写 App ID / App Secret；默认使用长连接，不需要公网回调地址。手动创建的应用需要启用机器人、配置 `im.message.receive_v1` 事件和相应的消息 / 资源权限，并发布应用。Webhook 模式另外填写 Verification Token / Encrypt Key，将配置的本机监听地址通过 HTTPS 反向代理暴露给飞书。
+- **企业微信智能机器人**：扫码设置或填写 Bot ID / Secret，使用官方 WebSocket 长连接；不是只支持发消息的群 Webhook 机器人。
+- **企业微信自建应用**：填写企业 ID、Agent ID、Secret、回调 Token 和 EncodingAESKey；将本机回调服务通过 HTTPS 暴露并配置到企业微信。此模式接收文本，附件消息会说明不支持，不会伪装成已处理。
+
+三个入口共用助手、模型和工作目录；模型可以跟随桌面对话默认配置。密钥存入系统凭证库，不写入普通设置或状态返回值；修改机器人 ID 后，需要重新保存与该 ID 对应的密钥。
+
+私聊默认使用**访问配对**：发送消息后，在本机此设置页批准配对码。群聊默认只响应允许列表中的群，可以再限制群内用户；飞书默认还要求 @ 机器人。群内不同用户默认分开会话。IM 会话保存在本机，能在桌面对话列表中继续查看；`/new`、`/reset` 开新会话并保留旧记录，`/stop` 停止当前回复，`/help` 查看说明。
+
+**IM 发起的工具调用及子代理会自动批准，不发送审批卡片；普通桌面对话原有审批策略不变。只授权可信用户。** 配对批准控制谁能访问，不是工具审批。应用需保持运行；不要让 Hermes 和 Dsivio 同时使用同一个机器人，以免抢占连接或分流消息。
+
+可按平台设置通知频道，让定时任务结果使用当前连接发送；连接未就绪时不补发。企业微信机器人群聊只能在有效消息回复窗口内被动回复，通知频道建议填写私聊目标；自建应用通知目标为企业微信用户 ID。
+
+
 ## 工作台
 
 工作台换的是左侧导航，不是另一套地址。图片、视频这些页面在两种形态下都能打开。
@@ -73,3 +90,5 @@ Windows 上用 `powershell -File scripts/win-cargo-test.ps1`。聊天协议的 T
 ## 许可证
 
 [GPL-3.0-or-later](LICENSE)
+
+IM 协议适配保留 [Hermes Agent 的 MIT 授权](docs/licenses/hermes-agent-MIT.txt)；飞书帧与加密实现参考 [lark-oapi 1.6.8 的 MIT 授权](docs/licenses/lark-oapi-MIT.txt)。

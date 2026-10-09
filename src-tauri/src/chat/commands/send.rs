@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
@@ -118,7 +120,7 @@ pub(crate) async fn send_user_message_when_idle(
     app: &AppHandle,
     conversation_id: &str,
     content: String,
-    cancellation: impl std::future::Future<Output = String>,
+    cancellation: impl Future<Output = String>,
     admit: &(dyn Fn() -> Result<(), String> + Send + Sync),
     on_user_message_saved: &(dyn Fn() + Send + Sync),
 ) -> Result<(), String> {
@@ -151,6 +153,44 @@ pub(crate) async fn send_user_message_when_idle(
             .unwrap_or("发送失败")
             .to_string())
     }
+}
+
+/// Backend send that waits for an idle conversation, then runs the normal send transaction.
+/// `cancellation` only interrupts the wait. After admission the transaction is not dropped
+/// mid-write; `on_admitted` marks scoped state that the caller clears when this future ends.
+pub(crate) async fn send_attached_when_idle<C, A>(
+    app: &AppHandle,
+    conversation_id: &str,
+    content: String,
+    attachments: Vec<String>,
+    cancellation: C,
+    on_admitted: A,
+) -> Result<serde_json::Value, String>
+where
+    C: Future<Output = String>,
+    A: Fn() + Send + Sync,
+{
+    let state = app.state::<AppState>();
+    let _send_reservation = tokio::select! {
+        biased;
+        reason = cancellation => return Err(reason),
+        reserved = ChatSendReservation::acquire_when_idle(state.inner(), conversation_id) => reserved,
+    };
+    on_admitted();
+    let outcome = send_reserved(
+        app.clone(),
+        app.state::<AppState>(),
+        conversation_id.to_string(),
+        content,
+        attachments,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    outcome
 }
 
 /// The send transaction; the caller already holds the conversation's send reservation.

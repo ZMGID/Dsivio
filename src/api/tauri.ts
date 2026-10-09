@@ -1,3 +1,4 @@
+import type { ImConfig } from '../generated/im'
 import type { SourcingConfig, LookalikeRequest, SourcingSearch, SourcingSearchSummary, PickFilter, PickPage, SavePickRequest, PickItem } from '../generated/sourcing'
 import type { GenerationWorkflow, WorkflowRun } from '../generated/generationWorkflow'
 import type { AiTaskRequest, AiTaskResult } from '../generated/aiTask'
@@ -1254,6 +1255,8 @@ export type Settings = {
   defaultModels: DefaultModelsConfig
   workbenchMedia: WorkbenchMediaConfig
   sourcing?: SourcingConfig
+  /** Legacy snapshots may omit IM; canonical backend settings always supply defaults. */
+  im?: ImConfig
   /** Canonical backend responses always contain chat settings after migration. */
   chat: ChatConfig
   /** Canonical backend responses always contain chat memory settings after migration. */

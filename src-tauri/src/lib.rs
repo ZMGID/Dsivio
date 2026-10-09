@@ -14,6 +14,7 @@ pub mod dock;
 pub mod fonts;
 pub mod workbench;
 pub mod content_templates;
+pub mod im;
 pub mod lens;
 pub mod lens_commands;
 #[cfg(any(target_os = "macos", test))]
@@ -383,6 +384,9 @@ pub fn run() {
                     .join("scheduled_tasks"),
             ));
             app.manage(connectors::OAuthFlows::default());
+            app.manage(im::ImRuntime::load(
+                app.path().app_data_dir()?.join("im"),
+            )?);
 
             // 崩溃残留的中断草稿日志:按每个 message_id 的最后一行合并回会话文件后删除。
             // setup 阶段不可能有活跃 run,没有并发写冲突。
@@ -422,6 +426,7 @@ pub fn run() {
             }
             crate::automation::spawn_scheduler(app.handle().clone());
             crate::scheduled_tasks::spawn_scheduler(app.handle().clone());
+            crate::im::start(app.handle().clone());
             if let Err(err) = setup_tray(&app.handle()) {
                 eprintln!("Failed to setup tray: {err}");
             }
@@ -608,6 +613,18 @@ pub fn run() {
             provider_oauth::usage::provider_oauth_usage,
             provider_oauth::account::provider_oauth_account,
             commands::get_settings,
+            im::commands::im_get_status,
+            im::commands::im_save_credentials,
+            im::commands::im_clear_credentials,
+            im::commands::im_reconnect,
+            im::commands::im_list_pairing_requests,
+            im::commands::im_approve_pairing,
+            im::commands::im_deny_pairing,
+            im::commands::im_list_approved_users,
+            im::commands::im_revoke_user,
+            im::commands::im_begin_setup,
+            im::commands::im_poll_setup,
+            im::commands::im_cancel_setup,
             windows::chat_window_apply_mica,
             windows::chat_window_set_opaque,
             windows::chat_traffic_light_center_y,
@@ -904,6 +921,7 @@ pub fn run() {
                 } else {
                     // 真正退出：同步排干 MCP 连接池，杀掉所有持久子进程，避免孤儿进程。
                     let state: State<AppState> = app_handle.state();
+                    tauri::async_runtime::block_on(app_handle.state::<im::ImRuntime>().shutdown());
                     if let Ok(runtime) = chat::sub_agent::control::runtime(app_handle) {
                         let stopped = tauri::async_runtime::block_on(async {
                             tokio::time::timeout(std::time::Duration::from_secs(5), runtime.shutdown()).await

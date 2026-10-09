@@ -166,6 +166,12 @@ pub trait AgentHost: Send + Sync {
         Box::pin(async { false })
     }
 
+    /// IM turns cannot open desktop cards. Default false so desktop and headless
+    /// hosts keep their existing ask_user behavior.
+    fn desktop_prompts_unavailable(&self) -> bool {
+        false
+    }
+
     fn request_user_response<'a>(
         &'a self,
         ctx: &'a ToolExecutionContext<'a>,

@@ -493,7 +493,12 @@ async fn execute_ask_user_call(
         &response.phase,
         &response.answers,
     ));
-    let content = ask_user::tool_result_content(&response);
+    let mut content = ask_user::tool_result_content(&response);
+    if host.desktop_prompts_unavailable() && response.phase == ask_user::ASK_USER_PHASE_CANCELLED
+    {
+        content.push('\n');
+        content.push_str(ask_user::IM_ASK_USER_GUIDANCE);
+    }
     match response.phase.as_str() {
         ask_user::ASK_USER_PHASE_ANSWERED => {
             record.status = ToolCallStatus::Success;
