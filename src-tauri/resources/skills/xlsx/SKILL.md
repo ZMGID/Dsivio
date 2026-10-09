@@ -19,8 +19,8 @@ Kivio stores each uploaded spreadsheet as a safe local copy and includes its abs
 
 1. Identify the safe copy path from the attachment note.
 2. For `.csv` / `.tsv`, use `read` for a small text preview.
-3. For `.xlsx` / `.xls` / `.xlsm`, `read` does not parse the workbook. If the host has Excel tooling (`python` with pandas/openpyxl, OfficeCLI, etc.), inspect sheets with `bash`. For a multi-line script, `write` it first, then run it.
-4. If no spreadsheet tool is installed, say so. Do not invent numbers.
+3. For `.xlsx` / `.xlsm`, `read` does not parse the workbook. Run Python through `dsivio python` (Dsivio's bundled Python 3.12, which ships openpyxl, Pillow and lxml, so no system Python or `pip install` is needed), e.g. `dsivio python script.py`; OfficeCLI also works when installed. For a multi-line script, `write` it first, then run it. Legacy `.xls` needs a reader the bundled Python does not ship (xlrd/pandas); use OfficeCLI or host tooling for it.
+4. If `dsivio python` reports that the bundled runtime is missing (exit code 127) and no other spreadsheet tool is installed, say so. Do not invent numbers.
 5. Inspect sheet names, columns, row counts, missing values, and representative rows before answering. Run calculations explicitly.
 
 ## Output

@@ -2,7 +2,7 @@
 name: dscraw-report
 description: "用紫鸟 CLI 抓取 Shopee、TikTok Shop、SHEIN 巴西店铺日报；4家并发、最多6个窗口、Agent 处理异常并补采，保存原始数据、HTML/PNG 和累计 Excel。也用于维护日报配置，不用于账号管理。"
 metadata:
-  required-binaries: "ziniao-cli, python, node"
+  required-binaries: "ziniao-cli, dsivio"
 ---
 
 # 紫鸟店铺日报
@@ -13,18 +13,18 @@ metadata:
 
 ## 1. 使用什么工具
 
-以下命令在本 Skill 目录执行，python 指宿主中可用的 Python；Windows 商店占位命令不可用时换成宿主 Python 绝对路径。scripts/ziniao_cli.py 调用已安装的紫鸟 CLI，不是另一个浏览器工具。Excel 处理需要 openpyxl，报告渲染需要 Node、Playwright/Chromium。
+以下命令在本 Skill 目录执行。`dsivio python` 是随 Dsivio 安装的 Python 3.12（已带 openpyxl），并让脚本内部调用的 `node` 使用内置 Node.js 22，不需要系统 Python/Node；仅当它报告内置运行时缺失（退出码 127）时，才按 [环境准备](references/migration.md) 换成已核验的宿主 Python 3.12+ 绝对路径。scripts/ziniao_cli.py 调用已安装的紫鸟 CLI，不是另一个浏览器工具。Excel 处理需要 openpyxl，报告渲染需要 Node、Playwright/Chromium。
 
 ~~~text
-python scripts/ziniao_cli.py doctor
-python scripts/ziniao_cli.py store list
-python scripts/ziniao_cli.py store open --id STORE_ID --expected-name "紫鸟准确店名" --url "该平台入口"
-python scripts/ziniao_cli.py page content --store-id STORE_ID
-python scripts/ziniao_cli.py page query --store-id STORE_ID --selector "现场定位的CSS选择器"
-python scripts/ziniao_cli.py page click --store-id STORE_ID --selector "唯一可见控件的CSS选择器"
-python scripts/ziniao_cli.py page visit --store-id STORE_ID --url "该平台入口"
-python scripts/ziniao_cli.py page exec --store-id STORE_ID --target-id TARGET_ID --script-file "本次只读观察.js的绝对路径"
-python scripts/ziniao_cli.py store close --id STORE_ID
+dsivio python scripts/ziniao_cli.py doctor
+dsivio python scripts/ziniao_cli.py store list
+dsivio python scripts/ziniao_cli.py store open --id STORE_ID --expected-name "紫鸟准确店名" --url "该平台入口"
+dsivio python scripts/ziniao_cli.py page content --store-id STORE_ID
+dsivio python scripts/ziniao_cli.py page query --store-id STORE_ID --selector "现场定位的CSS选择器"
+dsivio python scripts/ziniao_cli.py page click --store-id STORE_ID --selector "唯一可见控件的CSS选择器"
+dsivio python scripts/ziniao_cli.py page visit --store-id STORE_ID --url "该平台入口"
+dsivio python scripts/ziniao_cli.py page exec --store-id STORE_ID --target-id TARGET_ID --script-file "本次只读观察.js的绝对路径"
+dsivio python scripts/ziniao_cli.py store close --id STORE_ID
 ~~~
 
 - 每次任务 doctor 一次。开店、导航、观察、登录按钮、日期选择、导出、下载、关店全部先用上述 CLI；采集脚本内部也走 CLI。不要另建 Playwright/CDP 会话或直调 Bridge 私有接口。
@@ -49,8 +49,8 @@ python scripts/ziniao_cli.py store close --id STORE_ID
 一份日报配置保存在用户选择的数据目录的 `配置/<日报名>.json`，保存 stores、requirements、report.outputs、outputRoot 和 lastRun。先读取 `~/.kivio/dscraw-report/REPORTS.md` 中已登记的配置路径；没有配置时按工作流完成首次选择，已有配置直接复用，不每天重问。配置和经营数据不写入 Skill 安装目录。用户说全部店铺时核对实际范围，不能默认缩成旧童装六店；只支持 Shopee/TikTok/SHEIN 的 BR 站点，其他平台明确排除。按业务类目与用户顺序展示，不按平台重分组。
 
 ~~~text
-python scripts/report_state.py plan --config "日报配置的绝对路径" --date YYYY-MM-DD
-python scripts/collect_batch.py run --config "日报配置的绝对路径" --date YYYY-MM-DD
+dsivio python scripts/report_state.py plan --config "日报配置的绝对路径" --date YYYY-MM-DD
+dsivio python scripts/collect_batch.py run --config "日报配置的绝对路径" --date YYYY-MM-DD
 ~~~
 
 Dsivio 插件统一使用 --config 指定外部配置；--report 仅兼容旧 Skill 目录内配置，与 --config 二选一。没有日期时按配置时区取前一自然日；把 plan 的 dateIso、configSnapshot 和输出路径用于整个任务，跨午夜也不改变。有多份配置时按用户范围选择，不能任意取第一份。新增日报按现有 JSON 结构建配置并 plan 校验，不复制另一日报的 lastRun；不擅改已有店铺、广告开关或数量口径。
@@ -73,8 +73,8 @@ Dsivio 插件统一使用 --config 指定外部配置；--report 仅兼容旧 Sk
 修复后把页面留在待续跑步骤，发 ready；账号或下载目录缺失时只针对该店补 --account 或 --download-dir。下载目录取本次 store open 返回的 downloadFolderPath，不猜路径。
 
 ~~~text
-python scripts/collect_batch.py status --batch "batch.json绝对路径"
-python scripts/collect_batch.py ready --batch "batch.json绝对路径" --store-id STORE_ID --account "现场核对的页面账号"
+dsivio python scripts/collect_batch.py status --batch "batch.json绝对路径"
+dsivio python scripts/collect_batch.py ready --batch "batch.json绝对路径" --store-id STORE_ID --account "现场核对的页面账号"
 ~~~
 
 运行中的调度器会接收 ready；已经退出时用 run --batch "原batch.json绝对路径" 续跑。batch 位于 outputRoot/数据/dateIso/批量采集/batch.json。保留原日期、目录、归档和断点，不删锁抢进程、不换目录重导。中断后先确认旧进程已退出，再处理遗留锁和现场。
@@ -82,8 +82,8 @@ python scripts/collect_batch.py ready --batch "batch.json绝对路径" --store-i
 **难店放最后，不丢掉：** 一轮做几次有意义的 CLI 恢复仍无进展，可以先暂缓；次数只帮助决定是否后置，不触发 computer use，也不判最终失败。保存尝试及原导出状态，确认关窗不会打断下载或丢失未保存数据后，用 defer 关店释放窗口。正常店继续。正常队列结束、原 run 退出后，Agent 必须主动安排延迟补采，不等用户再催；默认等待 600 秒再只重开 deferred 店：
 
 ~~~text
-python scripts/collect_batch.py defer --batch "batch.json绝对路径" --store-id STORE_ID
-python scripts/collect_batch.py run --batch "batch.json绝对路径" --retry-deferred --retry-deferred-after 600
+dsivio python scripts/collect_batch.py defer --batch "batch.json绝对路径" --store-id STORE_ID
+dsivio python scripts/collect_batch.py run --batch "batch.json绝对路径" --retry-deferred --retry-deferred-after 600
 ~~~
 
 延迟计划写入原 batch，进程在等待期间中断后再次执行同一命令只等待剩余时间。补采只重开 deferred 店，不重跑 done 店；仍异常就按新现场继续 CLI 恢复，不能把一次补采失败当最终失败。继续按“有意义恢复→defer→等待600秒→只重开失败店”的循环处理，直到成功，或出现新的凭据、验证码、权限等真实外部阻塞；只有满足第1节的最后手段条件才用 computer use。不要把暂缓、等待或 needs_agent 当完成。close --batch ... --store-id ... 仅用于已由 Agent 验收取数或最终确认不可继续的异常店，不用于临时搁置。关闭未确认不释放名额；全局 Bridge/认证故障先处理，不能逐店跳过。若最终仍无法补齐，交付已取得的数据与具体缺项，不声称全部成功。
@@ -102,7 +102,7 @@ python scripts/collect_batch.py run --batch "batch.json绝对路径" --retry-def
 正常固定步骤用脚本；直接调用只用于接手单店，不与批量线程同店并跑：
 
 ~~~text
-python scripts/collect_tiktok.py --store-id STORE_ID --expected-name "紫鸟准确店名" --expected-account "页面账号" --date YYYY-MM-DD --download-dir "本店下载目录" --output-root "本次输出根目录"
+dsivio python scripts/collect_tiktok.py --store-id STORE_ID --expected-name "紫鸟准确店名" --expected-account "页面账号" --date YYYY-MM-DD --download-dir "本店下载目录" --output-root "本次输出根目录"
 ~~~
 
 ## 5. Shopee
@@ -116,7 +116,7 @@ python scripts/collect_tiktok.py --store-id STORE_ID --expected-name "紫鸟准�
 5. 仅 collectAds=true 进入 https://seller.shopee.com.br/portal/marketing/pas/index 。独立选目标单日，核对日期控件、GMT-3及 from/to；[data-testid='export-data-dropdown-trigger'] 打开菜单，按名称选“广告组数据”，核对确认框后提交一次，匹配本次任务再下载。CSV区间汇总不能填成七天中某一天；广告组与商品行不能重复相加。层级/全店覆盖无法核实时，Agent 读同一目标单日页面“花费/广告支出回报率”，记录 single-day-page-fallback；广告销售额不混入经营，ROAS不求和或平均。
 
 ~~~text
-python scripts/collect_shopee.py --store-id STORE_ID --expected-name "紫鸟准确店名" --expected-account "页面账号" --date YYYY-MM-DD --download-dir "本店下载目录" --output-root "本次输出根目录"
+dsivio python scripts/collect_shopee.py --store-id STORE_ID --expected-name "紫鸟准确店名" --expected-account "页面账号" --date YYYY-MM-DD --download-dir "本店下载目录" --output-root "本次输出根目录"
 ~~~
 
 需要广告时才追加 --collect-ads。脚本会核验当前“昨天”；若目标日不是它，Agent 用 CLI 选准确目标日并核验，不反复重跑错日期。经营完成后广告中断，复用原经营归档；恢复时留在待继续的页面，不重导经营。
@@ -131,7 +131,7 @@ python scripts/collect_shopee.py --store-id STORE_ID --expected-name "紫鸟准�
 4. 打开三份 Excel，按目标统计日期合并：GMV→sales；orderMetric=unitsSold取销量，paidOrders取支付订单数。两种原值都保留，不能混同。期间合计差异先保留，Agent 用 CLI 切准确目标单日交叉核验，不因几分钱差异弃店、不调平原值；SHEIN 页面卡片不能替代 Excel。无广告采集。
 
 ~~~text
-python scripts/collect_shein.py --store-id STORE_ID --expected-name "紫鸟准确店名" --expected-account "页面账号" --order-metric unitsSold --date YYYY-MM-DD --download-dir "本店下载目录" --output-root "本次输出根目录"
+dsivio python scripts/collect_shein.py --store-id STORE_ID --expected-name "紫鸟准确店名" --expected-account "页面账号" --order-metric unitsSold --date YYYY-MM-DD --download-dir "本店下载目录" --output-root "本次输出根目录"
 ~~~
 
 --order-metric 必须按本店配置选择 unitsSold 或 paidOrders。金额 BRL 2,089.22 与 Shopee 的1.643,39格式不同，按实际字段解析；空白、-、解析失败不填0。
@@ -145,7 +145,7 @@ python scripts/collect_shein.py --store-id STORE_ID --expected-name "紫鸟准�
 - 对正常成功店铺，正式 JSON 的 `downloads`/下载清单必须包含本次实际核验的 Excel；不能以空下载清单加网页读数结束。Shopee 使用更新中网页实时值时，也必须先归档产生可疑0的 Excel，并在 `sources` 中同时说明 Excel 值、页面值、目标日期和更新中状态。
 
 ~~~text
-python scripts/download_files.py REPORT_JSON STORE_ID "下载文件" --download-dir "本店下载目录" --type "数据类型" --start YYYY-MM-DD --end YYYY-MM-DD
+dsivio python scripts/download_files.py REPORT_JSON STORE_ID "下载文件" --download-dir "本店下载目录" --type "数据类型" --start YYYY-MM-DD --end YYYY-MM-DD
 ~~~
 
 --type 的值：TikTok 用“关键指标”；Shopee 用“店铺经营”或“广告组数据”；SHEIN 用“GMV”“销量”或“支付订单数”。此脚本复制归档、核对哈希后删除本次中转原件；已归档的直接复用。导出前保留本店目录基线，不只凭“最新文件”判断归属。下载/生成中的原任务继续等，不能重提。
@@ -155,17 +155,17 @@ python scripts/download_files.py REPORT_JSON STORE_ID "下载文件" --download-
 - 正常队列和暂缓补采处理完后，依次执行（REPORT_JSON 换实际路径，各步骤使用同一份 --config）：
 
 ~~~text
-python scripts/assemble_report.py --config "日报配置的绝对路径" --date YYYY-MM-DD
-python scripts/report_state.py prepare REPORT_JSON --config "日报配置的绝对路径"
-python scripts/history_ledger.py REPORT_JSON
-python scripts/render_reports.py REPORT_JSON
-python scripts/report_state.py audit REPORT_JSON --config "日报配置的绝对路径"
-python scripts/report_state.py complete REPORT_JSON
+dsivio python scripts/assemble_report.py --config "日报配置的绝对路径" --date YYYY-MM-DD
+dsivio python scripts/report_state.py prepare REPORT_JSON --config "日报配置的绝对路径"
+dsivio python scripts/history_ledger.py REPORT_JSON
+dsivio python scripts/render_reports.py REPORT_JSON
+dsivio python scripts/report_state.py audit REPORT_JSON --config "日报配置的绝对路径"
+dsivio python scripts/report_state.py complete REPORT_JSON
 ~~~
 
 assemble_report 从已验收候选组装正式 JSON，不采集浏览器；仅在候选已完整核验、或补采后需要更新正式数据时执行。已审计通过且来源未变的同日正式 JSON 直接复用，不因 batch 顶层残留 needs_agent 或历史清理待办而重新采集。assemble_report 支持 --config；Agent 手工补齐的正式 JSON 不盲目覆盖，先核对来源与候选一致。
 
-history_ledger 维护总台账及每店长期Excel，按日期+storeId更新，不每天另建台账。render_reports 生成outputs全部文件；Node不在PATH时加 --node 绝对路径。`audit` 是交付前只读闸门，会重新核对正式 JSON 路径/业务日期、每个成功店铺的目标日每日行、平台必需 Excel 清单、归档 SHA-256、TikTok/SHEIN 数量口径、累计台账、每店台账、HTML 日期与 `[object Object]`、PNG 文件头和尺寸；任一项不一致就回到对应步骤修正，不能继续报完成。`complete` 会自动再运行同一审计，然后才清理超过三天的原始下载并更新 lastRun。日报及台账长期保留；同日正式文件覆盖，不另建“修复版2”。
+history_ledger 维护总台账及每店长期Excel，按日期+storeId更新，不每天另建台账。render_reports 生成outputs全部文件；经 `dsivio python` 运行时自动使用内置 Node，改用宿主 Python 且 Node 不在PATH时加 --node 绝对路径。`audit` 是交付前只读闸门，会重新核对正式 JSON 路径/业务日期、每个成功店铺的目标日每日行、平台必需 Excel 清单、归档 SHA-256、TikTok/SHEIN 数量口径、累计台账、每店台账、HTML 日期与 `[object Object]`、PNG 文件头和尺寸；任一项不一致就回到对应步骤修正，不能继续报完成。`complete` 会自动再运行同一审计，然后才清理超过三天的原始下载并更新 lastRun。日报及台账长期保留；同日正式文件覆盖，不另建“修复版2”。
 
 所选日报全部生成后，按通用工作流重新 audit 每份正式 JSON，复算销售额、广告费、覆盖数和分口径数量，实际打开全部 PNG 检查店名、日期与布局。可选汇总须事先确认范围、同日同币种，不能混合订单与销量；明细变化后重建并重审受影响汇总。
 

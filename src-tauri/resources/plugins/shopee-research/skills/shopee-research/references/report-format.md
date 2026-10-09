@@ -24,7 +24,7 @@
 
 ## 图片与生成
 
-表格用随附Python脚本生成，依赖公开的openpyxl、Pillow、lxml。加载setup运行一次环境脚本后，从`~/.kivio/shopee-research/runtime/runtime.json`读取`python`路径；后续复用此环境。
+表格用随附Python脚本生成，依赖公开的openpyxl、Pillow、lxml，Dsivio内置Python（`dsivio python`）已自带。加载setup运行一次环境脚本后，从`~/.kivio/shopee-research/runtime/runtime.json`读取`python`路径；后续复用此环境，该路径失效时用`dsivio python`重跑环境脚本。
 
 截图统一为320×320白底JPEG，按比例留白，每张最多40KB，同图复用。嵌入标准DrawingML图片，图框156×156像素，商品行高160像素，图片列足够容纳图框。设为随单元格移动并启用无密码对象保护，已有文字和数据保持可编辑；此方式为锚定图片，软件行为以实测为准。
 

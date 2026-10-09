@@ -1,4 +1,9 @@
-"""Prepare one private Python environment; no system-wide installs or disk searches."""
+"""Pick the report Python: Dsivio's bundled Python first, else one private venv.
+
+Run it with `dsivio python` (bundled Python 3.12 shipping openpyxl, Pillow and lxml): the running
+interpreter is recorded as is, with no venv, pip or network. Only a host Python without those
+libraries gets the private venv below. No system-wide installs or disk searches.
+"""
 import argparse
 import json
 import os
@@ -11,6 +16,22 @@ import time
 PROBE = 'import json,openpyxl,PIL,lxml; print(json.dumps(dict(openpyxl=openpyxl.__version__,Pillow=PIL.__version__,lxml=lxml.__version__)))'
 
 
+def probe_current():
+    """Versions when this interpreter already has the report libraries (e.g. Dsivio's bundled Python)."""
+    try:
+        import lxml
+        import openpyxl
+        import PIL
+    except ImportError:
+        return None
+    return dict(openpyxl=openpyxl.__version__, Pillow=PIL.__version__, lxml=lxml.__version__)
+
+
+def is_bundled(python):
+    """Dsivio ships its Python under `<resources>/video-runtime/python`."""
+    return 'video-runtime' in Path(python).parts
+
+
 def probe(python):
     if not python.is_file():
         return None
@@ -20,10 +41,15 @@ def probe(python):
 
 def setup(root, check=False):
     started = time.perf_counter()
+    versions = probe_current()
+    if versions is not None:
+        python = Path(sys.executable)
+        return record(root, check, dict(ready=True, python=str(python), bundled=is_bundled(python),
+                                        versions=versions, seconds=time.perf_counter()-started))
     python = root/'venv'/('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
     versions = probe(python)
     if versions is None and check:
-        return dict(ready=False, python=str(python))
+        return dict(ready=False, python=str(python), bundled=False)
     if versions is None:
         root.mkdir(parents=True, exist_ok=True)
         if not python.is_file():
@@ -34,7 +60,11 @@ def setup(root, check=False):
         versions = probe(python)
         if versions is None:
             raise RuntimeError('Runtime dependency check failed')
-    result = dict(ready=True, python=str(python), versions=versions, seconds=time.perf_counter()-started)
+    return record(root, check, dict(ready=True, python=str(python), bundled=False, versions=versions,
+                                    seconds=time.perf_counter()-started))
+
+
+def record(root, check, result):
     if not check:
         root.mkdir(parents=True, exist_ok=True)
         fd, name = tempfile.mkstemp(dir=root, suffix='.json')

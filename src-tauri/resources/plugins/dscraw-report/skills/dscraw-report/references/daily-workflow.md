@@ -15,7 +15,7 @@
 ## 每日执行
 
 1. 读取接收方选定的 reports 配置，确认没有同店采集进程，doctor 一次。按接收方约定顺序执行，各份独立保存，不套用任何原作者店数或目录。
-2. 每份 `python scripts/report_state.py plan --config "配置绝对路径"`；默认配置时区前一自然日。只有用户明确指定日期才传 --date。冻结 plan 日期、快照、路径，跨午夜不重算。采集、组装、prepare、audit 全程使用同一份外部 --config。
+2. 每份 `dsivio python scripts/report_state.py plan --config "配置绝对路径"`；默认配置时区前一自然日。只有用户明确指定日期才传 --date。冻结 plan 日期、快照、路径，跨午夜不重算。采集、组装、prepare、audit 全程使用同一份外部 --config。
 3. 查同日正式 JSON、batch/capture/checkpoint/handoff：已审计成功且来源未变直接复用；未完成续跑原 batch，只补失败店。用 collect_batch run/status/ready，具体命令和并发限制见 SKILL.md。遇 needs_agent 由 AI 同店用 CLI 恢复，不是直接失败或切桌面工具。
 4. 登录按钮、页面广告、加载/选择器变化先现场 CLI 检查。多次有意义恢复仍无进展 defer，正常队列完成且原 run 退出后，用原 batch `--retry-deferred --retry-deferred-after 600` 延迟补采，只重开失败店；真实新验证码/凭据/权限才请接收方操作。异常相关细节读 recovery.md。
 5. 所有平台先导出并归档 Excel，核验店铺、目标日、表头、口径及 SHA-256；TikTok 订单/件数分开，SHEIN 三份 Excel 合并。仅 Shopee 满足 SKILL.md 更新中零值条件时网页覆盖并保留双来源。缺项 null，不补零、不沿用历史。
@@ -27,7 +27,7 @@
 默认只出各份独立日报，不自动把多个类目混算。现带 render_category_summary.py 是专用的童装/灯具/箱包三类汇总器，仅在接收方也采用该三类定义和数量口径时使用：
 
 ```text
-python scripts/render_category_summary.py YYYY-MM-DD "童装正式JSON" "灯具正式JSON" "箱包正式JSON" "接收方汇总目录"
+dsivio python scripts/render_category_summary.py YYYY-MM-DD "童装正式JSON" "灯具正式JSON" "箱包正式JSON" "接收方汇总目录"
 ```
 
 三份 dateIso 必须相同，币种均为 BRL；只合并销售额，订单/件数/SHEIN销量和支付订单数分开，ROI不合并，其他类目不自动加入。复算 JSON/HTML 并打开 PNG 后才交付。不同类目组合需要另外明确汇总范围及实现，不能改名硬套该专用脚本。
