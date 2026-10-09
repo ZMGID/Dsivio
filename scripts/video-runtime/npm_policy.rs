@@ -132,11 +132,19 @@ pub fn sources(npx: bool, args: &[OsString], config: &Configuration) -> Vec<Sour
     if config.registry {
         return vec![Source::AsConfigured];
     }
-    let command = args
-        .iter()
-        .take_while(|arg| *arg != OsStr::new("--"))
-        .filter_map(|arg| arg.to_str())
-        .find(|arg| !arg.starts_with('-'));
+    // Only classify an unambiguous command. Option values may themselves be named
+    // `view` or `install`; treating those as commands could rerun a later `exec`.
+    let command = args.iter().filter_map(|arg| arg.to_str()).find_map(|arg| {
+        if arg.starts_with('-') {
+            None
+        } else {
+            Some(arg)
+        }
+    });
+    let command = match args.first().and_then(|arg| arg.to_str()) {
+        Some(arg) if !arg.starts_with('-') => command,
+        _ => None,
+    };
     // exec/x and npx can perform arbitrary work. A nonzero exit is not proof of a
     // download failure, so never rerun the user's command against another registry.
     if npx || matches!(command, Some("exec" | "x")) {
