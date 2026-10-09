@@ -6,7 +6,7 @@
 
 Python 3.12 与 Node.js 22 随 Dsivio 安装：`dsivio python` 已带 openpyxl，`dsivio node`/`dsivio npm` 使用内置 Node，不需要系统 Python、Node 或 `.venv`。命令在本 Skill 目录执行；HTML/PNG 渲染还需要本目录的 Node 依赖及 Playwright Chromium，另需紫鸟 CLI 和客户端。只补齐缺失项，不重复安装、重新授权或覆盖用户文件。
 
-先用 `dsivio python -c "import openpyxl, sys; print(sys.version)"` 核验。缺少本目录 Node 依赖时执行 `dsivio npm ci`；缺少 Chromium 时执行 `dsivio npm exec -- playwright install chromium`。`dsivio npm` 先走 npmmirror 的 npm 源和 Playwright 浏览器镜像，失败时自动改用官方源重试一次。不要另起 Playwright 浏览器采集店铺，Chromium 仅用于本地日报截图。
+先用 `dsivio python -c "import openpyxl, sys; print(sys.version)"` 核验。缺少本目录 Node 依赖时执行 `dsivio npm ci`；缺少 Chromium 时执行 `dsivio npm exec -- playwright install chromium`。未自定义下载源时，`dsivio npm` 使用 npmmirror 的 npm 源和 Playwright 浏览器镜像；安装依赖失败时可自动改用官方源重试一次，`npm exec`/`x` 执行的命令不会自动重跑。不要另起 Playwright 浏览器采集店铺，Chromium 仅用于本地日报截图。
 
 仅当 `dsivio python`/`dsivio npm` 报告内置运行时缺失（退出码 127）时才改用宿主环境：在 Skill 下用宿主 Python 3.12+ 执行 `python -m venv .venv`，再用该解释器执行 `-m pip install -r requirements.txt`（Windows 使用 `.venv/Scripts/python.exe`，macOS/Linux 使用 `.venv/bin/python`），后续所有脚本使用已核验的解释器绝对路径；Node 依赖与 Chromium 用宿主 Node.js 22+ 的 `npm ci`、`npx playwright install chromium`。
 

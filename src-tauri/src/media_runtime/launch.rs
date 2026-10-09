@@ -17,18 +17,11 @@ pub const PYTHON_SUBCOMMAND: &str = "python";
 pub const NODE_SUBCOMMAND: &str = "node";
 pub const NPM_SUBCOMMAND: &str = "npm";
 
-pub(crate) const NPM_MIRROR_REGISTRY: &str = "https://registry.npmmirror.com/";
-pub(crate) const NPM_OFFICIAL_REGISTRY: &str = "https://registry.npmjs.org/";
-/// npmmirror's copy of the Playwright browser CDN (`builds/cft/...`, `builds/chromium/...`).
-pub(crate) const PLAYWRIGHT_MIRROR_HOST: &str = "https://cdn.npmmirror.com/binaries/playwright";
+#[path = "../../../scripts/video-runtime/npm_policy.rs"]
+mod npm_policy;
+pub(crate) use npm_policy::{Source as NpmSource, NPM_MIRROR_REGISTRY, NPM_OFFICIAL_REGISTRY, PLAYWRIGHT_MIRROR_HOST};
 /// "Command not found": the bundled runtime is absent, use the Skill's documented fallback.
 pub const MISSING_RUNTIME_EXIT: u8 = 127;
-
-/// npm commands that only download and are safe to repeat against another registry.
-const FETCH_COMMANDS: &[&str] = &[
-    "install", "i", "add", "ci", "clean-install", "update", "up", "upgrade", "exec", "x", "view",
-    "info", "show", "outdated",
-];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -86,50 +79,13 @@ pub(crate) fn npm_bin_dir(prefix: &Path) -> PathBuf {
     }
 }
 
-/// One npm attempt: which registry and Playwright download host to impose.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NpmSource {
-    /// npmmirror registry + npmmirror Playwright CDN.
-    Mirror,
-    /// registry.npmjs.org + Playwright's own CDN.
-    Official,
-    /// The user configured a registry (or the command does not fetch): change nothing.
-    AsConfigured,
+fn npm_configuration(args: &[OsString], env: &dyn Fn(&str) -> Option<OsString>) -> npm_policy::Configuration {
+    npm_policy::configuration(args, env, std::env::current_dir().ok().as_deref(),
+        directories::BaseDirs::new().as_ref().map(|dirs| dirs.home_dir()))
 }
 
-impl NpmSource {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Mirror => "npmmirror 镜像",
-            Self::Official => "官方源",
-            Self::AsConfigured => "已配置的源",
-        }
-    }
-}
-
-fn npm_command_name(args: &[OsString]) -> Option<&str> {
-    args.iter().filter_map(|arg| arg.to_str()).find(|arg| !arg.starts_with('-'))
-}
-
-/// Attempts for one `npm` invocation, in order. An explicit `--registry` argument or a
-/// `npm_config_registry` environment variable is respected as is, and commands that do not
-/// fetch (run, publish, config, ...) never get a registry imposed.
-pub(crate) fn npm_sources(
-    args: &[OsString],
-    env: impl Fn(&str) -> Option<OsString>,
-) -> Vec<NpmSource> {
-    let configured = args
-        .iter()
-        .any(|arg| arg.to_str().is_some_and(|arg| arg == "--registry" || arg.starts_with("--registry=")))
-        || ["npm_config_registry", "NPM_CONFIG_REGISTRY"]
-            .iter()
-            .any(|key| env(key).is_some_and(|value| !value.is_empty()));
-    let fetches = npm_command_name(args).is_some_and(|command| FETCH_COMMANDS.contains(&command));
-    if configured || !fetches {
-        vec![NpmSource::AsConfigured]
-    } else {
-        vec![NpmSource::Mirror, NpmSource::Official]
-    }
+pub(crate) fn npm_sources(args: &[OsString], env: impl Fn(&str) -> Option<OsString>) -> Vec<NpmSource> {
+    npm_policy::sources(false, args, &npm_configuration(args, &env))
 }
 
 fn prepend_path(command: &mut Command, front: &[PathBuf], back: &[PathBuf]) -> Result<(), String> {
@@ -195,11 +151,8 @@ pub(crate) fn npm_command(
     let npm = tool(root, "npm", Tool::Npm)?;
     let mut command = node_command(root, std::iter::once(npm.into_os_string()).chain(args.iter().cloned()))?;
     // A global prefix inside the App bundle is read-only (and replaced on update).
-    let explicit_prefix = args.iter().any(|arg| arg.to_str().is_some_and(|arg| arg == "--prefix" || arg.starts_with("--prefix=")));
-    if let (Some(prefix), false) = (prefix, explicit_prefix) {
-        // Unix environments are case-sensitive and npm reads both spellings.
-        #[cfg(not(windows))]
-        command.env_remove("NPM_CONFIG_PREFIX");
+    let configured = npm_configuration(args, &|key| std::env::var_os(key));
+    if let (Some(prefix), false) = (prefix, configured.prefix) {
         command.env("npm_config_prefix", prefix);
     }
     command.env("npm_config_update_notifier", "false");
@@ -402,10 +355,16 @@ mod tests {
         for args in [
             &["install", "-g", "@ziniao-open/cli@1.1.2"][..],
             &["ci"],
-            &["exec", "--", "playwright", "install", "chromium"],
             &["view", "@playwright/cli", "version"],
         ] {
             assert_eq!(npm_sources(&os(args), none), vec![NpmSource::Mirror, NpmSource::Official], "{args:?}");
+        }
+    }
+
+    #[test]
+    fn executable_npm_commands_never_retry() {
+        for command in ["exec", "x"] {
+            assert_eq!(npm_sources(&os(&[command, "--", "tool"]), |_| None), vec![NpmSource::Mirror]);
         }
     }
 

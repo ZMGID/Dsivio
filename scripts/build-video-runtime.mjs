@@ -18,7 +18,7 @@ const platform = `${process.platform}-${process.arch}`
 const archive = versions.nodeArchives[platform]
 if (!archive) throw new Error(`Bundled video runtime does not support ${platform}; build on the target OS/architecture.`)
 const fingerprint = createHash('sha256').update(platform)
-for (const file of ['versions.json', 'package.json', 'package-lock.json', 'requirements.txt', 'launcher.rs']) {
+for (const file of ['versions.json', 'package.json', 'package-lock.json', 'requirements.txt', 'launcher.rs', 'npm_policy.rs']) {
   fingerprint.update(readFileSync(join(inputs, file)))
 }
 fingerprint.update(readFileSync(fileURLToPath(import.meta.url)))

@@ -251,8 +251,10 @@ fn bundled_npm_root() -> Option<std::path::PathBuf> {
 /// (~/.kivio/npm-global). Fetches try npmmirror first and the official registry once more.
 async fn run_bundled_npm(root: &Path, args: &[&str], seconds: u64) -> Result<String, String> {
     use crate::media_runtime::launch;
-    let args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+    let mut args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
     let prefix = launch::npm_prefix().ok_or("Home directory unavailable")?;
+    // App-owned installs always use the private directory, independent of user npmrc.
+    args.push(format!("--prefix={}", prefix.display()).into());
     let mut failures = Vec::new();
     for source in launch::npm_sources(&args, |key| std::env::var_os(key)) {
         let command = launch::npm_command(root, &args, source, Some(&prefix))?;
