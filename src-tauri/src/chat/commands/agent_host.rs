@@ -155,7 +155,9 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         context_window_tokens: Option<u64>,
         cache_usage: Option<(u64, u64)>,
     ) {
-        if !self.context_owner { return; }
+        if !self.context_owner {
+            return;
+        }
         let runtime = self.state.chat_runtime();
         let (live, segments_once) = if token_count_source.is_some() {
             let Some((live, include_segments)) =
@@ -182,7 +184,6 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         );
     }
 
-
     fn begin_context_request(
         &self,
         conversation_id: &str,
@@ -192,7 +193,9 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         messages: &[Value],
         tools: &[ChatToolDefinition],
     ) {
-        if !self.context_owner { return; }
+        if !self.context_owner {
+            return;
+        }
         let runtime = self.state.chat_runtime();
         let cache = runtime
             .context_measurement(conversation_id)
@@ -203,7 +206,10 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         // refreshes retain the last reported request's total and categories.
         let settings = self.state.settings_read();
         let segments = super::context::measure_request_segments(
-            messages, tools, settings.get_provider(provider_id), model,
+            messages,
+            tools,
+            settings.get_provider(provider_id),
+            model,
         );
         drop(settings);
         runtime.bind_prepared_context(
@@ -245,7 +251,9 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
     }
 
     fn note_context_cache(&self, conversation_id: &str, run_cache: Option<(u64, u64)>) {
-        if !self.context_owner { return; }
+        if !self.context_owner {
+            return;
+        }
         self.state
             .chat_runtime()
             .note_context_run_cache(conversation_id, &self.run_id, run_cache);
@@ -290,7 +298,9 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         record: &'a ToolCallRecord,
     ) -> crate::chat::agent::AgentHostFuture<'a, bool> {
         if crate::chat::runtime_state::im_turn_allows_tools(
-            self.state.chat_runtime().im_turn_active(&self.conversation_id),
+            self.state
+                .chat_runtime()
+                .im_turn_active(&self.conversation_id),
         ) {
             return Box::pin(async { true });
         }
@@ -312,7 +322,9 @@ impl crate::chat::agent::AgentHost for ChatAgentHost<'_> {
         ctx: &'a crate::chat::agent::ToolExecutionContext<'a>,
     ) -> crate::chat::agent::AgentHostFuture<'a, bool> {
         if crate::chat::runtime_state::im_session_consent(
-            self.state.chat_runtime().im_turn_active(&self.conversation_id),
+            self.state
+                .chat_runtime()
+                .im_turn_active(&self.conversation_id),
             false,
         ) {
             return Box::pin(async { true });

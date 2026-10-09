@@ -267,6 +267,7 @@ pub struct ImApprovedUser {
 #[serde(rename_all = "snake_case")]
 pub enum ImSetupState {
     Pending,
+    Authorized,
     Completed,
     Denied,
     Expired,
@@ -310,6 +311,8 @@ pub struct InboundMessage {
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {
     pub chat_id: String,
+    pub is_group: bool,
+    pub thread_id: Option<String>,
     pub reply_token: Option<String>,
     pub reply_to: Option<String>,
     pub text: String,

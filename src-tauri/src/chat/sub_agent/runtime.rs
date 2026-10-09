@@ -753,6 +753,21 @@ impl Runtime {
         }
     }
 
+    /// Stops one child execution. A miss or a different conversation is not an error.
+    pub fn stop_execution(&self, conversation: &str, execution_id: &str) -> Result<(), String> {
+        let (owner, agent_id) = {
+            let control = self.lock();
+            match control.owners.get(execution_id) {
+                Some((owner, agent)) => (owner.clone(), agent.clone()),
+                None => return Ok(()),
+            }
+        };
+        if owner != conversation {
+            return Ok(());
+        }
+        self.stop(&owner, &agent_id, execution_id, true).map(|_| ())
+    }
+
     pub fn running(&self, conversation: &str, id: &str, run: &str) -> bool {
         let control = self.lock();
         control

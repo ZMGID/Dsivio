@@ -13,7 +13,12 @@ mod wecom_media;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 use tauri::{Emitter, Listener, Manager};
 use tokio::sync::{mpsc, watch, Notify};
 use types::*;
@@ -49,6 +54,7 @@ struct State {
     epoch: BTreeMap<ImPlatform, u64>,
     revisions: BTreeMap<ImPlatform, u64>,
     outputs: BTreeMap<ImPlatform, mpsc::Sender<OutboundMessage>>,
+    controls: BTreeMap<String, Arc<SessionControl>>,
 }
 pub struct ImRuntime {
     dir: PathBuf,
@@ -92,6 +98,7 @@ impl ImRuntime {
                 epoch: BTreeMap::new(),
                 revisions: BTreeMap::new(),
                 outputs: BTreeMap::new(),
+                controls: BTreeMap::new(),
             }),
             changed: Notify::new(),
             stop,
@@ -209,6 +216,32 @@ impl ImRuntime {
     }
 }
 
+impl ImRuntime {
+    /// Revoke only IM work, including preparation before a chat generation exists.
+    pub fn cancel_user_turns(
+        &self,
+        _app: &tauri::AppHandle,
+        platform: ImPlatform,
+        identity: &str,
+        user_id: &str,
+    ) {
+        let mut prefix = key(&[platform.key(), identity]);
+        prefix.pop();
+        prefix.push(',');
+        let controls: Vec<_> = self
+            .state
+            .lock()
+            .controls
+            .iter()
+            .filter(|(route, _)| route.starts_with(&prefix))
+            .map(|(_, control)| Arc::clone(control))
+            .collect();
+        for control in controls {
+            control.cancel_user(user_id);
+        }
+    }
+}
+
 /// Deliver opted-in task notifications through the existing live socket, never another login.
 pub async fn notify_task_finished(
     app: &tauri::AppHandle,
@@ -257,11 +290,20 @@ pub async fn notify_task_finished(
         format!("定时任务「{name}」已完成：\n{}", message.content)
     };
     for (platform, chat_id) in channels {
-        let output = runtime.state.lock().outputs.get(&platform).cloned();
+        let output = {
+            let state = runtime.state.lock();
+            state
+                .status
+                .get(&platform)
+                .filter(|s| s.state == ConnectionState::Connected)
+                .and_then(|_| state.outputs.get(&platform).cloned())
+        };
         if let Some(output) = output {
             let _ = output
                 .send(OutboundMessage {
                     chat_id,
+                    is_group: false,
+                    thread_id: None,
                     reply_token: None,
                     reply_to: None,
                     text: text.clone(),
@@ -325,12 +367,117 @@ fn session_key(config: &ImConfig, msg: &InboundMessage) -> String {
 fn response(msg: &InboundMessage, text: String) -> OutboundMessage {
     OutboundMessage {
         chat_id: msg.chat_id.clone(),
+        is_group: msg.is_group,
+        thread_id: msg.thread_id.clone(),
         reply_token: msg.reply_token.clone(),
         reply_to: Some(msg.message_id.clone()),
         text,
         attachments: Vec::new(),
         stream_id: None,
         finished: true,
+    }
+}
+
+#[derive(Default)]
+struct SessionControl {
+    inner: Mutex<SessionControlState>,
+}
+#[derive(Default)]
+struct SessionControlState {
+    revision: u64,
+    active: Option<(String, watch::Sender<bool>)>,
+}
+impl SessionControl {
+    fn revision(&self) -> u64 {
+        self.inner.lock().revision
+    }
+    fn begin(self: &Arc<Self>, revision: u64, user: &str) -> Option<TurnControl> {
+        let mut inner = self.inner.lock();
+        if inner.revision != revision {
+            return None;
+        }
+        let (stop, shutdown) = watch::channel(false);
+        inner.active = Some((user.to_owned(), stop));
+        Some(TurnControl {
+            control: Arc::clone(self),
+            shutdown,
+        })
+    }
+    fn cancel(&self) {
+        let mut inner = self.inner.lock();
+        inner.revision = inner.revision.wrapping_add(1);
+        if let Some((_, stop)) = &inner.active {
+            stop.send_replace(true);
+        }
+    }
+    fn cancel_user(&self, user: &str) {
+        let mut inner = self.inner.lock();
+        if inner
+            .active
+            .as_ref()
+            .is_some_and(|(owner, _)| owner == user)
+        {
+            inner.revision = inner.revision.wrapping_add(1);
+            if let Some((_, stop)) = &inner.active {
+                stop.send_replace(true);
+            }
+        }
+    }
+}
+struct TurnControl {
+    control: Arc<SessionControl>,
+    shutdown: watch::Receiver<bool>,
+}
+impl Drop for TurnControl {
+    fn drop(&mut self) {
+        self.control.inner.lock().active = None;
+    }
+}
+struct QueuedMessage {
+    message: InboundMessage,
+    revision: u64,
+}
+struct SessionWorker {
+    queue: mpsc::Sender<QueuedMessage>,
+    control: Arc<SessionControl>,
+    task: tauri::async_runtime::JoinHandle<()>,
+}
+
+/// Only unsent output lives here. Intermediate versions coalesce; final results do not.
+#[derive(Default)]
+struct PendingOutput {
+    queue: VecDeque<OutboundMessage>,
+}
+impl PendingOutput {
+    const CAPACITY: usize = 128;
+    fn push(&mut self, message: OutboundMessage) -> bool {
+        if let Some(stream) = message.stream_id.as_deref() {
+            if message.finished {
+                self.queue
+                    .retain(|old| old.stream_id.as_deref() != Some(stream) || old.finished);
+            } else if let Some(old) = self
+                .queue
+                .iter_mut()
+                .find(|old| old.stream_id.as_deref() == Some(stream))
+            {
+                if !old.finished {
+                    *old = message;
+                }
+                return true;
+            }
+        }
+        if self.queue.len() == Self::CAPACITY {
+            if let Some(index) = self.queue.iter().position(|old| !old.finished) {
+                self.queue.remove(index);
+            } else {
+                return false;
+            }
+        }
+        self.queue.push_back(message);
+        true
+    }
+    fn can_receive(&self) -> bool {
+        self.queue.len() < Self::CAPACITY || self.queue.iter().any(|message| !message.finished)
     }
 }
 
@@ -482,6 +629,66 @@ pub fn start(app: tauri::AppHandle) {
     });
     *runtime.runner.lock() = Some(task);
 }
+struct Transport {
+    output: mpsc::Sender<OutboundMessage>,
+    stop: watch::Sender<bool>,
+    task: tauri::async_runtime::JoinHandle<Result<(), String>>,
+}
+
+fn start_transport(
+    app: &tauri::AppHandle,
+    config: &ImConfig,
+    platform: ImPlatform,
+    secret: CredentialInput,
+    incoming: mpsc::Sender<InboundMessage>,
+    status: mpsc::Sender<StatusUpdate>,
+) -> Transport {
+    let (output, outgoing) = mpsc::channel(128);
+    let (stop, shutdown) = watch::channel(false);
+    let ctx = common::PlatformContext {
+        app: app.clone(),
+        inbound: incoming,
+        outbound: outgoing,
+        status,
+        shutdown,
+    };
+    let task = match platform {
+        ImPlatform::Feishu => {
+            tauri::async_runtime::spawn(feishu::run(config.feishu.clone(), secret, ctx))
+        }
+        ImPlatform::Wecom => {
+            tauri::async_runtime::spawn(wecom::run(config.wecom.clone(), secret, ctx))
+        }
+        ImPlatform::WecomCallback => tauri::async_runtime::spawn(wecom_callback::run(
+            config.wecom_callback.clone(),
+            secret,
+            ctx,
+        )),
+    };
+    Transport { output, stop, task }
+}
+
+async fn stop_transport(mut transport: Transport) {
+    transport.stop.send_replace(true);
+    if tokio::time::timeout(Duration::from_secs(5), &mut transport.task)
+        .await
+        .is_err()
+    {
+        transport.task.abort();
+        let _ = transport.task.await;
+    }
+}
+
+enum SupervisorEvent {
+    Shutdown,
+    Connect,
+    Ended(Result<(), String>),
+    Status(StatusUpdate),
+    Inbound(InboundMessage),
+    Output(OutboundMessage),
+    Send(Option<mpsc::OwnedPermit<OutboundMessage>>),
+}
+
 async fn supervise(
     app: tauri::AppHandle,
     config: ImConfig,
@@ -490,201 +697,348 @@ async fn supervise(
     epoch: u64,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    let config = Arc::new(config);
+    let (incoming, mut inbound) = mpsc::channel(128);
+    let (outbound, mut outgoing) = mpsc::channel(128);
+    let (status_tx, mut status_rx) = mpsc::channel(32);
+    app.state::<ImRuntime>()
+        .state
+        .lock()
+        .outputs
+        .insert(platform, outbound.clone());
+    let mut workers: BTreeMap<String, SessionWorker> = BTreeMap::new();
+    let mut pending = PendingOutput::default();
+    let mut transport: Option<Transport> = None;
+    let mut connected = false;
     let mut attempt = 0usize;
+    let mut retry_at = tokio::time::Instant::now();
     loop {
         if *shutdown.borrow() {
             break;
         }
-        app.state::<ImRuntime>().update_status(
-            &app,
-            epoch,
-            StatusUpdate {
-                platform,
-                state: if attempt == 0 {
-                    ConnectionState::Connecting
-                } else {
-                    ConnectionState::Retrying
-                },
-                message: if attempt == 0 {
-                    "正在连接机器人".into()
-                } else {
-                    "连接已断开，正在重连".into()
-                },
-            },
-        );
-        let outcome = run_connection(
-            &app,
-            &config,
-            platform,
-            secret.clone(),
-            epoch,
-            shutdown.clone(),
-        )
-        .await;
-        if *shutdown.borrow() {
-            break;
-        }
-        let error = outcome.err().unwrap_or_else(|| "IM 连接已结束".into());
-        let fatal = error.starts_with("fatal:");
-        app.state::<ImRuntime>().update_status(
-            &app,
-            epoch,
-            StatusUpdate {
-                platform,
-                state: if fatal {
-                    ConnectionState::Error
-                } else {
-                    ConnectionState::Retrying
-                },
-                message: error.trim_start_matches("fatal:").to_owned(),
-            },
-        );
-        if fatal {
-            break;
-        }
-        let delay = [2, 5, 10, 30, 60][attempt.min(4)];
-        attempt = attempt.saturating_add(1);
-        tokio::select! {_=tokio::time::sleep(Duration::from_secs(delay))=>{},_=shutdown.changed()=>break}
-    }
-}
-async fn run_connection(
-    app: &tauri::AppHandle,
-    config: &ImConfig,
-    platform: ImPlatform,
-    secret: CredentialInput,
-    epoch: u64,
-    shutdown: watch::Receiver<bool>,
-) -> Result<(), String> {
-    let (incoming, mut inbound) = mpsc::channel(128);
-    let (outbound, outgoing) = mpsc::channel(128);
-    let (status_tx, mut status_rx) = mpsc::channel(32);
-    {
-        let runtime = app.state::<ImRuntime>();
-        runtime
-            .state
-            .lock()
-            .outputs
-            .insert(platform, outbound.clone());
-    }
-    let (connection_stop, connection_shutdown) = watch::channel(false);
-    let ctx = common::PlatformContext {
-        app: app.clone(),
-        inbound: incoming,
-        outbound: outgoing,
-        status: status_tx,
-        shutdown: connection_shutdown.clone(),
-    };
-    let transport = async {
-        match platform {
-            ImPlatform::Feishu => feishu::run(config.feishu.clone(), secret, ctx).await,
-            ImPlatform::Wecom => wecom::run(config.wecom.clone(), secret, ctx).await,
-            ImPlatform::WecomCallback => {
-                wecom_callback::run(config.wecom_callback.clone(), secret, ctx).await
+        let output = transport
+            .as_ref()
+            .filter(|_| connected)
+            .map(|t| t.output.clone());
+        let disconnected = transport.is_none();
+        let event = {
+            let connection = async {
+                match transport.as_mut() {
+                    Some(connection) => (&mut connection.task)
+                        .await
+                        .unwrap_or_else(|_| Err("IM 连接任务中断".into())),
+                    None => std::future::pending().await,
+                }
+            };
+            let send = async {
+                match output {
+                    Some(output) => output.reserve_owned().await.ok(),
+                    None => std::future::pending().await,
+                }
+            };
+            tokio::select! {
+                _ = shutdown.changed() => SupervisorEvent::Shutdown,
+                result = connection => SupervisorEvent::Ended(result),
+                _ = tokio::time::sleep_until(retry_at), if disconnected => SupervisorEvent::Connect,
+                Some(status) = status_rx.recv() => SupervisorEvent::Status(status),
+                Some(message) = inbound.recv() => SupervisorEvent::Inbound(message),
+                permit = send, if connected && !pending.queue.is_empty() => SupervisorEvent::Send(permit),
+                Some(message) = outgoing.recv(), if pending.can_receive() => SupervisorEvent::Output(message),
+            }
+        };
+        match event {
+            SupervisorEvent::Shutdown => break,
+            SupervisorEvent::Connect => {
+                connected = false;
+                app.state::<ImRuntime>().update_status(
+                    &app,
+                    epoch,
+                    StatusUpdate {
+                        platform,
+                        state: if attempt == 0 {
+                            ConnectionState::Connecting
+                        } else {
+                            ConnectionState::Retrying
+                        },
+                        message: if attempt == 0 {
+                            "正在连接机器人"
+                        } else {
+                            "连接已断开，正在重连"
+                        }
+                        .into(),
+                    },
+                );
+                transport = Some(start_transport(
+                    &app,
+                    &config,
+                    platform,
+                    secret.clone(),
+                    incoming.clone(),
+                    status_tx.clone(),
+                ));
+            }
+            SupervisorEvent::Ended(outcome) => {
+                transport = None;
+                connected = false;
+                while status_rx.try_recv().is_ok() {}
+                let error = outcome.err().unwrap_or_else(|| "IM 连接已结束".into());
+                let fatal = error.starts_with("fatal:");
+                app.state::<ImRuntime>().update_status(
+                    &app,
+                    epoch,
+                    StatusUpdate {
+                        platform,
+                        state: if fatal {
+                            ConnectionState::Error
+                        } else {
+                            ConnectionState::Retrying
+                        },
+                        message: error.trim_start_matches("fatal:").to_owned(),
+                    },
+                );
+                if fatal {
+                    break;
+                }
+                let delay = [2, 5, 10, 30, 60][attempt.min(4)];
+                retry_at = tokio::time::Instant::now() + Duration::from_secs(delay);
+                attempt = attempt.saturating_add(1);
+            }
+            SupervisorEvent::Status(status) => {
+                if status.state == ConnectionState::Connected {
+                    connected = true;
+                }
+                app.state::<ImRuntime>().update_status(&app, epoch, status);
+            }
+            SupervisorEvent::Output(message) => {
+                pending.push(message);
+            }
+            SupervisorEvent::Send(Some(permit)) => {
+                if let Some(message) = pending.queue.pop_front() {
+                    permit.send(message);
+                }
+            }
+            SupervisorEvent::Send(None) => connected = false,
+            SupervisorEvent::Inbound(msg) => {
+                if msg.platform != platform {
+                    continue;
+                }
+                let runtime = app.state::<ImRuntime>();
+                if !runtime.authorize(&config, &msg) {
+                    if !msg.is_group && config.access(platform).dm_policy == DmPolicy::Pairing {
+                        match runtime.pair(&config, &msg) {
+                            Ok(Some(request)) => {
+                                let _ = app.emit("im-pairing-changed", ());
+                                queue_response(&app, epoch, &mut pending, &msg, format!("需要本机主人批准访问。配对码：{}（10 分钟有效）。请在 Dsivio 设置 → IM 中批准。", request.code));
+                            }
+                            Ok(None) => {}
+                            Err(message) => runtime.update_status(
+                                &app,
+                                epoch,
+                                StatusUpdate {
+                                    platform,
+                                    state: ConnectionState::Error,
+                                    message,
+                                },
+                            ),
+                        }
+                    }
+                    continue;
+                }
+                let session = session_key(&config, &msg);
+                if msg.text.trim() == "/stop" {
+                    if let Some(worker) = workers.get(&session) {
+                        worker.control.cancel();
+                    }
+                    queue_response(
+                        &app,
+                        epoch,
+                        &mut pending,
+                        &msg,
+                        "已停止当前回复和等待中的消息。".into(),
+                    );
+                    continue;
+                }
+                if msg.text.trim() == "/help" {
+                    queue_response(&app, epoch, &mut pending, &msg, "直接发送消息即可与 Dsivio Agent 对话。\n/new 或 /reset：开始新对话，保留历史。\n/stop：停止当前回复和等待中的消息。\nIM 对话自动批准工具，请仅授权可信用户。".into());
+                    continue;
+                }
+                match runtime.claim(&config, &msg) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
+                    Err(message) => {
+                        runtime.update_status(
+                            &app,
+                            epoch,
+                            StatusUpdate {
+                                platform,
+                                state: ConnectionState::Error,
+                                message,
+                            },
+                        );
+                        continue;
+                    }
+                }
+                runtime.touch(&app, platform);
+                if !workers.contains_key(&session)
+                    || workers
+                        .get(&session)
+                        .is_some_and(|worker| worker.queue.is_closed())
+                {
+                    if let Some(old) = workers.remove(&session) {
+                        let _ = old.task.await;
+                    }
+                    let (queue, receiver) = mpsc::channel(32);
+                    let control = Arc::new(SessionControl::default());
+                    runtime
+                        .state
+                        .lock()
+                        .controls
+                        .insert(session.clone(), Arc::clone(&control));
+                    let task_app = app.clone();
+                    let task_config = Arc::clone(&config);
+                    let task_output = outbound.clone();
+                    let task_stop = shutdown.clone();
+                    let task_control = Arc::clone(&control);
+                    let key = session.clone();
+                    let task = tauri::async_runtime::spawn(async move {
+                        session_worker(
+                            task_app,
+                            task_config,
+                            key,
+                            receiver,
+                            task_output,
+                            task_stop,
+                            task_control,
+                        )
+                        .await;
+                    });
+                    workers.insert(
+                        session.clone(),
+                        SessionWorker {
+                            queue,
+                            control,
+                            task,
+                        },
+                    );
+                }
+                if let Some(worker) = workers.get(&session) {
+                    let revision = worker.control.revision();
+                    if let Err(error) = worker.queue.try_send(QueuedMessage {
+                        message: msg,
+                        revision,
+                    }) {
+                        let msg = error.into_inner().message;
+                        let claim =
+                            key(&[platform.key(), config.identity(platform), &msg.message_id]);
+                        let _ = runtime.transact(|store| {
+                            store.seen.remove(&claim);
+                            Ok(())
+                        });
+                        queue_response(
+                            &app,
+                            epoch,
+                            &mut pending,
+                            &msg,
+                            "当前会话排队已满，请稍后重试".into(),
+                        );
+                    }
+                }
             }
         }
-    };
-    tokio::pin!(transport);
-    let mut shutdown = shutdown;
-    let mut workers: BTreeMap<String, mpsc::Sender<InboundMessage>> = BTreeMap::new();
-    let mut tasks = Vec::new();
-    let result = loop {
-        tokio::select! {
-            result=&mut transport=>break result,
-            _=shutdown.changed()=>{
-                connection_stop.send_replace(true);
-                break loop {
-                    tokio::select! {
-                        result=&mut transport=>break result,
-                        Some(status)=status_rx.recv()=>app.state::<ImRuntime>().update_status(app,epoch,status),
-                    }
-                };
-            },
-            Some(status)=status_rx.recv()=>app.state::<ImRuntime>().update_status(app,epoch,status),
-            Some(msg)=inbound.recv()=>{
-                if msg.platform!=platform {continue;}
-                let runtime=app.state::<ImRuntime>();
-                if !runtime.authorize(config,&msg) {
-                    if !msg.is_group&&config.access(platform).dm_policy==DmPolicy::Pairing {
-                        match runtime.pair(config,&msg) {Ok(Some(request))=>{let _=app.emit("im-pairing-changed",());let _=outbound.try_send(response(&msg,format!("需要本机主人批准访问。配对码：{}（10 分钟有效）。请在 Dsivio 设置 → IM 中批准。",request.code)));},Ok(None)=>{},Err(error)=>runtime.update_status(app,epoch,StatusUpdate{platform,state:ConnectionState::Error,message:error})}
-                    }
-                    continue;
-                }
-                if msg.text.trim()=="/stop" {
-                    let session=session_key(config,&msg);
-                    let id=runtime.state.lock().store.sessions.get(&session).cloned();
-                    if let Some(id)=id {app.state::<crate::state::AppState>().cancel_chat_generation(&id);}
-                    let _=outbound.try_send(response(&msg,"已停止当前回复。".into()));
-                    continue;
-                }
-                if msg.text.trim()=="/help" {
-                    let _=outbound.try_send(response(&msg,"直接发送消息即可与 Dsivio Agent 对话。\n/new 或 /reset：开始新对话，保留历史。\n/stop：停止当前回复。\nIM 对话自动批准工具，请仅授权可信用户。".into()));
-                    continue;
-                }
-                match runtime.claim(config,&msg) {Ok(true)=>{},Ok(false)=>continue,Err(message)=>{runtime.update_status(app,epoch,StatusUpdate{platform,state:ConnectionState::Error,message});continue;}}
-                runtime.touch(app,platform);
-                let session=session_key(config,&msg);
-                if !workers.contains_key(&session)||workers.get(&session).is_some_and(|q|q.is_closed()) {
-                    let (tx,rx)=mpsc::channel(32);workers.insert(session.clone(),tx);
-                    let app=app.clone();let cfg=config.clone();let output=outbound.clone();let stop=connection_shutdown.clone();let key=session.clone();
-                    tasks.push(tauri::async_runtime::spawn(async move {session_worker(app,cfg,key,rx,output,stop).await;}));
-                }
-                if let Some(queue)=workers.get(&session) {
-                    if let Err(error)=queue.try_send(msg) {
-                        let msg=error.into_inner();
-                        let claim=key(&[platform.key(),config.identity(platform),&msg.message_id]);
-                        let _=runtime.transact(|s|{s.seen.remove(&claim);Ok(())});
-                        let _=outbound.try_send(response(&msg,"当前会话排队已满，请稍后重试".into()));
-                    }
-                }
-            },
-        }
-    };
+    }
     {
         let runtime = app.state::<ImRuntime>();
-        runtime.state.lock().outputs.remove(&platform);
+        let mut state = runtime.state.lock();
+        state.outputs.remove(&platform);
+        for (session, worker) in &workers {
+            worker.control.cancel();
+            if state
+                .controls
+                .get(session)
+                .is_some_and(|control| Arc::ptr_eq(control, &worker.control))
+            {
+                state.controls.remove(session);
+            }
+        }
     }
-    let _ = connection_stop.send(true);
-    drop(workers);
-    for task in tasks {
-        let _ = task.await;
+    drop(outgoing);
+    drop(inbound);
+    drop(status_rx);
+    if let Some(transport) = transport {
+        stop_transport(transport).await;
     }
-    result
+    for (_, worker) in workers {
+        drop(worker.queue);
+        let _ = worker.task.await;
+    }
 }
+
+fn queue_response(
+    app: &tauri::AppHandle,
+    epoch: u64,
+    pending: &mut PendingOutput,
+    msg: &InboundMessage,
+    text: String,
+) {
+    if !pending.push(response(msg, text)) {
+        app.state::<ImRuntime>().update_status(
+            app,
+            epoch,
+            StatusUpdate {
+                platform: msg.platform,
+                state: ConnectionState::Error,
+                message: "IM 发送排队已满，请等待连接恢复".into(),
+            },
+        );
+    }
+}
+
+async fn send_worker_output(
+    output: &mpsc::Sender<OutboundMessage>,
+    message: OutboundMessage,
+    shutdown: &mut watch::Receiver<bool>,
+) {
+    if *shutdown.borrow() {
+        return;
+    }
+    tokio::select! {
+        biased;
+        _ = shutdown.changed() => {}
+        _ = output.send(message) => {}
+    }
+}
+
 async fn session_worker(
     app: tauri::AppHandle,
-    config: ImConfig,
+    config: Arc<ImConfig>,
     session: String,
-    mut queue: mpsc::Receiver<InboundMessage>,
+    mut queue: mpsc::Receiver<QueuedMessage>,
     output: mpsc::Sender<OutboundMessage>,
     mut shutdown: watch::Receiver<bool>,
+    control: Arc<SessionControl>,
 ) {
     loop {
-        let msg = tokio::select! {biased;_=shutdown.changed()=>break,msg=queue.recv()=>match msg {Some(msg)=>msg,None=>break}};
         if *shutdown.borrow() {
             break;
         }
+        let queued = tokio::select! {biased; _ = shutdown.changed() => break, msg = queue.recv() => match msg { Some(msg) => msg, None => break }};
+        let msg = queued.message;
+        let Some(mut turn) = control.begin(queued.revision, &msg.user_id) else {
+            continue;
+        };
         let runtime = app.state::<ImRuntime>();
-        if !runtime.authorize(&config, &msg) {
+        if *shutdown.borrow() || !runtime.authorize(&config, &msg) {
             continue;
         }
-        let reset = matches!(msg.text.trim(), "/new" | "/reset");
-        if reset {
-            match runtime.transact(|store| {
+        if matches!(msg.text.trim(), "/new" | "/reset") {
+            let text = match runtime.transact(|store| {
                 store.sessions.remove(&session);
                 Ok(())
             }) {
-                Ok(()) => {
-                    let _ = output
-                        .send(response(
-                            &msg,
-                            "已开始新对话，历史记录仍保留在 Dsivio。".into(),
-                        ))
-                        .await;
-                }
-                Err(error) => {
-                    let _ = output.send(response(&msg, error)).await;
-                }
-            }
+                Ok(()) => "已开始新对话，历史记录仍保留在 Dsivio。".into(),
+                Err(error) => error,
+            };
+            send_worker_output(&output, response(&msg, text), &mut turn.shutdown).await;
             continue;
         }
         let existing = runtime.state.lock().store.sessions.get(&session).cloned();
@@ -698,17 +1052,23 @@ async fn session_worker(
         {
             Ok(id) => id,
             Err(error) => {
-                let _ = output
-                    .send(response(&msg, format!("无法创建 IM 对话：{error}")))
-                    .await;
+                send_worker_output(
+                    &output,
+                    response(&msg, format!("无法创建 IM 对话：{error}")),
+                    &mut turn.shutdown,
+                )
+                .await;
                 continue;
             }
         };
-        if let Err(error) = runtime.transact(|s| {
-            s.sessions.insert(session.clone(), conversation.clone());
+        if *turn.shutdown.borrow() {
+            continue;
+        }
+        if let Err(error) = runtime.transact(|store| {
+            store.sessions.insert(session.clone(), conversation.clone());
             Ok(())
         }) {
-            let _ = output.send(response(&msg, error)).await;
+            send_worker_output(&output, response(&msg, error), &mut turn.shutdown).await;
             continue;
         }
         if let Err(error) = conversations::send(
@@ -717,15 +1077,16 @@ async fn session_worker(
             &msg,
             &conversation,
             output.clone(),
-            shutdown.clone(),
+            turn.shutdown.clone(),
         )
         .await
         {
-            if !*shutdown.borrow() {
-                let _ = output
-                    .send(response(&msg, format!("本次回复失败：{error}")))
-                    .await;
-            }
+            send_worker_output(
+                &output,
+                response(&msg, format!("本次回复失败：{error}")),
+                &mut turn.shutdown,
+            )
+            .await;
         }
     }
 }
@@ -862,5 +1223,74 @@ mod tests {
         };
         assert!(runtime.claim(&ImConfig::default(), &message()).is_err());
         assert!(runtime.state.lock().store.seen.is_empty());
+    }
+
+    #[test]
+    fn stop_discards_queued_work_and_cancels_preparation_but_allows_a_new_turn() {
+        let control = Arc::new(SessionControl::default());
+        let before_stop = control.revision();
+        let turn = control.begin(before_stop, "alice").unwrap();
+        control.cancel();
+        assert!(*turn.shutdown.borrow());
+        drop(turn);
+        assert!(control.begin(before_stop, "alice").is_none());
+        let next = control.begin(control.revision(), "alice").unwrap();
+        assert!(!*next.shutdown.borrow());
+    }
+
+    #[test]
+    fn revoking_one_sender_does_not_cancel_another_senders_active_turn() {
+        let control = Arc::new(SessionControl::default());
+        let turn = control.begin(control.revision(), "alice").unwrap();
+        control.cancel_user("bob");
+        assert!(!*turn.shutdown.borrow());
+        control.cancel_user("alice");
+        assert!(*turn.shutdown.borrow());
+    }
+
+    #[test]
+    fn disconnected_outbox_replaces_previews_but_keeps_final_files_and_other_chats() {
+        let mut pending = PendingOutput::default();
+        let mut preview = response(&message(), "first".into());
+        preview.stream_id = Some("a".into());
+        preview.finished = false;
+        pending.push(preview.clone());
+        preview.text = "latest".into();
+        pending.push(preview.clone());
+        let mut other = response(&message(), "other-chat".into());
+        other.chat_id = "other".into();
+        other.stream_id = Some("b".into());
+        pending.push(other);
+        let mut final_message = preview.clone();
+        final_message.finished = true;
+        final_message.text = "final".into();
+        final_message.attachments = vec!["final.pdf".into()];
+        pending.push(final_message);
+        preview.text = "late-stale".into();
+        pending.push(preview);
+        let other = pending.queue.pop_front().unwrap();
+        assert_eq!(
+            (other.chat_id.as_str(), other.text.as_str()),
+            ("other", "other-chat")
+        );
+        let final_message = pending.queue.pop_front().unwrap();
+        assert_eq!(final_message.text, "final");
+        assert_eq!(final_message.attachments, ["final.pdf"]);
+        assert!(final_message.finished);
+        assert!(pending.queue.is_empty());
+    }
+
+    #[test]
+    fn a_full_outbox_backpressures_without_dropping_accepted_final_results() {
+        let mut pending = PendingOutput::default();
+        for index in 0..PendingOutput::CAPACITY {
+            assert!(pending.push(response(&message(), index.to_string())));
+        }
+        assert!(!pending.can_receive());
+        assert!(!pending.push(response(&message(), "overflow".into())));
+        for index in 0..PendingOutput::CAPACITY {
+            assert_eq!(pending.queue.pop_front().unwrap().text, index.to_string());
+        }
+        assert!(pending.can_receive());
     }
 }

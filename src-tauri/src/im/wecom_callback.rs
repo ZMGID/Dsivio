@@ -2,7 +2,6 @@
 // Self-built apps: verify GET and decrypt POST, ack before the agent runs, reply with message/send.
 
 use std::collections::BTreeMap;
-use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch, Mutex};
+use tokio::task::JoinHandle;
 
 use super::common::{http_client, split_text, PlatformContext};
 use super::types::{
@@ -25,8 +25,8 @@ use super::wecom_crypto::{CryptError, WxCrypt};
 
 const MAX_BODY: usize = 65_536;
 const SEND_BYTES: usize = 2048;
-const TOKEN_URL: &str = "https://qyapi.weixin.qq.com/cgi-bin/gettoken";
-const SEND_URL: &str = "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=";
+const API_ROOT: &str = "https://qyapi.weixin.qq.com";
+const SHUTDOWN_BUDGET: Duration = Duration::from_secs(2);
 const UNSUPPORTED_NOTE: &str =
     "当前企业微信自建应用只接收文本。图片、文件、语音和视频请改用文字说明，本次附件没有交给助手。";
 
@@ -40,6 +40,7 @@ struct CallbackRt {
     corp_id: String,
     agent_id: i64,
     secret: String,
+    api_root: String,
     http: reqwest::Client,
     inbound: mpsc::Sender<InboundMessage>,
     app_token: Mutex<Option<CachedToken>>,
@@ -68,7 +69,7 @@ enum Accepted {
 pub async fn run(
     config: WecomCallbackConfig,
     credentials: CredentialInput,
-    mut ctx: PlatformContext,
+    ctx: PlatformContext,
 ) -> Result<(), String> {
     if !config.enabled {
         set_status(&ctx.status, ConnectionState::Disabled, "未启用").await;
@@ -110,6 +111,7 @@ pub async fn run(
         corp_id: corp_id.to_owned(),
         agent_id,
         secret: credentials.secret,
+        api_root: API_ROOT.to_owned(),
         http: http_client()?,
         inbound: ctx.inbound.clone(),
         app_token: Mutex::new(None),
@@ -126,45 +128,133 @@ pub async fn run(
     let listener = TcpListener::bind(bind_addr(host, config.webhook.port))
         .await
         .map_err(|_| format!("企业微信回调无法监听 {host}:{}", config.webhook.port))?;
-    let token_note = match rt.access_token().await {
-        Ok(_) => "自建应用回调已连接".to_owned(),
-        Err(_) => "回调已监听，访问令牌将在发送时重试".to_owned(),
-    };
-    set_status(&ctx.status, ConnectionState::Connected, token_note).await;
+    set_status(
+        &ctx.status,
+        ConnectionState::Connected,
+        "回调已监听，访问令牌将在发送时重试",
+    )
+    .await;
+    supervise(listener, router, rt, ctx.outbound, ctx.shutdown, ctx.status).await
+}
 
-    let (stop_tx, mut stop_rx) = watch::channel(false);
-    let server = axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            let _ = stop_rx.wait_for(|stop| *stop).await;
-        })
-        .into_future();
-    tokio::pin!(server);
-    let mut shutdown = ctx.shutdown.clone();
-    loop {
-        tokio::select! {
-            result = &mut server => {
-                return result.map_err(|_| "企业微信回调服务已停止".to_string());
-            }
-            message = ctx.outbound.recv() => {
-                match message {
-                    Some(message) => {
-                        if let Err(error) = deliver_outbound(&rt, message).await {
-                            set_status(&ctx.status, ConnectionState::Error, error).await;
-                        }
-                    }
-                    None => {
-                        let _ = stop_tx.send(true);
-                        return Ok(());
-                    }
-                }
-            }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    let _ = stop_tx.send(true);
-                    return Ok(());
-                }
+async fn supervise(
+    listener: TcpListener,
+    router: Router,
+    rt: Arc<CallbackRt>,
+    outbound: mpsc::Receiver<OutboundMessage>,
+    mut shutdown: watch::Receiver<bool>,
+    status: mpsc::Sender<StatusUpdate>,
+) -> Result<(), String> {
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let mut server = tokio::spawn(serve_http(listener, router, stop_rx));
+    let probe_rt = rt.clone();
+    let probe_status = status.clone();
+    let probe = tokio::spawn(async move {
+        if probe_rt.access_token().await.is_ok() {
+            set_status(
+                &probe_status,
+                ConnectionState::Connected,
+                "自建应用回调已连接",
+            )
+            .await;
+        }
+    });
+    let mut outbound_task =
+        tokio::spawn(outbound_worker(outbound, rt, stop_tx.subscribe(), status));
+    let mut server_done = false;
+    let mut outbound_done = false;
+    let outcome = tokio::select! {
+        result = &mut server => {
+            server_done = true;
+            match result {
+                Ok(Ok(())) => Ok(()),
+                _ => Err("企业微信回调服务已停止".to_string()),
             }
         }
+        _ = &mut outbound_task => {
+            outbound_done = true;
+            Ok(())
+        }
+        done = shutdown.wait_for(|stop| *stop) => {
+            let _ = done;
+            Ok(())
+        }
+    };
+    let _ = stop_tx.send(true);
+    if server_done {
+        drop(server);
+    } else {
+        finish_task(server, SHUTDOWN_BUDGET).await;
+    }
+    if outbound_done {
+        drop(outbound_task);
+    } else {
+        finish_task(outbound_task, SHUTDOWN_BUDGET).await;
+    }
+    finish_task(probe, SHUTDOWN_BUDGET).await;
+    outcome
+}
+
+async fn serve_http(
+    listener: TcpListener,
+    router: Router,
+    mut stop: watch::Receiver<bool>,
+) -> Result<(), String> {
+    axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            let _ = stop.wait_for(|stop| *stop).await;
+        })
+        .await
+        .map_err(|_| "企业微信回调服务已停止".to_string())
+}
+
+fn watch_stopped(stop: &watch::Receiver<bool>) -> bool {
+    *stop.borrow()
+}
+
+async fn until_stopped(stop: &mut watch::Receiver<bool>) {
+    loop {
+        if watch_stopped(stop) {
+            return;
+        }
+        if stop.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn outbound_worker(
+    mut outbound: mpsc::Receiver<OutboundMessage>,
+    rt: Arc<CallbackRt>,
+    mut stop: watch::Receiver<bool>,
+    status: mpsc::Sender<StatusUpdate>,
+) {
+    loop {
+        let message = tokio::select! {
+            _ = until_stopped(&mut stop) => break,
+            incoming = outbound.recv() => {
+                let Some(message) = incoming else { break };
+                message
+            }
+        };
+        let result = tokio::select! {
+            _ = until_stopped(&mut stop) => break,
+            result = deliver_outbound(&rt, message) => result,
+        };
+        if let Err(error) = result {
+            set_status(&status, ConnectionState::Error, error).await;
+        }
+    }
+}
+
+async fn finish_task<T>(mut task: JoinHandle<T>, budget: Duration) {
+    if task.is_finished() {
+        let _ = task.await;
+        return;
+    }
+    if tokio::time::timeout(budget, &mut task).await.is_err() {
+        task.abort();
+        let _ = task.await;
     }
 }
 
@@ -338,7 +428,10 @@ impl CallbackRt {
             let token = self.access_token().await?;
             let response = self
                 .http
-                .post(format!("{SEND_URL}{token}"))
+                .post(format!(
+                    "{}/cgi-bin/message/send?access_token={token}",
+                    self.api_root
+                ))
                 .json(&payload)
                 .send()
                 .await
@@ -368,7 +461,7 @@ impl CallbackRt {
         }
         let response = self
             .http
-            .get(TOKEN_URL)
+            .get(format!("{}/cgi-bin/gettoken", self.api_root))
             .query(&[
                 ("corpid", self.corp_id.as_str()),
                 ("corpsecret", self.secret.as_str()),
@@ -496,6 +589,16 @@ async fn set_status(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use axum::extract::State;
+    use axum::routing::{get, post};
+    use axum::Router;
+    use tokio::net::TcpListener;
+    use tokio::sync::{mpsc, oneshot, watch, Mutex, Notify};
+
+    use super::super::wecom_crypto::{signature, WxCrypt};
     use super::*;
 
     #[test]
@@ -545,5 +648,166 @@ mod tests {
             left,
             super::super::wecom_crypto::signature("t", "1", "n", "other")
         );
+    }
+
+    #[derive(Clone)]
+    struct SendGate {
+        entered: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+        release: Arc<Notify>,
+    }
+
+    async fn token_ok() -> axum::Json<serde_json::Value> {
+        axum::Json(serde_json::json!({
+            "errcode": 0,
+            "access_token": "tok",
+            "expires_in": 7200
+        }))
+    }
+
+    async fn hold_send(State(gate): State<SendGate>) -> axum::Json<serde_json::Value> {
+        if let Some(sender) = gate.entered.lock().await.take() {
+            let _ = sender.send(());
+        }
+        gate.release.notified().await;
+        axum::Json(serde_json::json!({"errcode": 0}))
+    }
+
+    #[tokio::test]
+    async fn slow_send_api_still_acks_callback() {
+        const TOKEN: &str = "token-demo";
+        const AES: &str = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let gate = SendGate {
+            entered: Arc::new(Mutex::new(Some(entered_tx))),
+            release: Arc::new(Notify::new()),
+        };
+        let mock_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mock_addr = mock_listener.local_addr().unwrap();
+        let mock_router = Router::new()
+            .route("/cgi-bin/gettoken", get(token_ok))
+            .route("/cgi-bin/message/send", post(hold_send))
+            .with_state(gate.clone());
+        let mock_task = tokio::spawn(async move {
+            let _ = axum::serve(mock_listener, mock_router).await;
+        });
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if http
+                    .get(format!("http://{mock_addr}/cgi-bin/gettoken"))
+                    .send()
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("mock token API did not start");
+
+        let crypt = WxCrypt::new(TOKEN, AES, "wwcorp").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (inbound_tx, mut inbound_rx) = mpsc::channel(4);
+        let (status_tx, _status_rx) = mpsc::channel(8);
+        let (out_tx, out_rx) = mpsc::channel(4);
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let rt = Arc::new(CallbackRt {
+            crypt: WxCrypt::new(TOKEN, AES, "wwcorp").unwrap(),
+            corp_id: "wwcorp".into(),
+            agent_id: 1,
+            secret: "corp-secret".into(),
+            api_root: format!("http://{mock_addr}"),
+            http: super::super::common::http_client().unwrap(),
+            inbound: inbound_tx,
+            app_token: Mutex::new(None),
+            send_lock: Mutex::new(()),
+            sent_streams: Mutex::new(std::collections::HashSet::new()),
+        });
+        let router = Router::new()
+            .route("/wecom/callback", get(verify).post(receive))
+            .with_state(rt.clone());
+        let supervised = tokio::spawn(supervise(listener, router, rt, out_rx, stop_rx, status_tx));
+        out_tx
+            .send(OutboundMessage {
+                chat_id: "wwcorp:user-1".into(),
+                is_group: false,
+                thread_id: None,
+                reply_token: None,
+                reply_to: None,
+                text: "hello".into(),
+                attachments: Vec::new(),
+                stream_id: None,
+                finished: true,
+            })
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), entered_rx)
+            .await
+            .expect("send API was not reached")
+            .expect("send API dropped the barrier signal");
+
+        let ts = "1700000000";
+        let nonce = "nonce12345";
+        let echo = crypt.encrypt_b64(b"echo-plain").unwrap();
+        let echo_sig = signature(TOKEN, ts, nonce, &echo);
+        let verified = tokio::time::timeout(
+            Duration::from_secs(1),
+            http.get(format!("http://{addr}/wecom/callback"))
+                .query(&[
+                    ("msg_signature", echo_sig.as_str()),
+                    ("timestamp", ts),
+                    ("nonce", nonce),
+                    ("echostr", echo.as_str()),
+                ])
+                .send(),
+        )
+        .await
+        .expect("verify did not return while send API was blocked")
+        .unwrap();
+        assert_eq!(verified.status(), reqwest::StatusCode::OK);
+        assert_eq!(verified.text().await.unwrap(), "echo-plain");
+
+        let plain = "<xml><ToUserName>wwcorp</ToUserName><FromUserName>user-9</FromUserName><MsgType>text</MsgType><Content>收到</Content><MsgId>m-9</MsgId></xml>";
+        let encrypted = crypt.encrypt_b64(plain.as_bytes()).unwrap();
+        let sig = signature(TOKEN, ts, nonce, &encrypted);
+        let body = format!("<xml><Encrypt><![CDATA[{encrypted}]]></Encrypt></xml>");
+        let received = tokio::time::timeout(
+            Duration::from_secs(1),
+            http.post(format!("http://{addr}/wecom/callback"))
+                .query(&[
+                    ("msg_signature", sig.as_str()),
+                    ("timestamp", ts),
+                    ("nonce", nonce),
+                ])
+                .header("content-type", "text/xml")
+                .body(body)
+                .send(),
+        )
+        .await
+        .expect("receive did not return while send API was blocked")
+        .unwrap();
+        assert_eq!(received.status(), reqwest::StatusCode::OK);
+        let inbound = tokio::time::timeout(Duration::from_secs(1), inbound_rx.recv())
+            .await
+            .expect("inbound was not delivered")
+            .expect("inbound closed");
+        assert_eq!(inbound.text, "收到");
+        assert_eq!(inbound.chat_id, "wwcorp:user-9");
+        assert!(!inbound.is_group);
+        assert!(inbound.thread_id.is_none());
+
+        let _ = stop_tx.send(true);
+        tokio::time::timeout(Duration::from_secs(3), supervised)
+            .await
+            .expect("shutdown left the callback tasks running")
+            .unwrap()
+            .unwrap();
+        mock_task.abort();
     }
 }

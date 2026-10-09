@@ -2,10 +2,11 @@
 // Smart-bot WebSocket: subscribe, ping, callbacks, native stream bubbles, and passive group replies.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -55,6 +56,30 @@ pub(crate) fn truncate_utf8(text: &str, max_bytes: usize) -> String {
         end -= 1;
     }
     text[..end].to_owned()
+}
+
+/// Final frames must differ from the last intermediate or WeCom drops them.
+/// The marker is reserved inside the 20480-byte cap so a max-sized frame still fits.
+fn distinct_final(text: &str, last_sent: &str) -> String {
+    let final_text = truncate_utf8(text, MAX_STREAM_BYTES);
+    if final_text.is_empty() || final_text != last_sent {
+        return final_text;
+    }
+    for marker in ["\u{200b}", "\u{200c}"] {
+        let budget = MAX_STREAM_BYTES.saturating_sub(marker.len());
+        let mut candidate = truncate_utf8(text, budget);
+        candidate.push_str(marker);
+        if candidate != last_sent {
+            return candidate;
+        }
+        let shrunk = budget.saturating_sub(1);
+        candidate = truncate_utf8(text, shrunk);
+        candidate.push_str(marker);
+        if candidate != last_sent {
+            return candidate;
+        }
+    }
+    final_text
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,11 +225,7 @@ impl StreamBook {
             }
         }
         if finished {
-            let mut final_text = truncate_utf8(text, MAX_STREAM_BYTES);
-            if !final_text.is_empty() && final_text == turn.last_sent {
-                final_text.push('\u{200b}');
-                final_text = truncate_utf8(&final_text, MAX_STREAM_BYTES);
-            }
+            let final_text = distinct_final(text, &turn.last_sent);
             cmds.push(stream_cmd(turn, final_text, true));
             self.turns.remove(stream_id);
             self.finalized.insert(stream_id.to_owned());
@@ -248,8 +269,28 @@ fn stream_cmd(turn: &Turn, content: String, finish: bool) -> WireCmd {
 
 enum OutMsg {
     Text(String),
+    Ping,
     Pong(Vec<u8>),
     Close,
+}
+
+#[derive(Clone, Copy)]
+struct Limits {
+    heartbeat: Duration,
+    pong_wait: Duration,
+    write_timeout: Duration,
+}
+
+fn production_limits() -> Limits {
+    Limits {
+        heartbeat: Duration::from_secs(30),
+        pong_wait: Duration::from_secs(60),
+        write_timeout: Duration::from_secs(10),
+    }
+}
+
+fn shutdown_budget(limits: Limits) -> Duration {
+    limits.write_timeout + limits.write_timeout + Duration::from_millis(500)
 }
 
 struct ReplySlot {
@@ -282,11 +323,17 @@ struct Bucket {
 struct GwState {
     pending: HashMap<String, oneshot::Sender<Value>>,
     replies: HashMap<String, ReplySlot>,
-    groups: HashSet<String>,
     req_ids: HashMap<String, String>,
     req_order: VecDeque<String>,
     book: StreamBook,
     buckets: HashMap<String, Bucket>,
+}
+
+struct OutPlan {
+    is_group: bool,
+    req_id: Option<String>,
+    cmds: Vec<WireCmd>,
+    streamed: bool,
 }
 
 struct Gateway {
@@ -294,11 +341,140 @@ struct Gateway {
     inbound: mpsc::Sender<InboundMessage>,
     status: mpsc::Sender<StatusUpdate>,
     write_tx: mpsc::Sender<OutMsg>,
+    write_timeout: Duration,
     state: Mutex<GwState>,
     origin: Instant,
     stop: watch::Sender<bool>,
     gates: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
-    workers: Mutex<HashMap<String, mpsc::Sender<OutboundMessage>>>,
+    workers: Mutex<HashMap<String, (mpsc::Sender<OutboundMessage>, tokio::task::JoinHandle<()>)>>,
+}
+
+async fn send_out(
+    tx: &mpsc::Sender<OutMsg>,
+    message: OutMsg,
+    budget: Duration,
+) -> Result<(), String> {
+    match tokio::time::timeout(budget, tx.send(message)).await {
+        Ok(Ok(())) => Ok(()),
+        _ => Err("企业微信连接已断开".into()),
+    }
+}
+
+fn watch_stopped(stop: &watch::Receiver<bool>) -> bool {
+    *stop.borrow()
+}
+
+async fn until_stopped(stop: &mut watch::Receiver<bool>) {
+    loop {
+        if watch_stopped(stop) {
+            return;
+        }
+        if stop.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn write_frames<W>(
+    mut write: W,
+    mut rx: mpsc::Receiver<OutMsg>,
+    mut stop: watch::Receiver<bool>,
+    write_timeout: Duration,
+) -> Result<(), String>
+where
+    W: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin + Send,
+{
+    loop {
+        tokio::select! {
+            biased;
+            _ = until_stopped(&mut stop) => {
+                let _ = tokio::time::timeout(write_timeout, write.send(Message::Close(None))).await;
+                return Ok(());
+            }
+            incoming = rx.recv() => {
+                let Some(message) = incoming else {
+                    let _ = tokio::time::timeout(write_timeout, write.send(Message::Close(None))).await;
+                    return Ok(());
+                };
+                if matches!(message, OutMsg::Close) {
+                    let _ = tokio::time::timeout(write_timeout, write.send(Message::Close(None))).await;
+                    return Ok(());
+                }
+                let frame = match message {
+                    OutMsg::Text(payload) => text_message(payload),
+                    OutMsg::Ping => Message::Ping(Vec::<u8>::new().into()),
+                    OutMsg::Pong(payload) => Message::Pong(payload.into()),
+                    OutMsg::Close => unreachable!(),
+                };
+                match tokio::time::timeout(write_timeout, write.send(frame)).await {
+                    Ok(Ok(())) => {}
+                    _ => return Err("企业微信发送超时".into()),
+                }
+            }
+        }
+    }
+}
+
+async fn read_events<R, F, Fut>(
+    mut read: R,
+    reader_tx: mpsc::Sender<OutMsg>,
+    mut stop: watch::Receiver<bool>,
+    limits: Limits,
+    mut on_text: F,
+) -> Result<(), String>
+where
+    R: Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin + Send,
+    F: FnMut(String) -> Fut + Send,
+    Fut: Future<Output = Result<(), String>> + Send,
+{
+    let mut heartbeat = tokio::time::interval(limits.heartbeat);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let pong_deadline = tokio::time::sleep(limits.pong_wait);
+    tokio::pin!(pong_deadline);
+    let mut waiting_pong = false;
+    loop {
+        tokio::select! {
+            _ = until_stopped(&mut stop) => return Ok(()),
+            _ = &mut pong_deadline, if waiting_pong => return Err("企业微信连接失活".into()),
+            _ = heartbeat.tick() => {
+                let ping = json!({"cmd":"ping","headers":{"req_id": format!("ping-{}", Uuid::new_v4().simple())},"body":{}}).to_string();
+                send_out(&reader_tx, OutMsg::Text(ping), limits.write_timeout).await?;
+                send_out(&reader_tx, OutMsg::Ping, limits.write_timeout).await?;
+                if !waiting_pong {
+                    waiting_pong = true;
+                    pong_deadline.as_mut().reset(tokio::time::Instant::now() + limits.pong_wait);
+                }
+            }
+            incoming = read.next() => {
+                match incoming {
+                    Some(Ok(Message::Ping(payload))) => {
+                        waiting_pong = false;
+                        send_out(&reader_tx, OutMsg::Pong(payload.to_vec()), limits.write_timeout).await?;
+                    }
+                    Some(Ok(Message::Pong(_))) => waiting_pong = false,
+                    Some(Ok(Message::Close(_))) | None => return Err("企业微信连接已断开".into()),
+                    Some(Ok(other)) => {
+                        waiting_pong = false;
+                        if let Some(text) = frame_text(other) {
+                            on_text(text).await?;
+                        }
+                    }
+                    Some(Err(_)) => return Err("企业微信连接已断开".into()),
+                }
+            }
+        }
+    }
+}
+
+async fn finish_task<T>(mut task: tokio::task::JoinHandle<T>, budget: Duration) {
+    if task.is_finished() {
+        let _ = task.await;
+        return;
+    }
+    if tokio::time::timeout(budget, &mut task).await.is_err() {
+        task.abort();
+        let _ = task.await;
+    }
 }
 
 pub async fn run(
@@ -390,32 +566,24 @@ pub async fn run(
             }
         }
     }
-    let (write_tx, mut write_rx) = mpsc::channel(64);
-    let writer = tokio::spawn(async move {
-        while let Some(message) = write_rx.recv().await {
-            let sent = match message {
-                OutMsg::Text(payload) => write.send(text_message(payload)).await,
-                OutMsg::Pong(payload) => write.send(Message::Pong(payload.into())).await,
-                OutMsg::Close => {
-                    let _ = write.send(Message::Close(None)).await;
-                    break;
-                }
-            };
-            if sent.is_err() {
-                break;
-            }
-        }
-    });
+    let limits = production_limits();
+    let (write_tx, write_rx) = mpsc::channel(64);
     let (stop_tx, _) = watch::channel(false);
+    let mut writer = tokio::spawn(write_frames(
+        write,
+        write_rx,
+        stop_tx.subscribe(),
+        limits.write_timeout,
+    ));
     let gateway = Arc::new(Gateway {
         app: ctx.app.clone(),
         inbound: ctx.inbound.clone(),
         status: ctx.status.clone(),
         write_tx: write_tx.clone(),
+        write_timeout: limits.write_timeout,
         state: Mutex::new(GwState {
             pending: HashMap::new(),
             replies: HashMap::new(),
-            groups: HashSet::new(),
             req_ids: HashMap::new(),
             req_order: VecDeque::new(),
             book: StreamBook::default(),
@@ -428,40 +596,35 @@ pub async fn run(
     });
     set_status(&ctx.status, ConnectionState::Connected, "企业微信已连接").await;
     let reader_gateway = gateway.clone();
-    let mut reader_stop = gateway.stop.subscribe();
-    let reader_tx = write_tx.clone();
-    let mut reader = tokio::spawn(async move {
-        let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
-        heartbeat.tick().await;
-        loop {
-            tokio::select! {
-                _ = async { let _ = reader_stop.wait_for(|stop| *stop).await; } => return Ok(()),
-                _ = heartbeat.tick() => {
-                    let ping = json!({"cmd":"ping","headers":{"req_id": format!("ping-{}", Uuid::new_v4().simple())},"body":{}}).to_string();
-                    if reader_tx.send(OutMsg::Text(ping)).await.is_err() { return Err("企业微信连接已断开".into()); }
-                }
-                incoming = read.next() => {
-                    match incoming {
-                        Some(Ok(Message::Ping(payload))) => { let _ = reader_tx.send(OutMsg::Pong(payload.to_vec())).await; }
-                        Some(Ok(Message::Close(_))) | None => return Err("企业微信连接已断开".into()),
-                        Some(Ok(other)) => {
-                            if let Some(text) = frame_text(other) {
-                                if let Err(error) = reader_gateway.on_text(&text).await { return Err(error); }
-                            }
-                        }
-                        Some(Err(_)) => return Err("企业微信连接已断开".into()),
-                    }
-                }
-            }
-        }
-    });
+    let mut reader = tokio::spawn(read_events(
+        read,
+        write_tx,
+        gateway.stop.subscribe(),
+        limits,
+        move |text| {
+            let gateway = reader_gateway.clone();
+            async move { gateway.on_text(&text).await }
+        },
+    ));
     let mut shutdown = ctx.shutdown.clone();
+    let mut reader_done = false;
+    let mut writer_done = false;
     let result = loop {
         tokio::select! {
-            end = &mut reader => break match end {
-                Ok(result) => result,
-                Err(_) => Err("企业微信连接已断开".into()),
-            },
+            end = &mut reader => {
+                reader_done = true;
+                break match end {
+                    Ok(result) => result,
+                    Err(_) => Err("企业微信连接已断开".into()),
+                };
+            }
+            end = &mut writer => {
+                writer_done = true;
+                break match end {
+                    Ok(result) => result,
+                    Err(_) => Err("企业微信连接已断开".into()),
+                };
+            }
             message = ctx.outbound.recv() => match message {
                 Some(message) => gateway.enqueue(message).await,
                 None => break Ok(()),
@@ -472,9 +635,22 @@ pub async fn run(
         }
     };
     let _ = gateway.stop.send(true);
-    let _ = write_tx.try_send(OutMsg::Close);
-    writer.abort();
-    reader.abort();
+    let budget = shutdown_budget(limits);
+    if writer_done {
+        drop(writer);
+    } else {
+        finish_task(writer, budget).await;
+    }
+    if reader_done {
+        drop(reader);
+    } else {
+        finish_task(reader, budget).await;
+    }
+    let workers = std::mem::take(&mut *gateway.workers.lock());
+    for (_, (tx, handle)) in workers {
+        drop(tx);
+        finish_task(handle, Duration::from_secs(2)).await;
+    }
     if let Err(error) = &result {
         set_status(
             &ctx.status,
@@ -497,15 +673,15 @@ impl Gateway {
         let chat_id = message.chat_id.clone();
         let sender = {
             let mut workers = self.workers.lock();
-            if let Some(sender) = workers.get(&chat_id) {
+            if let Some((sender, _)) = workers.get(&chat_id) {
                 sender.clone()
             } else {
                 let (tx, rx) = mpsc::channel(32);
-                workers.insert(chat_id, tx.clone());
                 let gateway = Arc::clone(self);
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     gateway.chat_worker(rx).await;
                 });
+                workers.insert(chat_id, (tx.clone(), handle));
                 tx
             }
         };
@@ -532,34 +708,31 @@ impl Gateway {
     }
 
     async fn handle_out(&self, message: OutboundMessage) -> Result<(), String> {
-        let (is_group, req_id) = {
-            let state = self.state.lock();
-            let req = req_for(&state, &message.chat_id, message.reply_token.as_deref());
-            (is_group_chat(&state, &message.chat_id), req)
+        let plan = {
+            let mut state = self.state.lock();
+            plan_outbound(&mut state, self.now_ms(), &message)?
         };
-        if let Some(stream_id) = message.stream_id.clone().filter(|id| !id.is_empty()) {
-            let cmds = {
-                let mut state = self.state.lock();
-                state.book.push(
-                    self.now_ms(),
-                    &message.chat_id,
-                    &stream_id,
-                    req_id.as_deref(),
-                    is_group,
-                    &message.text,
-                    message.finished,
-                )?
-            };
-            for cmd in cmds {
-                self.dispatch(&message.chat_id, is_group, cmd).await?;
+        if plan.streamed {
+            for cmd in plan.cmds {
+                self.dispatch(&message.chat_id, plan.is_group, cmd).await?;
             }
         } else if !message.text.is_empty() {
-            self.send_text(&message.chat_id, is_group, req_id.as_deref(), &message.text)
-                .await?;
+            self.send_text(
+                &message.chat_id,
+                plan.is_group,
+                plan.req_id.as_deref(),
+                &message.text,
+            )
+            .await?;
         }
         for path in &message.attachments {
-            self.send_attachment(&message.chat_id, is_group, req_id.as_deref(), path)
-                .await?;
+            self.send_attachment(
+                &message.chat_id,
+                plan.is_group,
+                plan.req_id.as_deref(),
+                path,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -575,8 +748,8 @@ impl Gateway {
                 content,
                 finish,
             } => {
-                if finish {
-                    self.acquire_token(chat_id, true).await;
+                if finish && !self.acquire_token(chat_id, true).await {
+                    return Err("企业微信连接已断开".into());
                 }
                 let fallback = content.clone();
                 let body = json!({"msgtype":"stream","stream":{"id": bubble_id, "finish": finish, "content": content}});
@@ -601,7 +774,9 @@ impl Gateway {
         text: &str,
     ) -> Result<(), String> {
         for item in plan_text(is_group, req_id, text)? {
-            self.acquire_token(chat_id, false).await;
+            if !self.acquire_token(chat_id, false).await {
+                return Err("企业微信连接已断开".into());
+            }
             match item {
                 TextSend::Passive { req_id, content } => {
                     let body = json!({"msgtype":"markdown","markdown":{"content": content}});
@@ -644,7 +819,9 @@ impl Gateway {
         let mut body = serde_json::Map::new();
         body.insert("msgtype".into(), json!(prepared.media_type));
         body.insert(prepared.media_type.clone(), json!({"media_id": media_id}));
-        self.acquire_token(chat_id, false).await;
+        if !self.acquire_token(chat_id, false).await {
+            return Err("企业微信连接已断开".into());
+        }
         if is_group {
             let req_id = req_id.unwrap_or("");
             match self.respond(req_id, Value::Object(body), true, false).await {
@@ -662,7 +839,7 @@ impl Gateway {
         Ok(())
     }
 
-    async fn acquire_token(&self, chat_id: &str, control: bool) {
+    async fn acquire_token(&self, chat_id: &str, control: bool) -> bool {
         let gate = {
             let mut gates = self.gates.lock();
             gates
@@ -690,16 +867,16 @@ impl Gateway {
                 }
                 if bucket.normal < NORMAL_TOKENS {
                     bucket.normal += 1;
-                    return;
+                    return true;
                 }
                 if control && bucket.reserved < RESERVED_TOKENS {
                     bucket.reserved += 1;
-                    return;
+                    return true;
                 }
                 Duration::from_secs(60).saturating_sub(now.duration_since(bucket.window))
             };
-            if !wait.is_zero() {
-                tokio::time::sleep(wait).await;
+            if !wait.is_zero() && !self.pause(wait).await {
+                return false;
             }
         }
     }
@@ -709,7 +886,10 @@ impl Gateway {
         let (tx, rx) = oneshot::channel();
         self.state.lock().pending.insert(req_id.clone(), tx);
         let payload = json!({"cmd": cmd, "headers": {"req_id": req_id}, "body": body}).to_string();
-        if self.write_tx.send(OutMsg::Text(payload)).await.is_err() {
+        if send_out(&self.write_tx, OutMsg::Text(payload), self.write_timeout)
+            .await
+            .is_err()
+        {
             self.state.lock().pending.remove(&req_id);
             return Err("企业微信连接已断开".into());
         }
@@ -752,7 +932,7 @@ impl Gateway {
             return Ok(FinalAck::Delivered);
         }
         if wait_final {
-            self.drain_reply(req_id).await;
+            self.drain_reply(req_id).await?;
         }
         let mut rx = self.reply_receiver(req_id);
         let start = *rx.borrow();
@@ -761,7 +941,10 @@ impl Gateway {
         }
         let payload = json!({"cmd":"aibot_respond_msg","headers":{"req_id": req_id},"body": body})
             .to_string();
-        if self.write_tx.send(OutMsg::Text(payload)).await.is_err() {
+        if send_out(&self.write_tx, OutMsg::Text(payload), self.write_timeout)
+            .await
+            .is_err()
+        {
             if let Some(slot) = self.state.lock().replies.get_mut(req_id) {
                 slot.pending = false;
             }
@@ -770,11 +953,14 @@ impl Gateway {
         if !wait_final {
             return Ok(FinalAck::Delivered);
         }
-        let acked = tokio::time::timeout(
-            Duration::from_secs(15),
-            rx.wait_for(move |seq| *seq != start),
-        )
-        .await;
+        let mut stop = self.stop.subscribe();
+        let acked = tokio::select! {
+            _ = stop.wait_for(|stop| *stop) => return Err(()),
+            acked = tokio::time::timeout(
+                Duration::from_secs(15),
+                rx.wait_for(move |seq| *seq != start),
+            ) => acked,
+        };
         let code = self
             .state
             .lock()
@@ -791,7 +977,7 @@ impl Gateway {
         })
     }
 
-    async fn drain_reply(&self, req_id: &str) {
+    async fn drain_reply(&self, req_id: &str) -> Result<(), ()> {
         let pending = self
             .state
             .lock()
@@ -799,17 +985,29 @@ impl Gateway {
             .get(req_id)
             .is_some_and(|slot| slot.pending);
         if !pending {
-            return;
+            return Ok(());
         }
         let mut rx = self.reply_receiver(req_id);
         let start = *rx.borrow();
-        let _ = tokio::time::timeout(
-            Duration::from_secs(15),
-            rx.wait_for(move |seq| *seq != start),
-        )
-        .await;
+        let mut stop = self.stop.subscribe();
+        tokio::select! {
+            _ = stop.wait_for(|stop| *stop) => return Err(()),
+            _ = tokio::time::timeout(
+                Duration::from_secs(15),
+                rx.wait_for(move |seq| *seq != start),
+            ) => {}
+        }
         if let Some(slot) = self.state.lock().replies.get_mut(req_id) {
             slot.pending = false;
+        }
+        Ok(())
+    }
+
+    async fn pause(&self, wait: Duration) -> bool {
+        let mut stop = self.stop.subscribe();
+        tokio::select! {
+            _ = stop.wait_for(|stop| *stop) => false,
+            _ = tokio::time::sleep(wait) => !*self.stop.borrow(),
         }
     }
 
@@ -901,9 +1099,6 @@ impl Gateway {
         let refs = refs_from_body(&body);
         {
             let mut state = self.state.lock();
-            if is_group {
-                state.groups.insert(chat_id.clone());
-            }
             remember(&mut state, &chat_id, &req_id);
             state.book.note_inbound(&chat_id);
         }
@@ -967,8 +1162,36 @@ fn req_for(state: &GwState, chat_id: &str, reply_token: Option<&str>) -> Option<
         .or_else(|| state.req_ids.get(chat_id).cloned())
 }
 
-fn is_group_chat(state: &GwState, chat_id: &str) -> bool {
-    state.groups.contains(chat_id) || chat_id.to_ascii_lowercase().starts_with("group")
+fn plan_outbound(
+    state: &mut GwState,
+    now_ms: u64,
+    message: &OutboundMessage,
+) -> Result<OutPlan, String> {
+    let is_group = message.is_group;
+    let req_id = req_for(state, &message.chat_id, message.reply_token.as_deref());
+    if let Some(stream_id) = message.stream_id.as_deref().filter(|id| !id.is_empty()) {
+        let cmds = state.book.push(
+            now_ms,
+            &message.chat_id,
+            stream_id,
+            req_id.as_deref(),
+            is_group,
+            &message.text,
+            message.finished,
+        )?;
+        return Ok(OutPlan {
+            is_group,
+            req_id,
+            cmds,
+            streamed: true,
+        });
+    }
+    Ok(OutPlan {
+        is_group,
+        req_id,
+        cmds: Vec::new(),
+        streamed: false,
+    })
 }
 
 fn message_text(body: &Value) -> String {
@@ -1110,6 +1333,11 @@ async fn set_status(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, VecDeque};
+    use std::time::Duration;
+
+    use tokio::sync::{mpsc, watch};
+
     use super::*;
 
     #[test]
@@ -1211,5 +1439,245 @@ mod tests {
     fn stream_truncation_keeps_unicode_boundaries() {
         assert_eq!(truncate_utf8("你你", 5), "你");
         assert!(truncate_utf8(&"你".repeat(10_000), MAX_STREAM_BYTES).len() <= MAX_STREAM_BYTES);
+    }
+
+    #[test]
+    fn max_byte_final_differs_and_stays_within_cap() {
+        let max = "a".repeat(MAX_STREAM_BYTES);
+        let mut book = StreamBook::default();
+        book.push(0, "dm", "bubble-max", Some("req"), false, &max, false)
+            .unwrap();
+        let cmds = book
+            .push(1, "dm", "bubble-max", Some("req"), false, &max, true)
+            .unwrap();
+        let content = cmds
+            .iter()
+            .find_map(|cmd| match cmd {
+                WireCmd::Stream {
+                    finish: true,
+                    content,
+                    ..
+                } => Some(content),
+                _ => None,
+            })
+            .expect("finish frame");
+        assert_ne!(content, &max);
+        assert!(content.len() <= MAX_STREAM_BYTES);
+        assert!(content.ends_with('\u{200b}'));
+    }
+
+    #[test]
+    fn rebuilt_socket_routes_group_by_message_flag() {
+        let mut rebuilt = empty_state();
+        let message = outbound(
+            "wrchat",
+            true,
+            Some("req-group"),
+            "答案",
+            Some("bubble"),
+            true,
+        );
+        let plan = plan_outbound(&mut rebuilt, 0, &message).unwrap();
+        assert!(plan.is_group);
+        assert_eq!(plan.req_id.as_deref(), Some("req-group"));
+        assert!(plan.cmds.iter().any(|cmd| matches!(
+            cmd,
+            WireCmd::Stream { req_id, finish: true, .. } if req_id == "req-group"
+        )));
+        assert!(plan
+            .cmds
+            .iter()
+            .all(|cmd| !matches!(cmd, WireCmd::Proactive { .. })));
+
+        let mut cached = empty_state();
+        remember(&mut cached, "chat-1", "cached-req");
+        let latest = outbound("chat-1", true, Some("latest-req"), "hi", None, true);
+        let plan = plan_outbound(&mut cached, 0, &latest).unwrap();
+        assert_eq!(plan.req_id.as_deref(), Some("latest-req"));
+        assert!(plan.is_group);
+
+        let mut window = empty_state();
+        remember(&mut window, "chat-1", "cached-req");
+        let fallback = outbound("chat-1", false, None, "hi", None, true);
+        let plan = plan_outbound(&mut window, 0, &fallback).unwrap();
+        assert_eq!(plan.req_id.as_deref(), Some("cached-req"));
+        assert!(!plan.is_group);
+        assert!(matches!(
+            plan_text(plan.is_group, plan.req_id.as_deref(), "hi")
+                .unwrap()
+                .as_slice(),
+            [TextSend::Proactive { .. }]
+        ));
+
+        let mut prefixed = empty_state();
+        let dm = outbound("group-looking", false, None, "hi", None, true);
+        assert!(!plan_outbound(&mut prefixed, 0, &dm).unwrap().is_group);
+    }
+
+    fn empty_state() -> GwState {
+        GwState {
+            pending: HashMap::new(),
+            replies: HashMap::new(),
+            req_ids: HashMap::new(),
+            req_order: VecDeque::new(),
+            book: StreamBook::default(),
+            buckets: HashMap::new(),
+        }
+    }
+
+    fn outbound(
+        chat_id: &str,
+        is_group: bool,
+        reply_token: Option<&str>,
+        text: &str,
+        stream_id: Option<&str>,
+        finished: bool,
+    ) -> OutboundMessage {
+        OutboundMessage {
+            chat_id: chat_id.to_owned(),
+            is_group,
+            thread_id: None,
+            reply_token: reply_token.map(str::to_owned),
+            reply_to: None,
+            text: text.to_owned(),
+            attachments: Vec::new(),
+            stream_id: stream_id.map(str::to_owned),
+            finished,
+        }
+    }
+
+    #[tokio::test]
+    async fn silent_peer_expires_and_socket_tasks_finish() {
+        use futures_util::StreamExt;
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let tcp = ws.into_inner();
+            let (mut read, write) = tokio::io::split(tcp);
+            let _hold_write = write;
+            let mut buf = [0u8; 4096];
+            loop {
+                match read.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        });
+        let (client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        let (write, read) = client.split();
+        let (write_tx, write_rx) = mpsc::channel(8);
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let limits = Limits {
+            heartbeat: Duration::from_millis(40),
+            pong_wait: Duration::from_millis(180),
+            write_timeout: Duration::from_millis(300),
+        };
+        let writer = tokio::spawn(write_frames(
+            write,
+            write_rx,
+            stop_tx.subscribe(),
+            limits.write_timeout,
+        ));
+        let reader = tokio::spawn(read_events(read, write_tx, stop_rx, limits, |_| async {
+            Ok(())
+        }));
+        let ended = tokio::time::timeout(Duration::from_secs(2), reader)
+            .await
+            .expect("reader hung on a silent peer");
+        let error = ended
+            .expect("reader task")
+            .expect_err("silent peer must fail");
+        assert!(error.contains("失活"), "{error}");
+        let _ = stop_tx.send(true);
+        let writer_ended = tokio::time::timeout(Duration::from_secs(2), writer)
+            .await
+            .expect("writer hung during shutdown");
+        assert!(writer_ended.expect("writer task").is_ok());
+        let _ = tokio::time::timeout(Duration::from_secs(1), server).await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_does_not_wait_forever_on_blocked_write() {
+        use futures_util::StreamExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            shrink_socket_buf(&stream, false);
+            let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let tcp = ws.into_inner();
+            std::future::pending::<()>().await;
+            drop(tcp);
+        });
+        let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+        shrink_socket_buf(&tcp, true);
+        let _ = tcp.set_nodelay(true);
+        let (client, _) = tokio_tungstenite::client_async(format!("ws://{addr}"), tcp)
+            .await
+            .unwrap();
+        let (write, read) = client.split();
+        let _hold_read = read;
+        let (write_tx, write_rx) = mpsc::channel(2);
+        let (stop_tx, _) = watch::channel(false);
+        let write_timeout = Duration::from_millis(200);
+        let writer = tokio::spawn(write_frames(
+            write,
+            write_rx,
+            stop_tx.subscribe(),
+            write_timeout,
+        ));
+        let payload = "x".repeat(512 * 1024);
+        let queued = write_tx.clone();
+        let flood = tokio::spawn(async move {
+            let _ = queued.send(OutMsg::Text(payload)).await;
+        });
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let _ = stop_tx.send(true);
+        let ended = tokio::time::timeout(Duration::from_secs(2), writer)
+            .await
+            .expect("shutdown waited on a blocked write");
+        assert!(ended.is_ok());
+        drop(write_tx);
+        let _ = flood.await;
+        server.abort();
+    }
+
+    fn shrink_socket_buf(stream: &tokio::net::TcpStream, send: bool) {
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            extern "C" {
+                fn setsockopt(
+                    sockfd: i32,
+                    level: i32,
+                    optname: i32,
+                    optval: *const i32,
+                    optlen: u32,
+                ) -> i32;
+            }
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+            let level = 0xffff;
+            #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+            let level = 1;
+            #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+            let name = if send { 0x1001 } else { 0x1002 };
+            #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+            let name = if send { 7 } else { 8 };
+            let size = 4 * 1024;
+            unsafe {
+                setsockopt(stream.as_raw_fd(), level, name, &size, 4);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (stream, send);
+        }
     }
 }

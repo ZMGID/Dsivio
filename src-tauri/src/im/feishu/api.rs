@@ -154,46 +154,80 @@ impl Api {
         &self,
         chat_id: &str,
         reply_to: Option<&str>,
-        reply_in_thread: bool,
+        thread_id: Option<&str>,
         msg_type: &str,
         content: &str,
     ) -> Result<String, String> {
         let token = self.tenant_token().await?;
-        let uuid = uuid::Uuid::new_v4().simple().to_string();
-        let (url, body) = if let Some(message_id) = reply_to.filter(|id| safe_id(id)) {
-            (
-                format!("{}/open-apis/im/v1/messages/{message_id}/reply", self.base),
-                json!({"content": content, "msg_type": msg_type, "reply_in_thread": reply_in_thread, "uuid": uuid}),
-            )
-        } else {
-            (
-                format!(
-                    "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
-                    self.base
-                ),
-                json!({"receive_id": chat_id, "content": content, "msg_type": msg_type, "uuid": uuid}),
-            )
+        let thread = match thread_id.map(str::trim).filter(|id| !id.is_empty()) {
+            Some(id) if safe_id(id) => Some(id),
+            Some(_) => return Err("飞书话题 ID 无效".into()),
+            None => None,
         };
-        let value = self.post_json(&token, &url, body).await?;
-        let code = value.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
-        if reply_to.is_some() && (code == 230011 || code == 231003) {
-            return Box::pin(self.send_message(chat_id, None, false, msg_type, content)).await;
+        let reply = reply_to.map(str::trim).filter(|id| safe_id(id));
+        let mut skipped_reply = false;
+        loop {
+            let uuid = uuid::Uuid::new_v4().simple().to_string();
+            let (url, body, replied) = if let Some(message_id) = reply.filter(|_| !skipped_reply) {
+                (
+                    format!("{}/open-apis/im/v1/messages/{message_id}/reply", self.base),
+                    json!({
+                        "content": content,
+                        "msg_type": msg_type,
+                        "reply_in_thread": thread.is_some(),
+                        "uuid": uuid,
+                    }),
+                    true,
+                )
+            } else if let Some(thread_id) = thread {
+                (
+                    format!(
+                        "{}/open-apis/im/v1/messages?receive_id_type=thread_id",
+                        self.base
+                    ),
+                    json!({
+                        "receive_id": thread_id,
+                        "content": content,
+                        "msg_type": msg_type,
+                        "uuid": uuid,
+                    }),
+                    false,
+                )
+            } else {
+                (
+                    format!(
+                        "{}/open-apis/im/v1/messages?receive_id_type=chat_id",
+                        self.base
+                    ),
+                    json!({
+                        "receive_id": chat_id,
+                        "content": content,
+                        "msg_type": msg_type,
+                        "uuid": uuid,
+                    }),
+                    false,
+                )
+            };
+            let value = self.post_json(&token, &url, body).await?;
+            let code = value.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+            if replied && matches!(code, 230011 | 231003) && !skipped_reply {
+                skipped_reply = true;
+                continue;
+            }
+            if code != 0 {
+                return Err(api_error(
+                    &self.secret,
+                    &token,
+                    code,
+                    value.get("msg").and_then(|v| v.as_str()).unwrap_or(""),
+                ));
+            }
+            return value
+                .pointer("/data/message_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .ok_or_else(|| "飞书消息响应缺少 message_id".into());
         }
-        if code != 0 {
-            return Err(api_error(
-                &self.secret,
-                &token,
-                code,
-                value.get("msg").and_then(|v| v.as_str()).unwrap_or(""),
-            ));
-        }
-        value
-            .pointer("/data/message_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned)
-            .ok_or_else(|| {
-                "\u{98de}\u{4e66}\u{6d88}\u{606f}\u{54cd}\u{5e94}\u{7f3a}\u{5c11} message_id".into()
-            })
     }
 
     pub async fn update_message(
@@ -519,6 +553,7 @@ async fn read_limited(mut response: reqwest::Response) -> Result<Vec<u8>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn api_errors_drop_secrets() {
@@ -539,5 +574,198 @@ mod tests {
         assert_eq!(route_file("mp4"), ("mp4", "media"));
         assert_eq!(route_file("pdf"), ("pdf", "file"));
         assert_eq!(route_file("zip"), ("stream", "file"));
+    }
+
+    #[tokio::test]
+    async fn withdrawn_thread_reply_is_not_sent_to_the_group() {
+        let (base, mock) = super::mock_http::spawn_mock(super::mock_http::MockOpts {
+            message_delay: Duration::ZERO,
+            fail_reply_once: Some(230011),
+        })
+        .await;
+        let api = Api::new(&base, "cli_app", "secret").unwrap();
+        let id = api
+            .send_message(
+                "oc_group",
+                Some("om_old"),
+                Some("omt_topic"),
+                "text",
+                "{\"text\":\"hello\"}",
+            )
+            .await
+            .unwrap();
+        assert!(id.starts_with("om_srv_"));
+        let hits = mock.hits.lock().clone();
+        let messages: Vec<_> = hits
+            .iter()
+            .filter(|hit| hit.path.contains("/im/v1/messages"))
+            .collect();
+        assert!(messages[0].path.contains("/messages/om_old/reply"), "{}", messages[0].path);
+        assert!(messages[0].body.contains("\"reply_in_thread\":true"));
+        assert!(messages[1].path.contains("receive_id_type=thread_id"), "{}", messages[1].path);
+        assert!(messages[1].body.contains("\"receive_id\":\"omt_topic\""));
+        assert!(messages.iter().all(|hit| !hit.body.contains("oc_group")));
+    }
+
+    #[tokio::test]
+    async fn thread_without_reply_target_uses_thread_receive_id() {
+        let (base, mock) = super::mock_http::spawn_mock(super::mock_http::MockOpts {
+            message_delay: Duration::ZERO,
+            fail_reply_once: None,
+        })
+        .await;
+        let api = Api::new(&base, "cli_app", "secret").unwrap();
+        api.send_message(
+            "oc_group",
+            None,
+            Some("omt_topic"),
+            "text",
+            "{\"text\":\"stay\"}",
+        )
+        .await
+        .unwrap();
+        let hits = mock.hits.lock().clone();
+        let message = hits
+            .iter()
+            .find(|hit| hit.path.contains("/im/v1/messages"))
+            .unwrap();
+        assert!(message.path.contains("receive_id_type=thread_id"));
+        assert!(message.body.contains("\"receive_id\":\"omt_topic\""));
+        assert!(!message.body.contains("oc_group"));
+    }
+}
+
+#[cfg(test)]
+pub(super) mod mock_http {
+    use parking_lot::Mutex;
+    use std::time::Duration;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[derive(Clone, Debug)]
+    pub struct MockHit {
+        pub method: String,
+        pub path: String,
+        pub body: String,
+    }
+
+    #[derive(Clone)]
+    pub struct MockApi {
+        pub hits: Arc<Mutex<Vec<MockHit>>>,
+    }
+
+    pub struct MockOpts {
+        pub message_delay: Duration,
+        pub fail_reply_once: Option<i64>,
+    }
+
+    struct Shared {
+        hits: Arc<Mutex<Vec<MockHit>>>,
+        message_delay: Duration,
+        fail_reply: Mutex<Option<i64>>,
+        seq: AtomicU64,
+    }
+
+    pub async fn spawn_mock(opts: MockOpts) -> (String, MockApi) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(Mutex::new(Vec::new()));
+        let shared = Arc::new(Shared {
+            hits: hits.clone(),
+            message_delay: opts.message_delay,
+            fail_reply: Mutex::new(opts.fail_reply_once),
+            seq: AtomicU64::new(1),
+        });
+        tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let shared = shared.clone();
+                tokio::spawn(serve(sock, shared));
+            }
+        });
+        (format!("http://{addr}"), MockApi { hits })
+    }
+
+    async fn serve(mut sock: tokio::net::TcpStream, shared: Arc<Shared>) {
+        let mut buf = Vec::new();
+        loop {
+            let header_end = loop {
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break pos;
+                }
+                let mut tmp = [0u8; 4096];
+                let n = match sock.read(&mut tmp).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => n,
+                };
+                buf.extend_from_slice(&tmp[..n]);
+                if buf.len() > 2 * 1024 * 1024 {
+                    return;
+                }
+            };
+            let header = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+            let expect = header.to_ascii_lowercase().contains("expect: 100-continue");
+            buf.drain(..header_end + 4);
+            if expect && sock.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").await.is_err() {
+                return;
+            }
+            let length = header
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.trim()
+                        .eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())?
+                })
+                .unwrap_or(0);
+            while buf.len() < length {
+                let mut tmp = [0u8; 8192];
+                let n = match sock.read(&mut tmp).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) => n,
+                };
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let body = String::from_utf8_lossy(&buf.drain(..length).collect::<Vec<_>>()).into_owned();
+            let mut parts = header.lines().next().unwrap_or("").split_whitespace();
+            let method = parts.next().unwrap_or("").to_owned();
+            let path = parts.next().unwrap_or("").to_owned();
+            shared.hits.lock().push(MockHit {
+                method: method.clone(),
+                path: path.clone(),
+                body: body.clone(),
+            });
+            let is_message = path.contains("/im/v1/messages");
+            if is_message && !shared.message_delay.is_zero() {
+                tokio::time::sleep(shared.message_delay).await;
+            }
+            let json = if path.contains("tenant_access_token") {
+                r#"{"code":0,"tenant_access_token":"t-test","expire":7200}"#.to_owned()
+            } else if path.contains("/im/v1/files") || path.contains("/im/v1/images") {
+                r#"{"code":0,"data":{"file_key":"fk_mock","image_key":"img_mock"}}"#.to_owned()
+            } else if path.contains("/reply") {
+                if let Some(code) = shared.fail_reply.lock().take() {
+                    format!(r#"{{"code":{code},"msg":"withdrawn"}}"#)
+                } else {
+                    let n = shared.seq.fetch_add(1, Ordering::Relaxed);
+                    format!(r#"{{"code":0,"data":{{"message_id":"om_srv_{n}"}}}}"#)
+                }
+            } else if is_message || method == "PUT" {
+                let n = shared.seq.fetch_add(1, Ordering::Relaxed);
+                format!(r#"{{"code":0,"data":{{"message_id":"om_srv_{n}"}}}}"#)
+            } else {
+                r#"{"code":0}"#.to_owned()
+            };
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{json}",
+                json.len()
+            );
+            if sock.write_all(resp.as_bytes()).await.is_err() {
+                return;
+            }
+        }
     }
 }

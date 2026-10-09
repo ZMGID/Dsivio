@@ -26,7 +26,7 @@ enum Wake {
 }
 
 enum Class {
-    Interval(u64),
+    Pong(Option<u64>),
     Ack(Frame),
     Ignore,
 }
@@ -110,14 +110,21 @@ where
 {
     let mut socket = socket;
     let mut assembler = Assembler::default();
-    let mut ping_every = Duration::from_secs(ping_interval.clamp(10, 600));
+    let mut ping_every = Duration::from_secs(ping_interval.clamp(1, 600));
     let mut next_ping = tokio::time::Instant::now() + ping_every;
+    let mut pong_by: Option<tokio::time::Instant> = None;
     loop {
         let wake = tokio::select! {
             biased;
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() { Wake::Stop } else { continue; }
             }
+            _ = async {
+                match pong_by {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending::<()>().await,
+                }
+            }, if pong_by.is_some() => return Err("飞书心跳未响应".into()),
             _ = tokio::time::sleep_until(next_ping) => Wake::Ping,
             ack = acks.recv() => match ack {
                 Some(ack) => Wake::Ack(ack),
@@ -139,7 +146,10 @@ where
                     .send(Message::Binary(frame::ping(service).into()))
                     .await
                     .map_err(|_| "飞书心跳失败".to_string())?;
-                next_ping = tokio::time::Instant::now() + ping_every;
+                let now = tokio::time::Instant::now();
+                let limit = ping_every.min(Duration::from_secs(20));
+                pong_by = Some(now + limit);
+                next_ping = now + ping_every;
             }
             Wake::Ack(bytes) => {
                 socket
@@ -156,9 +166,12 @@ where
             Wake::Message(Message::Close(_)) => return Err("飞书长连接已断开".into()),
             Wake::Message(Message::Binary(bytes)) => {
                 match classify(&bytes, &mut assembler, &events)? {
-                    Class::Interval(seconds) => {
-                        ping_every = Duration::from_secs(seconds);
-                        next_ping = tokio::time::Instant::now() + ping_every;
+                    Class::Pong(seconds) => {
+                        pong_by = None;
+                        if let Some(seconds) = seconds {
+                            ping_every = Duration::from_secs(seconds);
+                            next_ping = tokio::time::Instant::now() + ping_every;
+                        }
                     }
                     Class::Ack(frame) => {
                         socket
@@ -184,9 +197,10 @@ fn classify(
         Err(()) => return Ok(Class::Ignore),
     };
     if frame.method == 0 {
-        return Ok(control_interval(&frame)
-            .map(Class::Interval)
-            .unwrap_or(Class::Ignore));
+        if frame.header("type") != Some("pong") {
+            return Ok(Class::Ignore);
+        }
+        return Ok(Class::Pong(control_interval(&frame)));
     }
     if frame.header("type") != Some("event") {
         return Ok(Class::Ack(frame));
@@ -331,5 +345,130 @@ mod tests {
         assert!(handshake_code(514, Some(1000040350)).starts_with("fatal:"));
         assert!(handshake_code(403, None).starts_with("fatal:"));
         assert!(!handshake_code(500, None).starts_with("fatal:"));
+    }
+
+    fn pong_frame(interval: u64) -> Vec<u8> {
+        frame::Frame {
+            seq_id: 0,
+            log_id: 0,
+            service: 1,
+            method: 0,
+            headers: vec![frame::Header {
+                key: "type".into(),
+                value: "pong".into(),
+            }],
+            payload: format!(r#"{{"PingInterval":{interval}}}"#).into_bytes(),
+        }
+        .encode()
+    }
+
+    #[tokio::test]
+    async fn silent_peer_makes_heartbeat_retryable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
+        let (_ack_tx, ack_rx) = mpsc::unbounded_channel();
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut seen = Some(seen_tx);
+            while let Some(item) = socket.next().await {
+                if matches!(item, Ok(Message::Binary(_))) {
+                    if let Some(tx) = seen.take() {
+                        let _ = tx.send(());
+                    }
+                }
+            }
+        });
+        let (socket, _) = connect_async(format!("ws://{addr}")).await.unwrap();
+        let drive = tokio::spawn(drive(socket, stop_rx, ev_tx, ack_rx, 1, 1));
+        tokio::time::timeout(Duration::from_secs(3), seen_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(4), drive)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(error.contains("心跳"), "{error}");
+        assert!(!error.starts_with("fatal:"));
+    }
+
+    #[tokio::test]
+    async fn shutdown_during_pong_wait_returns_immediately() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
+        let (_ack_tx, ack_rx) = mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut seen = Some(seen_tx);
+            while let Some(item) = socket.next().await {
+                if matches!(item, Ok(Message::Binary(_))) {
+                    if let Some(tx) = seen.take() {
+                        let _ = tx.send(());
+                    }
+                }
+            }
+        });
+        let (socket, _) = connect_async(format!("ws://{addr}")).await.unwrap();
+        let drive = tokio::spawn(drive(socket, stop_rx, ev_tx, ack_rx, 1, 1));
+        tokio::time::timeout(Duration::from_secs(3), seen_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let started = std::time::Instant::now();
+        stop_tx.send(true).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), drive)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        assert!(started.elapsed() < Duration::from_millis(500), "{:?}", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn pong_keeps_the_connection_until_shutdown() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (ev_tx, _ev_rx) = mpsc::unbounded_channel();
+        let (_ack_tx, ack_rx) = mpsc::unbounded_channel();
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let (ponged_tx, ponged_rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let mut ponged = Some(ponged_tx);
+            while let Some(item) = socket.next().await {
+                if matches!(item, Ok(Message::Binary(_))) {
+                    socket
+                        .send(Message::Binary(pong_frame(30).into()))
+                        .await
+                        .unwrap();
+                    if let Some(tx) = ponged.take() {
+                        let _ = tx.send(());
+                    }
+                }
+            }
+        });
+        let (socket, _) = connect_async(format!("ws://{addr}")).await.unwrap();
+        let drive = tokio::spawn(drive(socket, stop_rx, ev_tx, ack_rx, 1, 1));
+        tokio::time::timeout(Duration::from_secs(3), ponged_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        stop_tx.send(true).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), drive)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok(), "{result:?}");
     }
 }

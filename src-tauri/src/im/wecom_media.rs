@@ -92,7 +92,7 @@ fn push_ref(out: &mut Vec<MediaRef>, kind: &str, media: Option<&Value>) {
     out.push(MediaRef {
         kind: kind.to_owned(),
         url: text_at(media, "url"),
-        aeskey: percent_decode(&text_at(media, "aeskey")),
+        aeskey: text_at(media, "aeskey"),
         filename,
         inline_b64: text_at(media, "base64"),
     });
@@ -324,7 +324,8 @@ fn ext_for(data: &[u8], kind: &str) -> &'static str {
 }
 
 fn decode_aes_key(aes_key: &str) -> Result<Vec<u8>, String> {
-    let decoded = percent_decode(aes_key.trim());
+    // One percent-decode. Base64 keeps '+'; form-urlencoded '+' → space would corrupt the key.
+    let decoded = percent_decode(aes_key.trim())?;
     let pad = (4 - decoded.len() % 4) % 4;
     let padded = format!("{decoded}{}", "=".repeat(pad));
     let key = base64::engine::general_purpose::STANDARD
@@ -343,7 +344,7 @@ fn decode_b64(data: &str) -> Result<Vec<u8>, String> {
         .map_err(|_| "媒体内容无效".to_string())
 }
 
-fn percent_decode(input: &str) -> String {
+fn percent_decode(input: &str) -> Result<String, String> {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -357,14 +358,10 @@ fn percent_decode(input: &str) -> String {
                 continue;
             }
         }
-        out.push(if bytes[index] == b'+' {
-            b' '
-        } else {
-            bytes[index]
-        });
+        out.push(bytes[index]);
         index += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    String::from_utf8(out).map_err(|_| "媒体密钥无效".to_string())
 }
 
 fn from_hex(byte: u8) -> Option<u8> {
@@ -423,5 +420,57 @@ mod tests {
             .encrypt_padded_vec_mut::<NoPadding>(&padded);
         let aes_key = base64::engine::general_purpose::STANDARD.encode(key);
         assert_eq!(decrypt_media(&encrypted, &aes_key).unwrap(), plain);
+    }
+
+    #[test]
+    fn fb_key_raw_and_percent_encoded_restore_cipher() {
+        let key = [0xfb_u8; 32];
+        let raw = base64::engine::general_purpose::STANDARD.encode(key);
+        assert!(raw.contains('+'), "fixture must exercise base64 '+'");
+        let encoded = percent_encode_once(&raw);
+        assert!(encoded.contains("%2B"));
+        assert_ne!(encoded, raw);
+        let plain = "真实密文-fb".as_bytes();
+        let amount = match plain.len() % 32 {
+            0 => 32,
+            rest => 32 - rest,
+        };
+        let mut padded = plain.to_vec();
+        padded.extend(std::iter::repeat(amount as u8).take(amount));
+        let cipher = cbc::Encryptor::<Aes256>::new_from_slices(&key, &key[..16])
+            .unwrap()
+            .encrypt_padded_vec_mut::<NoPadding>(&padded);
+
+        let raw_body = serde_json::json!({
+            "msgtype": "image",
+            "image": {"url": "https://cdn.example/a", "aeskey": raw}
+        });
+        let encoded_body = serde_json::json!({
+            "msgtype": "image",
+            "image": {"url": "https://cdn.example/a", "aeskey": encoded}
+        });
+        let raw_ref = &refs_from_body(&raw_body)[0];
+        let encoded_ref = &refs_from_body(&encoded_body)[0];
+        assert_eq!(raw_ref.aeskey, raw);
+        assert_eq!(encoded_ref.aeskey, encoded);
+        assert_eq!(decode_aes_key(&raw_ref.aeskey).unwrap(), key);
+        assert_eq!(decode_aes_key(&encoded_ref.aeskey).unwrap(), key);
+        assert_eq!(decrypt_media(&cipher, &raw_ref.aeskey).unwrap(), plain);
+        assert_eq!(decrypt_media(&cipher, &encoded_ref.aeskey).unwrap(), plain);
+        let twice = percent_encode_once(&encoded);
+        assert!(decode_aes_key(&twice).is_err() || decode_aes_key(&twice).unwrap() != key);
+    }
+
+    fn percent_encode_once(input: &str) -> String {
+        let mut out = String::new();
+        for byte in input.bytes() {
+            match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(byte as char);
+                }
+                _ => out.push_str(&format!("%{byte:02X}")),
+            }
+        }
+        out
     }
 }

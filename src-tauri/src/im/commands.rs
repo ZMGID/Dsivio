@@ -11,27 +11,51 @@ pub async fn im_get_status(app: AppHandle) -> Result<Vec<ImStatus>, String> {
 pub async fn im_save_credentials(
     app: AppHandle,
     platform: ImPlatform,
+    expected_identity: String,
     credentials: CredentialInput,
 ) -> Result<(), String> {
-    let identity = app
-        .state::<crate::state::AppState>()
-        .settings_read()
-        .im
-        .identity(platform)
-        .to_owned();
-    tauri::async_runtime::spawn_blocking(move || {
-        super::credentials::save(platform, &identity, credentials)
+    let settings = app.clone();
+    credentials::off_runtime(move || {
+        credentials::CredentialStore::system().save_if_current(
+            platform,
+            &expected_identity,
+            credentials,
+            || {
+                settings
+                    .state::<crate::state::AppState>()
+                    .settings_read()
+                    .im
+                    .identity(platform)
+                    .to_owned()
+            },
+        )
     })
-    .await
-    .map_err(|_| "保存 IM 凭证失败")??;
+    .await?;
     app.state::<ImRuntime>().reconnect(platform);
     Ok(())
 }
 #[tauri::command]
-pub async fn im_clear_credentials(app: AppHandle, platform: ImPlatform) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || credentials::clear(platform))
-        .await
-        .map_err(|_| "删除 IM 凭证失败")??;
+pub async fn im_clear_credentials(
+    app: AppHandle,
+    platform: ImPlatform,
+    expected_identity: String,
+) -> Result<(), String> {
+    let settings = app.clone();
+    credentials::off_runtime(move || {
+        credentials::CredentialStore::system().clear_if_current(
+            platform,
+            &expected_identity,
+            || {
+                settings
+                    .state::<crate::state::AppState>()
+                    .settings_read()
+                    .im
+                    .identity(platform)
+                    .to_owned()
+            },
+        )
+    })
+    .await?;
     app.state::<ImRuntime>().reconnect(platform);
     Ok(())
 }
@@ -141,24 +165,7 @@ pub fn im_revoke_user(app: AppHandle, platform: ImPlatform, user_id: String) -> 
         });
         Ok(())
     })?;
-    let conversations: Vec<_> = runtime
-        .state
-        .lock()
-        .store
-        .sessions
-        .iter()
-        .filter_map(|(route, id)| {
-            let parts: Vec<String> = serde_json::from_str(route).ok()?;
-            (parts.first().is_some_and(|p| p == platform.key())
-                && parts.get(1) == Some(&identity)
-                && (parts.get(4) == Some(&user_id) || parts.get(4).is_some_and(|p| p == "*")))
-            .then(|| id.clone())
-        })
-        .collect();
-    for id in conversations {
-        app.state::<crate::state::AppState>()
-            .cancel_chat_generation(&id);
-    }
+    runtime.cancel_user_turns(&app, platform, &identity, &user_id);
     let _ = app.emit("im-pairing-changed", ());
     Ok(())
 }
@@ -175,11 +182,31 @@ pub async fn im_begin_setup(
 }
 #[tauri::command]
 pub async fn im_poll_setup(app: AppHandle, id: String) -> Result<ImSetupSession, String> {
-    let result = app.state::<ImRuntime>().setup.poll(&id).await?;
-    if result.status == ImSetupState::Completed {
-        app.state::<ImRuntime>().reconnect(result.platform);
-    }
-    Ok(result)
+    app.state::<ImRuntime>().setup.poll(&id).await
+}
+#[tauri::command]
+pub async fn im_commit_setup(
+    app: AppHandle,
+    id: String,
+    expected_identity: String,
+) -> Result<ImSetupSession, String> {
+    let settings = app.clone();
+    let outcome = app
+        .state::<ImRuntime>()
+        .setup
+        .commit(&id, &expected_identity, move |platform| {
+            settings
+                .state::<crate::state::AppState>()
+                .settings_read()
+                .im
+                .identity(platform)
+                .to_owned()
+        })
+        .await?;
+    Ok(super::onboarding::activate_commit(
+        &app.state::<ImRuntime>(),
+        outcome,
+    ))
 }
 #[tauri::command]
 pub fn im_cancel_setup(app: AppHandle, id: String) -> Result<(), String> {

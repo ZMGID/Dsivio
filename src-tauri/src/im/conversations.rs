@@ -1,6 +1,8 @@
 //! IM turns reuse the desktop chat pipeline. Identity mapping stays in the IM runtime.
 //! This module creates or reuses the sidebar conversation and bridges one inbound turn.
 
+use parking_lot::Mutex;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -76,6 +78,8 @@ pub(crate) fn im_message(
 ) -> OutboundMessage {
     OutboundMessage {
         chat_id: inbound.chat_id.clone(),
+        is_group: inbound.is_group,
+        thread_id: inbound.thread_id.clone(),
         reply_token: inbound.reply_token.clone(),
         reply_to: Some(inbound.message_id.clone()),
         text,
@@ -117,6 +121,84 @@ pub(crate) fn assistant_output_files(
     paths
 }
 
+fn prior_assistant_ids(messages: &[ChatMessage]) -> HashSet<String> {
+    messages
+        .iter()
+        .filter(|message| message.role == "assistant")
+        .map(|message| message.id.clone())
+        .collect()
+}
+
+fn this_turn_assistants<'a>(
+    messages: &'a [ChatMessage],
+    prior: &HashSet<String>,
+) -> Vec<&'a ChatMessage> {
+    messages
+        .iter()
+        .filter(|message| message.role == "assistant" && !prior.contains(&message.id))
+        .collect()
+}
+
+/// Text and file sources for this inbound turn. Assistants that already existed
+/// at admission are not part of the result, so a later desktop reply cannot be
+/// forwarded and a turn that never generated does not replay history.
+pub(crate) fn compose_turn_outbound<'a>(
+    messages: &'a [ChatMessage],
+    prior: &HashSet<String>,
+    streamed: &str,
+) -> (String, Vec<&'a ChatMessage>) {
+    let fresh = this_turn_assistants(messages, prior);
+    if fresh.is_empty() {
+        return (streamed.to_string(), Vec::new());
+    }
+    let text = fresh
+        .iter()
+        .rev()
+        .find_map(|message| (!message.content.is_empty()).then(|| message.content.clone()));
+    (text.unwrap_or_else(|| streamed.to_string()), fresh)
+}
+
+struct TurnSnapshot {
+    saw_assistant: bool,
+    text: String,
+    attachments: Vec<String>,
+}
+
+fn snapshot_this_turn(
+    app: &AppHandle,
+    conversation_id: &str,
+    prior: &HashSet<String>,
+) -> TurnSnapshot {
+    let Ok(saved) = load_conversation(app, conversation_id) else {
+        return TurnSnapshot {
+            saw_assistant: false,
+            text: String::new(),
+            attachments: Vec::new(),
+        };
+    };
+    let (text, fresh) = compose_turn_outbound(&saved.messages, prior, "");
+    if fresh.is_empty() {
+        return TurnSnapshot {
+            saw_assistant: false,
+            text: String::new(),
+            attachments: Vec::new(),
+        };
+    }
+    let mut attachments = Vec::new();
+    for message in fresh {
+        for path in assistant_output_files(app, conversation_id, message) {
+            if !attachments.iter().any(|existing| existing == &path) {
+                attachments.push(path);
+            }
+        }
+    }
+    TurnSnapshot {
+        saw_assistant: true,
+        text,
+        attachments,
+    }
+}
+
 fn pipeline_failure(outcome: &Result<serde_json::Value, String>) -> Option<String> {
     match outcome {
         Err(error) => Some(error.clone()),
@@ -139,14 +221,41 @@ struct ImTurnGuard {
 
 impl Drop for ImTurnGuard {
     fn drop(&mut self) {
-        let state = self.app.state::<AppState>();
         if self.armed.load(Ordering::SeqCst) {
+            let state = self.app.state::<AppState>();
+            state
+                .chat_protocol()
+                .unbind_im_text_stream(&self.conversation_id);
             state.chat_runtime().end_im_turn(&self.conversation_id);
         }
+    }
+}
+
+struct ClearImApproval {
+    app: AppHandle,
+    conversation_id: String,
+    armed: Arc<AtomicBool>,
+}
+
+impl Drop for ClearImApproval {
+    fn drop(&mut self) {
+        let state = self.app.state::<AppState>();
         state
             .chat_protocol()
             .unbind_im_text_stream(&self.conversation_id);
+        state.chat_runtime().end_im_turn(&self.conversation_id);
+        self.armed.store(false, Ordering::SeqCst);
     }
+}
+
+/// Stop one admitted IM turn. A desktop run that never entered `begin_im_turn`
+/// is left alone: the latch fails, and this does not cancel every generation.
+fn stop_admitted_im_turn(state: &AppState, conversation_id: &str) -> bool {
+    let Some(children) = state.chat_runtime().cancel_im_lineage(conversation_id) else {
+        return false;
+    };
+    state.sub_agents.stop_lineage(conversation_id, &children);
+    true
 }
 
 struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
@@ -208,30 +317,57 @@ pub async fn ensure_conversation(
     Ok(conversation.id)
 }
 
+pub(crate) fn resolved_im_model(
+    provider_id: &str,
+    model: &str,
+    defaults: (String, String),
+) -> (String, String) {
+    match (non_empty(provider_id), non_empty(model)) {
+        (Some(provider_id), Some(model)) => (provider_id, model),
+        _ => defaults,
+    }
+}
+
+pub(crate) fn apply_im_conversation_alignment(
+    conversation: &mut crate::chat::Conversation,
+    provider_id: &str,
+    model: &str,
+    assistant: Option<crate::chat::ChatAssistantSnapshot>,
+) {
+    conversation.provider_id = provider_id.to_string();
+    conversation.model = model.to_string();
+    match assistant {
+        Some(snapshot) => {
+            conversation.active_skill_id = None;
+            conversation.assistant_id = Some(snapshot.id.clone());
+            conversation.assistant_snapshot = Some(snapshot);
+        }
+        None => {
+            conversation.active_skill_id = None;
+            conversation.assistant_id = None;
+            conversation.assistant_snapshot = None;
+        }
+    }
+}
+
 async fn align_conversation(
     app: &AppHandle,
     config: &ImAgentConfig,
     conversation_id: &str,
 ) -> Result<(), String> {
-    let provider_id = non_empty(&config.provider_id);
-    let model = non_empty(&config.model);
+    let defaults = {
+        let state = app.state::<AppState>();
+        let settings = state.settings_read();
+        settings.effective_chat_model()
+    };
+    let (provider_id, model) = resolved_im_model(&config.provider_id, &config.model, defaults);
     let assistant = match non_empty(&config.assistant_id) {
         Some(id) => Some(assistant_snapshot(app, &id)?),
         None => None,
     };
     crate::chat::repository::repository(app)
         .mutate(app, conversation_id, move |conversation| {
-            if let Some(provider_id) = provider_id {
-                conversation.provider_id = provider_id;
-            }
-            if let Some(model) = model {
-                conversation.model = model;
-            }
-            if let Some(snapshot) = assistant {
-                conversation.active_skill_id = None;
-                conversation.assistant_id = Some(snapshot.id.clone());
-                conversation.assistant_snapshot = Some(snapshot);
-            }
+            apply_im_conversation_alignment(conversation, &provider_id, &model, assistant);
             Ok(())
         })
         .await
@@ -259,35 +395,49 @@ pub async fn send(
         conversation_id: conversation_id.to_string(),
         armed: Arc::new(AtomicBool::new(false)),
     };
+    let prior_assistants = Arc::new(Mutex::new(None));
+    let turn_snapshot = Arc::new(Mutex::new(None));
     let app_for_turn = app.clone();
     let turn_id = conversation_id.to_string();
     let armed = Arc::clone(&guard.armed);
+    let prior_for_admit = Arc::clone(&prior_assistants);
+    let admit_shutdown = shutdown.clone();
+    let watcher: Arc<Mutex<Option<AbortOnDrop<()>>>> = Arc::new(Mutex::new(None));
+    let watcher_for_admit = Arc::clone(&watcher);
+    let app_for_watch = app.clone();
+    let watch_id = conversation_id.to_string();
+    let mut watch_shutdown = shutdown.clone();
     let on_admitted = move || {
+        // Arm before any await-free work so a panic still clears the turn.
+        armed.store(true, Ordering::SeqCst);
         let state = app_for_turn.state::<AppState>();
         state.chat_runtime().begin_im_turn(&turn_id);
         state
             .chat_protocol()
             .bind_im_text_stream(&turn_id, updates.clone());
-        armed.store(true, Ordering::SeqCst);
-    };
-
-    let app_for_cancel = app.clone();
-    let cancel_id = conversation_id.to_string();
-    let mut cancel_shutdown = shutdown.clone();
-    let canceller = AbortOnDrop(tokio::spawn(async move {
-        loop {
-            if *cancel_shutdown.borrow() {
-                let state = app_for_cancel.state::<AppState>();
-                if state.chat_runtime().im_turn_active(&cancel_id) {
-                    state.cancel_chat_generation(&cancel_id);
-                }
-                break;
-            }
-            if cancel_shutdown.changed().await.is_err() {
-                break;
-            }
+        let known = load_conversation(&app_for_turn, &turn_id)
+            .ok()
+            .map(|conversation| prior_assistant_ids(&conversation.messages));
+        *prior_for_admit.lock() = known;
+        // Stop can already be latched before this turn owns a generation.
+        // This only runs after the reservation is held, so a queued turn never
+        // cancels the desktop generation that still owns the conversation.
+        if *admit_shutdown.borrow() {
+            stop_admitted_im_turn(&state, &turn_id);
         }
-    }));
+        let handle = tokio::spawn(async move {
+            loop {
+                if *watch_shutdown.borrow() {
+                    let _ = stop_admitted_im_turn(&app_for_watch.state::<AppState>(), &watch_id);
+                    break;
+                }
+                if watch_shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+        });
+        *watcher_for_admit.lock() = Some(AbortOnDrop(handle));
+    };
 
     let streaming = config.streaming;
     let stream_id = im_stream_id(streaming, &inbound.message_id);
@@ -317,6 +467,39 @@ pub async fn send(
         text
     });
 
+    let snapshot_for_release = Arc::clone(&turn_snapshot);
+    let prior_for_release = Arc::clone(&prior_assistants);
+    let app_for_release = app.clone();
+    let release_id = conversation_id.to_string();
+    let armed_for_release = Arc::clone(&guard.armed);
+    let release_shutdown = shutdown.clone();
+    let before_release = move || {
+        // Watcher, approval, and the reservation end together. Abort first so a
+        // late stop cannot run after the desktop turn has taken the conversation.
+        drop(watcher.lock().take());
+        if *release_shutdown.borrow() {
+            stop_admitted_im_turn(&app_for_release.state::<AppState>(), &release_id);
+        }
+        // Drop clears approval before the send reservation is released, including
+        // when the snapshot panics. The reservation is still held while we read.
+        let clear = ClearImApproval {
+            app: app_for_release.clone(),
+            conversation_id: release_id.clone(),
+            armed: Arc::clone(&armed_for_release),
+        };
+        let prior = prior_for_release.lock().take();
+        let snapshot = match &prior {
+            Some(ids) => snapshot_this_turn(&app_for_release, &release_id, ids),
+            None => TurnSnapshot {
+                saw_assistant: false,
+                text: String::new(),
+                attachments: Vec::new(),
+            },
+        };
+        *snapshot_for_release.lock() = Some(snapshot);
+        drop(clear);
+    };
+
     let mut wait_shutdown = shutdown.clone();
     let outcome = crate::chat::commands::send::send_attached_when_idle(
         app,
@@ -331,14 +514,9 @@ pub async fn send(
             "cancelled".to_string()
         },
         on_admitted,
+        before_release,
     )
     .await;
-    drop(canceller);
-    // Drop the admitted sender before waiting, otherwise the forwarder never sees EOF.
-    app.state::<AppState>()
-        .chat_protocol()
-        .unbind_im_text_stream(conversation_id);
-
     if *shutdown.borrow() {
         forwarder.abort();
         return Ok(());
@@ -355,28 +533,21 @@ pub async fn send(
         return Err(error);
     }
 
-    let saved = match load_conversation(app, conversation_id) {
-        Ok(conversation) => conversation,
-        Err(error) => {
-            if *shutdown.borrow() {
-                return Ok(());
-            }
-            return Err(error);
-        }
+    let snapshot = turn_snapshot.lock().take().unwrap_or(TurnSnapshot {
+        saw_assistant: false,
+        text: String::new(),
+        attachments: Vec::new(),
+    });
+    let attachments = if snapshot.saw_assistant {
+        snapshot.attachments
+    } else {
+        Vec::new()
     };
-    let assistant = saved
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role == "assistant");
-    let text = assistant
-        .map(|message| message.content.clone())
-        .filter(|content| !content.is_empty())
-        .unwrap_or(streamed);
-    let attachments = assistant
-        .map(|message| assistant_output_files(app, conversation_id, message))
-        .unwrap_or_default();
-    drop(guard);
+    let text = if snapshot.saw_assistant && !snapshot.text.is_empty() {
+        snapshot.text
+    } else {
+        streamed
+    };
     let final_message = im_message(
         inbound,
         text,
@@ -466,5 +637,235 @@ mod tests {
             crate::chat::storage::read_im_working_directory_at(&path, "conv_b").as_deref(),
             Some("/work/b")
         );
+    }
+
+    fn message(id: &str, role: &str, content: &str) -> ChatMessage {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "role": role,
+            "content": content,
+            "timestamp": 1
+        }))
+        .unwrap()
+    }
+
+    fn inbound(is_group: bool, thread_id: Option<&str>) -> InboundMessage {
+        InboundMessage {
+            platform: crate::im::types::ImPlatform::Feishu,
+            message_id: "in_1".into(),
+            chat_id: "chat_1".into(),
+            user_id: "user_1".into(),
+            user_name: "Ada".into(),
+            is_group,
+            thread_id: thread_id.map(str::to_string),
+            reply_token: Some("token".into()),
+            text: "hello".into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn new_turn_does_not_replay_an_old_assistant_or_its_files() {
+        let old = message("old", "assistant", "OLD SECRET");
+        let user = message("user", "user", "new question");
+        let prior = prior_assistant_ids(std::slice::from_ref(&old));
+
+        let without_reply = [old.clone(), user.clone()];
+        let (text, fresh) = compose_turn_outbound(&without_reply, &prior, "");
+        assert!(
+            fresh.is_empty(),
+            "a turn that never generated must not select the previous assistant"
+        );
+        assert_eq!(text, "");
+        assert_ne!(text, old.content);
+
+        let fresh_assistant = message("new", "assistant", "this turn");
+        let with_reply = [old.clone(), user, fresh_assistant];
+        let (text, fresh) = compose_turn_outbound(&with_reply, &prior, "streamed tail");
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].id, "new");
+        assert_eq!(text, "this turn");
+        assert!(!text.contains("OLD SECRET"));
+    }
+
+    #[test]
+    fn cleared_shared_model_and_assistant_follow_current_defaults() {
+        let mut conversation: crate::chat::Conversation =
+            serde_json::from_value(serde_json::json!({
+                "id": "conv_align",
+                "title": "im",
+                "provider_id": "shared-provider",
+                "model": "shared-model",
+                "messages": [],
+                "created_at": 1,
+                "updated_at": 1,
+                "active_skill_id": "skill-from-assistant",
+                "assistant_id": "asst_old",
+                "assistant_snapshot": {
+                    "id": "asst_old",
+                    "name": "Old",
+                    "provider_id": "assistant-provider",
+                    "model": "assistant-model",
+                    "system_prompt": "stay in character"
+                }
+            }))
+            .unwrap();
+        let defaults = (
+            "settings-provider".to_string(),
+            "settings-model".to_string(),
+        );
+
+        let (provider_id, model) = resolved_im_model("  ", "", defaults.clone());
+        apply_im_conversation_alignment(&mut conversation, &provider_id, &model, None);
+        assert_eq!(conversation.provider_id, "settings-provider");
+        assert_eq!(conversation.model, "settings-model");
+        assert_ne!(conversation.model, "shared-model");
+        assert_ne!(conversation.model, "assistant-model");
+        assert!(conversation.assistant_id.is_none());
+        assert!(conversation.assistant_snapshot.is_none());
+        assert!(conversation.active_skill_id.is_none());
+
+        let (provider_id, model) = resolved_im_model("only-provider", " ", defaults.clone());
+        apply_im_conversation_alignment(&mut conversation, &provider_id, &model, None);
+        assert_eq!(
+            (
+                conversation.provider_id.as_str(),
+                conversation.model.as_str()
+            ),
+            ("settings-provider", "settings-model"),
+            "half-cleared shared model must not keep the leftover provider"
+        );
+
+        let snapshot = crate::chat::ChatAssistantSnapshot {
+            id: "asst_new".into(),
+            name: "New".into(),
+            description: String::new(),
+            source: String::new(),
+            system_prompt: String::new(),
+            provider_id: "assistant-provider".into(),
+            model: "assistant-model".into(),
+            mcp_server_ids: Vec::new(),
+            skill_ids: vec!["skill-from-assistant".into()],
+        };
+        conversation.active_skill_id = Some("skill-from-assistant".into());
+        let (provider_id, model) = resolved_im_model("custom-provider", "custom-model", defaults);
+        apply_im_conversation_alignment(&mut conversation, &provider_id, &model, Some(snapshot));
+        assert_eq!(conversation.provider_id, "custom-provider");
+        assert_eq!(conversation.model, "custom-model");
+        assert_eq!(conversation.assistant_id.as_deref(), Some("asst_new"));
+        assert!(conversation.active_skill_id.is_none());
+    }
+
+    /// In-process stand-in for `conversations::send`: same reservation primitive as
+    /// `send_attached_when_idle` (`try_reserve_send` / `reserve_send_when_idle`).
+    /// A full `send` smoke still needs a Tauri `AppHandle` so the repository and
+    /// protocol can persist the turn; wire that entry when a test app exists.
+    #[tokio::test]
+    async fn busy_reservation_stops_before_generation_and_does_not_approve_desktop() {
+        let state = crate::state::test_app_state();
+        let id = "conv_im_smoke";
+        let queued_desktop = state.chat_runtime().begin_generation(id);
+        assert!(
+            !stop_admitted_im_turn(&state, id),
+            "stop while the IM turn is still queued must not cancel a desktop generation"
+        );
+        assert!(state
+            .chat_runtime()
+            .is_generation_active(id, queued_desktop));
+        state.chat_runtime().end_generation(id, queued_desktop);
+
+        assert!(
+            state.chat_runtime().try_reserve_send(id, "im-send"),
+            "send reservation is the interface desktop must wait on"
+        );
+        state.chat_runtime().begin_im_turn(id);
+        assert!(
+            !state.chat_runtime().try_reserve_send(id, "desktop-during"),
+            "desktop cannot enter while this IM send still holds the conversation"
+        );
+
+        let im_generation = state
+            .chat_runtime()
+            .begin_generation_unless_im_stopped(id)
+            .expect("admitted turn can start one generation");
+        let desktop_generation = state.chat_runtime().begin_generation(id);
+        assert_eq!(
+            state
+                .chat_runtime()
+                .note_im_child(id, im_generation, "im-child"),
+            crate::chat::runtime_state::ImChild::Inherited
+        );
+        assert_eq!(
+            state
+                .chat_runtime()
+                .note_im_child(id, desktop_generation, "desktop-child"),
+            crate::chat::runtime_state::ImChild::NotIm
+        );
+        let mut model_requests = 0;
+        let mut tool_runs = 0;
+        assert!(stop_admitted_im_turn(&state, id));
+        if state
+            .chat_runtime()
+            .begin_generation_unless_im_stopped(id)
+            .is_some()
+        {
+            model_requests += 1;
+            tool_runs += 1;
+        }
+        assert_eq!(model_requests, 0);
+        assert_eq!(tool_runs, 0);
+        assert!(!state.chat_runtime().is_generation_active(id, im_generation));
+        assert!(
+            state
+                .chat_runtime()
+                .is_generation_active(id, desktop_generation),
+            "stopping this IM lineage must leave the desktop generation running"
+        );
+        state.chat_runtime().end_generation(id, desktop_generation);
+
+        let old = message("old", "assistant", "OLD SECRET");
+        let prior = prior_assistant_ids(std::slice::from_ref(&old));
+        let (text, fresh) = compose_turn_outbound(std::slice::from_ref(&old), &prior, "");
+        assert!(fresh.is_empty());
+        assert_eq!(text, "");
+
+        state.chat_runtime().end_im_turn(id);
+        assert!(
+            !crate::chat::runtime_state::im_turn_allows_tools(
+                state.chat_runtime().im_turn_active(id)
+            ),
+            "approval clears before the IM reservation is released"
+        );
+        assert!(!state
+            .chat_runtime()
+            .try_reserve_send(id, "desktop-still-busy"));
+        state.chat_runtime().end_reply(id, "im-send");
+
+        assert!(state.chat_runtime().try_reserve_send(id, "desktop"));
+        let desktop = state.chat_runtime().begin_generation(id);
+        assert!(
+            !stop_admitted_im_turn(&state, id),
+            "stopping a finished IM turn must not latch the desktop generation"
+        );
+        assert!(state.chat_runtime().is_generation_active(id, desktop));
+        assert!(!crate::chat::runtime_state::im_session_consent(
+            state.chat_runtime().im_turn_active(id),
+            false
+        ));
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let desktop_text = "desktop reply that IM must not forward";
+        tx.send(desktop_text).await.unwrap();
+        let blocked = tokio::spawn(async move {
+            tx.send(desktop_text).await.unwrap();
+        });
+        tokio::task::yield_now().await;
+        assert_ne!(text, desktop_text);
+        assert!(!crate::chat::runtime_state::im_turn_allows_tools(
+            state.chat_runtime().im_turn_active(id)
+        ));
+        assert_eq!(rx.recv().await.unwrap(), desktop_text);
+        blocked.await.unwrap();
+        state.chat_runtime().end_reply(id, "desktop");
     }
 }

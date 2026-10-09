@@ -210,7 +210,12 @@ pub(super) async fn complete_assistant_reply_inner(
                 .into(),
         );
     }
-    let run_generation = state.chat_runtime().begin_generation(&conversation.id);
+    let Some(run_generation) = state
+        .chat_runtime()
+        .begin_generation_unless_im_stopped(&conversation.id)
+    else {
+        return Err("cancelled".into());
+    };
     let run_id = format!("chat-run-{}-{}", run_generation, Uuid::new_v4());
     let assistant_message_id = format!("msg_{}", Uuid::new_v4());
     if let Some(goal) = conversation
@@ -687,8 +692,9 @@ pub(super) async fn complete_assistant_reply_inner(
         // 多模型臂不直接落盘（最终由协调者统一 upsert + save），因此抑制 loop 的
         // mid-run 部分快照写盘，避免 N 条并发 run 同写 conversations/{id}.json 的竞态。
         suppress_partial_persist: arm.is_some(),
-        context_owner: arm.is_none() || (resolved_provider_id == conversation.provider_id
-            && resolved_model == conversation.model),
+        context_owner: arm.is_none()
+            || (resolved_provider_id == conversation.provider_id
+                && resolved_model == conversation.model),
         // 生命周期 Hooks：无启用条目时为 None，loop 完全不感知。先用 `any_enabled`
         // 短路，没配 Hook 时连下面这几个 id / model 字符串都不分配（验收 6）。
         hooks: crate::chat::hooks::HookDispatcher::any_enabled(&settings.chat_tools.hooks)
@@ -749,7 +755,9 @@ pub(super) async fn complete_assistant_reply_inner(
     let (initial_anchor_total_tokens, initial_anchor_trailing_estimate) =
         resolve_usage_anchor(conversation, Some(&provider));
     state.chat_runtime().seed_context_measurement(
-        &conversation.id, conversation.context_state.lifecycle_id, conversation.context_state.measurement_seq,
+        &conversation.id,
+        conversation.context_state.lifecycle_id,
+        conversation.context_state.measurement_seq,
         conversation.context_state.request_measurement.as_ref(),
     );
     let result = crate::chat::agent::run_agent_loop(

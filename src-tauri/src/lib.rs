@@ -633,6 +633,7 @@ pub fn run() {
             im::commands::im_revoke_user,
             im::commands::im_begin_setup,
             im::commands::im_poll_setup,
+            im::commands::im_commit_setup,
             im::commands::im_cancel_setup,
             windows::chat_window_apply_mica,
             windows::chat_window_set_opaque,

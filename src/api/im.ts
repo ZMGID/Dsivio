@@ -34,12 +34,16 @@ export function getImStatus(): Promise<ImStatus[]> {
   return invoke<ImStatus[]>('im_get_status').then((rows) => asArray(rows, 'IM 状态响应无效'))
 }
 
-export function saveImCredentials(platform: ImPlatform, credentials: CredentialInput): Promise<void> {
-  return invoke<void>('im_save_credentials', { platform, credentials })
+export function saveImCredentials(
+  platform: ImPlatform,
+  expectedIdentity: string,
+  credentials: CredentialInput,
+): Promise<void> {
+  return invoke<void>('im_save_credentials', { platform, expectedIdentity, credentials })
 }
 
-export function clearImCredentials(platform: ImPlatform): Promise<void> {
-  return invoke<void>('im_clear_credentials', { platform })
+export function clearImCredentials(platform: ImPlatform, expectedIdentity: string): Promise<void> {
+  return invoke<void>('im_clear_credentials', { platform, expectedIdentity })
 }
 
 export function reconnectIm(platform: ImPlatform): Promise<void> {
@@ -72,6 +76,10 @@ export function beginImSetup(platform: ImPlatform, domain?: FeishuDomain | null)
 
 export function pollImSetup(id: string): Promise<ImSetupSession> {
   return invoke<ImSetupSession>('im_poll_setup', { id })
+}
+
+export function commitImSetup(id: string, expectedIdentity: string): Promise<ImSetupSession> {
+  return invoke<ImSetupSession>('im_commit_setup', { id, expectedIdentity })
 }
 
 export function cancelImSetup(id: string): Promise<void> {

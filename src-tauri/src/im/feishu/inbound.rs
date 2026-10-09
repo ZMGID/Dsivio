@@ -211,7 +211,21 @@ fn parse_post(value: &Value, parsed: &mut Parsed) {
             }
         }
     }
+    if let Some(files) = node.get("files").and_then(|v| v.as_array()) {
+        for entry in files {
+            if entry.get("is_folder").is_some_and(flagged) {
+                continue;
+            }
+            push_file(parsed, entry, ResourceKind::File);
+        }
+    }
     parsed.text = lines.join("\n");
+}
+
+fn flagged(value: &Value) -> bool {
+    value.as_bool() == Some(true)
+        || value.as_i64() == Some(1)
+        || value.as_str() == Some("true")
 }
 
 fn post_locale(value: &Value) -> &Value {
@@ -577,5 +591,16 @@ mod tests {
         ev["event"]["sender"]["sender_id"]["open_id"] = json!("ou_user");
         ev["event"]["sender"]["sender_type"] = json!("bot");
         assert!(draft(&ev, &bot(), true).is_none());
+    }
+
+    #[test]
+    fn post_sibling_files_join_the_attachment_downloads() {
+        let post = r#"{"zh_cn":{"title":"T","content":[[{"tag":"text","text":"hi"},{"tag":"file","file_key":"f_dup","file_name":"same.txt"}]],"files":[{"file_key":"f_sib","file_name":"extra.txt"},{"file_key":"f_dup","file_name":"same.txt"},{"file_key":"f_dir","file_name":"dir","is_folder":true},{"file_key":"f_one","is_folder":1},{"file_key":"f_str","is_folder":"true"},{"file_name":"missing-key.txt"},{"file_key":"  ","file_name":"blank.txt"}]}}"#;
+        let rich = draft(&event("p2p", "post", post, json!([])), &bot(), true).unwrap();
+        let keys: Vec<_> = rich.downloads.iter().map(|item| item.key.as_str()).collect();
+        assert_eq!(keys, vec!["f_dup", "f_sib"]);
+        assert_eq!(rich.downloads[1].name, "extra.txt");
+        assert_eq!(rich.downloads[1].kind, ResourceKind::File);
+        assert!(rich.message.text.contains("hi"));
     }
 }

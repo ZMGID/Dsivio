@@ -155,42 +155,92 @@ pub(crate) async fn send_user_message_when_idle(
     }
 }
 
+struct FinishOnDrop<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Drop for FinishOnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(finish) = self.0.take() {
+            finish();
+        }
+    }
+}
+
+/// Holds the conversation send reservation around `body`. `before_release` runs
+/// on every exit after admission, including unwind, and always before the
+/// reservation is dropped. `cancellation` only interrupts the wait.
+async fn hold_send_reservation<C, A, F, B, Fut, T>(
+    state: &AppState,
+    conversation_id: &str,
+    cancellation: C,
+    on_admitted: A,
+    before_release: F,
+    body: B,
+) -> Result<T, String>
+where
+    C: Future<Output = String>,
+    A: FnOnce(),
+    F: FnOnce(),
+    B: FnOnce() -> Fut,
+    Fut: Future<Output = T>,
+{
+    let reservation = tokio::select! {
+        biased;
+        reason = cancellation => return Err(reason),
+        reserved = ChatSendReservation::acquire_when_idle(state, conversation_id) => reserved,
+    };
+    // Installed before admission so a panic while arming the watcher still
+    // clears that watcher and the approval before this reservation drops.
+    let finish = FinishOnDrop(Some(before_release));
+    on_admitted();
+    let output = body().await;
+    drop(finish);
+    drop(reservation);
+    Ok(output)
+}
+
 /// Backend send that waits for an idle conversation, then runs the normal send transaction.
 /// `cancellation` only interrupts the wait. After admission the transaction is not dropped
-/// mid-write; `on_admitted` marks scoped state that the caller clears when this future ends.
-pub(crate) async fn send_attached_when_idle<C, A>(
+/// mid-write. `before_release` snapshots and clears scoped state while the reservation
+/// is still held.
+pub(crate) async fn send_attached_when_idle<C, A, F>(
     app: &AppHandle,
     conversation_id: &str,
     content: String,
     attachments: Vec<String>,
     cancellation: C,
     on_admitted: A,
+    before_release: F,
 ) -> Result<serde_json::Value, String>
 where
     C: Future<Output = String>,
-    A: Fn() + Send + Sync,
+    A: FnOnce() + Send,
+    F: FnOnce() + Send,
 {
     let state = app.state::<AppState>();
-    let _send_reservation = tokio::select! {
-        biased;
-        reason = cancellation => return Err(reason),
-        reserved = ChatSendReservation::acquire_when_idle(state.inner(), conversation_id) => reserved,
-    };
-    on_admitted();
-    let outcome = send_reserved(
-        app.clone(),
-        app.state::<AppState>(),
-        conversation_id.to_string(),
-        content,
-        attachments,
-        None,
-        None,
-        None,
-        None,
-        None,
+    let app_for_send = app.clone();
+    let conversation_for_send = conversation_id.to_string();
+    hold_send_reservation(
+        state.inner(),
+        conversation_id,
+        cancellation,
+        on_admitted,
+        before_release,
+        || {
+            send_reserved(
+                app_for_send,
+                app.state::<AppState>(),
+                conversation_for_send,
+                content,
+                attachments,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        },
     )
-    .await;
-    outcome
+    .await?
 }
 
 /// The send transaction; the caller already holds the conversation's send reservation.
@@ -450,9 +500,18 @@ async fn send_reserved(
             // Usage is a cache. A concurrent refresh/rename must not abort an
             // already persisted user message or overwrite a newer summary.
             conversation = persist_context_state_best_effort(
-                &app, &conversation_id, conversation, context_state,
-            ).await?;
-            emit_chat_context_state(&app, &conversation.id, conversation.revision, &conversation.context_state);
+                &app,
+                &conversation_id,
+                conversation,
+                context_state,
+            )
+            .await?;
+            emit_chat_context_state(
+                &app,
+                &conversation.id,
+                conversation.revision,
+                &conversation.context_state,
+            );
         }
         Err(err) => {
             eprintln!("Context usage estimate failed before send: {err}");
@@ -537,5 +596,103 @@ async fn send_reserved(
                 "error": err,
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn busy_progress_does_not_approve_a_desktop_turn() {
+        let state = crate::state::test_app_state();
+        let id = "conv_im_busy";
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        tx.send("delta").await.unwrap();
+
+        hold_send_reservation(
+            &state,
+            id,
+            std::future::pending::<String>(),
+            || state.chat_runtime().begin_im_turn(id),
+            || {
+                assert!(
+                    !state
+                        .chat_runtime()
+                        .try_reserve_send(id, "desktop-during-finish"),
+                    "finish must run before the IM send reservation is released"
+                );
+                state.chat_runtime().end_im_turn(id);
+            },
+            || async { "finished" },
+        )
+        .await
+        .unwrap();
+
+        assert!(!state.chat_runtime().im_turn_active(id));
+        assert!(!crate::chat::runtime_state::im_turn_allows_tools(
+            state.chat_runtime().im_turn_active(id)
+        ));
+        assert!(
+            state.chat_runtime().try_reserve_send(id, "desktop"),
+            "the sidebar can accept a send only after IM approval is cleared"
+        );
+
+        let outbound = tokio::spawn(async move { tx.send("final").await.unwrap() });
+        tokio::task::yield_now().await;
+        assert!(
+            !crate::chat::runtime_state::im_turn_allows_tools(
+                state.chat_runtime().im_turn_active(id)
+            ),
+            "a blocked IM outbound send must not keep approving the new desktop turn"
+        );
+        rx.recv().await.unwrap();
+        outbound.await.unwrap();
+        state.chat_runtime().end_reply(id, "desktop");
+    }
+
+    #[tokio::test]
+    async fn stop_after_admission_does_not_start_a_model_run() {
+        let state = crate::state::test_app_state();
+        let id = "conv_im_stop";
+        let model_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&model_calls);
+
+        let outcome = hold_send_reservation(
+            &state,
+            id,
+            std::future::pending::<String>(),
+            || state.chat_runtime().begin_im_turn(id),
+            || state.chat_runtime().end_im_turn(id),
+            || {
+                let state = &state;
+                let calls = Arc::clone(&calls);
+                async move {
+                    assert!(state.chat_runtime().cancel_im_lineage(id).is_some());
+                    if state
+                        .chat_runtime()
+                        .begin_generation_unless_im_stopped(id)
+                        .is_none()
+                    {
+                        return "stopped";
+                    }
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    "started"
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, "stopped");
+        assert_eq!(model_calls.load(Ordering::SeqCst), 0);
+        assert!(!state.chat_runtime().has_active_generation(id));
+        assert!(!state.chat_runtime().im_turn_active(id));
+        let desktop = state.chat_runtime().begin_generation(id);
+        assert!(state.chat_runtime().cancel_im_lineage(id).is_none());
+        assert!(state.chat_runtime().is_generation_active(id, desktop));
     }
 }

@@ -33,7 +33,7 @@ export type ImPairingRequest = { platform: ImPlatform, code: string, userId: str
 
 export type ImApprovedUser = { platform: ImPlatform, identity: string, userId: string, userName: string, approvedAt: number, };
 
-export type ImSetupState = "pending" | "completed" | "denied" | "expired" | "cancelled" | "error";
+export type ImSetupState = "pending" | "authorized" | "completed" | "denied" | "expired" | "cancelled" | "error";
 
 export type ImSetupIdentity = { appId: string, botId: string, domain: FeishuDomain, ownerId: string, botName: string, };
 

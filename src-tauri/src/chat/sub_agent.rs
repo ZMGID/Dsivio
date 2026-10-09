@@ -83,6 +83,24 @@ impl SubAgentManager {
             }
         }
     }
+
+    /// Stops child executions that inherited one IM generation. Other children
+    /// of the same conversation are left running.
+    pub fn stop_lineage(&self, conversation: &str, execution_ids: &[String]) {
+        let Some(runtime) = self
+            .durable
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        for execution_id in execution_ids {
+            if let Err(error) = runtime.stop_execution(conversation, execution_id) {
+                eprintln!("Cannot save child cancellation: {error}");
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -361,7 +379,9 @@ impl AgentHost for SubAgentHost {
         Box::pin(async move {
             let state = self.app.state::<AppState>();
             crate::chat::runtime_state::im_session_consent(
-                state.chat_runtime().im_turn_active(&self.parent_conversation_id),
+                state
+                    .chat_runtime()
+                    .im_turn_active(&self.parent_conversation_id),
                 state
                     .chat_interactions()
                     .has_session_consent(&self.parent_conversation_id),
@@ -638,13 +658,21 @@ async fn run_sub_agent(app: AppHandle, req: SubAgentRequest) -> Result<AgentRunR
     let state = app.state::<AppState>();
     let state: &AppState = &state;
     let sub_conversation_id = format!("subagent-{}", req.task_id);
-
-    let sub_generation = state.chat_runtime().begin_generation(&sub_conversation_id);
     let sub_run_id = req
         .managed
         .as_ref()
         .map(|r| r.current().id.clone())
         .unwrap_or_else(|| format!("subrun-{}", req.task_id));
+    if state.chat_runtime().note_im_child(
+        &req.parent_conversation_id,
+        req.parent_generation,
+        &sub_run_id,
+    ) == crate::chat::runtime_state::ImChild::Stopped
+    {
+        return Err("cancelled".into());
+    }
+
+    let sub_generation = state.chat_runtime().begin_generation(&sub_conversation_id);
     let sub_message_id = format!("submsg-{}", req.task_id);
 
     let runtime_messages = req

@@ -52,6 +52,7 @@ vi.mock('../api/im', () => ({
   beginImSetup: vi.fn(),
   pollImSetup: vi.fn(),
   cancelImSetup: vi.fn(),
+  commitImSetup: vi.fn(),
   subscribeImStatus: vi.fn(async () => () => {}),
   subscribeImPairing: vi.fn(async () => () => {}),
 }))

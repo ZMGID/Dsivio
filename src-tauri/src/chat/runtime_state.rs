@@ -24,8 +24,28 @@ pub(crate) struct ChatRuntimeState {
     reply_idle: tokio::sync::Notify,
     popout_create_lock: tokio::sync::Mutex<()>,
     conversation_create_lock: tokio::sync::Mutex<()>,
-    /// Conversations whose current turn was admitted from IM. Desktop sends never set this.
-    im_turns: parking_lot::Mutex<HashSet<String>>,
+    /// Admitted IM turns. `cancel` sticks from stop until the turn finishes so a
+    /// generation that has not been created yet cannot start. `generation` is the
+    /// single model run this turn claimed; stop retires that id only. Desktop
+    /// sends never set `active`, and stopping IM does not cancel a turn that is
+    /// not admitted.
+    im_turns: parking_lot::Mutex<ImTurnFlags>,
+}
+
+#[derive(Default)]
+struct ImTurnFlags {
+    active: HashSet<String>,
+    cancel: HashSet<String>,
+    generation: HashMap<String, u64>,
+    children: HashMap<String, HashSet<String>>,
+}
+
+/// Whether a child execution belongs to the admitted IM generation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ImChild {
+    Inherited,
+    Stopped,
+    NotIm,
 }
 
 #[derive(Default)]
@@ -48,6 +68,28 @@ impl ChatRuntimeState {
             .or_default()
             .insert(generation);
         generation
+    }
+
+    /// Starts a generation unless this IM turn was already stopped. The cancel
+    /// flag and the insert share one critical section, so a stop that lands
+    /// before the generation exists cannot lose the race to a later insert.
+    pub(crate) fn begin_generation_unless_im_stopped(&self, conversation_id: &str) -> Option<u64> {
+        let mut turns = self.im_turns.lock();
+        if turns.cancel.contains(conversation_id) {
+            return None;
+        }
+        let generation = self.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.runs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .active_generations
+            .entry(conversation_id.to_string())
+            .or_default()
+            .insert(generation);
+        turns
+            .generation
+            .insert(conversation_id.to_string(), generation);
+        Some(generation)
     }
 
     pub(crate) fn cancel_conversation(&self, conversation_id: &str) {
@@ -165,15 +207,86 @@ impl ChatRuntimeState {
     }
 
     pub(crate) fn begin_im_turn(&self, conversation_id: &str) {
-        self.im_turns.lock().insert(conversation_id.to_string());
+        self.im_turns
+            .lock()
+            .active
+            .insert(conversation_id.to_string());
     }
 
     pub(crate) fn end_im_turn(&self, conversation_id: &str) {
-        self.im_turns.lock().remove(conversation_id);
+        let mut turns = self.im_turns.lock();
+        turns.active.remove(conversation_id);
+        turns.cancel.remove(conversation_id);
+        turns.generation.remove(conversation_id);
+        turns.children.remove(conversation_id);
     }
 
     pub(crate) fn im_turn_active(&self, conversation_id: &str) -> bool {
-        self.im_turns.lock().contains(conversation_id)
+        self.im_turns.lock().active.contains(conversation_id)
+    }
+
+    pub(crate) fn im_turn_cancel_latched(&self, conversation_id: &str) -> bool {
+        self.im_turns.lock().cancel.contains(conversation_id)
+    }
+
+    /// Records stop for an admitted IM turn and CAS-retires only the generation
+    /// this turn claimed. A desktop generation on the same conversation stays
+    /// active. `None` means this conversation is not in an IM turn, so the
+    /// caller must not cancel anything. The vec is the child executions that
+    /// inherited this generation; desktop children are never included.
+    pub(crate) fn cancel_im_lineage(&self, conversation_id: &str) -> Option<Vec<String>> {
+        let mut turns = self.im_turns.lock();
+        if !turns.active.contains(conversation_id) {
+            return None;
+        }
+        turns.cancel.insert(conversation_id.to_string());
+        let generation = turns.generation.get(conversation_id).copied();
+        let children = turns
+            .children
+            .remove(conversation_id)
+            .map(|runs| runs.into_iter().collect())
+            .unwrap_or_default();
+        drop(turns);
+        if let Some(generation) = generation {
+            let mut indexes = self.runs.lock().unwrap_or_else(|error| error.into_inner());
+            retire_generation(&mut indexes, conversation_id, generation);
+        }
+        Some(children)
+    }
+
+    /// Tags a child execution when its parent generation is the one this IM
+    /// turn claimed. A desktop generation does not match, so the child is not
+    /// part of the lineage. `Stopped` means the IM generation was already
+    /// cancelled and this child must not start.
+    pub(crate) fn note_im_child(
+        &self,
+        conversation_id: &str,
+        parent_generation: u64,
+        child_run: &str,
+    ) -> ImChild {
+        let mut turns = self.im_turns.lock();
+        if turns.generation.get(conversation_id) != Some(&parent_generation) {
+            return ImChild::NotIm;
+        }
+        if turns.cancel.contains(conversation_id) {
+            return ImChild::Stopped;
+        }
+        turns
+            .children
+            .entry(conversation_id.to_string())
+            .or_default()
+            .insert(child_run.to_string());
+        ImChild::Inherited
+    }
+
+    pub(crate) fn im_generation_stopped(
+        &self,
+        conversation_id: &str,
+        parent_generation: u64,
+    ) -> bool {
+        let turns = self.im_turns.lock();
+        turns.cancel.contains(conversation_id)
+            && turns.generation.get(conversation_id) == Some(&parent_generation)
     }
 
     pub(crate) fn forget_conversation(&self, conversation_id: &str) {
@@ -191,7 +304,10 @@ impl ChatRuntimeState {
         self.reply_idle.notify_waiters();
     }
 
-    pub(crate) fn context_measurement(&self, conversation_id: &str) -> Option<LiveContextMeasurement> {
+    pub(crate) fn context_measurement(
+        &self,
+        conversation_id: &str,
+    ) -> Option<LiveContextMeasurement> {
         self.indexes()
             .context_measurements
             .get(conversation_id)
@@ -219,9 +335,9 @@ impl ChatRuntimeState {
         if slot.request_id.is_empty() && slot.seq <= seq {
             slot.seq = seq;
             slot.lifecycle_id = lifecycle_id;
-            if let Some(stored) = stored.filter(|stored| {
-                stored.lifecycle_id == lifecycle_id && stored.seq == seq
-            }) {
+            if let Some(stored) =
+                stored.filter(|stored| stored.lifecycle_id == lifecycle_id && stored.seq == seq)
+            {
                 slot.provider_id = stored.provider_id.clone();
                 slot.model = stored.model.clone();
                 slot.reported_tokens = stored.reported_tokens;
@@ -297,7 +413,9 @@ impl ChatRuntimeState {
     ) -> Option<LiveContextMeasurement> {
         let mut indexes = self.indexes();
         let slot = indexes.context_measurements.get_mut(conversation_id)?;
-        if slot.request_id != run_id || run_id.is_empty() || slot.report_received
+        if slot.request_id != run_id
+            || run_id.is_empty()
+            || slot.report_received
             || slot.stored().reported_tokens.is_some()
         {
             return None;
@@ -321,7 +439,10 @@ impl ChatRuntimeState {
         }
     }
 
-    pub(crate) fn invalidate_context_display(&self, conversation_id: &str) -> LiveContextMeasurement {
+    pub(crate) fn invalidate_context_display(
+        &self,
+        conversation_id: &str,
+    ) -> LiveContextMeasurement {
         let mut indexes = self.indexes();
         let slot = indexes
             .context_measurements
@@ -337,7 +458,6 @@ impl ChatRuntimeState {
         slot.run_cache = None;
         slot.clone()
     }
-
 
     /// Consecutive automatic compaction failures, kept for the life of the process like
     /// ZCode's per-session circuit breaker.
@@ -383,7 +503,10 @@ impl ChatRuntimeState {
     }
 
     pub(crate) fn has_any_active_reply(&self) -> bool {
-        self.indexes().active_replies.values().any(|runs| !runs.is_empty())
+        self.indexes()
+            .active_replies
+            .values()
+            .any(|runs| !runs.is_empty())
     }
 
     pub(crate) fn has_active_reply(&self, conversation_id: &str) -> bool {
@@ -501,7 +624,9 @@ mod tests {
         assert!(runtime.im_turn_active("conv_im"));
         assert!(!runtime.im_turn_active("conv_desktop"));
         assert!(im_turn_allows_tools(runtime.im_turn_active("conv_im")));
-        assert!(!im_turn_allows_tools(runtime.im_turn_active("conv_desktop")));
+        assert!(!im_turn_allows_tools(
+            runtime.im_turn_active("conv_desktop")
+        ));
         assert_eq!(
             im_session_consent(true, false),
             true,
@@ -512,6 +637,63 @@ mod tests {
         runtime.end_im_turn("conv_im");
         assert!(!runtime.im_turn_active("conv_im"));
         assert!(!im_turn_allows_tools(false));
+    }
+
+    #[test]
+    fn stop_before_generation_admits_nothing_and_spares_a_later_desktop_run() {
+        let runtime = ChatRuntimeState::default();
+        runtime.begin_im_turn("conv");
+        let started = runtime
+            .begin_generation_unless_im_stopped("conv")
+            .expect("an IM turn that has not been stopped can generate");
+        let desktop = runtime.begin_generation("conv");
+        assert_eq!(
+            runtime.note_im_child("conv", desktop, "desktop-child"),
+            ImChild::NotIm,
+            "a desktop child does not inherit the IM generation"
+        );
+        assert_eq!(
+            runtime.note_im_child("conv", started, "im-child"),
+            ImChild::Inherited
+        );
+        let children = runtime
+            .cancel_im_lineage("conv")
+            .expect("an admitted turn can be stopped");
+        assert_eq!(children, vec!["im-child".to_string()]);
+        assert!(runtime.im_turn_cancel_latched("conv"));
+        assert!(
+            !runtime.is_generation_active("conv", started),
+            "stop retires only the generation this IM turn claimed"
+        );
+        assert!(
+            runtime.is_generation_active("conv", desktop),
+            "a desktop generation on the same conversation stays active"
+        );
+        assert_eq!(
+            runtime.note_im_child("conv", started, "late-im-child"),
+            ImChild::Stopped
+        );
+        assert!(
+            runtime.begin_generation_unless_im_stopped("conv").is_none(),
+            "stop before the next generation must not admit a model run"
+        );
+        assert!(
+            runtime.is_generation_active("conv", desktop),
+            "refusing the next IM generation must not retire the desktop run"
+        );
+
+        let other = runtime.begin_generation("other");
+        runtime.end_im_turn("conv");
+        assert!(!runtime.im_turn_cancel_latched("conv"));
+        let desktop = runtime.begin_generation("conv");
+        assert!(
+            runtime.cancel_im_lineage("conv").is_none(),
+            "stopping IM after the turn ended must not latch the desktop run"
+        );
+        assert!(runtime.is_generation_active("conv", desktop));
+        assert!(runtime.is_generation_active("other", other));
+        assert!(!im_turn_allows_tools(runtime.im_turn_active("conv")));
+        assert!(!im_session_consent(runtime.im_turn_active("conv"), false));
     }
 
     #[test]
@@ -548,7 +730,10 @@ mod tests {
             .await
             .expect("idle signal must wake the queued send")
             .unwrap();
-        assert!(!runtime.try_reserve_send("a", "user"), "queued send now owns the conversation");
+        assert!(
+            !runtime.try_reserve_send("a", "user"),
+            "queued send now owns the conversation"
+        );
         runtime.end_reply("a", "queued");
         assert!(runtime.try_reserve_send("a", "user"));
     }
@@ -642,15 +827,35 @@ mod tests {
     #[test]
     fn late_cache_report_cannot_overwrite_new_branch_request() {
         let runtime = ChatRuntimeState::default();
-        runtime.bind_prepared_context("conversation", "old", "first", "openai", "gpt-4o", &[], Some((100, 90)));
+        runtime.bind_prepared_context(
+            "conversation",
+            "old",
+            "first",
+            "openai",
+            "gpt-4o",
+            &[],
+            Some((100, 90)),
+        );
         runtime.invalidate_context_display("conversation");
-        runtime.bind_prepared_context("conversation", "new", "second", "openai", "gpt-4o", &[], Some((100, 10)));
+        runtime.bind_prepared_context(
+            "conversation",
+            "new",
+            "second",
+            "openai",
+            "gpt-4o",
+            &[],
+            Some((100, 10)),
+        );
         // This callback belongs to the old run, which has already lost ownership.
         runtime.note_context_run_cache("conversation", "old", Some((100, 90)));
-        let (reported, _) = runtime.report_context_tokens("conversation", "new", 7_100).unwrap();
+        let (reported, _) = runtime
+            .report_context_tokens("conversation", "new", 7_100)
+            .unwrap();
         assert_eq!(reported.run_cache, Some((100, 10)));
         runtime.note_context_run_cache("conversation", "new", Some((200, 30)));
-        let (reported, _) = runtime.report_context_tokens("conversation", "new", 8_000).unwrap();
+        let (reported, _) = runtime
+            .report_context_tokens("conversation", "new", 8_000)
+            .unwrap();
         assert_eq!(reported.run_cache, Some((200, 30)));
     }
 }

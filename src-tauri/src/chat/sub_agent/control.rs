@@ -230,6 +230,12 @@ pub fn launch(app: &AppHandle, mut request: SubAgentRequest, key: &str) -> Resul
         profile,
         &request.prompt,
     )?;
+    // Register before the worker starts. A desktop parent generation does not match.
+    let _lineage = app.state::<AppState>().chat_runtime().note_im_child(
+        &request.parent_conversation_id,
+        request.parent_generation,
+        &record.current().id,
+    );
     if !app
         .state::<AppState>()
         .chat_runtime()
