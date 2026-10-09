@@ -3,7 +3,8 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, renameSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import assert from 'node:assert/strict'
 
@@ -32,8 +33,8 @@ Object.assign(env, {
 })
 mkdirSync(env.HOME)
 
-function run(command, args, input) {
-  const result = spawnSync(command, args, { env, cwd: scratch, encoding: 'utf8', timeout: 45000, input })
+function run(command, args, input, cwd = scratch) {
+  const result = spawnSync(command, args, { env, cwd, encoding: 'utf8', timeout: 45000, input })
   assert.equal(result.status, 0, `${command}: ${result.error || result.stderr || result.stdout}`)
   return result.stdout
 }
@@ -83,6 +84,87 @@ async function withMcp(command, args, check) {
     }
   }
 }
+// The App appends shims/tools, the Node directory and shims/python to PATH (launch.rs). With only
+// those on PATH, the bare names an Agent or a plugin types must reach the bundled runtimes.
+function verifyPathShims() {
+  // A developer's own npm prefix/registry settings are respected by the shims; test the defaults.
+  const shimEnv = { ...Object.fromEntries(Object.entries(env).filter(([k]) => !/^npm_config_(prefix|registry)$/iu.test(k))), PATH: [join(root, 'shims/tools'), join(root, 'shims/python'), dirname(node)].join(win ? ';' : ':'),
+    PYTHONPATH: join(scratch, 'foreign-python-path'), PYTHONHOME: join(scratch, 'foreign-python-home') }
+  const viaPath = (name, args, expectSuccess = true) => {
+    const result = spawnSync(name, args, { env: shimEnv, cwd: scratch, encoding: 'utf8', timeout: 45000 })
+    if (expectSuccess) assert.equal(result.status, 0, `${name} via PATH: ${result.error || result.stderr || result.stdout}`)
+    return result
+  }
+  const npmVersion = JSON.parse(readFileSync(join(root, 'runtime.json'))).npm
+  assert.equal(viaPath('npm', ['--version']).stdout.trim(), npmVersion)
+  assert.equal(viaPath('npx', ['--version']).stdout.trim(), npmVersion)
+  // Global installs land in the App-private prefix, never inside the bundle.
+  assert.equal(viaPath('npm', ['prefix', '-g']).stdout.trim(), join(env.HOME, '.kivio', 'npm-global'))
+  for (const name of ['python', 'python3']) {
+    const probe = 'import sys, openpyxl, PIL.Image, lxml.etree, pypdf, docx; print(sys.prefix); print(any("foreign" in p for p in sys.path))'
+    const [prefix, foreign] = viaPath(name, ['-c', probe]).stdout.trim().split(/\r?\n/u)
+    assert.equal(resolve(prefix), resolve(join(root, 'python')), `${name} must be the bundled interpreter`)
+    assert.equal(foreign, 'False', `${name} must ignore the caller's PYTHONPATH/PYTHONHOME`)
+  }
+  const pip = viaPath('python', ['-m', 'pip', 'install', '--no-index', 'dsivio-not-a-package'], false)
+  assert.notEqual(pip.status, 0)
+  assert.match(pip.stderr + pip.stdout, /virtualenv/u, 'pip must refuse to install into the bundled interpreter')
+  assert.match(viaPath('ffmpeg', ['-version']).stdout, /^ffmpeg version/u)
+  assert.match(viaPath('ffprobe', ['-version']).stdout, /^ffprobe version/u)
+  console.log('Bundled PATH launchers: npm, npx, python, python3, ffmpeg and ffprobe resolve without system runtimes')
+}
+
+// `dsivio dsvideo` loads hooks/render-browser-mirror.mjs through NODE_OPTIONS. Run the HyperFrames
+// Provider's own browser installation against a local stand-in mirror, then a failing mirror.
+async function verifyRenderBrowserMirror() {
+  const provider = join(root, 'dsvideo/node_modules/@dsvideo/dsvideo/packages/provider-hyperframes-local')
+  const tsx = run(node, ['--input-type=module', '-e', 'console.log(import.meta.resolve("tsx"))'], undefined, provider).trim()
+  // Chrome for Testing archive folder and @puppeteer/browsers cache platform name.
+  const [folder, cachePlatform] = { 'darwin-arm64': ['mac-arm64', 'mac_arm'], 'darwin-x64': ['mac-x64', 'mac'], 'linux-x64': ['linux64', 'linux'] }[`${process.platform}-${process.arch}`] ?? []
+  if (!folder) return
+  const version = '1.2.3.4'
+  const archive = join(scratch, 'chrome-headless-shell.zip')
+  run(python, ['-s', '-B', '-c', [
+    'import sys, zipfile',
+    'z = zipfile.ZipFile(sys.argv[1], "w")',
+    'i = zipfile.ZipInfo(sys.argv[2] + "/chrome-headless-shell")',
+    'i.external_attr = 0o100755 << 16',
+    'z.writestr(i, "#!/bin/sh\\necho Google Chrome for Testing " + sys.argv[3] + "\\n")',
+    'z.close()'].join('\n'), archive, `chrome-headless-shell-${folder}`, version])
+  const served = `/${version}/${folder}/chrome-headless-shell-${folder}.zip`
+  const server = createServer((request, response) => {
+    if (request.url === served) response.end(readFileSync(archive))
+    else { response.statusCode = 404; response.end() }
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const mirror = `http://127.0.0.1:${server.address().port}`
+  // @puppeteer/browsers extracts with the OS `unzip`, which the App's PATH always includes.
+  const install = (base, cacheDir) => new Promise(resolve => {
+    const child = spawn(node, ['--import', tsx, '--import', './src/capture-bootstrap.ts', 'src/browser-install.ts', cacheDir, version], {
+      cwd: provider, env: { ...env, PATH: `${env.PATH}:/usr/bin:/bin`, NODE_OPTIONS: `--import=${pathToFileURL(join(root, 'hooks/render-browser-mirror.mjs')).href}`, DSIVIO_RENDER_BROWSER_MIRROR: base },
+      stdio: ['ignore', 'pipe', 'pipe'] })
+    let output = ''
+    child.stdout.on('data', chunk => { output += chunk })
+    child.stderr.on('data', chunk => { output += chunk })
+    const timer = setTimeout(() => child.kill('SIGKILL'), 60000)
+    child.on('close', code => { clearTimeout(timer); resolve({ code, output }) })
+  })
+  try {
+    const cache = join(scratch, 'render-browser-cache')
+    const mirrored = await install(mirror, cache)
+    assert.equal(mirrored.code, 0, mirrored.output)
+    assert.ok(existsSync(join(cache, 'chrome-headless-shell', `${cachePlatform}-${version}`, `chrome-headless-shell-${folder}`, 'chrome-headless-shell')), mirrored.output)
+    // A broken mirror is followed by exactly one attempt at the official source (which has no such version).
+    const fallback = await install(`${mirror}/missing`, join(scratch, 'render-browser-fallback'))
+    assert.notEqual(fallback.code, 0)
+    assert.match(fallback.output, /改用官方源/u, fallback.output)
+    assert.match(fallback.output, /storage\.googleapis\.com\/chrome-for-testing-public/u, fallback.output)
+  } finally {
+    server.close()
+  }
+  console.log('Render browser download: mirror first, official source after a mirror failure')
+}
+
 try {
   assert.equal(JSON.parse(readFileSync(join(root, 'runtime.json'))).platform, `${process.platform}-${process.arch}`)
   assert.equal(run(node, [npm, '--version']).trim(), JSON.parse(readFileSync(join(root, 'runtime.json'))).npm)
@@ -109,6 +191,7 @@ try {
   }))
   run(node, [npm, 'install', '--omit=dev', '--no-audit', '--no-fund', '--offline'])
   assert.equal(run(node, ['-p', 'require("dsivio-runtime-smoke-dependency")']).trim(), node)
+  verifyPathShims()
   const bundledScripts = join(dirname(root), 'video-studio/scripts')
   const scripts = existsSync(bundledScripts) ? bundledScripts : join(repo, 'src-tauri/resources/video-studio/scripts')
   // openpyxl/Pillow/lxml back the bundled report Skills (`dsivio python`): import their native parts.
@@ -121,6 +204,7 @@ try {
   run(ffmpeg, ['-y', '-f', 'lavfi', '-i', 'color=c=blue:s=64x64:d=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', video])
   const probe = JSON.parse(run(join(root, 'bin', win ? 'ffprobe.exe' : 'ffprobe'), ['-v', 'error', '-show_entries', 'format=duration', '-of', 'json', video]))
   assert.ok(Number(probe.format.duration) > 0, 'bundled ffprobe must read local media')
+  if (!win && !process.argv.includes('--base-runtime-only')) await verifyRenderBrowserMirror()
   await withMcp(python, ['-s', '-B', join(scripts, 'mcp_comfy.py')], async request => {
     const result = await request('tools/list')
     assert.ok(result.tools.some(t => t.name === 'run_workflow'), 'Comfy tools unavailable')
