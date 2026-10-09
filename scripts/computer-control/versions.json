@@ -1,0 +1,35 @@
+{
+  "cua": "0.34.0",
+  "playwright": "0.1.22",
+  "officecli": "1.0.155",
+  "platforms": {
+    "darwin-arm64": {
+      "cua": {
+        "file": "cua-driver-rs-0.34.0-darwin-universal.tar.gz",
+        "sha256": "2d0ade531c07b4d16e8078844fe1b63a0dfa0ee19677c9dcc079b4d3460ab387"
+      },
+      "office": {
+        "file": "officecli-mac-arm64",
+        "sha256": "6b83cac55120995019f299b632d9a7c9e89268f382b726e1dad123864e3b57aa"
+      }
+    },
+    "win32-x64": {
+      "cua": {
+        "file": "cua-driver-rs-0.34.0-windows-x86_64.zip",
+        "sha256": "f96cc1632bc88e6f268eab745277c1fc302bb0f7d123e04373e35afecad6439f"
+      },
+      "office": {
+        "file": "officecli-win-x64.exe",
+        "sha256": "66757c7a3ac4e8b181d54534e82b9486cf734e21e5851eff9cfad4a3287ff50c"
+      }
+    }
+  },
+  "cuaSkills": {
+    "file": "cua-driver-rs-v0.34.0-skills.tar.gz",
+    "sha256": "4ea2bfc2d833af791c8a6d9c5904f468bd35552728b4608e151b106ace02292f"
+  },
+  "officeSource": {
+    "file": "office-source.tar.gz",
+    "sha256": "60e182f6e753426a2f7276792bb62d00c6b1e3b2dd1a2e2cc2ecd08a4aa668c7"
+  }
+}

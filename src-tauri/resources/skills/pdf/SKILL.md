@@ -20,8 +20,8 @@ Kivio stores each uploaded file as a safe local copy and includes its absolute p
 ## Workflow
 
 1. Identify the PDF path from the attachment note or a local search.
-2. If the host has a PDF tool (`pdftotext`, `python` with pypdf, OfficeCLI, etc.), extract text with `bash`. For a multi-line script, `write` it first, then run it — do not cram quoted code into `python -c`.
-3. If no PDF tool is installed, say so and stop guessing. Do not invent document contents from the filename.
+2. Extract text with Dsivio's bundled Python 3.12, which ships pypdf (no system Python or `pip install` needed): `write` a script, then run it with `dsivio python <script>.py` in `bash` — do not cram quoted code into `python -c`. `pdftotext` or OfficeCLI also work when installed.
+3. If `dsivio python` reports that the bundled runtime is missing (exit code 127) and no other PDF tool is installed, say so and stop guessing. Do not invent document contents from the filename.
 4. If extraction returns little text, the PDF may be scanned/image-only — ask for OCR or use Lens.
 5. For long PDFs, extract page-level text first, then summarize by section/page before answering.
 

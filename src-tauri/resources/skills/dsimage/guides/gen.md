@@ -14,10 +14,10 @@
 命令工具的 cwd 设为 Skill 末尾显示的 `Skill directory`，timeout 设为 `600000ms`：
 
 ```bash
-python3 scripts/dsimage.py gen "<PROMPT>" --ratio <RATIO> --out "<ABS_OUTPUT_DIR>" --name <NAME> [--ref "<IMAGE>"] [--n <COUNT>] [--resolution 2k|4k]
+dsivio python scripts/dsimage.py gen "<PROMPT>" --ratio <RATIO> --out "<ABS_OUTPUT_DIR>" --name <NAME> [--ref "<IMAGE>"] [--n <COUNT>] [--resolution 2k|4k]
 ```
 
-Windows 使用 `python`。默认 1k 时省略 `--resolution`。
+只有 `dsivio python` 报告内置运行时缺失（退出码 127）时，才把 `dsivio python` 换成系统 Python 3（Windows `python`，其他 `python3`）跑同一命令。默认 1k 时省略 `--resolution`。
 
 ## 收口
 

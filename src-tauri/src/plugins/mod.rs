@@ -9,10 +9,16 @@
 mod catalog;
 mod install;
 mod lifecycle;
-pub mod packages;
 pub mod marketplaces;
+pub mod packages;
 mod preview;
 mod state;
+
+pub(crate) fn has_saved_state(id: &str) -> bool {
+    state::read_meta(id).is_some()
+}
+
+pub(crate) use lifecycle::refresh_bundled_office_path;
 
 pub use catalog::{catalog_plugin, CatalogPlugin, PLUGIN_CATALOG};
 pub use install::{

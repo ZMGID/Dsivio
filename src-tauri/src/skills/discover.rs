@@ -122,6 +122,11 @@ fn scan_root_entries(
     if let Some(path) = bundled_skills_dir(app) {
         push_root(&mut roots, path, "builtin");
     }
+    for id in ["cua-driver", "playwright-cli"] {
+        if let Some(path) = crate::computer_control::bundled::skill_dir(id) {
+            push_root(&mut roots, path, "builtin");
+        }
+    }
     // 项目优先于全局（同 id 近处覆盖远处）：`.kivio/skills` 再 `.agents/skills`，cwd → git 根。
     if let Some(cwd) = project_cwd {
         for path in project_skill_dirs(cwd) {

@@ -10,13 +10,13 @@ kivio-market-managed: true
 
 ## 检查
 
-1. 检查 `node -v`（官方 CLI 要求 Node.js 18 或以上）、`command -v ziniao-cli` 和 `ziniao-cli --version`。Windows 用 PowerShell 查询命令。不要把项目本地或 npx 的临时 Node 当成系统安装。
+1. 检查 `command -v ziniao-cli` 和 `ziniao-cli --version`。Windows 用 PowerShell 查询命令。Dsivio 自带 Node.js 22（`dsivio node --version`），并已把它和私有 CLI 目录 `~/.kivio/npm-global` 放在 Dsivio 终端的 PATH 末尾，因此不再要求系统 Node；只有 `dsivio node --version` 报告内置运行时缺失（退出码 127）时，才检查系统 `node -v`（官方 CLI 要求 Node.js 18 或以上）。不要把项目本地或 npx 的临时 Node 当成系统安装。
 2. 检查官方 `ziniao-shared`、`ziniao-store`、`ziniao-page` 等所需 Skills 是否可读取。缺失时用 `ziniao-cli skills install --copy` 安装官方 Skills；不要自己编写或复制同名 Skill。
 3. 执行 `ziniao-cli doctor`，根据实际报错判断 CLI、紫鸟客户端与授权状态。不要读取或输出 Token、Cookie 或配置文件中的密钥。
 
 ## 补齐缺失项
 
-- CLI 缺失时，按紫鸟官方 SETUP 安装正式版：`npm install -g @ziniao-open/cli`，再验证 `ziniao-cli --version`。安装、授权与打开授权页都在本机真实环境进行；工具没有足够权限时明确报告，不在隔离环境重复尝试。
+- CLI 缺失时，用 Dsivio 内置 npm 安装紫鸟官方正式版：`dsivio npm install -g @ziniao-open/cli`，再验证 `ziniao-cli --version`。`dsivio npm` 的 `-g` 装到 Dsivio 私有目录 `~/.kivio/npm-global`，不写系统 Node；先走 npmmirror 镜像，失败时自动改用 npm 官方源重试一次。仅当它报告内置运行时缺失（退出码 127）时，才按紫鸟官方 SETUP 用系统 npm 执行 `npm install -g @ziniao-open/cli`。安装、授权与打开授权页都在本机真实环境进行；工具没有足够权限时明确报告，不在隔离环境重复尝试。
 - 只有 doctor 指出需要初始化时才执行 `ziniao-cli config init --new`。若紫鸟客户端未登录，先请用户在客户端登录，再继续同一次流程。init 可能等待审批一小时；在能持续读取输出的终端后台启动，一出现含 `memberAuth?cliRequestId=` 的授权链接，立即在本机系统默认浏览器打开，告知用户完成授权并保持 init 进程运行。macOS 用 `open`，Windows PowerShell 用 `Start-Process`，Linux 用 `xdg-open`。打不开时再提供完整链接。不要用无头或沙盒浏览器代替本机授权。
 - 授权完成后再执行 `ziniao-cli doctor`。失败或超时按输出报告，不把 CLI 已安装误报成授权成功。不要自动删除已有的 `ziniao-assistant` 或其它用户 Skill。
 

@@ -33,7 +33,7 @@ description: 根据商品图片、名称或链接，用 CUA 操作用户已有�
 
 将商品ID、标题、链接、数字价格、`salesRaw`（销量原文）、`period`（销量期间）、`salesSource`（Shopee／虾多拉）、`gmv`（数字金额）、`gmvPeriod`、`currency`及`included`（是否相关）存入`samples.json`。按品类、功能与形态排除无关商品；GMV只记录实际可见数据，缺失时省略。
 
-用户指定数量时保留足量相关商品逐款调研；默认代表品模式运行 `python scripts/select_candidates.py <任务目录>/samples.json <任务目录>/selected.json`。脚本按商品ID去重，在同一币种与销量期间内选最高、居中和最低标价且有销量的候选，重复命中合并标签。`40mil+`、`10万+`等按显示量级参与比较，主表保留原文；同量级以商品ID稳定排序，摘要简注“按页面显示销量量级筛选”。只有近30天数据时统一使用该期间。GMV辅助判断同类商品的销售规模和价格定位，比较时统一币种与期间；销量仍决定三类代表品，不用当前SKU价乘历史销量代替GMV。
+用户指定数量时保留足量相关商品逐款调研；默认代表品模式运行 `dsivio python scripts/select_candidates.py <任务目录>/samples.json <任务目录>/selected.json`（退出码 127 时改用`~/.kivio/shopee-research/runtime/runtime.json`记录的`python`）。脚本按商品ID去重，在同一币种与销量期间内选最高、居中和最低标价且有销量的候选，重复命中合并标签。`40mil+`、`10万+`等按显示量级参与比较，主表保留原文；同量级以商品ID稳定排序，摘要简注“按页面显示销量量级筛选”。只有近30天数据时统一使用该期间。GMV辅助判断同类商品的销售规模和价格定位，比较时统一币种与期间；销量仍决定三类代表品，不用当前SKU价乘历史销量代替GMV。
 
 ## 2. 每个候选一次整理完整
 

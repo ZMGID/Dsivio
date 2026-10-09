@@ -380,6 +380,19 @@ fn trim_install_output(stdout: &[u8], stderr: &[u8]) -> String {
 /// 运行 catalog 里当前系统的 GitHub README 安装命令（允许名单）。
 pub async fn run_official_install(id: &str) -> Result<PluginActionResult, String> {
     let catalog = catalog_plugin(id).ok_or_else(|| format!("unknown plugin: {id}"))?;
+    if id == "officecli" && crate::computer_control::bundled::root().is_some() {
+        let binary = resolve_binary(id).ok_or("内置 OfficeCLI 缺失，请修复 Dsivio 安装")?;
+        if probe_version(&binary).as_deref()
+            != crate::computer_control::bundled::version("officecli").as_deref()
+        {
+            return Err("内置 OfficeCLI 版本校验失败，请修复 Dsivio 安装".into());
+        }
+        return Ok(PluginActionResult {
+            ok: true,
+            message: "固定版本 OfficeCLI 和官方技能已内置，打开启用后即可使用。".into(),
+            status: status_for(catalog),
+        });
+    }
     let script = catalog
         .host_install_command()
         .ok_or_else(|| "当前系统暂不支持自动安装该插件".to_string())?;
@@ -894,6 +907,9 @@ fn home_agent_skill_parents() -> Vec<PathBuf> {
 
 /// 官方安装器 / `skills install` 写入的 skill 目录（含 `SKILL.md`）。
 pub(crate) fn official_skill_dir(skill_id: &str) -> Option<PathBuf> {
+    if let Some(dir) = crate::computer_control::bundled::skill_dir(skill_id) {
+        return Some(dir);
+    }
     for folder in skill_folder_names(skill_id) {
         for parent in home_agent_skill_parents() {
             let dir = parent.join(folder);

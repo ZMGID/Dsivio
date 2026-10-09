@@ -265,6 +265,9 @@ pub fn run() {
         })
         .setup(|app| {
             if let Err(error) = media_runtime::initialize(app.handle()) { eprintln!("Video initialization failed: {error}"); }
+            if let Err(error) = computer_control::bundled::initialize(app.handle()) {
+                eprintln!("Computer control initialization failed: {error}");
+            }
             if let Err(error) = workbench::image_projects::initialize_skill_workspace(app.handle()) { eprintln!("Image initialization failed: {error}"); }
             if let Err(error) = media_generation::local_asr::initialize(app.handle()) { eprintln!("Local ASR initialization failed: {error}"); }
             media_generation::cli::serve(app.handle().clone());
@@ -377,6 +380,12 @@ pub fn run() {
                 rapidocr::RapidOcrClient::new(offline_models),
             ));
             app.manage(chat::repository::ConversationRepository::default());
+            // Essential offline preparation finishes before a chat can try these tools.
+            if let Err(error) = tauri::async_runtime::block_on(
+                computer_control::bundled::bootstrap(app.handle().clone()),
+            ) {
+                eprintln!("Bundled computer control setup failed: {error}");
+            }
             app.manage(scheduled_tasks::ScheduledTasks::load(
                 app.path()
                     .app_data_dir()

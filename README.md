@@ -92,3 +92,9 @@ Windows 上用 `powershell -File scripts/win-cargo-test.ps1`。聊天协议的 T
 [GPL-3.0-or-later](LICENSE)
 
 IM 协议适配保留 [Hermes Agent 的 MIT 授权](docs/licenses/hermes-agent-MIT.txt)；飞书帧与加密实现参考 [lark-oapi 1.6.8 的 MIT 授权](docs/licenses/lark-oapi-MIT.txt)。
+
+### 内置电脑控制工具
+
+安装包固定提供 Cua Driver 0.34.0、Playwright CLI 0.1.22 和 OfficeCLI 1.0.155，以及对应官方技能。版本与下载校验值统一维护在 `scripts/computer-control/versions.json`，Playwright 的传递依赖由同目录锁文件固定。构建使用 `npm run build:computer-control`；验证使用 `npm run verify:computer-control`。
+
+首次打开 Dsivio 会从本地资源完成接入、启用 CUA 和 OfficeCLI，并提供 Playwright 命令与技能，不需要再执行在线安装器。后续重启保留关闭状态和自定义驱动路径。macOS 保留官方 CuaDriver 的签名与应用身份；用户仍需授权辅助功能和屏幕录制。已有不同版本或签名异常的 CuaDriver 不会被静默覆盖，设置页会报告该安装问题。Playwright 连接用户现有浏览器时仍需对应浏览器和扩展授权。ego lite 不随包安装。

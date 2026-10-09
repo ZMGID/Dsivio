@@ -75,6 +75,7 @@ pub(crate) fn tools_at(root: &Path) -> Result<BTreeMap<&'static str, PathBuf>, S
 
 pub(super) fn initialize(app: &AppHandle) -> Result<(), String> {
     let root = resource_directory(app)?.join("video-runtime");
+    super::launch::extend_process_path(&root);
     ROOT.set(root)
         .map_err(|_| "Video runtime already initialized".to_string())
 }

@@ -11,13 +11,14 @@
     "protocol:check": "cargo run --quiet --manifest-path src-tauri/Cargo.toml --bin export-chat-protocol -- --check",
     "dev": "(npm run build:swift || true) && tauri dev",
     "dev:ui": "vite --port 5713",
-    "build": "npm run build:video-runtime && npm run build:dsvideo && npm run package:check && npm run icons:check && npm run build:swift && npm run protocol:check && tauri build",
+    "build": "npm run build:video-runtime && npm run build:dsvideo && npm run build:computer-control && npm run package:check && npm run icons:check && npm run build:swift && npm run protocol:check && tauri build",
     "tauri": "tauri",
     "build:ui": "vite build",
     "build:swift": "node scripts/build-swift-sidecar.js",
     "icons:generate": "node scripts/generate-windows-icons.mjs",
     "icons:check": "node scripts/generate-windows-icons.mjs --check",
     "package:check": "node scripts/sync-product-sku-report.mjs --check && node scripts/check-desktop-package.mjs",
+    "test:runtime-launchers": "node --test scripts/test-runtime-launchers.test.mjs",
     "test:packaging": "node --test scripts/check-desktop-package.test.mjs",
     "test:adapters": "node --test src-tauri/resources/plugins/hypit-setup/adapter/test/provider.test.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
@@ -32,7 +33,9 @@
     "preview": "vite preview",
     "build:video-runtime": "node scripts/build-video-runtime.mjs",
     "verify:video-runtime": "node scripts/verify-video-runtime.mjs",
-    "build:dsvideo": "node scripts/build-dsvideo-plugin.mjs"
+    "build:dsvideo": "node scripts/build-dsvideo-plugin.mjs",
+    "build:computer-control": "node scripts/build-computer-control.mjs",
+    "verify:computer-control": "node scripts/verify-computer-control.mjs"
   },
   "dependencies": {
     "@lobehub/icons": "^5.10.0",

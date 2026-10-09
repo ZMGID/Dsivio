@@ -128,6 +128,59 @@ pub fn materialize_mcp_server(plugin: &CatalogPlugin) -> Option<ChatMcpServer> {
     })
 }
 
+/// Refresh only the owned executable path, preserving user switches and MCP customization.
+pub(crate) fn refresh_bundled_office_path(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let Some(binary) = crate::computer_control::bundled::command("officecli") else {
+        return Ok(());
+    };
+    let command = binary.to_string_lossy().into_owned();
+    let needs_refresh = state
+        .settings_read()
+        .chat_tools
+        .servers
+        .iter()
+        .any(|s| s.id == plugin_mcp_server_id("officecli") && s.command != command);
+    if needs_refresh {
+        update_settings(app, state, |settings| {
+            refresh_office_command(settings, &command);
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+fn refresh_office_command(settings: &mut Settings, command: &str) {
+    for server in &mut settings.chat_tools.servers {
+        if server.id == plugin_mcp_server_id("officecli") {
+            server.command = command.into();
+        }
+    }
+}
+
+#[cfg(test)]
+mod bundled_path_tests {
+    use super::*;
+    #[test]
+    fn office_relocation_preserves_disabled_state_and_custom_arguments() {
+        let mut settings = Settings::default();
+        settings.chat_tools.enabled = false;
+        settings.chat_tools.servers.push(ChatMcpServer {
+            id: plugin_mcp_server_id("officecli"),
+            command: "/old/officecli".into(),
+            enabled: false,
+            args: vec!["custom".into()],
+            ..Default::default()
+        });
+        refresh_office_command(&mut settings, "/new/computer-control/bin/officecli");
+        assert_eq!(
+            settings.chat_tools.servers[0].command,
+            "/new/computer-control/bin/officecli"
+        );
+        assert!(!settings.chat_tools.enabled && !settings.chat_tools.servers[0].enabled);
+        assert_eq!(settings.chat_tools.servers[0].args, vec!["custom"]);
+    }
+}
+
 /// 启用：挂 MCP（若有）+ 确保 chat 工具总开关 + 落盘 settings。
 ///
 /// 注意：README 里的 `officecli mcp claude/cursor` 是给那些客户端写配置用的；

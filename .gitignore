@@ -68,3 +68,5 @@ MEMORY.md
 __pycache__/
 *.pyc
 src-tauri/resources/video-runtime/
+
+src-tauri/resources/computer-control/

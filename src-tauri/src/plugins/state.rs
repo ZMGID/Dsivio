@@ -195,6 +195,11 @@ fn known_binary_path(catalog: &CatalogPlugin) -> Option<PathBuf> {
 
 /// 解析可用二进制：Kivio 托管 → 刷新后 PATH → 官方常见安装路径。
 pub fn resolve_binary(id: &str) -> Option<PathBuf> {
+    if id == "officecli" {
+        if let Some(path) = crate::computer_control::bundled::command("officecli") {
+            return path.is_file().then_some(path);
+        }
+    }
     if let Some(path) = kivio_binary_path(id) {
         return Some(path);
     }

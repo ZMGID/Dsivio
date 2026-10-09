@@ -1,6 +1,7 @@
 //! Bundled analyzer runtime and read-only legacy settings migration.
 pub mod cli;
 pub mod dsvideo;
+pub mod launch;
 pub mod projects;
 pub(crate) mod runtime;
 pub(crate) mod config;

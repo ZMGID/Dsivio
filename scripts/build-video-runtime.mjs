@@ -18,19 +18,27 @@ const platform = `${process.platform}-${process.arch}`
 const archive = versions.nodeArchives[platform]
 if (!archive) throw new Error(`Bundled video runtime does not support ${platform}; build on the target OS/architecture.`)
 const fingerprint = createHash('sha256').update(platform)
-for (const file of ['versions.json', 'package.json', 'package-lock.json', 'requirements.txt', 'launcher.rs']) {
+// PATH launchers for npm/npx/python/python3/ffmpeg/ffprobe (shim.rs) and the Node hooks that send
+// Dsvideo's render-browser download through npmmirror (node-hooks/), see src-tauri/src/media_runtime/launch.rs.
+const exe = process.platform === 'win32' ? '.exe' : ''
+const shims = { tools: ['npm', 'npx', 'ffmpeg', 'ffprobe'], python: ['python', 'python3'] }
+const nodeHooks = ['render-browser-mirror.mjs', 'render-browser-mirror-hooks.mjs', 'render-browser-mirror-install.mjs']
+for (const file of ['versions.json', 'package.json', 'package-lock.json', 'requirements.txt', 'launcher.rs', 'npm_policy.rs', 'shim.rs', ...nodeHooks.map(name => `node-hooks/${name}`)]) {
   fingerprint.update(readFileSync(join(inputs, file)))
 }
 fingerprint.update(readFileSync(fileURLToPath(import.meta.url)))
 const identity = fingerprint.digest('hex')
 const marker = join(destination, 'runtime.json')
-const required = ['python-packages/comfy_mcp/server.py', 'analyzer/node_modules/mcp-video-analyzer/dist/index.js',
+const required = ['python-packages/comfy_mcp/server.py', 'python-packages/openpyxl/__init__.py', 'analyzer/node_modules/mcp-video-analyzer/dist/index.js',
   process.platform === 'win32' ? 'python/python.exe' : 'python/bin/python3',
   process.platform === 'win32' ? 'node/node.exe' : 'node/bin/node',
   process.platform === 'win32' ? 'node/node_modules/npm/bin/npm-cli.js' : 'node/lib/node_modules/npm/bin/npm-cli.js',
   `bin/comfy${process.platform === 'win32' ? '.exe' : ''}`, `bin/yt-dlp${process.platform === 'win32' ? '.exe' : ''}`,
   `bin/ffprobe${process.platform === 'win32' ? '.exe' : ''}`,
-  `analyzer/node_modules/ffmpeg-static/ffmpeg${process.platform === 'win32' ? '.exe' : ''}`]
+  `analyzer/node_modules/ffmpeg-static/ffmpeg${process.platform === 'win32' ? '.exe' : ''}`,
+  process.platform === 'win32' ? 'node/node_modules/npm/bin/npx-cli.js' : 'node/lib/node_modules/npm/bin/npx-cli.js',
+  ...Object.entries(shims).flatMap(([group, names]) => names.map(name => `shims/${group}/${name}${exe}`)),
+  ...nodeHooks.map(name => `hooks/${name}`)]
 if (existsSync(marker) && JSON.parse(readFileSync(marker)).fingerprint === identity && required.every(p => existsSync(join(destination, p)))) {
   console.log(`Bundled video runtime ready (${platform}).`)
   process.exit(0)
@@ -97,6 +105,16 @@ try {
   const launcher = join(staging, 'bin', process.platform === 'win32' ? 'comfy.exe' : 'comfy')
   run('rustc', ['--edition=2021', '-C', 'opt-level=s', '-C', 'strip=symbols', join(inputs, 'launcher.rs'), '-o', launcher])
   cpSync(launcher, join(staging, 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'))
+  // One relocatable launcher, copied under each tool name (the file name selects the tool).
+  const shim = join(staging, `shim${exe}`)
+  run('rustc', ['--edition=2021', '-C', 'opt-level=s', '-C', 'strip=symbols', join(inputs, 'shim.rs'), '-o', shim])
+  for (const [group, names] of Object.entries(shims)) {
+    mkdirSync(join(staging, 'shims', group), { recursive: true })
+    for (const name of names) cpSync(shim, join(staging, 'shims', group, `${name}${exe}`))
+  }
+  rmSync(shim, { force: true })
+  mkdirSync(join(staging, 'hooks'))
+  for (const name of nodeHooks) cpSync(join(inputs, 'node-hooks', name), join(staging, 'hooks', name))
 
   // Keep npm's JS entry and dependencies for explicit project setup. Remove
   // unrelated managers and shell launchers; npm always runs through bundled Node.

@@ -11,6 +11,7 @@ use tokio::{
 use crate::{proc::NoConsoleWindow, skills::SkillMeta};
 
 static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
+pub(crate) mod bundled;
 
 pub(crate) const CUA_MCP_SERVER_ID: &str = "computer-control-cua-driver";
 pub(crate) const LEGACY_CUA_MCP_SERVER_ID: &str = "plugin-cua-driver";
@@ -68,12 +69,20 @@ fn control_server(
                     )
             })
         {
-            return server.clone();
+            let mut server = server.clone();
+            if server.command == tool.command() {
+                if let Some(path) = bundled::command(tool.command()) {
+                    server.command = path.to_string_lossy().into_owned();
+                }
+            }
+            return server;
         }
     }
     crate::settings::ChatMcpServer {
         id: CUA_MCP_SERVER_ID.into(),
-        command: tool.command().into(),
+        command: bundled::command(tool.command())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| tool.command().into()),
         args: vec!["mcp".into()],
         ..Default::default()
     }
@@ -199,9 +208,17 @@ async fn run_with_env(
 ) -> Result<String, String> {
     let mut process = rmcp::transport::which_command(command)
         .map_err(|e| format!("Cannot find {command}: {e}"))?;
+    process.args(args).envs(crate::mcp::conn::clean_env(env));
+    run_process(process, command, cwd, seconds).await
+}
+
+async fn run_process(
+    mut process: tokio::process::Command,
+    command: &str,
+    cwd: Option<&Path>,
+    seconds: u64,
+) -> Result<String, String> {
     process
-        .args(args)
-        .envs(crate::mcp::conn::clean_env(env))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -230,6 +247,78 @@ async fn run_with_env(
         return Err(format!("{command}: {status}\n{out}\n{err}"));
     }
     Ok(out.trim().to_string())
+}
+
+/// The App's bundled runtime root, when it ships Node and npm.
+fn bundled_npm_root() -> Option<std::path::PathBuf> {
+    let root = crate::media_runtime::runtime::root().ok()?;
+    let tools = crate::media_runtime::runtime::tools_at(&root).ok()?;
+    (tools.contains_key("node") && tools.contains_key("npm")).then_some(root)
+}
+
+/// npm through the App's bundled Node, with `-g` going to the App-private prefix
+/// (~/.kivio/npm-global). Fetches try npmmirror first and the official registry once more.
+async fn run_bundled_npm(root: &Path, args: &[&str], seconds: u64) -> Result<String, String> {
+    use crate::media_runtime::launch;
+    let mut args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+    let prefix = launch::npm_prefix().ok_or("Home directory unavailable")?;
+    // App-owned installs always use the private directory, independent of user npmrc.
+    args.push(format!("--prefix={}", prefix.display()).into());
+    let mut failures = Vec::new();
+    for source in launch::npm_sources(&args, |key| std::env::var_os(key)) {
+        let command = launch::npm_command(root, &args, source, Some(&prefix))?;
+        match run_process(command.into(), "npm", None, seconds).await {
+            Ok(output) => {
+                // The private bin directory must be on PATH for the CLI that was just installed.
+                launch::extend_process_path(root);
+                return Ok(output);
+            }
+            Err(error) => failures.push(format!("[{}] {error}", source.label())),
+        }
+    }
+    Err(failures.join("\n"))
+}
+
+fn playwright_package() -> String {
+    format!(
+        "@playwright/cli@{}",
+        bundled::version("playwright").expect("Pinned Playwright version missing")
+    )
+}
+
+/// New installs use the bundled npm and the private prefix, so no system Node is required.
+/// An existing system-wide `playwright-cli` keeps being updated by the system npm, otherwise
+/// the private copy would be shadowed by the older one earlier on PATH. Without a bundled
+/// runtime (broken installation) the previous `npm -g` path is the fallback.
+async fn install_playwright_cli(update: bool) -> Result<String, String> {
+    let package = playwright_package();
+    let private = crate::media_runtime::launch::npm_prefix()
+        .map(|prefix| crate::media_runtime::launch::npm_bin_dir(&prefix));
+    let system_install = update
+        && !private.as_deref().is_some_and(|dir| {
+            crate::media_runtime::launch::resolves_inside("playwright-cli", dir)
+        })
+        && rmcp::transport::which_command("npm").is_ok();
+    match bundled_npm_root() {
+        Some(root) if !system_install => {
+            run_bundled_npm(
+                &root,
+                &["install", "--global", &package, "--no-audit", "--no-fund"],
+                300,
+            )
+            .await
+        }
+        _ => run("npm", &["install", "-g", &package], None, 300).await,
+    }
+}
+
+async fn latest_playwright_cli_version() -> Result<String, String> {
+    let package = playwright_package();
+    let args = ["view", &package, "version"];
+    match bundled_npm_root() {
+        Some(root) => run_bundled_npm(&root, &args, 30).await,
+        None => run("npm", &args, None, 30).await,
+    }
 }
 
 #[tauri::command]
@@ -289,6 +378,11 @@ pub async fn computer_control_status(
     if !check_updates.unwrap_or(false) {
         return Ok(status);
     }
+    if bundled::command(tool.command()).is_some_and(|path| path.to_string_lossy() == server.command)
+    {
+        status.latest_version = Some(status.current_version.clone());
+        return Ok(status);
+    }
     match tool {
         ControlTool::Cua => {
             let output = run_driver(&server, &["check-update", "--json"], 30).await?;
@@ -298,7 +392,7 @@ pub async fn computer_control_status(
             status.update_available = update.update_available;
         }
         ControlTool::Playwright => {
-            let output = run("npm", &["view", "@playwright/cli", "version"], None, 30).await?;
+            let output = latest_playwright_cli_version().await?;
             let latest = extract_version(&output);
             status.update_available = is_newer_version(&latest, &status.current_version);
             status.latest_version = Some(latest);
@@ -327,16 +421,18 @@ pub async fn computer_control_install(
         .map_err(|_| "Another computer-control installation is running")?;
     crate::path_env::refresh_path_now();
     let server = control_server(tool, &state);
+    if bundled::command(tool.command()).is_some_and(|path| path.to_string_lossy() == server.command)
+    {
+        bundled::prepare(&app, tool).await?;
+        run_driver(&server, &["--version"], 15).await?;
+        let source =
+            bundled::skill_dir(tool.command()).ok_or("内置电脑控制技能缺失，请修复 Dsivio 安装")?;
+        return import_control_skill(app, &source);
+    }
     if needs_install(&server.command, tool.command())? {
         match tool {
             ControlTool::Playwright => {
-                run(
-                    "npm",
-                    &["install", "-g", "@playwright/cli@latest"],
-                    None,
-                    300,
-                )
-                .await?;
+                install_playwright_cli(false).await?;
             }
             ControlTool::Cua => {
                 #[cfg(windows)]
@@ -410,6 +506,13 @@ pub async fn computer_control_update(
         .map_err(|_| "Another computer-control installation is running")?;
     crate::path_env::refresh_path_now();
     let server = control_server(tool, &state);
+    if bundled::command(tool.command()).is_some_and(|path| path.to_string_lossy() == server.command)
+    {
+        bundled::prepare(&app, tool).await?;
+        let source =
+            bundled::skill_dir(tool.command()).ok_or("内置电脑控制技能缺失，请修复 Dsivio 安装")?;
+        return import_control_skill(app, &source);
+    }
     let previous_version = extract_version(&run_driver(&server, &["--version"], 15).await?);
 
     let home = directories::BaseDirs::new()
@@ -430,13 +533,7 @@ pub async fn computer_control_update(
             home.join(".cua-driver/skills/cua-driver")
         }
         ControlTool::Playwright => {
-            run(
-                "npm",
-                &["install", "-g", "@playwright/cli@latest"],
-                None,
-                300,
-            )
-            .await?;
+            install_playwright_cli(true).await?;
             crate::path_env::refresh_path_now();
             let staging = home.join(".kivio/tool-setup/playwright");
             std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
