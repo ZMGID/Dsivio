@@ -792,3 +792,37 @@ async fn order_offset_advances_when_paging_total_says_more() {
     let call = calls.iter().find(|call| req_path(call) == "/orders/search").unwrap();
     assert_eq!(q(call, "offset"), Some("1"));
 }
+
+#[tokio::test]
+async fn service_submit_preserves_prefixed_category_and_persists_listing() {
+    use super::service::{self, Runtime, ShopSource};
+    use super::shopee::{ResolvedShop, ScriptTransport, Transport};
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("cup.jpg");
+    std::fs::write(&image, &images()[0].1).unwrap();
+    let script = Arc::new(ScriptHttp::new());
+    push_local_reads(&script, "MLA", "MLA3530", &["ARS"], false);
+    script.push("/pictures/items/upload", ok(picture()));
+    script.push("/items", ok(item("MLA1136716168", "active")));
+    script.push("/items/MLA1136716168/description", ok(description()));
+    let runtime = Runtime {
+        db: dir.path().join("commerce.sqlite3"),
+        transport: Transport::script(Arc::new(ScriptTransport::new())),
+        http: scripted(&script),
+        shops: ShopSource::Fixed(std::collections::HashMap::from([("shop-1".into(), ResolvedShop {
+            platform: Platform::Mercadolibre, partner_id: "app".into(), partner_key: "secret".into(),
+            access_token: "token-abc".into(), remote_id: "789".into(), region: Some("MLA".into()), name: "demo".into(),
+        })])),
+        now: NOW,
+    };
+    let mut draft = draft();
+    draft.images = vec![image.to_string_lossy().into_owned()];
+    let records = service::submit(&runtime, draft, vec![target("MLA3530")], None).await.unwrap();
+    assert_eq!(records[0].status, ListingStatus::Live);
+    let saved = service::record(&runtime, &records[0].id).unwrap();
+    assert_eq!(saved.target.category_id, "MLA3530");
+    assert_eq!(saved.remote_id.as_deref(), Some("MLA1136716168"));
+    let calls = script.calls();
+    let request = calls.iter().find(|call| req_path(call) == "/items").unwrap();
+    assert_eq!(json_of(request)["category_id"], "MLA3530");
+}

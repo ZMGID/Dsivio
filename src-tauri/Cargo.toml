@@ -1,7 +1,7 @@
 # Dsivio Rust 后端 Cargo 配置
 [package]
 name = "kivio"
-version = "1.0.1"
+version = "1.1.0"
 description = "Dsivio - Screen-level AI assistant for macOS/Windows"
 authors = ["ZM"]
 license = "GPL-3.0-or-later"

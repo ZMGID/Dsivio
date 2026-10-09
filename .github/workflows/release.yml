@@ -22,6 +22,10 @@ env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   BUILD_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   create-release:
     # Both platform jobs upload into this release. Creating it first avoids a
@@ -34,10 +38,14 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists"
+            if [ "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "true" ]; then
+              echo "Release $RELEASE_TAG is already public; use a new version instead of replacing published assets." >&2
+              exit 1
+            fi
+            echo "Reusing draft release $RELEASE_TAG"
             exit 0
           fi
-          extra=()
+          extra=(--draft --verify-tag)
           case "$RELEASE_TAG" in
             *beta*|*alpha*|*rc*) extra+=(--prerelease) ;;
           esac
@@ -45,7 +53,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Dsivio $RELEASE_TAG" \
             --notes "Automated macOS (Apple Silicon) + Windows (x64 installer and portable zip) build for ${RELEASE_TAG}. Built from: ${BUILD_REF}." \
-            --verify-tag \
             "${extra[@]}"
 
   tauri-release:
@@ -107,7 +114,7 @@ jobs:
         # macOS: real kivio-ocr-helper. Windows: empty stub for externalBin.
         run: npm run build:swift
 
-      - name: Build and publish ${{ matrix.name }} installer
+      - name: Build and upload ${{ matrix.name }} installer to draft
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -119,7 +126,7 @@ jobs:
             Built from: ${{ env.BUILD_REF }}
             - macOS: DMG (unsigned — first launch: right-click → Open, or `xattr -cr "/Applications/dsivio.app"`)
             - Windows: NSIS installer (.exe) and portable zip (unzip and run)
-          releaseDraft: false
+          releaseDraft: true
           prerelease: ${{ contains(env.RELEASE_TAG, 'beta') || contains(env.RELEASE_TAG, 'alpha') || contains(env.RELEASE_TAG, 'rc') }}
           includeUpdaterJson: false
           tauriScript: npx tauri
@@ -177,3 +184,28 @@ jobs:
           $zip = "src-tauri/target/release/bundle/portable/dsivio_${ver}_x64-portable.zip"
           if (-not (Test-Path -LiteralPath $zip)) { throw "portable zip not found: $zip" }
           gh release upload $env:RELEASE_TAG $zip --clobber --repo $env:GITHUB_REPOSITORY
+
+  publish-release:
+    needs: tauri-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
+      - name: Publish verified installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          for asset in "dsivio_${version}_aarch64.dmg" "dsivio_${version}_x64-setup.exe" "dsivio_${version}_x64-portable.zip"; do
+            if ! grep -Fxq "$asset" <<< "$assets"; then
+              echo "Missing verified release asset: $asset" >&2
+              exit 1
+            fi
+          done
+          notes="docs/releases/${RELEASE_TAG}.md"
+          test -s "$notes"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$notes" --draft=false

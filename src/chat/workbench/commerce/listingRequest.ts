@@ -194,7 +194,7 @@ export function buildListingRequest(
       continue
     }
     const categoryId = (form.categories[shopId] ?? '').trim()
-    if (!/^\d+$/.test(categoryId)) {
+    if (!categoryId) {
       errors.push(`请为${name}选择类目`)
       continue
     }

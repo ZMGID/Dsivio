@@ -89,7 +89,9 @@ it('keeps the images that could be read and shows why one could not', async () =
 })
 
 it('releases previews that finish loading after the page is left', async () => {
-  const gate = Promise.withResolvers<{ name: string; mime: string; base64: string }>()
+  let resolve!: (value: { name: string; mime: string; base64: string }) => void
+  const promise = new Promise<{ name: string; mime: string; base64: string }>((done) => { resolve = done })
+  const gate = { promise, resolve }
   vi.mocked(api.workbenchReadLocalImage).mockImplementation(() => gate.promise)
   const onNotice = vi.fn()
   const view = render(<Harness onNotice={onNotice} />)

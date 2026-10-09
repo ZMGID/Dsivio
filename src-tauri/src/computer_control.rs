@@ -44,8 +44,77 @@ impl ControlTool {
 #[serde(rename_all = "camelCase")]
 pub struct ControlToolStatus {
     pub current_version: String,
+    pub installed: bool,
+    pub issue: Option<String>,
     pub latest_version: Option<String>,
     pub update_available: bool,
+}
+
+fn control_server(
+    tool: ControlTool,
+    state: &crate::state::AppState,
+) -> crate::settings::ChatMcpServer {
+    if matches!(tool, ControlTool::Cua) {
+        if let Some(server) = state
+            .settings_read()
+            .chat_tools
+            .servers
+            .iter()
+            .find(|server| {
+                is_cua_mcp_server_id(&server.id)
+                    || matches!(
+                        server.connector_id.as_deref(),
+                        Some("computer-control:cua" | "plugin:cua-driver")
+                    )
+            })
+        {
+            return server.clone();
+        }
+    }
+    crate::settings::ChatMcpServer {
+        id: CUA_MCP_SERVER_ID.into(),
+        command: tool.command().into(),
+        args: vec!["mcp".into()],
+        ..Default::default()
+    }
+}
+
+// Only a missing default executable permits installation. An existing but broken
+// driver, or a missing custom path, requires fixing that environment instead.
+fn needs_install(command: &str, default: &str) -> Result<bool, String> {
+    match rmcp::transport::which_command(command) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && command == default => {
+            Ok(true)
+        }
+        Err(error) => Err(format!("Cannot find configured driver {command}: {error}")),
+    }
+}
+
+async fn run_driver(
+    server: &crate::settings::ChatMcpServer,
+    args: &[&str],
+    seconds: u64,
+) -> Result<String, String> {
+    run_with_env(
+        &server.command,
+        args,
+        server.cwd.as_deref().map(Path::new),
+        &server.env,
+        seconds,
+    )
+    .await
+}
+
+fn permission_issue(value: &serde_json::Value) -> Option<String> {
+    let mut missing = Vec::new();
+    if value.get("accessibility").and_then(|v| v.as_bool()) == Some(false) {
+        missing.push("辅助功能");
+    }
+    if value.get("screen_recording").and_then(|v| v.as_bool()) == Some(false) {
+        missing.push("屏幕录制");
+    }
+    (!missing.is_empty()).then(|| format!("请在系统设置中授权：{}", missing.join("、")))
 }
 
 #[derive(Deserialize)]
@@ -118,10 +187,21 @@ async fn run(
     cwd: Option<&Path>,
     seconds: u64,
 ) -> Result<String, String> {
+    run_with_env(command, args, cwd, &Default::default(), seconds).await
+}
+
+async fn run_with_env(
+    command: &str,
+    args: &[&str],
+    cwd: Option<&Path>,
+    env: &std::collections::HashMap<String, String>,
+    seconds: u64,
+) -> Result<String, String> {
     let mut process = rmcp::transport::which_command(command)
         .map_err(|e| format!("Cannot find {command}: {e}"))?;
     process
         .args(args)
+        .envs(crate::mcp::conn::clean_env(env))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -153,44 +233,78 @@ async fn run(
 }
 
 #[tauri::command]
-pub async fn computer_control_check(tool: ControlTool) -> Result<String, String> {
+pub async fn computer_control_check(
+    state: State<'_, crate::state::AppState>,
+    tool: ControlTool,
+) -> Result<String, String> {
     crate::path_env::refresh_path_now();
-    run(tool.command(), &["--version"], None, 15).await
+    run_driver(&control_server(tool, &state), &["--version"], 15).await
 }
 
 #[tauri::command]
-pub async fn computer_control_status(tool: ControlTool) -> Result<ControlToolStatus, String> {
-    let current_version = extract_version(&computer_control_check(tool).await?);
-    let mut latest_version = None;
-    let mut update_available = false;
-
-    match tool {
-        ControlTool::Cua => {
-            if let Ok(output) = run("cua-driver", &["check-update", "--json"], None, 30).await {
-                if let Ok(status) = serde_json::from_str::<CuaUpdateStatus>(&output) {
-                    latest_version = status.latest_version;
-                    update_available = status.update_available;
-                    if latest_version.is_none() {
-                        latest_version = status.current_version;
-                    }
-                }
-            }
-        }
-        ControlTool::Playwright => {
-            if let Ok(output) = run("npm", &["view", "@playwright/cli", "version"], None, 30).await
-            {
-                let latest = extract_version(&output);
-                update_available = is_newer_version(&latest, &current_version);
-                latest_version = Some(latest);
-            }
+pub async fn computer_control_status(
+    state: State<'_, crate::state::AppState>,
+    tool: ControlTool,
+    check_updates: Option<bool>,
+) -> Result<ControlToolStatus, String> {
+    crate::path_env::refresh_path_now();
+    let server = control_server(tool, &state);
+    let installed = !needs_install(&server.command, tool.command()).unwrap_or(false);
+    let mut status = ControlToolStatus {
+        installed,
+        current_version: String::new(),
+        latest_version: None,
+        update_available: false,
+        issue: None,
+    };
+    if !installed {
+        return Ok(status);
+    }
+    match run_driver(&server, &["--version"], 15).await {
+        Ok(output) => status.current_version = extract_version(&output),
+        Err(error) => {
+            status.issue = Some(error);
+            return Ok(status);
         }
     }
-
-    Ok(ControlToolStatus {
-        current_version,
-        latest_version,
-        update_available,
-    })
+    if matches!(tool, ControlTool::Cua) {
+        // Use the application's existing MCP connection, including its configured
+        // executable/environment. This read-only call also detects protocol mismatch.
+        let probe = state.mcp_call_tool(None, &server, "check_permissions", serde_json::json!({}));
+        status.issue = match tokio::time::timeout(Duration::from_secs(15), probe).await {
+            Ok(Ok(result)) if !result.is_error => {
+                let value = result
+                    .structured_content
+                    .or_else(|| serde_json::from_str(&result.content).ok());
+                match value {
+                    Some(value) => permission_issue(&value),
+                    None => Some("CUA 权限检测未返回有效结果，请检查驱动连接".into()),
+                }
+            }
+            Ok(Ok(result)) => Some(result.content),
+            Ok(Err(error)) => Some(error),
+            Err(_) => Some("CUA 连接检测超时，请检查已有驱动服务".into()),
+        };
+    }
+    if !check_updates.unwrap_or(false) {
+        return Ok(status);
+    }
+    match tool {
+        ControlTool::Cua => {
+            let output = run_driver(&server, &["check-update", "--json"], 30).await?;
+            let update: CuaUpdateStatus =
+                serde_json::from_str(&output).map_err(|e| e.to_string())?;
+            status.latest_version = update.latest_version.or(update.current_version);
+            status.update_available = update.update_available;
+        }
+        ControlTool::Playwright => {
+            let output = run("npm", &["view", "@playwright/cli", "version"], None, 30).await?;
+            let latest = extract_version(&output);
+            status.update_available = is_newer_version(&latest, &status.current_version);
+            status.latest_version = Some(latest);
+        }
+    }
+    Ok(status)
 }
 
 fn import_control_skill(app: AppHandle, source: &Path) -> Result<SkillMeta, String> {
@@ -205,12 +319,15 @@ fn import_control_skill(app: AppHandle, source: &Path) -> Result<SkillMeta, Stri
 #[tauri::command]
 pub async fn computer_control_install(
     app: AppHandle,
+    state: State<'_, crate::state::AppState>,
     tool: ControlTool,
 ) -> Result<SkillMeta, String> {
     let _guard = INSTALL_LOCK
         .try_lock()
         .map_err(|_| "Another computer-control installation is running")?;
-    if computer_control_check(tool).await.is_err() {
+    crate::path_env::refresh_path_now();
+    let server = control_server(tool, &state);
+    if needs_install(&server.command, tool.command())? {
         match tool {
             ControlTool::Playwright => {
                 run(
@@ -238,15 +355,31 @@ pub async fn computer_control_install(
             }
         }
     }
-    computer_control_check(tool).await?;
+    crate::path_env::refresh_path_now();
+    run_driver(&server, &["--version"], 15).await?;
+    if let Ok(registry) = crate::skills::build_registry_metadata(
+        &app,
+        &state.settings_read().chat_tools.skill_scan_paths,
+    ) {
+        if let Some(skill) = registry
+            .metas()
+            .into_iter()
+            .find(|skill| skill.id == tool.command() || skill.name == tool.command())
+        {
+            return Ok(skill);
+        }
+    }
     let home = directories::BaseDirs::new()
         .ok_or("Home directory unavailable")?
         .home_dir()
         .to_path_buf();
     let source = match tool {
         ControlTool::Cua => {
-            run("cua-driver", &["skills", "install"], None, 120).await?;
-            home.join(".cua-driver/skills/cua-driver")
+            let source = home.join(".cua-driver/skills/cua-driver");
+            if !source.join("SKILL.md").is_file() {
+                run_driver(&server, &["skills", "install"], 120).await?;
+            }
+            source
         }
         ControlTool::Playwright => {
             let staging = home.join(".kivio/tool-setup/playwright");
@@ -275,7 +408,9 @@ pub async fn computer_control_update(
     let _guard = INSTALL_LOCK
         .try_lock()
         .map_err(|_| "Another computer-control installation is running")?;
-    let previous_version = extract_version(&computer_control_check(tool).await?);
+    crate::path_env::refresh_path_now();
+    let server = control_server(tool, &state);
+    let previous_version = extract_version(&run_driver(&server, &["--version"], 15).await?);
 
     let home = directories::BaseDirs::new()
         .ok_or("Home directory unavailable")?
@@ -287,12 +422,11 @@ pub async fn computer_control_update(
             // then refresh its separately versioned official Skill pack.
             state.mcp_disconnect_server(CUA_MCP_SERVER_ID).await;
             state.mcp_disconnect_server(LEGACY_CUA_MCP_SERVER_ID).await;
-            let update_result =
-                run("cua-driver", &["update", "--apply", "--json"], None, 300).await;
+            let update_result = run_driver(&server, &["update", "--apply", "--json"], 300).await;
             crate::path_env::refresh_path_now();
-            let observed_version = extract_version(&computer_control_check(tool).await?);
+            let observed_version = extract_version(&run_driver(&server, &["--version"], 15).await?);
             validate_self_update_result(update_result, &previous_version, &observed_version)?;
-            run("cua-driver", &["skills", "update"], None, 180).await?;
+            run_driver(&server, &["skills", "update"], 180).await?;
             home.join(".cua-driver/skills/cua-driver")
         }
         ControlTool::Playwright => {
@@ -317,13 +451,64 @@ pub async fn computer_control_update(
         }
     };
 
-    computer_control_check(tool).await?;
+    crate::path_env::refresh_path_now();
+    run_driver(&server, &["--version"], 15).await?;
     import_control_skill(app, &source)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn existing_broken_driver_never_requests_installation() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cua-driver");
+        std::fs::write(&file, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let command = file.to_str().unwrap();
+        assert!(!needs_install(command, command).unwrap());
+        assert!(run(command, &["--version"], None, 1).await.is_err());
+        assert!(!needs_install(command, command).unwrap());
+        assert!(needs_install("/missing/custom/cua-driver", "cua-driver").is_err());
+        assert!(needs_install("dsivio-test-missing-driver", "dsivio-test-missing-driver").unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn configured_driver_uses_its_environment_and_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = crate::settings::ChatMcpServer {
+            command: "/bin/sh".into(),
+            cwd: Some(dir.path().to_string_lossy().into()),
+            env: [("DSIVIO_CONTROL_TEST".into(), "existing-driver".into())].into(),
+            ..Default::default()
+        };
+        let output = run_driver(
+            &server,
+            &["-c", "printf '%s\n' \"$DSIVIO_CONTROL_TEST\"; pwd -P"],
+            1,
+        )
+        .await
+        .unwrap();
+        let expected = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(output, format!("existing-driver\n{}", expected.display()));
+    }
+
+    #[test]
+    fn reports_missing_permissions_without_reinstallation() {
+        assert!(permission_issue(
+            &serde_json::json!({"accessibility": true, "screen_recording": true})
+        )
+        .is_none());
+        assert!(permission_issue(
+            &serde_json::json!({"accessibility": false, "screen_recording": false})
+        )
+        .unwrap()
+        .contains("辅助功能、屏幕录制"));
+    }
 
     #[test]
     fn extracts_cli_versions() {

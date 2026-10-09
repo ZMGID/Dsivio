@@ -16,6 +16,7 @@ type ControlDetectionSnapshot = {
   skills: SkillMeta[]
   plugins: PluginStatus[]
   skillScanPaths: string[]
+  configKey: string
 }
 
 const CONTROL_CACHE_KEY = 'kivio.computer-control.detection.v1'
@@ -52,7 +53,7 @@ function cuaMcpServer(current?: ChatMcpServer, enabled = true): ChatMcpServer {
     transport: 'stdio',
     url: '',
     command: current?.command || 'cua-driver',
-    args: ['mcp'],
+    args: current?.args.length ? current.args : ['mcp'],
     env: current?.env ?? {},
     headers: {},
     cwd: current?.cwd ?? null,
@@ -65,11 +66,11 @@ function formatControlVersion(output: string): string {
   return match ? `v${match[1]}` : output.trim()
 }
 
-function scanPathKey(paths: string[]): string {
-  return JSON.stringify(paths)
+function detectionKey(tools: ChatToolsConfig): string {
+  return JSON.stringify([tools.skillScanPaths, tools.servers.filter(isCuaMcp).map(({ command, args, env, cwd, transport, url }) => ({ command, args, env, cwd, transport, url }))])
 }
 
-function readDetectionCache(paths: string[]): ControlDetectionSnapshot | null {
+function readDetectionCache(tools: ChatToolsConfig): ControlDetectionSnapshot | null {
   try {
     const raw = window.sessionStorage.getItem(CONTROL_CACHE_KEY)
     if (!raw) return null
@@ -77,7 +78,7 @@ function readDetectionCache(paths: string[]): ControlDetectionSnapshot | null {
     if (!parsed.versions || !parsed.updates || !Array.isArray(parsed.skills) || !Array.isArray(parsed.plugins) || !Array.isArray(parsed.skillScanPaths)) {
       return null
     }
-    if (scanPathKey(parsed.skillScanPaths) !== scanPathKey(paths)) return null
+    if (parsed.configKey !== detectionKey(tools)) return null
     return parsed as ControlDetectionSnapshot
   } catch {
     return null
@@ -92,8 +93,8 @@ function writeDetectionCache(snapshot: ControlDetectionSnapshot): void {
   }
 }
 
-function updatePluginInDetectionCache(paths: string[], status: PluginStatus): void {
-  const cached = readDetectionCache(paths)
+function updatePluginInDetectionCache(tools: ChatToolsConfig, status: PluginStatus): void {
+  const cached = readDetectionCache(tools)
   if (!cached) return
   writeDetectionCache({
     ...cached,
@@ -101,8 +102,9 @@ function updatePluginInDetectionCache(paths: string[], status: PluginStatus): vo
   })
 }
 
-function detectControls(skillScanPaths: string[]): Promise<ControlDetectionSnapshot> {
-  const key = scanPathKey(skillScanPaths)
+function detectControls(tools: ChatToolsConfig): Promise<ControlDetectionSnapshot> {
+  const key = detectionKey(tools)
+  const skillScanPaths = tools.skillScanPaths
   if (detectionInFlight?.key === key) return detectionInFlight.promise
 
   const promise = Promise.all([
@@ -110,8 +112,8 @@ function detectControls(skillScanPaths: string[]): Promise<ControlDetectionSnaps
       try {
         const status = await api.computerControlStatus(tool.id)
         return [tool.id, status] as const
-      } catch {
-        return [tool.id, null] as const
+      } catch (cause) {
+        return [tool.id, { currentVersion: '', latestVersion: null, updateAvailable: false, installed: true, issue: String(cause) }] as const
       }
     })),
     api.chatSkillsList(skillScanPaths).catch(() => ({ success: false, skills: [] as SkillMeta[] })),
@@ -124,6 +126,7 @@ function detectControls(skillScanPaths: string[]): Promise<ControlDetectionSnaps
       skills: skillResult.skills,
       plugins,
       skillScanPaths: [...skillScanPaths],
+      configKey: key,
     }
     writeDetectionCache(snapshot)
     return snapshot
@@ -159,7 +162,7 @@ function publishOperation(next: ControlOperation): void {
 async function runControlOperation(
   tool: Tool,
   kind: 'install' | 'update' | 'toggle',
-  paths: string[],
+  getTools: () => ChatToolsConfig,
   work: () => Promise<void>,
 ): Promise<void> {
   if (controlOperation.pending) return
@@ -168,7 +171,7 @@ async function runControlOperation(
     await work()
     // A detection begun before installation must not become the final result.
     if (detectionInFlight) await detectionInFlight.promise
-    if (kind !== 'toggle') await detectControls(paths)
+    if (kind !== 'toggle') await detectControls(getTools())
     publishOperation({ ...controlOperation, detectionRevision: controlOperation.detectionRevision + 1 })
   } catch (cause) {
     const detail = typeof cause === 'string' ? cause : cause instanceof Error ? cause.message : ''
@@ -211,11 +214,13 @@ export function ComputerControlTab({ lang, tools, onChange }: {
   onChange: (updates: Partial<ChatToolsConfig> | ((current: ChatToolsConfig) => Partial<ChatToolsConfig>)) => void
 }) {
   const zh = lang === 'zh'
-  const initialCache = useRef(readDetectionCache(tools.skillScanPaths)).current
+  const initialCache = useRef(readDetectionCache(tools)).current
   const [versions, setVersions] = useState<Partial<Record<NativeTool, string>>>(initialCache?.versions ?? {})
   const [updates, setUpdates] = useState<Partial<Record<NativeTool, ControlToolStatus>>>(initialCache?.updates ?? {})
   const [skills, setSkills] = useState<SkillMeta[]>(initialCache?.skills ?? [])
   const [plugins, setPlugins] = useState<PluginStatus[]>(initialCache?.plugins ?? [])
+  const [checkingUpdates, setCheckingUpdates] = useState<NativeTool | null>(null)
+  const [updateError, setUpdateError] = useState('')
   const [loading, setLoading] = useState(initialCache === null)
   const operation = useSyncExternalStore(subscribeOperation, operationSnapshot)
   const appliedRevision = useRef(operation.detectionRevision)
@@ -223,7 +228,7 @@ export function ComputerControlTab({ lang, tools, onChange }: {
   const updating = operation.pending?.kind === 'update' ? operation.pending.tool : null
   const error = operation.error
     ? operation.error.kind === 'install'
-      ? (zh ? '安装失败，请稍后重试。' : 'Installation failed. Please try again.')
+      ? (operation.error.detail ? `${zh ? '接入失败' : 'Setup failed'}：${operation.error.detail.slice(0, 240)}` : (zh ? '安装失败，请稍后重试。' : 'Installation failed. Please try again.'))
       : operation.error.detail
         ? `${zh ? '更新失败' : 'Update failed'}：${operation.error.detail.slice(0, 240)}`
         : (zh ? '更新失败，请稍后重试。' : 'Update failed. Please try again.')
@@ -234,8 +239,8 @@ export function ComputerControlTab({ lang, tools, onChange }: {
 
   const reload = useCallback(async (showLoading: boolean) => {
     if (showLoading) setLoading(true)
-    const snapshot = await detectControls(latest.current.tools.skillScanPaths)
-    if (!mounted.current) return
+    const snapshot = await detectControls(latest.current.tools)
+    if (!mounted.current || snapshot.configKey !== detectionKey(latest.current.tools)) return
     setVersions(snapshot.versions)
     setUpdates(snapshot.updates)
     setSkills(snapshot.skills)
@@ -243,16 +248,18 @@ export function ComputerControlTab({ lang, tools, onChange }: {
     setLoading(false)
   }, [])
 
+  const configKey = detectionKey(tools)
+
   useEffect(() => {
     mounted.current = true
-    if (!initialCache) void reload(true)
+    if (!readDetectionCache(latest.current.tools)) void reload(true)
     return () => { mounted.current = false }
-  }, [initialCache, reload])
+  }, [configKey, reload])
 
   useEffect(() => {
     if (appliedRevision.current === operation.detectionRevision) return
     appliedRevision.current = operation.detectionRevision
-    const snapshot = readDetectionCache(latest.current.tools.skillScanPaths)
+    const snapshot = readDetectionCache(latest.current.tools)
     if (!snapshot) {
       void reload(false)
       return
@@ -269,11 +276,10 @@ export function ComputerControlTab({ lang, tools, onChange }: {
   }
 
   const install = (tool: Tool) => {
-    const paths = [...latest.current.tools.skillScanPaths]
-    return runControlOperation(tool, 'install', paths, async () => {
+    return runControlOperation(tool, 'install', () => latest.current.tools, async () => {
       if (tool === 'ego-lite' || tool === 'officecli') {
         const result = await api.pluginsRunOfficialInstall(tool)
-        updatePluginInDetectionCache(paths, result.status)
+        updatePluginInDetectionCache(latest.current.tools, result.status)
         await refreshSettings().catch(() => undefined)
       } else {
         const skill = await api.computerControlInstall(tool)
@@ -283,18 +289,34 @@ export function ComputerControlTab({ lang, tools, onChange }: {
   }
 
   const update = (tool: NativeTool) => {
-    const paths = [...latest.current.tools.skillScanPaths]
-    return runControlOperation(tool, 'update', paths, async () => {
+    return runControlOperation(tool, 'update', () => latest.current.tools, async () => {
       const skill = await api.computerControlUpdate(tool)
       setNativeControlEnabled(tool, skill.id, true)
     })
   }
 
+  const checkUpdates = async (tool: NativeTool) => {
+    if (checkingUpdates) return
+    setCheckingUpdates(tool)
+    setUpdateError('')
+    const key = detectionKey(latest.current.tools)
+    try {
+      const status = await api.computerControlStatus(tool, true)
+      if (!mounted.current || key !== detectionKey(latest.current.tools)) return
+      setUpdates(current => ({ ...current, [tool]: status }))
+      const cached = readDetectionCache(latest.current.tools)
+      if (cached) writeDetectionCache({ ...cached, updates: { ...cached.updates, [tool]: status } })
+    } catch (cause) {
+      if (mounted.current) setUpdateError(`${zh ? '检查更新失败' : 'Update check failed'}：${String(cause).slice(0, 240)}`)
+    } finally {
+      if (mounted.current) setCheckingUpdates(null)
+    }
+  }
+
   const setPluginEnabled = (id: 'ego-lite' | 'officecli', enabled: boolean) => {
-    const paths = [...latest.current.tools.skillScanPaths]
-    return runControlOperation(id, 'toggle', paths, async () => {
+    return runControlOperation(id, 'toggle', () => latest.current.tools, async () => {
       const result = await api.pluginsSetEnabled(id, enabled)
-      updatePluginInDetectionCache(paths, result.status)
+      updatePluginInDetectionCache(latest.current.tools, result.status)
       await refreshSettings().catch(() => undefined)
     })
   }
@@ -306,6 +328,10 @@ export function ComputerControlTab({ lang, tools, onChange }: {
 
   return (
     <>
+      <Button size="sm" disabled={loading || installing !== null || updating !== null || checkingUpdates !== null}
+        onClick={() => { void reload(true) }}>
+        {zh ? '重新检测' : 'Recheck'}
+      </Button>
       {CONTROL_GROUPS.map(group => (
         <section className="computer-control-section" key={group.id}>
           <h3 className="computer-control-heading">{zh ? group.zh : group.en}</h3>
@@ -327,9 +353,11 @@ export function ComputerControlTab({ lang, tools, onChange }: {
                 ? (plugin?.version ? formatControlVersion(plugin.version) : '')
                 : versions[tool.id] ?? ''
               const updateStatus = tool.kind === 'native' ? updates[tool.id] : undefined
+              const issue = updateStatus?.issue
+              const driverInstalled = updateStatus?.installed ?? !!version
               const ready = tool.kind === 'plugin'
                 ? installed === true
-                : !!version && !!skill && (tool.id !== 'cua' || !!mcp)
+                : !issue && !!version && !!skill && (tool.id !== 'cua' || !!mcp)
               const enabled = tool.kind === 'plugin'
                 ? plugin?.enabled === true
                 : ready
@@ -337,7 +365,7 @@ export function ComputerControlTab({ lang, tools, onChange }: {
                   && !(tools.disabledSkillIds ?? []).includes(skill!.id)
                   && (tool.id !== 'cua' || mcp?.enabled === true)
               const Icon = tool.icon
-              const description = version
+              const description = issue ? `${version ? `${version} · ` : ''}${issue.slice(0, 240)}` : version
                 ? `${version}${componentCounts ? ` · ${componentCounts}` : ''}`
                 : (zh ? '未安装' : 'Not installed')
 
@@ -359,6 +387,13 @@ export function ComputerControlTab({ lang, tools, onChange }: {
                         <RefreshCw size={14} className="animate-spin text-neutral-400" aria-label={zh ? '正在检测' : 'Checking'} />
                       ) : ready ? (
                         <>
+                          {tool.kind === 'native' && !updateStatus?.updateAvailable && (
+                            <Button size="sm" disabled={checkingUpdates !== null || installing !== null || updating !== null}
+                              aria-label={`${zh ? '检查' : 'Check'} ${tool.name} ${zh ? '更新' : 'updates'}`}
+                              onClick={() => { void checkUpdates(tool.id) }}>
+                              {checkingUpdates === tool.id ? (zh ? '检查中…' : 'Checking…') : (zh ? '检查更新' : 'Check updates')}
+                            </Button>
+                          )}
                           {tool.kind === 'native' && updateStatus?.updateAvailable && (
                             <Button
                               size="sm"
@@ -380,6 +415,10 @@ export function ComputerControlTab({ lang, tools, onChange }: {
                             }}
                           />
                         </>
+                      ) : issue ? (
+                        <Button size="sm" disabled={installing !== null || updating !== null} onClick={() => { void reload(true) }}>
+                          {zh ? '重新检测' : 'Recheck'}
+                        </Button>
                       ) : (
                         <Button
                           size="sm"
@@ -387,7 +426,7 @@ export function ComputerControlTab({ lang, tools, onChange }: {
                           onClick={() => { void install(tool.id) }}
                         >
                           {installing === tool.id && <RefreshCw size={12} className="animate-spin" />}
-                          {installing === tool.id ? (zh ? '安装中…' : 'Installing…') : (zh ? '安装' : 'Install')}
+                          {installing === tool.id ? (zh ? '安装中…' : 'Installing…') : tool.kind === 'native' && driverInstalled ? (zh ? '接入' : 'Connect') : (zh ? '安装' : 'Install')}
                         </Button>
                       )}
                     </div>
@@ -419,6 +458,7 @@ export function ComputerControlTab({ lang, tools, onChange }: {
           </div>
         </section>
       ))}
+      {updateError && <p role="alert" className="computer-control-error">{updateError}</p>}
       {error && <p role="alert" className="computer-control-error">{error}</p>}
     </>
   )

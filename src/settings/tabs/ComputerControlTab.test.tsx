@@ -69,7 +69,7 @@ describe('ComputerControlTab', () => {
     window.sessionStorage.clear()
     vi.mocked(api.computerControlStatus).mockImplementation(async tool => {
       if (tool === 'cua') return { currentVersion: '0.28.1', latestVersion: '0.28.1', updateAvailable: false }
-      throw new Error('playwright-cli not found')
+      return { currentVersion: '', latestVersion: null, updateAvailable: false, installed: false }
     })
     vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [] })
     vi.mocked(api.pluginsList).mockResolvedValue([])
@@ -116,8 +116,8 @@ describe('ComputerControlTab', () => {
     const onChange = vi.fn()
     render(<ComputerControlTab lang="zh" tools={makeChatToolsFixture()} onChange={onChange} />)
     await screen.findAllByText('未安装')
-    fireEvent.click(screen.getAllByRole('button', { name: '安装' })[1])
-    expect(await screen.findByRole('alert')).toHaveTextContent('安装失败，请稍后重试。')
+    fireEvent.click(within(screen.getByText('Playwright CLI').closest('.computer-control-row') as HTMLElement).getByRole('button', { name: '安装' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('接入失败：npm unavailable')
     expect(onChange).not.toHaveBeenCalled()
   })
 
@@ -209,7 +209,7 @@ describe('ComputerControlTab', () => {
   it('updates the Cua binary, MCP runtime, and official skill when a release is available', async () => {
     vi.mocked(api.computerControlStatus).mockImplementation(async tool => {
       if (tool === 'cua') return { currentVersion: '0.28.1', latestVersion: '0.28.2', updateAvailable: true }
-      throw new Error('playwright-cli not found')
+      return { currentVersion: '', latestVersion: null, updateAvailable: false, installed: false }
     })
     vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [cuaSkill] })
     vi.mocked(api.computerControlUpdate).mockResolvedValue(cuaSkill)
@@ -227,7 +227,7 @@ describe('ComputerControlTab', () => {
   it('shows the backend error when a native tool update fails', async () => {
     vi.mocked(api.computerControlStatus).mockImplementation(async tool => {
       if (tool === 'cua') return { currentVersion: '0.28.1', latestVersion: '0.28.2', updateAvailable: true }
-      throw new Error('playwright-cli not found')
+      return { currentVersion: '', latestVersion: null, updateAvailable: false, installed: false }
     })
     vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: [cuaSkill] })
     vi.mocked(api.computerControlUpdate).mockRejectedValue(new Error('installer exited with code 1'))
@@ -245,7 +245,7 @@ describe('ComputerControlTab', () => {
     const oldStatus = { currentVersion: '1.0.0', latestVersion: '1.1.0', updateAvailable: true }
     vi.mocked(api.computerControlStatus).mockImplementation(async tool => {
       if (tool === 'cua') return { currentVersion: '0.28.1', latestVersion: '0.28.1', updateAvailable: false }
-      if (kind === 'install') throw new Error('not installed')
+      if (kind === 'install') return { currentVersion: '', latestVersion: null, updateAvailable: false, installed: false }
       return oldStatus
     })
     vi.mocked(api.chatSkillsList).mockResolvedValue({ success: true, skills: kind === 'update' ? [playwrightSkill] : [] })
@@ -317,5 +317,66 @@ describe('ComputerControlTab', () => {
     expect(row().getByText('v0.5.0 · 1 Skill')).toBeTruthy()
     expect(row().getByRole('switch', { name: 'ego lite 控制' })).toBeChecked()
     expect(row().queryByRole('button', { name: '安装' })).toBeNull()
+  })
+})
+
+
+describe('existing computer control environment', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    ;({ ComputerControlTab } = await import('./ComputerControlTab'))
+    vi.clearAllMocks()
+    window.sessionStorage.clear()
+    mockedApi.chatSkillsList.mockResolvedValue({ success: true, skills: [cuaSkill] })
+    mockedApi.pluginsList.mockResolvedValue([])
+  })
+
+  it('shows an installed driver failure without offering another installation', async () => {
+    mockedApi.computerControlStatus.mockResolvedValue({
+      currentVersion: '', latestVersion: null, updateAvailable: false,
+      installed: true, issue: 'CUA connection protocol mismatch',
+    })
+    renderControls({ ...makeChatToolsFixture(), servers: [cuaMcp] })
+    const issue = await screen.findAllByText(/CUA connection protocol mismatch/)
+    const row = issue[0].closest('.computer-control-row') as HTMLElement
+    expect(within(row).queryByRole('button', { name: '安装' })).toBeNull()
+    expect(within(row).getByRole('button', { name: '重新检测' })).toBeTruthy()
+    expect(mockedApi.computerControlInstall).not.toHaveBeenCalled()
+  })
+
+  it('retains the configured CUA arguments when enabling control', async () => {
+    mockedApi.computerControlStatus.mockResolvedValue({ currentVersion: '0.34.0', latestVersion: null, updateAvailable: false })
+    const controls = renderControls({ ...makeChatToolsFixture(), servers: [{ ...cuaMcp, enabled: false, args: ['mcp', '--custom-option'] }] })
+    fireEvent.click(await screen.findByRole('switch', { name: 'Cua Driver 控制' }))
+    expect(controls.tools().servers[0].args).toEqual(['mcp', '--custom-option'])
+  })
+
+  it('checks updates only on an explicit request', async () => {
+    mockedApi.computerControlStatus.mockResolvedValue({ currentVersion: '0.34.0', latestVersion: null, updateAvailable: false })
+    renderControls({ ...makeChatToolsFixture(), servers: [cuaMcp] })
+    await screen.findByRole('switch', { name: 'Cua Driver 控制' })
+    expect(mockedApi.computerControlStatus).toHaveBeenCalledWith('cua')
+    fireEvent.click(screen.getByRole('button', { name: '检查 Cua Driver 更新' }))
+    await waitFor(() => expect(mockedApi.computerControlStatus).toHaveBeenCalledWith('cua', true))
+  })
+})
+
+
+describe('computer control detection cache', () => {
+  it('invalidates cached health when the configured executable changes', async () => {
+    vi.resetModules()
+    ;({ ComputerControlTab } = await import('./ComputerControlTab'))
+    vi.clearAllMocks()
+    window.sessionStorage.clear()
+    mockedApi.computerControlStatus.mockResolvedValue({ currentVersion: '0.34.0', latestVersion: null, updateAvailable: false })
+    mockedApi.chatSkillsList.mockResolvedValue({ success: true, skills: [cuaSkill] })
+    mockedApi.pluginsList.mockResolvedValue([])
+    const controls = renderControls({ ...makeChatToolsFixture(), servers: [cuaMcp] })
+    await screen.findByRole('switch', { name: 'Cua Driver 控制' })
+    mockedApi.computerControlStatus.mockClear()
+    controls.edit({ servers: [{ ...cuaMcp, command: '/custom/cua-driver' }] })
+    await waitFor(() => expect(mockedApi.computerControlStatus).toHaveBeenCalledWith('cua'))
+    await screen.findByRole('switch', { name: 'Cua Driver 控制' })
+    controls.leave()
   })
 })

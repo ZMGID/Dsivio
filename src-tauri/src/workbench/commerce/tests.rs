@@ -5,7 +5,6 @@ use super::shopee::{self, ResolvedShop, ScriptTransport, Step, Transport, Transp
 use super::types::{AttributeInput, ListingDraft, ListingStatus, MetricKey, MetricRange};
 use crate::workbench::shops::{sign_shopee, Platform};
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 const NOW: i64 = 1_790_899_200;
@@ -23,10 +22,13 @@ fn shop(platform: Platform) -> ResolvedShop {
 }
 
 fn harness(platform: Platform) -> (tempfile::TempDir, Runtime, Arc<ScriptTransport>) {
+    harness_with(&[("shop-1", platform)])
+}
+
+fn harness_with(entries: &[(&str, Platform)]) -> (tempfile::TempDir, Runtime, Arc<ScriptTransport>) {
     let dir = tempfile::tempdir().expect("temp dir");
     let script = Arc::new(ScriptTransport::new());
-    let mut shops = HashMap::new();
-    shops.insert("shop-1".into(), shop(platform));
+    let shops = entries.iter().map(|(id, platform)| ((*id).to_string(), shop(*platform))).collect();
     let runtime = Runtime {
         db: dir.path().join("commerce.sqlite3"),
         transport: Transport::script(script.clone()),
@@ -300,6 +302,25 @@ async fn add_item_happy_path_records_reviewing_and_the_payload() {
     let upload = script.calls().into_iter().find(|call| call.path.ends_with("upload_image")).unwrap();
     assert_eq!(upload.query_value("scene"), Some("normal"));
     assert_eq!(upload.file_name.as_deref(), Some("cup.jpg"));
+}
+
+#[tokio::test]
+async fn submit_records_each_shop_under_its_own_platform() {
+    let (dir, runtime, script) = harness_with(&[("shop-1", Platform::Shopee), ("shop-2", Platform::Shein)]);
+    let image = image_file(dir.path());
+    push_happy(&script);
+    let targets = vec![
+        serde_json::from_value(target()).unwrap(),
+        serde_json::from_value(json!({ "shopId": "shop-2", "categoryId": "200" })).unwrap(),
+    ];
+    let records = service::submit(&runtime, draft(&image), targets, Some("group-1".into())).await.expect("submit");
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].platform, Platform::Shopee);
+    assert_eq!(records[0].status, ListingStatus::Reviewing);
+    assert_eq!(records[1].platform, Platform::Shein);
+    assert!(records[1].status.can_resubmit(), "no SHEIN script was queued: {:?}", records[1].status);
+    let stored = service::record(&runtime, &records[1].id).expect("stored");
+    assert_eq!(stored.platform, Platform::Shein);
 }
 
 #[tokio::test]

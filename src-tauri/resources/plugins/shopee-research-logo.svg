@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="虾皮商品调研">
+  <rect x="3" y="3" width="58" height="58" rx="16" fill="#EE5A32"/>
+  <path d="M15 23h29l-2 28H17z" fill="#FFF5ED"/>
+  <path d="M23 24v-5a7 7 0 0 1 14 0v5" fill="none" stroke="#FFF5ED" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="36" cy="37" r="9" fill="#EE5A32" stroke="#EE5A32" stroke-width="3"/>
+  <circle cx="36" cy="37" r="6" fill="none" stroke="#FFF5ED" stroke-width="2.5"/>
+  <path d="m42 44 8 8" stroke="#283747" stroke-width="5" stroke-linecap="round"/>
+</svg>

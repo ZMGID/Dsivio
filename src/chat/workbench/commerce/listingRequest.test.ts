@@ -94,3 +94,10 @@ it('prefills an archive without choosing a category', () => {
   expect(next.shopIds).toEqual([])
   expect(next.images).toEqual(['/tmp/from-archive.png'])
 })
+
+it('preserves prefixed platform category IDs and rejects an empty selection', () => {
+  const built = buildListingRequest(form({ categories: { s1: 'MLA3530' } }), shops, defs)
+  expect(built.ok).toBe(true)
+  if (built.ok) expect(built.targets[0].categoryId).toBe('MLA3530')
+  expect(buildListingRequest(form({ categories: { s1: '  ' } }), shops, defs).ok).toBe(false)
+})
