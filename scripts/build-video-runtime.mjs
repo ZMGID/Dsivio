@@ -23,7 +23,7 @@ const fingerprint = createHash('sha256').update(platform)
 const exe = process.platform === 'win32' ? '.exe' : ''
 const shims = { tools: ['npm', 'npx', 'ffmpeg', 'ffprobe'], python: ['python', 'python3'] }
 const nodeHooks = ['render-browser-mirror.mjs', 'render-browser-mirror-hooks.mjs', 'render-browser-mirror-install.mjs']
-for (const file of ['versions.json', 'package.json', 'package-lock.json', 'requirements.txt', 'launcher.rs', 'shim.rs', ...nodeHooks.map(name => `node-hooks/${name}`)]) {
+for (const file of ['versions.json', 'package.json', 'package-lock.json', 'requirements.txt', 'launcher.rs', 'npm_policy.rs', 'shim.rs', ...nodeHooks.map(name => `node-hooks/${name}`)]) {
   fingerprint.update(readFileSync(join(inputs, file)))
 }
 fingerprint.update(readFileSync(fileURLToPath(import.meta.url)))

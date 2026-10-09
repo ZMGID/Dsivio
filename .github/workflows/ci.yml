@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install frontend dependencies
@@ -42,6 +42,9 @@ jobs:
 
       - name: Prepare bundled plugin dependencies
         run: npm run build:video-runtime
+
+      - name: Test bundled npm launchers
+        run: npm run test:runtime-launchers
 
       - name: Prepare built-in dsvideo
         run: npm run build:dsvideo
@@ -78,3 +81,21 @@ jobs:
       # 上面的 build:swift 在 macOS 上构建真实 Swift sidecar 满足校验，否则这一步会在 build-script 阶段失败。
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  runtime-launchers-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Setup uv for bundled plugin dependencies
+        uses: astral-sh/setup-uv@v6
+      - name: Prepare bundled runtime
+        run: npm run build:video-runtime
+      - name: Test bundled npm launchers on Windows
+        run: npm run test:runtime-launchers

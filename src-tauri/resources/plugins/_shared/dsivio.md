@@ -102,7 +102,7 @@ stdout 只输出一行 JSON，进度和错误说明写在 stderr。
 
 Dsivio 把内置运行时以 `node`、`npm`、`npx`、`python`、`python3`、`ffmpeg`、`ffprobe` 这些命令名放在它启动的终端（bash、Git Bash、PowerShell）PATH 的**末尾**。没有装系统 Node、Python 或 ffmpeg 的电脑上，插件文档里的这些命令可以直接运行；用户自己装的版本排在前面，仍然优先。唯一例外：macOS 未装命令行工具时 `/usr/bin/python3` 只会弹出安装框，Windows 的应用商店 `python.exe` 别名只会打开商店，这两种情况下内置 `python`/`python3` 排在它们前面。
 
-- 内置 `npm`/`npx` 是 Node.js 22 自带的 npm。`npm install -g` 装到 Dsivio 私有目录 `~/.kivio/npm-global`（已在 PATH 上），不写系统目录。下载先走 npmmirror 镜像，`npm` 失败时自动改用官方源重试一次；`npx` 只走镜像（避免把命令执行两次），镜像缺包时可临时设 `npm_config_registry=https://registry.npmjs.org/`。已用参数、环境变量或 `.npmrc` 指定 registry 时不改动。
+- 内置 `npm`/`npx` 是 Node.js 22 自带的 npm。未指定 prefix 时，`npm install -g` 装到 Dsivio 私有目录 `~/.kivio/npm-global`（已在 PATH 上），不写系统目录。未指定 registry 时，下载先走 npmmirror 镜像；依赖安装失败时可改用官方源重试一次，`npx`、`npm exec` 和 `npm x` 执行的命令不会自动重跑，镜像缺包时可临时设 `npm_config_registry=https://registry.npmjs.org/`。参数、环境变量和 `.npmrc` 中的 registry/prefix 配置均保留。
 - 内置 `python`/`python3` 是 Python 3.12，自带 openpyxl、Pillow、lxml、requests、jsonschema、pypdf、python-docx。它拒绝把包 `pip install` 进 Dsivio 自身；需要其他包时先建虚拟环境：`python -m venv <目录>`，再用该环境的 python 安装和运行。
 - 要确定用的是内置 Python（不受用户 PATH 影响），写 `dsivio python …`；内置运行时缺失时它以退出码 127 结束，这时才改用系统 Python 3。
 

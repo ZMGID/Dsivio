@@ -20,15 +20,10 @@ use std::{
     process::{exit, Command},
 };
 
-pub const NPM_MIRROR_REGISTRY: &str = "https://registry.npmmirror.com/";
-pub const NPM_OFFICIAL_REGISTRY: &str = "https://registry.npmjs.org/";
-pub const PLAYWRIGHT_MIRROR_HOST: &str = "https://cdn.npmmirror.com/binaries/playwright";
+#[path = "npm_policy.rs"]
+mod npm_policy;
+pub use npm_policy::{Source, NPM_MIRROR_REGISTRY, NPM_OFFICIAL_REGISTRY, PLAYWRIGHT_MIRROR_HOST};
 pub const MISSING_RUNTIME_EXIT: i32 = 127;
-/// npm commands that only download and are safe to repeat against another registry.
-pub const FETCH_COMMANDS: &[&str] = &[
-    "install", "i", "add", "ci", "clean-install", "update", "up", "upgrade", "exec", "x", "view",
-    "info", "show", "outdated",
-];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -37,13 +32,6 @@ pub enum Tool {
     Python,
     Ffmpeg,
     Ffprobe,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Source {
-    Mirror,
-    Official,
-    AsConfigured,
 }
 
 /// The tool a shim file name (without extension) stands for.
@@ -79,36 +67,13 @@ pub fn target(root: &Path, tool: Tool, windows: bool) -> (PathBuf, Vec<PathBuf>)
     }
 }
 
-fn has_option(args: &[OsString], name: &str) -> bool {
-    args.iter().filter_map(|arg| arg.to_str()).any(|arg| arg == name || arg.starts_with(&format!("{name}=")))
+fn configuration(args: &[OsString], env: &dyn Fn(&str) -> Option<OsString>, home: Option<&Path>) -> npm_policy::Configuration {
+    npm_policy::configuration(args, env, std::env::current_dir().ok().as_deref(), home)
 }
 
-fn env_set(env: &dyn Fn(&str) -> Option<OsString>, keys: &[&str]) -> bool {
-    keys.iter().any(|key| env(key).is_some_and(|value| !value.is_empty()))
-}
-
-/// True when an npmrc text sets the default registry (scoped `@x:registry` lines do not count).
-pub fn npmrc_sets_registry(text: &str) -> bool {
-    text.lines().any(|line| {
-        let line = line.trim_start();
-        line.split_once('=').is_some_and(|(key, _)| key.trim() == "registry")
-    })
-}
-
-/// Attempts for one invocation, in order.
-pub fn sources(tool: Tool, args: &[OsString], env: &dyn Fn(&str) -> Option<OsString>, npmrc_registry: bool) -> Vec<Source> {
-    let configured = has_option(args, "--registry") || env_set(env, &["npm_config_registry", "NPM_CONFIG_REGISTRY"]) || npmrc_registry;
+pub fn sources(tool: Tool, args: &[OsString], env: &dyn Fn(&str) -> Option<OsString>, home: Option<&Path>) -> Vec<Source> {
     match tool {
-        Tool::Npm if !configured => {
-            let command = args.iter().filter_map(|arg| arg.to_str()).find(|arg| !arg.starts_with('-'));
-            if command.is_some_and(|command| FETCH_COMMANDS.contains(&command)) {
-                vec![Source::Mirror, Source::Official]
-            } else {
-                vec![Source::AsConfigured]
-            }
-        }
-        // npx runs the package after fetching it; repeating it could run the tool twice.
-        Tool::Npx if !configured => vec![Source::Mirror],
+        Tool::Npm | Tool::Npx => npm_policy::sources(tool == Tool::Npx, args, &configuration(args, env, home)),
         _ => vec![Source::AsConfigured],
     }
 }
@@ -127,7 +92,7 @@ pub fn environment(
         Tool::Npm | Tool::Npx => {
             set.push(("npm_config_update_notifier", "false".into()));
             // The bundled npm's default global prefix is inside the App bundle.
-            if !has_option(args, "--prefix") && !env_set(env, &["npm_config_prefix", "NPM_CONFIG_PREFIX"]) {
+            if !configuration(args, env, home).prefix {
                 if let Some(home) = home {
                     set.push(("npm_config_prefix", home.join(".kivio").join("npm-global").into_os_string()));
                 }
@@ -135,7 +100,7 @@ pub fn environment(
             match source {
                 Source::Mirror => {
                     set.push(("npm_config_registry", NPM_MIRROR_REGISTRY.into()));
-                    if !env_set(env, &["PLAYWRIGHT_DOWNLOAD_HOST"]) {
+                    if env("PLAYWRIGHT_DOWNLOAD_HOST").is_none_or(|value| value.is_empty()) {
                         set.push(("PLAYWRIGHT_DOWNLOAD_HOST", PLAYWRIGHT_MIRROR_HOST.into()));
                     }
                 }
@@ -171,18 +136,6 @@ fn label(tool: Tool) -> &'static str {
 fn home() -> Option<PathBuf> {
     let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     env::var_os(key).filter(|value| !value.is_empty()).map(PathBuf::from)
-}
-
-fn npmrc_registry(home: Option<&Path>) -> bool {
-    let user = env::var_os("npm_config_userconfig")
-        .or_else(|| env::var_os("NPM_CONFIG_USERCONFIG"))
-        .map(PathBuf::from)
-        .or_else(|| home.map(|home| home.join(".npmrc")));
-    let project = env::current_dir().ok().map(|dir| dir.join(".npmrc"));
-    [user, project]
-        .into_iter()
-        .flatten()
-        .any(|file| std::fs::read_to_string(file).is_ok_and(|text| npmrc_sets_registry(&text)))
 }
 
 fn shim_path() -> Option<PathBuf> {
@@ -256,8 +209,7 @@ fn main() {
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     let home = home();
     let read_env = |key: &str| env::var_os(key);
-    let npm = matches!(tool, Tool::Npm | Tool::Npx);
-    let attempts = sources(tool, &args, &read_env, npm && npmrc_registry(home.as_deref()));
+    let attempts = sources(tool, &args, &read_env, home.as_deref());
     let mut code = 1;
     for (index, source) in attempts.iter().enumerate() {
         let mut command = Command::new(&program);

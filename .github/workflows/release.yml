@@ -79,7 +79,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Setup Rust
@@ -93,6 +93,9 @@ jobs:
 
       - name: Prepare bundled plugin dependencies
         run: npm run build:video-runtime
+
+      - name: Test bundled npm launchers
+        run: npm run test:runtime-launchers
 
       - name: Prepare built-in dsvideo
         run: npm run build:dsvideo
