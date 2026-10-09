@@ -162,7 +162,7 @@ fn model_db_norm_index() -> Option<&'static ModelDbNormIndex> {
 ///
 /// 不做生图命名启发式（那是前端 `matchKnownImageGenerationModel` 的展示层兜底）；
 /// 也不为某个 CLI 别名（如 kimi 的 `k3`）放宽匹配——那会污染所有 provider。
-fn model_database_entry(model: &str) -> Option<&'static Value> {
+fn model_database_match(model: &str) -> Option<(&'static str, &'static Value)> {
     let model = model.trim();
     if model.is_empty() {
         return None;
@@ -173,12 +173,12 @@ fn model_database_entry(model: &str) -> Option<&'static Value> {
     let stripped = name.rsplit('/').next().unwrap_or(name.as_str());
 
     // 1. 精确匹配（含 OpenRouter 风格 `provider/model` 去前缀）
-    if let Some(entry) = entries.get(name.as_str()) {
-        return Some(entry);
+    if let Some((key, entry)) = entries.get_key_value(name.as_str()) {
+        return Some((key.as_str(), entry));
     }
     if stripped != name.as_str() {
-        if let Some(entry) = entries.get(stripped) {
-            return Some(entry);
+        if let Some((key, entry)) = entries.get_key_value(stripped) {
+            return Some((key.as_str(), entry));
         }
     }
 
@@ -190,7 +190,7 @@ fn model_database_entry(model: &str) -> Option<&'static Value> {
         .get(&normalize_model_sep(&name))
         .or_else(|| index.exact_norm.get(&normalize_model_sep(stripped)))
     {
-        return entries.get(*orig);
+        return entries.get(*orig).map(|entry| (*orig, entry));
     }
 
     let norm_name = normalize_model_sep(&name);
@@ -215,7 +215,7 @@ fn model_database_entry(model: &str) -> Option<&'static Value> {
         }
     }
     if let Some((orig, _)) = best_prefix {
-        return entries.get(orig);
+        return entries.get(orig).map(|entry| (orig, entry));
     }
 
     // 3. 包含匹配（归一化后最长 key 优先，带版本延续保护）
@@ -235,7 +235,11 @@ fn model_database_entry(model: &str) -> Option<&'static Value> {
             best_contains = Some((*orig, norm_len));
         }
     }
-    best_contains.and_then(|(orig, _)| entries.get(orig))
+    best_contains.and_then(|(orig, _)| entries.get(orig).map(|entry| (orig, entry)))
+}
+
+fn model_database_entry(model: &str) -> Option<&'static Value> {
+    model_database_match(model).map(|(_, entry)| entry)
 }
 
 /// Resolve Kimi Code aliases only for its own provider, without widening global matching.
@@ -376,13 +380,15 @@ pub(crate) fn thinking_capabilities_for_model(
     provider: Option<&ModelProvider>,
     model: &str,
 ) -> ThinkingCapabilities {
+    let model_id = provider_model_database_id(provider, model);
+    let database_match = model_database_match(model_id);
     let reasoning = provider
         .and_then(|p| override_model_info(p, model))
         .and_then(|info| info.capabilities.as_ref())
         .and_then(|caps| caps.reasoning)
         .or_else(|| {
-            model_database_entry(provider_model_database_id(provider, model))
-                .and_then(|entry| entry.get("capabilities"))
+            database_match
+                .and_then(|(_, entry)| entry.get("capabilities"))
                 .and_then(|caps| caps.get("reasoning"))
                 .and_then(Value::as_bool)
         });
@@ -393,15 +399,21 @@ pub(crate) fn thinking_capabilities_for_model(
         };
     }
     let levels = reasoning_efforts_for_model(provider, model);
-    let id = normalize_model_name(provider_model_database_id(provider, model));
+    let normalized_id;
+    let id = if let Some((id, _)) = database_match {
+        id
+    } else {
+        normalized_id = normalize_model_name(model_id);
+        normalized_id.as_str()
+    };
     let kimi_code = id.starts_with("kimi-code/");
-    let id = id.rsplit('/').next().unwrap_or(&id);
+    let id = id.rsplit('/').next().unwrap_or(id);
     let off_mode = if provider.is_some_and(crate::provider_oauth::antigravity::is_provider)
         && crate::provider_oauth::antigravity::model_includes_effort(model)
     {
         ThinkingOffMode::Unsupported
-    } else if let Some(mode) = model_database_entry(id)
-        .and_then(|entry| entry.get("thinkingOff"))
+    } else if let Some(mode) = database_match
+        .and_then(|(_, entry)| entry.get("thinkingOff"))
         .and_then(Value::as_bool)
     {
         if mode {

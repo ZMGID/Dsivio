@@ -258,6 +258,24 @@ impl GeminiProvider<'_> {
                 if antigravity::is_provider(self.provider) {
                     value = antigravity::unwrap_response(value);
                 }
+                if let Some(err) = gemini_prompt_block_error(&value, &label) {
+                    self.record_usage_failure(
+                        &request,
+                        &label,
+                        started_at,
+                        started.elapsed(),
+                        &err.message,
+                    );
+                    self.record_debug_failure(
+                        &request,
+                        &label,
+                        true,
+                        &err.message,
+                        started_at,
+                        started.elapsed(),
+                    );
+                    return Err(err);
+                }
                 if let Some(err) = gemini_error_message(&value) {
                     sink.emit(StreamPart::Error {
                         message: err.clone(),
@@ -965,6 +983,9 @@ pub fn output_from_gemini_response(
     value: &Value,
     label: &str,
 ) -> Result<GenerateOutput, ModelError> {
+    if let Some(err) = gemini_prompt_block_error(value, label) {
+        return Err(err);
+    }
     if let Some(msg) = gemini_error_message(value) {
         return Err(ModelError::new(format!("{label}: {msg}")));
     }
@@ -1270,6 +1291,12 @@ fn gemini_usage(value: &Value) -> Option<ModelUsage> {
         // 内置 provider 路径：窗口来自 model_metadata，不由响应携带。
         context_window_tokens: None,
     })
+}
+
+// A rejected prompt has no candidates or finishReason, but is a terminal response.
+fn gemini_prompt_block_error(value: &Value, label: &str) -> Option<ModelError> {
+    let reason = value.get("promptFeedback")?.get("blockReason")?.as_str()?;
+    Some(ModelError::new(format!("{label}: prompt blocked ({reason})")))
 }
 
 fn gemini_error_message(value: &Value) -> Option<String> {
