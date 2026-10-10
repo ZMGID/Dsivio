@@ -128,6 +128,7 @@ pub fn draft(event: &Value, bot: &BotIdentity, require_mention: bool) -> Option<
             reply_token: Some(message_id.to_owned()),
             text: parsed.text,
             attachments: Vec::new(),
+            attachment_failures: Vec::new(),
         },
         downloads: parsed.downloads,
     })

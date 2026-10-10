@@ -84,8 +84,8 @@ impl SubAgentManager {
         }
     }
 
-    /// Stops child executions that inherited one IM generation. Other children
-    /// of the same conversation are left running.
+    /// Stops the child executions that inherited this IM turn. Children of a
+    /// desktop generation on the same conversation are left running.
     pub fn stop_lineage(&self, conversation: &str, execution_ids: &[String]) {
         let Some(runtime) = self
             .durable

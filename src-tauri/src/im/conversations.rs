@@ -661,6 +661,7 @@ mod tests {
             reply_token: Some("token".into()),
             text: "hello".into(),
             attachments: Vec::new(),
+            attachment_failures: Vec::new(),
         }
     }
 

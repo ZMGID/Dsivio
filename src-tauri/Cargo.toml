@@ -30,6 +30,11 @@ name = "scheduled_task_lifecycle"
 path = "src/scheduled_tasks/lifecycle_tests.rs"
 harness = false
 
+[[test]]
+name = "im_directory_lifecycle"
+path = "src/chat/storage/directory_lifecycle_tests.rs"
+harness = false
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

@@ -427,7 +427,7 @@
   gap: 8px;
 }
 
-/* 即时通讯：扫码连接和配对管理，技术配置留在后台。 */
+/* 即时通讯：扫码、手动连接、群访问和配对。 */
 .im-settings {
   container: im-settings / inline-size;
   display: flex;
@@ -473,6 +473,13 @@
 .im-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 .im-status-message { min-width: 0; color: var(--text); font-size: 12px; line-height: 1.6; }
 .im-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.im-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.im-qr-dialog-body .im-form { width: 100%; text-align: left; }
 .im-settings [role="alert"] { color: var(--danger); font-size: 12px; line-height: 1.6; }
 .im-settings p, .im-settings a { overflow-wrap: anywhere; }
 .kv-modal.im-qr-dialog {

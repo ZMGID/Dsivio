@@ -14,6 +14,7 @@ import {
   pollImSetup,
   reconnectIm,
   revokeImUser,
+  saveImCredentials,
   subscribeImPairing,
   subscribeImStatus,
 } from '../../api/im'
@@ -32,6 +33,7 @@ vi.mock('../../api/im', () => ({
   pollImSetup: vi.fn(),
   cancelImSetup: vi.fn(),
   commitImSetup: vi.fn(),
+  saveImCredentials: vi.fn(),
   subscribeImStatus: vi.fn(async () => () => {}),
   subscribeImPairing: vi.fn(async () => () => {}),
 }))
@@ -817,5 +819,335 @@ describe('ImTab setup session', () => {
     await settle()
     expect(screen.getByText('setup unavailable')).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: '授权二维码' })).toBeNull()
+  })
+})
+
+describe('ImTab group access and manual connection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    installListeners()
+    vi.mocked(saveImCredentials).mockResolvedValue(undefined)
+  })
+
+  it('saves allowed groups and per-group users while keeping the other settings', async () => {
+    const view = renderIm()
+    const initial = view.config()
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    expect(feishu.queryByRole('region', { name: '开放访问说明' })).toBeNull()
+    fireEvent.change(feishu.getByRole('textbox', { name: '飞书允许的群' }), { target: { value: 'oc_new, oc_two' } })
+    expect(feishu.queryByRole('textbox', { name: '飞书群内用户 oc_old' })).toBeNull()
+    fireEvent.change(feishu.getByRole('textbox', { name: '飞书群内用户 oc_new' }), { target: { value: 'ou_a, ou_b' } })
+    fireEvent.change(feishu.getByRole('textbox', { name: '飞书群内用户 oc_two' }), { target: { value: 'ou_c' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存群访问 飞书' }))
+    await waitFor(() => expect(view.config().feishu.access.allowedGroups).toEqual(['oc_new', 'oc_two']))
+    expect(view.config().feishu.access).toEqual({
+      dmPolicy: 'pairing',
+      groupPolicy: 'allowlist',
+      allowedUsers: ['ou_old'],
+      allowedGroups: ['oc_new', 'oc_two'],
+      groupUsers: { oc_new: ['ou_a', 'ou_b'], oc_two: ['ou_c'] },
+    })
+    expect(view.config().feishu.webhook).toEqual(initial.feishu.webhook)
+    expect(view.config().feishu.homeChannel).toBe(initial.feishu.homeChannel)
+    expect(view.config().feishu.requireMention).toBe(true)
+    expect(view.config().wecom).toEqual(initial.wecom)
+    expect(view.config().wecomCallback).toEqual(initial.wecomCallback)
+    expect(view.config().agent).toEqual(initial.agent)
+
+    const wecom = within(screen.getByRole('region', { name: '企业微信机器人' }))
+    fireEvent.change(wecom.getByRole('textbox', { name: '企业微信允许的群' }), { target: { value: 'wr_group' } })
+    fireEvent.change(wecom.getByRole('textbox', { name: '企业微信群内用户 wr_group' }), { target: { value: 'zhang' } })
+    fireEvent.click(wecom.getByRole('button', { name: '保存群访问 企业微信' }))
+    await waitFor(() => expect(view.config().wecom.access.allowedGroups).toEqual(['wr_group']))
+    expect(view.config().wecom.access.groupUsers).toEqual({ wr_group: ['zhang'] })
+    expect(view.config().wecom.access.dmPolicy).toBe('pairing')
+    expect(view.config().wecom.access.groupPolicy).toBe('allowlist')
+    expect(view.config().feishu.access.allowedGroups).toEqual(['oc_new', 'oc_two'])
+    expect(view.config().agent).toEqual(initial.agent)
+  })
+
+  it('shows the failed group save and explains open or wildcard access without applying it', async () => {
+    const view = renderIm(backendConfig(), 'zh', async () => false)
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.change(feishu.getByRole('textbox', { name: '飞书允许的群' }), { target: { value: 'oc_failed' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存群访问 飞书' }))
+    await waitFor(() => expect(feishu.getByRole('alert')).toBeVisible())
+    expect(view.config().feishu.access.allowedGroups).toEqual(['oc_old'])
+    expect(view.config().feishu.access.groupUsers).toEqual({ oc_old: ['ou_old'] })
+    expect(view.config().wecom).toEqual(backendConfig().wecom)
+    fireEvent.click(feishu.getByRole('button', { name: '飞书群策略' }))
+    fireEvent.click(screen.getByRole('option', { name: '开放' }))
+    expect(feishu.getByRole('region', { name: '开放访问说明' })).toHaveTextContent(/本机工具/)
+    expect(view.config().feishu.access.groupPolicy).toBe('allowlist')
+    fireEvent.click(feishu.getByRole('button', { name: '飞书群策略' }))
+    fireEvent.click(screen.getByRole('option', { name: '允许列表' }))
+    fireEvent.change(feishu.getByRole('textbox', { name: '飞书允许的群' }), { target: { value: '*' } })
+    expect(feishu.getByRole('region', { name: '开放访问说明' })).toBeVisible()
+    expect(view.config().feishu.access.allowedGroups).toEqual(['oc_old'])
+  })
+
+  it('saves WeCom group access from the English page', async () => {
+    const view = renderIm(backendConfig(), 'en')
+    const wecom = within(screen.getByRole('region', { name: 'WeCom bot' }))
+    expect(wecom.getByRole('button', { name: 'Manual setup WeCom' })).toBeVisible()
+    fireEvent.change(wecom.getByRole('textbox', { name: 'WeCom allowed groups' }), { target: { value: 'wr_en' } })
+    fireEvent.change(wecom.getByRole('textbox', { name: 'WeCom users in wr_en' }), { target: { value: 'alice' } })
+    fireEvent.click(wecom.getByRole('button', { name: 'Save group access WeCom' }))
+    await waitFor(() => expect(view.config().wecom.access.allowedGroups).toEqual(['wr_en']))
+    expect(view.config().wecom.access.groupUsers).toEqual({ wr_en: ['alice'] })
+    expect(view.config().wecom.access.dmPolicy).toBe('pairing')
+    expect(view.config().feishu.appId).toBe('cli_existing')
+    fireEvent.click(wecom.getByRole('button', { name: 'WeCom group policy' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Open' }))
+    expect(wecom.getByRole('region', { name: 'Open access warning' })).toHaveTextContent(/local tools/)
+    expect(view.config().wecom.access.groupPolicy).toBe('allowlist')
+  })
+
+  it('does not store a secret when the manual identity cannot be saved', async () => {
+    const view = renderIm(backendConfig(), 'zh', async () => false)
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.click(feishu.getByRole('button', { name: '手动配置 飞书' }))
+    expect(feishu.getByLabelText('密钥')).toHaveValue('')
+    fireEvent.change(feishu.getByRole('textbox', { name: 'App ID' }), { target: { value: 'cli_manual' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'secret-value' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(feishu.getByRole('alert')).toBeVisible())
+    expect(saveImCredentials).not.toHaveBeenCalled()
+    expect(view.config().feishu.appId).toBe('cli_existing')
+    expect(view.config().feishu.enabled).toBe(false)
+    expect(JSON.stringify(view.config())).not.toContain('secret-value')
+    expect(view.config().wecom.botId).toBe('bot_existing')
+  })
+
+  it('does not enable the platform when the secret cannot be stored and restores the previous bot', async () => {
+    const initial = backendConfig()
+    initial.feishu.enabled = true
+    initial.feishu.connectionMode = 'webhook'
+    const view = renderIm(initial)
+    vi.mocked(saveImCredentials).mockRejectedValue(new Error('credential write failed'))
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.click(feishu.getByRole('button', { name: '手动配置 飞书' }))
+    fireEvent.click(feishu.getByRole('button', { name: '飞书域' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Lark' }))
+    fireEvent.change(feishu.getByRole('textbox', { name: 'App ID' }), { target: { value: 'cli_manual' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'secret-value' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(feishu.getByRole('alert')).toBeVisible())
+    expect(saveImCredentials).toHaveBeenCalledTimes(1)
+    expect(view.config().feishu).toMatchObject({
+      appId: 'cli_existing',
+      enabled: true,
+      connectionMode: 'webhook',
+      domain: 'feishu',
+    })
+    expect(view.config().feishu.webhook.path).toBe('/feishu/webhook')
+    expect(view.config().feishu.access.allowedGroups).toEqual(['oc_old'])
+    expect(view.config().wecom.botId).toBe('bot_existing')
+    expect(JSON.stringify(view.config())).not.toContain('secret-value')
+    expect(feishu.getByRole('status')).not.toHaveTextContent('已连接')
+  })
+
+  it('enables a saved manual bot and keeps the connection label from backend status', async () => {
+    vi.mocked(getImStatus).mockResolvedValue([
+      status({ platform: 'feishu', state: 'retrying', message: 'opening', credentialsConfigured: true }),
+    ])
+    const view = renderIm()
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.click(feishu.getByRole('button', { name: '手动配置 飞书' }))
+    fireEvent.change(feishu.getByRole('textbox', { name: 'App ID' }), { target: { value: 'cli_manual' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'secret-value' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(view.config().feishu.enabled).toBe(true))
+    expect(view.config().feishu.appId).toBe('cli_manual')
+    expect(view.config().feishu.domain).toBe('feishu')
+    expect(view.config().feishu.connectionMode).toBe('websocket')
+    expect(view.config().feishu.webhook.path).toBe('/feishu/webhook')
+    expect(view.config().wecom.botId).toBe('bot_existing')
+    expect(saveImCredentials).toHaveBeenCalledWith('feishu', 'cli_manual', expect.objectContaining({
+      secret: 'secret-value', encryptKey: '', verificationToken: '', token: '', encodingAesKey: '',
+    }))
+    expect(JSON.stringify(view.config())).not.toContain('secret-value')
+    expect(feishu.getByLabelText('密钥')).toHaveValue('')
+    expect(feishu.getByRole('status')).toHaveTextContent('重连中')
+    expect(screen.queryByText('已连接')).toBeNull()
+  })
+
+  it('connects WeCom manually without changing Feishu or storing the secret in settings', async () => {
+    vi.mocked(getImStatus).mockResolvedValue([
+      status({ platform: 'wecom', state: 'connecting', message: 'opening', credentialsConfigured: true }),
+    ])
+    const view = renderIm()
+    const wecom = within(screen.getByRole('region', { name: '企业微信机器人' }))
+    fireEvent.click(wecom.getByRole('button', { name: '手动配置 企业微信' }))
+    expect(wecom.getByLabelText('密钥')).toHaveValue('')
+    fireEvent.change(wecom.getByRole('textbox', { name: 'Bot ID' }), { target: { value: 'bot_manual' } })
+    fireEvent.change(wecom.getByLabelText('密钥'), { target: { value: 'wecom-secret' } })
+    fireEvent.click(wecom.getByRole('button', { name: '保存并连接 企业微信' }))
+    await waitFor(() => expect(view.config().wecom.enabled).toBe(true))
+    expect(view.config().wecom.botId).toBe('bot_manual')
+    expect(view.config().wecom.websocketUrl).toBe('wss://openws.work.weixin.qq.com')
+    expect(view.config().wecom.access.groupPolicy).toBe('allowlist')
+    expect(view.config().feishu).toMatchObject({ appId: 'cli_existing', enabled: false, domain: 'feishu' })
+    expect(JSON.stringify(view.config())).not.toContain('wecom-secret')
+    expect(wecom.getByRole('status')).toHaveTextContent('连接中')
+    expect(saveImCredentials).toHaveBeenCalledWith('wecom', 'bot_manual', expect.objectContaining({ secret: 'wecom-secret' }))
+  })
+
+  it('does not store a secret when manual connect is cancelled before the identity flush finishes', async () => {
+    const flushed = deferred<boolean>()
+    const view = renderIm(backendConfig(), 'zh', () => flushed.promise)
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.click(feishu.getByRole('button', { name: '手动配置 飞书' }))
+    fireEvent.change(feishu.getByRole('textbox', { name: 'App ID' }), { target: { value: 'cli_manual' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'secret-value' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(view.config().feishu.appId).toBe('cli_manual'))
+    expect(view.config().feishu.enabled).toBe(false)
+    fireEvent.click(feishu.getByRole('button', { name: '取消手动连接 飞书' }))
+    flushed.resolve(true)
+    await waitFor(() => expect(view.config().feishu.appId).toBe('cli_existing'))
+    expect(saveImCredentials).not.toHaveBeenCalled()
+    expect(view.config().feishu.enabled).toBe(false)
+    expect(JSON.stringify(view.config())).not.toContain('secret-value')
+  })
+
+  it('does not enable a manual connection cancelled before the secret or the enable flush returns', async () => {
+    const secretCall = deferred<void>()
+    vi.mocked(saveImCredentials).mockImplementation(() => secretCall.promise)
+    const view = renderIm()
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.click(feishu.getByRole('button', { name: '手动配置 飞书' }))
+    fireEvent.change(feishu.getByRole('textbox', { name: 'App ID' }), { target: { value: 'cli_manual' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'secret-value' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(saveImCredentials).toHaveBeenCalledTimes(1))
+    expect(view.config().feishu).toMatchObject({ appId: 'cli_manual', enabled: false })
+    fireEvent.click(feishu.getByRole('button', { name: '取消手动连接 飞书' }))
+    secretCall.resolve()
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(view.config().feishu.enabled).toBe(false)
+    view.unmount()
+
+    const enableFlush = deferred<boolean>()
+    let flushes = 0
+    vi.mocked(saveImCredentials).mockResolvedValue(undefined)
+    const late = renderIm(backendConfig(), 'zh', () => {
+      flushes += 1
+      return flushes === 1 ? Promise.resolve(true) : enableFlush.promise
+    })
+    const lateFeishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    vi.mocked(saveImCredentials).mockResolvedValue(undefined)
+    fireEvent.click(lateFeishu.getByRole('button', { name: '手动配置 飞书' }))
+    fireEvent.change(lateFeishu.getByRole('textbox', { name: 'App ID' }), { target: { value: 'cli_late' } })
+    fireEvent.change(lateFeishu.getByLabelText('密钥'), { target: { value: 'late-secret' } })
+    fireEvent.click(lateFeishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(late.config().feishu.enabled).toBe(true))
+    fireEvent.click(lateFeishu.getByRole('button', { name: '取消手动连接 飞书' }))
+    enableFlush.resolve(true)
+    await waitFor(() => expect(late.config().feishu.enabled).toBe(false))
+    expect(late.config().feishu.appId).toBe('cli_late')
+    expect(JSON.stringify(late.config())).not.toContain('late-secret')
+  })
+
+  it('does not let a cancelled manual save roll back the next attempt or store the first secret', async () => {
+    const identityFlush = deferred<boolean>()
+    const secretCall = deferred<void>()
+    let flushes = 0
+    vi.mocked(saveImCredentials).mockImplementation(() => secretCall.promise)
+    const view = renderIm(backendConfig(), 'zh', () => ++flushes === 1 ? identityFlush.promise : Promise.resolve(true))
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.click(feishu.getByRole('button', { name: '手动配置 飞书' }))
+    fireEvent.change(feishu.getByLabelText('App ID'), { target: { value: 'cli_manual' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'first-secret' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(view.config().feishu.appId).toBe('cli_manual'))
+    fireEvent.click(feishu.getByRole('button', { name: '取消手动连接 飞书' }))
+    const connect = feishu.getByRole('button', { name: /保存并连接/ })
+    expect(connect).toBeDisabled()
+    const scan = feishu.getByRole('button', { name: '扫码连接 飞书' })
+    expect(scan).toBeDisabled()
+    fireEvent.click(scan)
+    expect(beginImSetup).not.toHaveBeenCalled()
+    fireEvent.change(feishu.getByLabelText('App ID'), { target: { value: 'cli_next' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'second-secret' } })
+    fireEvent.click(connect)
+    expect(view.config().feishu.appId).toBe('cli_manual')
+    expect(saveImCredentials).not.toHaveBeenCalled()
+    identityFlush.resolve(true)
+    await waitFor(() => expect(view.config().feishu.appId).toBe('cli_existing'))
+    expect(feishu.getByRole('button', { name: '保存并连接 飞书' })).toBeEnabled()
+    expect(scan).toBeEnabled()
+    expect(saveImCredentials).not.toHaveBeenCalled()
+    fireEvent.change(feishu.getByLabelText('App ID'), { target: { value: 'cli_next' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'second-secret' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(saveImCredentials).toHaveBeenCalledTimes(1))
+    expect(view.config().feishu).toMatchObject({ appId: 'cli_next', enabled: false })
+    expect(saveImCredentials).toHaveBeenCalledWith('feishu', 'cli_next', expect.objectContaining({ secret: 'second-secret' }))
+    secretCall.resolve()
+    await waitFor(() => expect(view.config().feishu.enabled).toBe(true))
+    expect(view.config().feishu.appId).toBe('cli_next')
+    expect(saveImCredentials).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(view.config())).not.toContain('first-secret')
+    expect(JSON.stringify(view.config())).not.toContain('second-secret')
+  })
+
+  it('does not enable a manual bot when the page unmounts during the credential write', async () => {
+    const secretCall = deferred<void>()
+    vi.mocked(saveImCredentials).mockImplementation(() => secretCall.promise)
+    const view = renderIm()
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.click(feishu.getByRole('button', { name: '手动配置 飞书' }))
+    fireEvent.change(feishu.getByLabelText('App ID'), { target: { value: 'cli_manual' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'secret-value' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(saveImCredentials).toHaveBeenCalledTimes(1))
+    view.unmount()
+    await act(async () => { secretCall.resolve(); await secretCall.promise })
+    expect(view.config().feishu.enabled).toBe(false)
+    expect(view.config().feishu.appId).toBe('cli_manual')
+    expect(JSON.stringify(view.config())).not.toContain('secret-value')
+  })
+
+  it('does not enable a manual bot when the page unmounts during the enable flush', async () => {
+    const enableFlush = deferred<boolean>()
+    let flushes = 0
+    const view = renderIm(backendConfig(), 'zh', () => {
+      flushes += 1
+      if (flushes === 2) return enableFlush.promise
+      return Promise.resolve(true)
+    })
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    fireEvent.click(feishu.getByRole('button', { name: '手动配置 飞书' }))
+    fireEvent.change(feishu.getByLabelText('App ID'), { target: { value: 'cli_manual' } })
+    fireEvent.change(feishu.getByLabelText('密钥'), { target: { value: 'secret-value' } })
+    fireEvent.click(feishu.getByRole('button', { name: '保存并连接 飞书' }))
+    await waitFor(() => expect(view.config().feishu.enabled).toBe(true))
+    view.unmount()
+    enableFlush.resolve(true)
+    await waitFor(() => expect(view.config().feishu.enabled).toBe(false))
+    expect(view.config().feishu.appId).toBe('cli_manual')
+    expect(saveImCredentials).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens manual setup from a failed scan and uses a chosen Lark domain without writing it early', async () => {
+    vi.mocked(beginImSetup).mockRejectedValueOnce(new Error('setup unavailable')).mockResolvedValue(setupSession())
+    const view = renderIm()
+    fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '改用手动配置' })).toBeVisible())
+    fireEvent.click(screen.getByRole('button', { name: '改用手动配置' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
+    expect(feishu.getByRole('textbox', { name: 'App ID' })).toBeVisible()
+    fireEvent.click(feishu.getByRole('button', { name: '飞书域' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Lark' }))
+    expect(view.config().feishu.domain).toBe('feishu')
+    fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
+    await waitFor(() => expect(beginImSetup).toHaveBeenCalledWith('feishu', 'lark'))
+    expect(view.config().feishu.domain).toBe('feishu')
+    expect(view.config().feishu.appId).toBe('cli_existing')
   })
 })

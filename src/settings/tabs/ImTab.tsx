@@ -18,10 +18,13 @@ import {
   subscribeImStatus,
 } from '../../api/im'
 import type {
-  ConnectionState, FeishuConfig, ImApprovedUser, ImConfig, ImPairingRequest, ImPlatform,
+  ConnectionState, FeishuConfig, FeishuDomain, ImAccessConfig, ImApprovedUser, ImConfig, ImPairingRequest, ImPlatform,
   ImSetupSession, ImStatus, WecomConfig,
 } from '../../api/im'
+import { Select } from '../public/controls'
 import { authorizationQrDataUrl } from './imQr'
+import { ImAccessEditor } from './ImAccessEditor'
+import { ImManualConnect } from './ImManualConnect'
 
 export const IM_SETUP_POLL_MS = 1000
 
@@ -215,6 +218,11 @@ function imCopy(lang: Lang) {
     requestFailed: zh ? '请求失败' : 'Request failed',
     scanConnect: zh ? '扫码连接' : 'Connect with QR',
     scanAgain: zh ? '重新扫码' : 'Scan again',
+    scanFailedManual: zh ? '扫码没有完成。请手动配置机器人。' : 'The scan did not finish. Configure the bot manually.',
+    useManual: zh ? '改用手动配置' : 'Use manual setup',
+    domain: zh ? '飞书域' : 'Feishu domain',
+    domainFeishu: zh ? '飞书' : 'Feishu',
+    domainLark: 'Lark',
     scanHint: {
       feishu: zh ? '打开飞书或 Lark，扫描二维码并在客户端里确认授权。' : 'Open Feishu or Lark, scan this QR code, and confirm the authorization in the app.',
       wecom: zh ? '打开企业微信，扫描二维码并在客户端里确认授权。' : 'Open WeCom, scan this QR code, and confirm the authorization in the app.',
@@ -337,6 +345,18 @@ export function ImTab({ lang, config, onChange, onFlush }: {
   const [qrError, setQrError] = useState('')
   const [actionError, setActionError] = useState('')
   const [busyAction, setBusyAction] = useState('')
+  const configuredDomain = config?.feishu.domain ?? 'feishu'
+  const feishuDomainRef = useRef<FeishuDomain>(configuredDomain)
+  const accessGen = useRef({ feishu: 0, wecom: 0 })
+  const [feishuDomain, setFeishuDomain] = useState<FeishuDomain>(configuredDomain)
+  const [manualOpen, setManualOpen] = useState<{ feishu: boolean, wecom: boolean }>({ feishu: false, wecom: false })
+  const [manualSuspend, setManualSuspend] = useState<{ feishu: number, wecom: number }>({ feishu: 0, wecom: 0 })
+  const [manualBusy, setManualBusy] = useState({ feishu: false, wecom: false })
+
+  useEffect(() => {
+    feishuDomainRef.current = configuredDomain
+    setFeishuDomain(configuredDomain)
+  }, [configuredDomain])
 
   useEffect(() => {
     const dialog = setupDialogRef.current
@@ -674,9 +694,17 @@ export function ImTab({ lang, config, onChange, onFlush }: {
     }
   }
 
-  const startSetup = async (platform: ImPlatform) => {
+  const chooseDomain = (value: FeishuDomain) => {
+    feishuDomainRef.current = value
+    setFeishuDomain(value)
+  }
+
+  const startSetup = async (platform: ImPlatform, domainOverride?: FeishuDomain) => {
     const current = configRef.current
     if (!current || platform === 'wecom_callback') return
+    if (platform === 'feishu' || platform === 'wecom') {
+      setManualSuspend((currentSuspend) => ({ ...currentSuspend, [platform]: currentSuspend[platform] + 1 }))
+    }
     const saving = phaseRef.current === 'saving'
     const previousId = sessionRef.current
     setupGen.current += 1
@@ -698,7 +726,7 @@ export function ImTab({ lang, config, onChange, onFlush }: {
     setSetupBusy(true)
     setupHeadingRef.current?.focus()
     try {
-      const domain = platform === 'feishu' ? current.feishu.domain : null
+      const domain = platform === 'feishu' ? (domainOverride ?? feishuDomainRef.current) : null
       const session = await beginImSetup(platform, domain)
       if (!live(gen)) {
         void cancelImSetup(session.id).catch(() => {})
@@ -859,6 +887,37 @@ export function ImTab({ lang, config, onChange, onFlush }: {
       setActionError(errorText(error, copy.requestFailed))
     }
   }
+  const withAccess = (source: ImConfig, platform: 'feishu' | 'wecom', access: ImAccessConfig): ImConfig => (
+    platform === 'feishu'
+      ? { ...source, feishu: { ...source.feishu, access } }
+      : { ...source, wecom: { ...source.wecom, access } }
+  )
+
+  const saveAccess = async (platform: 'feishu' | 'wecom', next: ImAccessConfig) => {
+    const before = configRef.current
+    if (!before) return false
+    const previous = platform === 'feishu' ? before.feishu.access : before.wecom.access
+    const gen = ++accessGen.current[platform]
+    update(withAccess(before, platform, next))
+    let ok = false
+    try {
+      ok = await onFlushRef.current()
+    } catch {
+      ok = false
+    }
+    if (!mountedRef.current || gen !== accessGen.current[platform]) return ok
+    if (!ok) {
+      const now = configRef.current
+      if (now) update(withAccess(now, platform, previous))
+      return false
+    }
+    return true
+  }
+
+  const openManual = (platform: 'feishu' | 'wecom') => {
+    setManualOpen((currentOpen) => ({ ...currentOpen, [platform]: true }))
+    void cancelSetup()
+  }
 
   if (!config) {
     return (
@@ -903,19 +962,41 @@ export function ImTab({ lang, config, onChange, onFlush }: {
               ref={platform === 'feishu' ? feishuButtonRef : wecomButtonRef}
               variant={connected ? 'default' : 'primary'}
               aria-label={`${scanLabel} ${copy.platform[platform]}`}
-              disabled={setupBusy || savingSetup}
+              disabled={setupBusy || savingSetup || manualBusy[platform]}
               onClick={() => void startSetup(platform)}
             >
               <QrCode size={14} aria-hidden="true" />
               {scanLabel}
             </Button>
             {enabled && row?.state === 'error' && row.credentialsConfigured ? (
-              <Button size="sm" aria-label={`${copy.reconnect} ${copy.platform[platform]}`} onClick={() => void reconnect(platform)}>{copy.reconnect}</Button>
+              <Button size="sm" disabled={manualBusy[platform]} aria-label={`${copy.reconnect} ${copy.platform[platform]}`} onClick={() => void reconnect(platform)}>{copy.reconnect}</Button>
             ) : null}
             {enabled ? (
-              <Button size="sm" aria-label={`${copy.disable} ${copy.platform[platform]}`} onClick={() => void disablePlatform(platform)}>{copy.disable}</Button>
+              <Button size="sm" disabled={manualBusy[platform]} aria-label={`${copy.disable} ${copy.platform[platform]}`} onClick={() => void disablePlatform(platform)}>{copy.disable}</Button>
             ) : null}
           </div>
+          <ImManualConnect
+            platform={platform}
+            lang={lang}
+            open={manualOpen[platform]}
+            onOpenChange={(next) => setManualOpen((currentOpen) => ({ ...currentOpen, [platform]: next }))}
+            domain={feishuDomain}
+            onDomainChange={chooseDomain}
+            showDomain={setupPlatform !== 'feishu'}
+            suspendEpoch={manualSuspend[platform]}
+            configuredIdentity={platform === 'feishu' ? config.feishu.appId : config.wecom.botId}
+            readConfig={() => configRef.current}
+            onChange={(next) => update(next)}
+            onFlush={() => onFlushRef.current()}
+            onSettled={() => { void refreshStatus() }}
+            onBusyChange={(busy) => setManualBusy((currentBusy) => ({ ...currentBusy, [platform]: busy }))}
+          />
+          <ImAccessEditor
+            platform={platform}
+            lang={lang}
+            access={platform === 'feishu' ? config.feishu.access : config.wecom.access}
+            onSave={(next) => saveAccess(platform, next)}
+          />
         </div>
       </section>
     )
@@ -1003,6 +1084,20 @@ export function ImTab({ lang, config, onChange, onFlush }: {
           </div>
           <div className="im-qr-dialog-body">
             <p id={`${setupTitleId}-hint`} className="kv-row-desc">{copy.scanHint[setupPlatform]}</p>
+            {setupPlatform === 'feishu' ? (
+              <div className="im-form">
+                <Select
+                  ariaLabel={copy.domain}
+                  value={feishuDomain}
+                  options={[{ value: 'feishu', label: copy.domainFeishu }, { value: 'lark', label: copy.domainLark }]}
+                  onChange={(value) => {
+                    const next = value === 'lark' ? 'lark' : 'feishu'
+                    chooseDomain(next)
+                    if (!savingSetup) void startSetup('feishu', next)
+                  }}
+                />
+              </div>
+            ) : null}
             {pendingSetup && qrUrl ? <img alt={copy.qrAlt} src={qrUrl} width={260} height={260} /> : null}
             {savingSetup || loadingQr || session ? (
               <p role="status">
@@ -1015,6 +1110,12 @@ export function ImTab({ lang, config, onChange, onFlush }: {
             {session?.identity?.botName ? <p>{session.identity.botName}</p> : null}
             {pendingSetup && session && isSecureSetupUrl(session.url) ? (
               <a href={session.url} target="_blank" rel="noreferrer">{copy.zh ? '打开授权页面' : 'Open authorization page'}</a>
+            ) : null}
+            {!savingSetup && !setupBusy && (setupError || qrError || (session && !pendingSetup)) ? (
+              <>
+                <p>{copy.scanFailedManual}</p>
+                <Button size="sm" onClick={() => openManual(setupPlatform)}>{copy.useManual}</Button>
+              </>
             ) : null}
             {retrySession ? (
               <Button variant="primary" disabled={savingSetup} onClick={() => void commitAuthorized(retrySession, setupGen.current)}>{copy.retrySave}</Button>

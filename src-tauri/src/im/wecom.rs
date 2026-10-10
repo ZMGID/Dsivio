@@ -19,7 +19,7 @@ use super::types::{
     WecomConfig,
 };
 use super::wecom_media::{
-    load_outbound, prepare_bytes, refs_from_body, store_inbound, upload_media, WecomRpc,
+    accept_stored, load_outbound, prepare_bytes, refs_from_body, store_inbound, upload_media, WecomRpc,
 };
 
 const DEFAULT_WS: &str = "wss://openws.work.weixin.qq.com";
@@ -1114,12 +1114,16 @@ impl Gateway {
         };
         tokio::spawn(async move {
             let mut attachments = Vec::new();
+            let mut attachment_failures = Vec::new();
             for media in refs {
-                if let Some(path) = store_inbound(&app, &message_id, &media).await {
-                    attachments.push(path);
-                }
+                accept_stored(
+                    &media.kind,
+                    store_inbound(&app, &message_id, &media).await,
+                    &mut attachments,
+                    &mut attachment_failures,
+                );
             }
-            if text.is_empty() && attachments.is_empty() {
+            if text.is_empty() && attachments.is_empty() && attachment_failures.is_empty() {
                 return;
             }
             let _ = inbound
@@ -1134,6 +1138,7 @@ impl Gateway {
                     reply_token,
                     text,
                     attachments,
+                    attachment_failures,
                 })
                 .await;
         });
@@ -1335,6 +1340,8 @@ async fn set_status(
 mod tests {
     use std::collections::{HashMap, VecDeque};
     use std::time::Duration;
+    use base64::Engine;
+    use super::super::wecom_media::decrypt_inbound;
 
     use tokio::sync::{mpsc, watch};
 
@@ -1353,6 +1360,38 @@ mod tests {
             plan_text(false, None, "hello").unwrap().as_slice(),
             [TextSend::Proactive { .. }]
         ));
+    }
+
+    #[test]
+    fn contentless_callback_has_nothing_to_fetch_or_reply() {
+        let body = serde_json::json!({"msgtype": "event", "event": {"eventtype": "enter_chat"}});
+        assert!(message_text(&body).is_empty());
+        assert!(refs_from_body(&body).is_empty());
+    }
+
+    #[test]
+    fn failed_decrypt_reply_stays_on_the_group_req_id() {
+        let aes = base64::engine::general_purpose::STANDARD.encode([0x3c_u8; 32]);
+        let err = decrypt_inbound(&[0x11_u8; 32], &aes).expect_err("bad ciphertext");
+        let mut attachments = Vec::new();
+        let mut failures = Vec::new();
+        accept_stored("image", Err(err), &mut attachments, &mut failures);
+        assert!(attachments.is_empty());
+        let mut state = empty_state();
+        remember(&mut state, "room", "req-9");
+        state.book.note_inbound("room");
+        let message = outbound("room", true, Some("req-9"), &failures[0], None, true);
+        let plan = plan_outbound(&mut state, 0, &message).unwrap();
+        assert_eq!(plan.req_id.as_deref(), Some("req-9"));
+        assert!(matches!(
+            plan_text(plan.is_group, plan.req_id.as_deref(), &message.text)
+                .unwrap()
+                .as_slice(),
+            [TextSend::Passive { req_id, .. }] if req_id == "req-9"
+        ));
+        assert!(!message.text.contains(&aes));
+        assert!(!message.text.contains("://"));
+        assert!(!message.text.contains('?'));
     }
 
     #[test]

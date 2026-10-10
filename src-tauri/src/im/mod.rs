@@ -382,6 +382,19 @@ fn response(msg: &InboundMessage, text: String) -> OutboundMessage {
     }
 }
 
+struct ClaimedTurn {
+    notice: Option<String>,
+    enqueue: bool,
+}
+
+/// Attachment failures are a finished user reply. They are a model turn only
+/// when the callback also has text or a saved attachment.
+fn claimed_turn(msg: &InboundMessage) -> ClaimedTurn {
+    let notice = (!msg.attachment_failures.is_empty()).then(|| msg.attachment_failures.join("\n"));
+    let enqueue = !msg.text.trim().is_empty() || !msg.attachments.is_empty();
+    ClaimedTurn { notice, enqueue }
+}
+
 #[derive(Default)]
 struct SessionControl {
     inner: Mutex<SessionControlState>,
@@ -883,6 +896,13 @@ async fn supervise(
                     }
                 }
                 runtime.touch(&app, platform);
+                let claimed = claimed_turn(&msg);
+                if let Some(notice) = claimed.notice {
+                    queue_response(&app, epoch, &mut pending, &msg, notice);
+                }
+                if !claimed.enqueue {
+                    continue;
+                }
                 if !workers.contains_key(&session)
                     || workers
                         .get(&session)
@@ -1153,6 +1173,7 @@ mod tests {
             reply_token: None,
             text: "hello".into(),
             attachments: Vec::new(),
+            attachment_failures: Vec::new(),
         }
     }
     #[test]
@@ -1296,5 +1317,14 @@ mod tests {
             assert_eq!(pending.queue.pop_front().unwrap().text, index.to_string());
         }
         assert!(pending.can_receive());
+    }
+
+    #[test]
+    fn empty_inbound_is_not_a_model_turn() {
+        let mut msg = message();
+        msg.text.clear();
+        let claimed = claimed_turn(&msg);
+        assert!(!claimed.enqueue);
+        assert!(claimed.notice.is_none());
     }
 }

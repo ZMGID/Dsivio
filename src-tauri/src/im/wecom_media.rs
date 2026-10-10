@@ -98,35 +98,71 @@ fn push_ref(out: &mut Vec<MediaRef>, kind: &str, media: Option<&Value>) {
     });
 }
 
+pub(crate) async fn fetch_inbound(media: &MediaRef) -> Result<Vec<u8>, &'static str> {
+    let bytes = if !media.inline_b64.is_empty() {
+        decode_b64(&media.inline_b64).map_err(|_| "编码无效")?
+    } else if media.url.starts_with("https://") {
+        let client = http_client().map_err(|_| "下载服务不可用")?;
+        let encrypted = download_media(&client, &media.url, MAX_MEDIA_BYTES)
+            .await
+            .map_err(|_| "下载失败")?;
+        if media.aeskey.is_empty() {
+            encrypted
+        } else {
+            decrypt_inbound(&encrypted, &media.aeskey)?
+        }
+    } else {
+        return Err("下载地址无效");
+    };
+    if bytes.is_empty() {
+        return Err("附件内容为空");
+    }
+    if bytes.len() > MAX_MEDIA_BYTES {
+        return Err("附件超过大小限制");
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn decrypt_inbound(encrypted: &[u8], aeskey: &str) -> Result<Vec<u8>, &'static str> {
+    decrypt_media(encrypted, aeskey).map_err(|_| "解密失败")
+}
+
 pub(crate) async fn store_inbound(
     app: &AppHandle,
     message_id: &str,
     media: &MediaRef,
-) -> Option<String> {
-    let bytes = if !media.inline_b64.is_empty() {
-        decode_b64(&media.inline_b64).ok()?
-    } else if media.url.starts_with("https://") {
-        let client = http_client().ok()?;
-        let encrypted = download_media(&client, &media.url, MAX_MEDIA_BYTES)
-            .await
-            .ok()?;
-        if media.aeskey.is_empty() {
-            encrypted
-        } else {
-            decrypt_media(&encrypted, &media.aeskey).ok()?
-        }
-    } else {
-        return None;
-    };
-    if bytes.is_empty() || bytes.len() > MAX_MEDIA_BYTES {
-        return None;
-    }
+) -> Result<String, &'static str> {
+    let bytes = fetch_inbound(media).await?;
     let name = if media.filename.is_empty() {
         format!("wecom-{}.{}", media.kind, ext_for(&bytes, &media.kind))
     } else {
         media.filename.clone()
     };
-    save_media(app, ImPlatform::Wecom, message_id, &name, &bytes).ok()
+    save_media(app, ImPlatform::Wecom, message_id, &name, &bytes).map_err(|_| "保存失败")
+}
+
+pub(crate) fn accept_stored(
+    kind: &str,
+    result: Result<String, &'static str>,
+    attachments: &mut Vec<String>,
+    failures: &mut Vec<String>,
+) {
+    match result {
+        Ok(path) => attachments.push(path),
+        Err(error) => failures.push(media_failure_notice(kind, error)),
+    }
+}
+
+/// Failure reasons are static stage labels, never transport errors or signed media URLs.
+pub(crate) fn media_failure_notice(kind: &str, error: &'static str) -> String {
+    let label = match kind {
+        "image" => "图片",
+        "video" => "视频",
+        "voice" => "语音",
+        "file" => "文件",
+        _ => "附件",
+    };
+    format!("{label}未能接收（{error}），请重新发送。")
 }
 
 pub(crate) async fn load_outbound(path: &str) -> Result<(Vec<u8>, String), String> {
@@ -403,6 +439,165 @@ mod tests {
         let (kind, note) = limit_kind("voice", 100, "clip.amr");
         assert_eq!(kind, "voice");
         assert!(note.is_none());
+    }
+
+    fn media(kind: &str, url: &str, aeskey: &str, inline: &str) -> MediaRef {
+        MediaRef {
+            kind: kind.into(),
+            url: url.into(),
+            aeskey: aeskey.into(),
+            filename: String::new(),
+            inline_b64: inline.into(),
+        }
+    }
+
+    fn inbound(
+        text: &str,
+        attachments: Vec<String>,
+        failures: Vec<String>,
+        token: Option<&str>,
+    ) -> super::super::types::InboundMessage {
+        super::super::types::InboundMessage {
+            platform: ImPlatform::Wecom,
+            message_id: "m".into(),
+            chat_id: "room".into(),
+            user_id: "alice".into(),
+            user_name: String::new(),
+            is_group: true,
+            thread_id: None,
+            reply_token: token.map(str::to_owned),
+            text: text.into(),
+            attachments,
+            attachment_failures: failures,
+        }
+    }
+
+    #[tokio::test]
+    async fn pure_download_failure_is_a_finished_reply_and_not_an_agent_turn() {
+        let secret = "QUERYSECRET";
+        let url = format!("https://bot:{secret}@cdn.example/a.bin?token={secret}&aeskey={secret}");
+        let err = fetch_inbound(&media("image", &url, secret, ""))
+            .await
+            .expect_err("credentialed url");
+        assert_eq!(err, "下载失败");
+        assert!(!err.contains(secret));
+        let mut attachments = Vec::new();
+        let mut failures = Vec::new();
+        accept_stored("image", Err(err), &mut attachments, &mut failures);
+        let msg = inbound("", attachments, failures, Some("req-room"));
+        let claimed = super::super::claimed_turn(&msg);
+        assert!(!claimed.enqueue);
+        assert!(msg.text.is_empty());
+        assert!(msg.attachments.is_empty());
+        let outbound = super::super::response(&msg, claimed.notice.expect("visible failure"));
+        assert!(outbound.finished);
+        assert_eq!(outbound.reply_token.as_deref(), Some("req-room"));
+        assert!(outbound.attachments.is_empty());
+        assert!(outbound.text.contains("图片未能接收"));
+        assert!(outbound.text.contains("下载失败"));
+        assert!(!outbound.text.contains(secret));
+        assert!(!outbound.text.contains("cdn.example"));
+        assert!(!outbound.text.contains('?'));
+    }
+
+    #[tokio::test]
+    async fn rejected_urls_do_not_return_the_signed_address() {
+        let secret = "FILESECRET";
+        let http = fetch_inbound(&media(
+            "file",
+            &format!("http://cdn.example/doc.bin?token={secret}"),
+            secret,
+            "",
+        ))
+        .await
+        .expect_err("plain http");
+        assert_eq!(http, "下载地址无效");
+        assert!(!http.contains(secret));
+        assert!(!http.contains("http://"));
+        let inline = fetch_inbound(&media(
+            "image",
+            "",
+            "",
+            &format!("https://cdn.example/a.bin?token={secret}"),
+        ))
+        .await
+        .expect_err("inline is not base64");
+        assert_eq!(inline, "编码无效");
+        assert!(!inline.contains(secret));
+    }
+
+    #[test]
+    fn decrypt_failure_stays_off_the_agent_and_off_an_unauthorized_group() {
+        let aes = base64::engine::general_purpose::STANDARD.encode([0x3c_u8; 32]);
+        let raw = decrypt_media(&[0x11_u8; 32], &aes).expect_err("padding");
+        assert!(!raw.contains(&aes));
+        let err = decrypt_inbound(&[0x11_u8; 32], &aes).expect_err("mapped");
+        assert_eq!(err, "解密失败");
+        let mut attachments = Vec::new();
+        let mut failures = Vec::new();
+        accept_stored("image", Err(err), &mut attachments, &mut failures);
+        let msg = inbound("", attachments, failures, Some("req-9"));
+        let claimed = super::super::claimed_turn(&msg);
+        assert!(!claimed.enqueue);
+        let notice = claimed.notice.expect("visible failure");
+        assert!(notice.contains("解密失败"));
+        assert!(!notice.contains(&aes));
+        let mut config = super::super::types::ImConfig::default();
+        config.wecom.bot_id = "bot".into();
+        assert!(!super::super::authorized(&config, &msg, &[]));
+        config.wecom.access.allowed_groups = vec!["room".into()];
+        assert!(super::super::authorized(&config, &msg, &[]));
+    }
+
+    #[tokio::test]
+    async fn mixed_fetch_keeps_text_and_saved_bytes_and_reports_only_the_failure() {
+        let png = b"\x89PNG\r\n\x1a\nreal-image";
+        let saved = fetch_inbound(&media(
+            "image",
+            "",
+            "",
+            &base64::engine::general_purpose::STANDARD.encode(png),
+        ))
+        .await
+        .expect("inline image");
+        assert_eq!(saved, png);
+        let secret = "FILESECRET";
+        let err = fetch_inbound(&media(
+            "file",
+            &format!("http://files.example/a.bin?token={secret}"),
+            secret,
+            "",
+        ))
+        .await
+        .expect_err("file url");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.png");
+        std::fs::write(&path, saved).unwrap();
+        let mut attachments = Vec::new();
+        let mut failures = Vec::new();
+        accept_stored(
+            "image",
+            Ok(path.to_string_lossy().into_owned()),
+            &mut attachments,
+            &mut failures,
+        );
+        accept_stored("file", Err(err), &mut attachments, &mut failures);
+        let msg = inbound("看说明", attachments, failures, Some("req-room"));
+        assert_eq!(msg.text, "看说明");
+        assert_eq!(msg.attachments.len(), 1);
+        assert!(!msg.text.contains("未能接收"));
+        let claimed = super::super::claimed_turn(&msg);
+        assert!(claimed.enqueue);
+        let notice = claimed.notice.expect("failure beside the prompt");
+        assert!(notice.contains("文件未能接收"));
+        assert!(notice.contains("下载地址无效"));
+        assert!(!notice.contains(secret));
+        assert!(!notice.contains("看说明"));
+        assert!(!notice.contains("http://"));
+        let outbound = super::super::response(&msg, notice);
+        assert!(outbound.finished);
+        assert_eq!(outbound.reply_token.as_deref(), Some("req-room"));
+        assert!(outbound.attachments.is_empty());
     }
 
     #[test]

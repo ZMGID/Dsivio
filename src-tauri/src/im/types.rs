@@ -307,6 +307,8 @@ pub struct InboundMessage {
     pub reply_token: Option<String>,
     pub text: String,
     pub attachments: Vec<String>,
+    /// User-visible attachment failures. Never copied into `text`.
+    pub attachment_failures: Vec<String>,
 }
 #[derive(Debug, Clone)]
 pub struct OutboundMessage {

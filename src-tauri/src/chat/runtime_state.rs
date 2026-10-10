@@ -25,10 +25,10 @@ pub(crate) struct ChatRuntimeState {
     popout_create_lock: tokio::sync::Mutex<()>,
     conversation_create_lock: tokio::sync::Mutex<()>,
     /// Admitted IM turns. `cancel` sticks from stop until the turn finishes so a
-    /// generation that has not been created yet cannot start. `generation` is the
-    /// single model run this turn claimed; stop retires that id only. Desktop
-    /// sends never set `active`, and stopping IM does not cancel a turn that is
-    /// not admitted.
+    /// generation that has not been created yet cannot start. `generations` holds
+    /// every model run this turn claimed; stop retires that whole set. Desktop
+    /// sends never set `active`, and a generation started while no IM turn is
+    /// admitted is not part of the lineage.
     im_turns: parking_lot::Mutex<ImTurnFlags>,
 }
 
@@ -36,11 +36,11 @@ pub(crate) struct ChatRuntimeState {
 struct ImTurnFlags {
     active: HashSet<String>,
     cancel: HashSet<String>,
-    generation: HashMap<String, u64>,
+    generations: HashMap<String, HashSet<u64>>,
     children: HashMap<String, HashSet<String>>,
 }
 
-/// Whether a child execution belongs to the admitted IM generation.
+/// Whether a child execution belongs to a generation this IM turn claimed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ImChild {
     Inherited,
@@ -70,12 +70,15 @@ impl ChatRuntimeState {
         generation
     }
 
-    /// Starts a generation unless this IM turn was already stopped. The cancel
-    /// flag and the insert share one critical section, so a stop that lands
-    /// before the generation exists cannot lose the race to a later insert.
+    /// Starts a generation unless this admitted IM turn was already stopped.
+    /// The cancel flag and the lineage insert share one critical section, so a
+    /// stop that lands first cannot lose to a later insert, and an insert that
+    /// lands first stays in the set stop retires. A conversation with no admitted
+    /// IM turn still receives a generation, and that id is not recorded here.
     pub(crate) fn begin_generation_unless_im_stopped(&self, conversation_id: &str) -> Option<u64> {
         let mut turns = self.im_turns.lock();
-        if turns.cancel.contains(conversation_id) {
+        let admitted = turns.active.contains(conversation_id);
+        if admitted && turns.cancel.contains(conversation_id) {
             return None;
         }
         let generation = self.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -86,9 +89,13 @@ impl ChatRuntimeState {
             .entry(conversation_id.to_string())
             .or_default()
             .insert(generation);
-        turns
-            .generation
-            .insert(conversation_id.to_string(), generation);
+        if admitted {
+            turns
+                .generations
+                .entry(conversation_id.to_string())
+                .or_default()
+                .insert(generation);
+        }
         Some(generation)
     }
 
@@ -217,7 +224,7 @@ impl ChatRuntimeState {
         let mut turns = self.im_turns.lock();
         turns.active.remove(conversation_id);
         turns.cancel.remove(conversation_id);
-        turns.generation.remove(conversation_id);
+        turns.generations.remove(conversation_id);
         turns.children.remove(conversation_id);
     }
 
@@ -229,35 +236,43 @@ impl ChatRuntimeState {
         self.im_turns.lock().cancel.contains(conversation_id)
     }
 
-    /// Records stop for an admitted IM turn and CAS-retires only the generation
-    /// this turn claimed. A desktop generation on the same conversation stays
+    /// Records stop for an admitted IM turn and retires every generation this
+    /// turn claimed. A desktop generation on the same conversation stays
     /// active. `None` means this conversation is not in an IM turn, so the
-    /// caller must not cancel anything. The vec is the child executions that
-    /// inherited this generation; desktop children are never included.
+    /// caller must not cancel anything. The vec is every child execution that
+    /// inherited one of those generations; desktop children are never included.
+    /// Claimed generations stay recorded until the turn ends, so a child that
+    /// registers after stop is refused instead of starting.
     pub(crate) fn cancel_im_lineage(&self, conversation_id: &str) -> Option<Vec<String>> {
         let mut turns = self.im_turns.lock();
         if !turns.active.contains(conversation_id) {
             return None;
         }
         turns.cancel.insert(conversation_id.to_string());
-        let generation = turns.generation.get(conversation_id).copied();
+        let generations = turns
+            .generations
+            .get(conversation_id)
+            .cloned()
+            .unwrap_or_default();
         let children = turns
             .children
             .remove(conversation_id)
             .map(|runs| runs.into_iter().collect())
             .unwrap_or_default();
         drop(turns);
-        if let Some(generation) = generation {
+        if !generations.is_empty() {
             let mut indexes = self.runs.lock().unwrap_or_else(|error| error.into_inner());
-            retire_generation(&mut indexes, conversation_id, generation);
+            for generation in generations {
+                retire_generation(&mut indexes, conversation_id, generation);
+            }
         }
         Some(children)
     }
 
-    /// Tags a child execution when its parent generation is the one this IM
-    /// turn claimed. A desktop generation does not match, so the child is not
-    /// part of the lineage. `Stopped` means the IM generation was already
-    /// cancelled and this child must not start.
+    /// Tags a child execution when its parent generation is one this IM turn
+    /// claimed. A desktop generation does not match, so the child is not part
+    /// of the lineage. `Stopped` means that IM generation was already cancelled
+    /// and this child must not start.
     pub(crate) fn note_im_child(
         &self,
         conversation_id: &str,
@@ -265,7 +280,11 @@ impl ChatRuntimeState {
         child_run: &str,
     ) -> ImChild {
         let mut turns = self.im_turns.lock();
-        if turns.generation.get(conversation_id) != Some(&parent_generation) {
+        let claimed = turns
+            .generations
+            .get(conversation_id)
+            .is_some_and(|generations| generations.contains(&parent_generation));
+        if !claimed {
             return ImChild::NotIm;
         }
         if turns.cancel.contains(conversation_id) {
@@ -286,7 +305,10 @@ impl ChatRuntimeState {
     ) -> bool {
         let turns = self.im_turns.lock();
         turns.cancel.contains(conversation_id)
-            && turns.generation.get(conversation_id) == Some(&parent_generation)
+            && turns
+                .generations
+                .get(conversation_id)
+                .is_some_and(|generations| generations.contains(&parent_generation))
     }
 
     pub(crate) fn forget_conversation(&self, conversation_id: &str) {
@@ -663,7 +685,7 @@ mod tests {
         assert!(runtime.im_turn_cancel_latched("conv"));
         assert!(
             !runtime.is_generation_active("conv", started),
-            "stop retires only the generation this IM turn claimed"
+            "stop retires every generation this IM turn claimed"
         );
         assert!(
             runtime.is_generation_active("conv", desktop),
@@ -694,6 +716,172 @@ mod tests {
         assert!(runtime.is_generation_active("other", other));
         assert!(!im_turn_allows_tools(runtime.im_turn_active("conv")));
         assert!(!im_session_consent(runtime.im_turn_active("conv"), false));
+    }
+
+    #[test]
+    fn im_stop_retires_every_admitted_generation_and_child() {
+        let runtime = ChatRuntimeState::default();
+        let desktop_reply = runtime
+            .begin_generation_unless_im_stopped("conv")
+            .expect("a reply with no admitted IM turn still starts");
+        let desktop = runtime.begin_generation("conv");
+        runtime.begin_im_turn("conv");
+        runtime.begin_im_turn("other");
+        let first = runtime
+            .begin_generation_unless_im_stopped("conv")
+            .expect("the first admitted arm starts");
+        let second = runtime
+            .begin_generation_unless_im_stopped("conv")
+            .expect("a later admitted arm starts without replacing the first");
+        let other = runtime
+            .begin_generation_unless_im_stopped("other")
+            .expect("another admitted IM turn starts on its own");
+        assert_ne!(first, second);
+
+        assert_eq!(
+            runtime.note_im_child("conv", desktop_reply, "desktop-reply-child"),
+            ImChild::NotIm
+        );
+        assert_eq!(
+            runtime.note_im_child("conv", desktop, "desktop-child"),
+            ImChild::NotIm
+        );
+        assert_eq!(
+            runtime.note_im_child("conv", first, "arm-a-child"),
+            ImChild::Inherited
+        );
+        assert_eq!(
+            runtime.note_im_child("conv", second, "arm-b-child"),
+            ImChild::Inherited
+        );
+        assert_eq!(
+            runtime.note_im_child("other", other, "other-child"),
+            ImChild::Inherited
+        );
+
+        let mut children = runtime
+            .cancel_im_lineage("conv")
+            .expect("an admitted turn can be stopped");
+        children.sort();
+        assert_eq!(
+            children,
+            vec!["arm-a-child".to_string(), "arm-b-child".to_string()]
+        );
+        assert!(runtime.im_turn_cancel_latched("conv"));
+        assert!(!runtime.im_turn_cancel_latched("other"));
+        for generation in [first, second] {
+            assert!(!runtime.is_generation_active("conv", generation));
+            assert!(runtime.im_generation_stopped("conv", generation));
+            assert_eq!(
+                runtime.note_im_child("conv", generation, "late-child"),
+                ImChild::Stopped
+            );
+        }
+        assert!(runtime.begin_generation_unless_im_stopped("conv").is_none());
+        assert!(runtime.is_generation_active("conv", desktop_reply));
+        assert!(runtime.is_generation_active("conv", desktop));
+        assert!(runtime.is_generation_active("other", other));
+        assert_eq!(
+            runtime.note_im_child("other", other, "other-late"),
+            ImChild::Inherited
+        );
+        assert!(
+            runtime.cancel_im_lineage("conv").is_some(),
+            "the latch stays until the turn ends"
+        );
+        assert!(runtime.is_generation_active("other", other));
+
+        runtime.end_im_turn("conv");
+        assert!(!runtime.im_turn_cancel_latched("conv"));
+        assert!(!runtime.im_turn_active("conv"));
+        runtime.begin_im_turn("conv");
+        let next = runtime
+            .begin_generation_unless_im_stopped("conv")
+            .expect("ending the turn clears the cancel flag for the next round");
+        assert!(runtime.is_generation_active("conv", next));
+        assert_eq!(
+            runtime.note_im_child("conv", next, "next-child"),
+            ImChild::Inherited
+        );
+        assert!(runtime.is_generation_active("conv", desktop));
+        assert!(runtime.is_generation_active("conv", desktop_reply));
+        assert!(runtime.is_generation_active("other", other));
+        assert!(!runtime.im_generation_stopped("conv", first));
+    }
+
+    #[test]
+    fn im_stop_race_retires_or_refuses_each_registration() {
+        let runtime = std::sync::Arc::new(ChatRuntimeState::default());
+        runtime.begin_im_turn("conv");
+        let desktop = runtime.begin_generation("conv");
+        let other = runtime.begin_generation("other");
+        let started = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let inherited = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stopper = {
+            let runtime = std::sync::Arc::clone(&runtime);
+            std::thread::spawn(move || runtime.cancel_im_lineage("conv"))
+        };
+        let mut arms = Vec::new();
+        for index in 0..8 {
+            let runtime = std::sync::Arc::clone(&runtime);
+            let started = std::sync::Arc::clone(&started);
+            let inherited = std::sync::Arc::clone(&inherited);
+            arms.push(std::thread::spawn(move || {
+                let Some(generation) = runtime.begin_generation_unless_im_stopped("conv") else {
+                    return;
+                };
+                started
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .push(generation);
+                let child = format!("arm-{index}");
+                match runtime.note_im_child("conv", generation, &child) {
+                    ImChild::Inherited => inherited
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .push(child),
+                    ImChild::Stopped => {}
+                    ImChild::NotIm => panic!("an admitted generation left the IM lineage"),
+                }
+            }));
+        }
+        let children = stopper
+            .join()
+            .expect("stop thread")
+            .expect("the admitted turn is still open while stop runs");
+        for arm in arms {
+            arm.join().expect("arm thread");
+        }
+
+        let started = started.lock().unwrap_or_else(|error| error.into_inner());
+        let inherited = inherited.lock().unwrap_or_else(|error| error.into_inner());
+        for generation in started.iter() {
+            assert!(!runtime.is_generation_active("conv", *generation));
+            assert!(runtime.im_generation_stopped("conv", *generation));
+            assert_eq!(
+                runtime.note_im_child("conv", *generation, "after-stop"),
+                ImChild::Stopped
+            );
+        }
+        for child in inherited.iter() {
+            assert!(
+                children.iter().any(|stopped| stopped == child),
+                "a child that inherited before stop must be in the cancelled set"
+            );
+        }
+        assert!(runtime.begin_generation_unless_im_stopped("conv").is_none());
+        assert!(runtime.is_generation_active("conv", desktop));
+        assert!(runtime.is_generation_active("other", other));
+
+        runtime.end_im_turn("conv");
+        assert!(!runtime.im_turn_cancel_latched("conv"));
+        runtime.begin_im_turn("conv");
+        let next = runtime
+            .begin_generation_unless_im_stopped("conv")
+            .expect("the next round can generate after the stopped turn ends");
+        assert!(runtime.is_generation_active("conv", next));
+        assert!(runtime.is_generation_active("conv", desktop));
+        assert!(runtime.is_generation_active("other", other));
     }
 
     #[test]

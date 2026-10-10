@@ -379,6 +379,7 @@ fn accept(corp_id: &str, fields: &BTreeMap<String, String>) -> Accepted {
         reply_token: None,
         text: content,
         attachments: Vec::new(),
+        attachment_failures: Vec::new(),
     })
 }
 
