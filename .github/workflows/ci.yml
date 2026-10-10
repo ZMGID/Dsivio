@@ -48,7 +48,6 @@ jobs:
 
       - name: Test bundled npm launchers
         run: npm run test:runtime-launchers
-
       - name: Prepare built-in dsvideo
         run: npm run build:dsvideo
 

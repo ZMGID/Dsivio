@@ -320,7 +320,6 @@ async fn latest_playwright_cli_version() -> Result<String, String> {
         None => run("npm", &args, None, 30).await,
     }
 }
-
 #[tauri::command]
 pub async fn computer_control_check(
     state: State<'_, crate::state::AppState>,
