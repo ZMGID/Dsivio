@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { PanelsTopLeft, Search, SquarePen, Trash2 } from 'lucide-react'
+import { PanelsTopLeft, Search, Trash2 } from 'lucide-react'
 import { useT } from '../components/i18n'
+import { ComposeIcon } from '../settings/public/icons'
 import type { ConversationMenuAnchor } from './ConversationContextMenu'
 import { useCloseAnimation } from './useCloseAnimation'
 
@@ -70,7 +71,7 @@ export function ChatSectionMenu({
           onClose()
         }}
       >
-        <SquarePen strokeWidth={1.75} />
+        <ComposeIcon />
         {t.chatNewChat}
       </button>
       <button

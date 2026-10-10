@@ -1,3 +1,5 @@
+import './NavIcons.css'
+
 // 设置导航的自定义线性图标。接口对齐 lucide-react（size / strokeWidth / className），
 // 可直接替换 <Icon size={17} strokeWidth={1.75} />。fill=none + stroke=currentColor，
 // 颜色随上层文字色（选中态 / 深色模式自动跟随）。
@@ -8,14 +10,14 @@ interface IconProps {
   className?: string
 }
 
-function svgProps({ size = 24, strokeWidth = 2, className }: IconProps) {
+function svgProps({ size = 24, strokeWidth, className }: IconProps, defaultStrokeWidth = 2) {
   return {
     width: size,
     height: size,
     viewBox: '0 0 24 24',
     fill: 'none',
     stroke: 'currentColor',
-    strokeWidth,
+    strokeWidth: strokeWidth ?? defaultStrokeWidth,
     strokeLinecap: 'round' as const,
     strokeLinejoin: 'round' as const,
     className,
@@ -44,12 +46,16 @@ export function HotkeysIcon(props: IconProps) {
 }
 
 
-// 知识库：摊开的书（两页微弧 + 书脊）
+// 折角 · 知识：摊开的书页，右上折页保留共同笔触。
 export function KnowledgeIcon(props: IconProps) {
   return (
-    <svg {...svgProps(props)}>
-      <path d="M12 6.75 C10 5.25 7 4.75 3.5 5.25 V18.75 C7 18.25 10 18.75 12 20.25 C14 18.75 17 18.25 20.5 18.75 V5.25 C17 4.75 14 5.25 12 6.75 Z" />
-      <path d="M12 6.75 V20.25" />
+    <svg {...svgProps(props, 1.7)} aria-hidden="true">
+      <path d="M12 6.5C9.5 5 6.5 4.5 3.5 5v13c3-.5 6 0 8.5 1.5" />
+      <g data-nav-motion="knowledge-page">
+        <path d="M12 19.5c2.5-1.5 5.5-2 8.5-1.5V9l-4-4C15 5.2 13.5 5.7 12 6.5" />
+        <path d="M16.5 5v3a1 1 0 0 0 1 1h3" />
+      </g>
+      <path d="M12 6.5v13M6.5 9.5l2.5.5m-2.5 3 2.5.5" />
     </svg>
   )
 }
@@ -147,15 +153,14 @@ export function CliIcon(props: IconProps) {
 }
 
 
-// 助手：圆角机器人头（天线 + 胶囊眼 + 耳侧）
+// 折角 · 助手：带简单表情的伙伴卡片。
 export function AgentIcon(props: IconProps) {
   return (
-    <svg {...svgProps(props)}>
-      <rect x="4.5" y="7.5" width="15" height="12" rx="4" />
-      <path d="M12 7.5 V4.75" />
-      <circle cx="12" cy="3.75" r="1" fill="currentColor" stroke="none" />
-      <path d="M9.25 12.25 V14 M14.75 12.25 V14" />
-      <path d="M2.5 12 V15 M21.5 12 V15" />
+    <svg {...svgProps(props, 1.7)} aria-hidden="true">
+      <path d="M7 4.5h7.5l6 6V17a2 2 0 0 1-2 2H7a3.5 3.5 0 0 1-3.5-3.5V8A3.5 3.5 0 0 1 7 4.5Z" />
+      <path d="M14.5 4.5V8a2.5 2.5 0 0 0 2.5 2.5h3.5" />
+      <path data-nav-motion="agent-eyes" d="M8 10.5v1.5M12 10.5v1.5" />
+      <path data-nav-motion="agent-mouth" d="M8 15h6" />
     </svg>
   )
 }
@@ -233,23 +238,24 @@ export function HooksIcon(props: IconProps) {
 }
 
 
-// 插件：主体模块右上留出接口，独立圆角模块嵌入。
+// 折角 · 插件：接口与独立插接模块。
 export function PluginIcon(props: IconProps) {
   return (
-    <svg {...svgProps(props)} aria-hidden="true">
-      <path d="M10 4.5 H6 A2.5 2.5 0 0 0 3.5 7 V18 A2.5 2.5 0 0 0 6 20.5 H17 A2.5 2.5 0 0 0 19.5 18 V14 H12.5 A2.5 2.5 0 0 1 10 11.5 Z" />
-      <rect data-nav-motion="plugin" x="14" y="3.5" width="7" height="7" rx="1.75" />
+    <svg {...svgProps(props, 1.7)} aria-hidden="true">
+      <path d="M10 4H5.5A2 2 0 0 0 3.5 6v13a1.5 1.5 0 0 0 1.5 1.5h13A2 2 0 0 0 20 18.5V14h-6V10h-4Z" />
+      <path data-nav-motion="plugin" d="M15 3.5h5.5V9H15Z" />
     </svg>
   )
 }
 
+// 折角 · 新建聊天：开放对话框与向前的笔尖。
 export function ComposeIcon(props: IconProps) {
   return (
-    <svg {...svgProps(props)} aria-hidden="true">
-      <path d="M10 4.5 H6 A2 2 0 0 0 4 6.5 V18 A2 2 0 0 0 6 20 H17.5 A2 2 0 0 0 19.5 18 V14" />
+    <svg {...svgProps(props, 1.7)} aria-hidden="true">
+      <path d="M12 4.5H6A2.5 2.5 0 0 0 3.5 7v11.5L8 16h10A2.5 2.5 0 0 0 20.5 13.5V12" />
       <g data-nav-motion="compose">
-        <path d="m10 11 7.5-7.5 a1.8 1.8 0 0 1 2.5 2.5 L12.5 13.5 9 14 Z" />
-        <path d="m16 5 2.5 2.5" />
+        <path d="m12 9 6.5-6.5 3 3L15 12l-4 1Z" />
+        <path d="m17 4 3 3" />
       </g>
     </svg>
   )
@@ -285,38 +291,39 @@ export function ScheduleIcon(props: IconProps) {
   )
 }
 
-// 任务：清单与完成标记，涵盖定时任务和自动化工作流。
+// 折角 · 任务：任务页与一枚清楚的完成标记。
 export function TasksIcon(props: IconProps) {
   return (
-    <svg {...svgProps(props)} aria-hidden="true">
-      <rect x="5" y="4" width="14" height="17" rx="2.5" />
-      <path d="M9 3.5 H15 V6.5 H9 Z" />
-      <path d="M8.5 12 L10 13.5 L12.5 10.5 M14.5 12 H16 M8.5 17 H16" />
+    <svg {...svgProps(props, 1.7)} aria-hidden="true">
+      <path d="M13 3.5H6A2 2 0 0 0 4 5.5v14A1 1 0 0 0 5 20.5h14a1 1 0 0 0 1-1v-9Z" />
+      <path d="M13 3.5v5a2 2 0 0 0 2 2h5" />
+      <path data-nav-motion="tasks-check" pathLength={1} d="m8 14 2.5 2.5 5-5" />
     </svg>
   )
 }
 
+// 折角 · 作品：错位展开的产出页。
 export function PortfolioIcon(props: IconProps) {
   return (
-    <svg {...svgProps(props)} aria-hidden="true">
-      <path data-nav-motion="portfolio-back" d="M7 3.5 H17" />
-      <path data-nav-motion="portfolio-middle" d="M5 7 H19" />
-      <rect data-nav-motion="portfolio-front" x="3.5" y="10.5" width="17" height="10" rx="2" />
+    <svg {...svgProps(props, 1.7)} aria-hidden="true">
+      <path data-nav-motion="portfolio-back" d="M7 3.5h10a2 2 0 0 1 2 2v1" />
+      <path data-nav-motion="portfolio-middle" d="M5 7h13a2 2 0 0 1 2 2v1" />
+      <g data-nav-motion="portfolio-front">
+        <path d="M5 10.5h9l6.5 6.5v2.5a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-7a2 2 0 0 1 1.5-2Z" />
+        <path d="M14 10.5v5a1.5 1.5 0 0 0 1.5 1.5h5" />
+      </g>
     </svg>
   )
 }
 
+// 折角 · 扩展：能力模块与开放的加号。
 export function ExtensionsIcon(props: IconProps) {
   return (
-    <svg {...svgProps(props)} aria-hidden="true">
-      <g data-nav-motion="extensions-a">
-        <rect x="3.5" y="3.5" width="6.5" height="6.5" rx="1.5" />
-        <rect x="14" y="14" width="6.5" height="6.5" rx="1.5" />
-      </g>
-      <g data-nav-motion="extensions-b">
-        <rect x="14" y="3.5" width="6.5" height="6.5" rx="1.5" />
-        <rect x="3.5" y="14" width="6.5" height="6.5" rx="1.5" />
-      </g>
+    <svg {...svgProps(props, 1.7)} aria-hidden="true">
+      <rect data-nav-motion="extensions-a" x="3.5" y="3.5" width="6.5" height="6.5" rx="1.5" />
+      <rect data-nav-motion="extensions-b" x="3.5" y="14" width="6.5" height="6.5" rx="1.5" />
+      <rect data-nav-motion="extensions-c" x="14" y="14" width="6.5" height="6.5" rx="1.5" />
+      <path data-nav-motion="extensions-plus" d="M17.25 2.75v8.5M13 7h8.5" />
     </svg>
   )
 }

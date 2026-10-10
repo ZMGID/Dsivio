@@ -1,5 +1,6 @@
-import { PanelLeftClose, PanelLeftOpen, SquarePen } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useT } from '../components/i18n'
+import { ComposeIcon } from '../settings/public/icons'
 import { chatTitlebarPillIconClass } from './platform'
 
 type ChatTitlebarActionsProps = {
@@ -44,9 +45,8 @@ export function ChatTitlebarActions({
         title={t.chatNewChat}
         aria-label={t.chatNewChat}
       >
-        <SquarePen
+        <ComposeIcon
           size={15}
-          strokeWidth={1.75}
           className="transition-transform duration-300 ease-out group-hover:-rotate-6 group-hover:scale-110"
         />
       </button>

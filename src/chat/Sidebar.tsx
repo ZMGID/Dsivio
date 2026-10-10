@@ -2,9 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { createPortal } from 'react-dom'
 import { save } from '@tauri-apps/plugin-dialog'
 import {
-  Store,
   Images,
-  SquarePen,
   ChevronRight,
   Folder,
   FolderPlus,
@@ -15,7 +13,7 @@ import {
 } from 'lucide-react'
 import type { ChatAssistant, ChatProject, ChatSet, ConversationListItem, ConversationSearchHit } from './types'
 import { HighlightText } from './searchHighlight'
-import { AgentIcon, ExtensionsIcon, KnowledgeIcon, NotesIcon, PortfolioIcon, TasksIcon } from '../settings/public/icons'
+import { AgentIcon, ComposeIcon, ExtensionsIcon, KnowledgeIcon, NotesIcon, PluginIcon, PortfolioIcon, TasksIcon } from '../settings/public/icons'
 import { ConversationList } from './ConversationList'
 import { useScheduledTasks } from './scheduledTasks/useScheduledTasks'
 import { ChatSectionMenu } from './ChatSectionMenu'
@@ -242,15 +240,15 @@ function ExtensionsNav({
       <button
         type="button"
         onClick={() => setExpanded((open) => !open)}
-        className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] font-medium transition-colors ${
+        className={`kv-nav-motion group flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-[13px] font-medium text-[color:var(--text)] transition-colors ${
           highlighted
-            ? 'bg-neutral-900/[0.06] text-neutral-900'
-            : 'text-neutral-800 hover:bg-neutral-900/[0.04]'
+            ? 'bg-neutral-900/[0.06]'
+            : 'hover:bg-neutral-900/[0.04]'
         }`}
         aria-expanded={expanded}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-neutral-600 transition duration-300 ease-out group-hover:text-neutral-800 dark:text-neutral-400">
-          <ExtensionsIcon size={18} strokeWidth={1.75} />
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-[color:var(--text-muted)] transition duration-300 ease-out group-hover:text-[color:var(--text)]">
+          <ExtensionsIcon size={18} />
         </span>
         <span className="min-w-0 flex-1 truncate">{t.chatNavExtensions}</span>
         <ChevronRight
@@ -271,16 +269,16 @@ function ExtensionsNav({
                 key={item.id}
                 type="button"
                 onClick={() => onSelectItem(item.id)}
-                className={`flex items-center gap-2 rounded-md py-1.5 pl-2 pr-1 text-left text-[13px] transition-colors ${
+                className={`kv-nav-motion flex items-center gap-2 rounded-md py-1.5 pl-2 pr-1 text-left text-[13px] transition-colors ${
                   active
-                    ? 'font-medium text-neutral-900'
-                    : 'text-neutral-700 hover:bg-neutral-900/[0.04] hover:text-neutral-900'
+                    ? 'font-medium text-[color:var(--text)]'
+                    : 'text-[color:var(--text-muted)] hover:bg-neutral-900/[0.04] hover:text-[color:var(--text)]'
                 }`}
               >
                 <span className={`flex h-4 w-4 shrink-0 items-center justify-center ${
-                  active ? 'text-neutral-700' : 'text-neutral-400 dark:text-neutral-500'
+                  active ? 'text-[color:var(--text-muted)]' : 'text-[color:var(--text-faint)]'
                 }`}>
-                  <Icon size={15} strokeWidth={1.75} />
+                  <Icon size={15} strokeWidth={1.7} />
                 </span>
                 <span className="min-w-0 flex-1 truncate">{item.label(t)}</span>
               </button>
@@ -1312,24 +1310,23 @@ export const Sidebar = memo(function Sidebar({
         data-tauri-drag-region="false"
       >
         <NavRow
-          icon={<SquarePen size={17} strokeWidth={1.75} />}
+          icon={<ComposeIcon size={18} />}
           label={t.chatNewChat}
           onClick={onNewConversation}
-          iconMotion="group-hover:-rotate-6 group-hover:scale-110"
         />
         <NavRow
-          icon={<TasksIcon size={18} strokeWidth={1.75} />}
+          icon={<TasksIcon size={18} />}
           label={t.chatNavTasks}
           onClick={() => onOpenExtensionsItem('tasks')}
           active={extensionsActive === 'tasks'}
         />
         <NavRow
-          icon={<PortfolioIcon size={18} strokeWidth={1.75} />}
+          icon={<PortfolioIcon size={18} />}
           label={t.chatNavArtifacts}
           onClick={() => onOpenExtensionsItem('artifacts')}
           active={extensionsActive === 'artifacts'}
         />
-        <NavRow icon={<Store size={17} />} label={t.chatNavMarket} onClick={() => onOpenExtensionsItem('market')} active={extensionsActive === 'market'} />
+        <NavRow icon={<PluginIcon size={18} />} label={t.chatNavMarket} onClick={() => onOpenExtensionsItem('market')} active={extensionsActive === 'market'} />
         <ExtensionsNav
           activeItem={extensionSubItems.some((item) => item.id === extensionsActive) ? extensionsActive : null}
           onSelectItem={onOpenExtensionsItem}
@@ -1402,7 +1399,7 @@ export const Sidebar = memo(function Sidebar({
                       <FolderPlus size={16} />
                     </IconButton>
                     <IconButton size="sm" label={t.chatSidebarNewInScope} onClick={newListedConversation}>
-                      <SquarePen size={16} />
+                      <ComposeIcon size={16} />
                     </IconButton>
                   </>
                 )}
@@ -1590,7 +1587,7 @@ export const Sidebar = memo(function Sidebar({
                             className="mr-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
                             label={t.chatNewChat}
                           >
-                            <SquarePen size={15} strokeWidth={1.75} />
+                            <ComposeIcon size={15} />
                           </IconButton>
                         </div>
 
@@ -1743,7 +1740,7 @@ export const Sidebar = memo(function Sidebar({
                               className="mr-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
                               label={t.chatNewChatInSet}
                             >
-                              <SquarePen size={15} strokeWidth={1.75} />
+                              <ComposeIcon size={15} />
                             </IconButton>
                           </div>
 

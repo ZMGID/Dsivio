@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../../src/settings/NavIcons.css">
+  <title>Dsivio · 侧栏图标提案 / 折角</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --theme-surface: #fff;
+      --theme-surface-muted: #f5f5f2;
+      --theme-surface-soft: #fafaf8;
+      --theme-surface-hover: #eeefeb;
+      --theme-surface-active: #e7eae3;
+      --theme-surface-border: #e2e4de;
+      --text: #252a25;
+      --muted: #727a72;
+      --icon-ink: #424b43;
+      --accent: #426b49;
+      --accent-soft: #e9f0e6;
+      --shadow: 0 18px 60px rgb(30 39 28 / 7%);
+      --nav-size: 18px;
+      --sub-size: 15px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --theme-surface: #1b1e1b;
+      --theme-surface-muted: #141714;
+      --theme-surface-soft: #202420;
+      --theme-surface-hover: #292e29;
+      --theme-surface-active: #303830;
+      --theme-surface-border: #343b34;
+      --text: #e7ece5;
+      --muted: #9ba69a;
+      --icon-ink: #c4cec1;
+      --accent: #b4d2a9;
+      --accent-soft: #2c3929;
+      --shadow: 0 18px 60px rgb(0 0 0 / 20%);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--text); background: var(--theme-surface-muted); font-size: 14px; line-height: 1.6; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    button:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+    button { -webkit-tap-highlight-color: transparent; }
+    .page { max-width: 1160px; padding: 32px 36px 24px; margin: auto; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 21px; border-bottom: 1px solid var(--theme-surface-border); }
+    .wordmark { font-size: 20px; font-weight: 650; letter-spacing: -.6px; }
+    .top-caption { margin-left: 14px; font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+    .theme-button { border: 1px solid var(--theme-surface-border); border-radius: 8px; padding: 7px 13px; background: var(--theme-surface); font-size: 12px; }
+    .theme-button:hover { background: var(--theme-surface-hover); }
+    .intro { display: flex; justify-content: space-between; align-items: end; gap: 30px; padding: 33px 0 25px; }
+    .eyebrow { margin: 0 0 9px; color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: 2px; }
+    h1 { margin: 0; font-size: 34px; font-weight: 550; letter-spacing: -1.1px; line-height: 1.3; }
+    .lead { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+    .spec { display: flex; gap: 18px; padding-bottom: 3px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .spec span { padding-left: 12px; border-left: 1px solid var(--theme-surface-border); }
+    .toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding: 0 0 15px; }
+    .toolbar-note { color: var(--muted); font-size: 12px; margin: 0; }
+    .size-control { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+    .segments { display: flex; padding: 3px; gap: 2px; border: 1px solid var(--theme-surface-border); border-radius: 8px; background: var(--theme-surface); }
+    .segments button { border: 0; background: none; border-radius: 5px; padding: 3px 10px; font-size: 11px; }
+    .segments button[aria-pressed="true"] { background: var(--theme-surface-active); color: var(--text); }
+    .window { overflow: hidden; border: 1px solid var(--theme-surface-border); border-radius: 14px; background: var(--theme-surface); box-shadow: var(--shadow); }
+    .titlebar { display: flex; align-items: center; height: 39px; border-bottom: 1px solid var(--theme-surface-border); background: var(--theme-surface-soft); padding: 0 16px; position: relative; }
+    .traffic { display: flex; gap: 7px; }
+    .traffic i { width: 9px; height: 9px; border-radius: 50%; border: 1px solid var(--theme-surface-border); background: var(--theme-surface-hover); }
+    .titlebar-label { position: absolute; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 10px; letter-spacing: .4px; }
+    .workspace { display: grid; grid-template-columns: 226px minmax(0, 1fr); min-height: 465px; }
+    .sidebar { display: flex; flex-direction: column; padding: 22px 10px 16px; background: var(--theme-surface-soft); border-right: 1px solid var(--theme-surface-border); }
+    .sidebar-name { display: flex; justify-content: space-between; align-items: center; padding: 0 13px 20px; font-size: 16px; font-weight: 600; letter-spacing: -.4px; }
+    .sidebar-name small { color: var(--muted); font-size: 9px; font-weight: 400; letter-spacing: 1px; }
+    .nav { display: grid; gap: 3px; }
+    .nav-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 12px; border: 0; border-radius: 8px; background: none; text-align: left; font-size: 13px; line-height: 20px; }
+    .nav-row:hover { background: var(--theme-surface-hover); }
+    .nav-row[aria-pressed="true"] { background: var(--theme-surface-active); font-weight: 550; }
+    .nav-row .icon { width: var(--nav-size); height: var(--nav-size); }
+    .icon-slot { display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex-shrink: 0; color: var(--icon-ink); }
+    .nav-row .chevron { margin-left: auto; width: 12px; height: 12px; color: var(--muted); transition: transform 160ms ease; }
+    .nav-row[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+    .subnav { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 4px 4px 0 15px; }
+    .subnav[hidden] { display: none; }
+    .subnav .nav-row { padding: 6px 5px; gap: 7px; font-size: 12px; }
+    .subnav .icon-slot { width: 17px; height: 18px; }
+    .subnav .icon { width: var(--sub-size); height: var(--sub-size); }
+    .sidebar-divider { height: 1px; background: var(--theme-surface-border); margin: 21px 10px 16px; }
+    .sidebar-context { padding: 0 13px; color: var(--muted); font-size: 11px; }
+    .sidebar-context strong { color: var(--text); display: block; font-size: 12px; font-weight: 500; margin-bottom: 7px; }
+    .sidebar-footer { margin-top: auto; padding: 30px 13px 0; color: var(--muted); font-size: 10px; }
+    .content { padding: 26px 29px 25px; min-width: 0; }
+    .content-head { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 19px; }
+    .content-head h2 { font-size: 16px; font-weight: 550; margin: 0 0 5px; }
+    .content-head p { color: var(--muted); font-size: 11px; margin: 0; }
+    .badge { padding: 3px 8px; color: var(--accent); background: var(--accent-soft); border-radius: 5px; font-size: 9px; white-space: nowrap; }
+    .icon-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .icon-card { display: flex; flex-direction: column; align-items: center; min-width: 0; padding: 20px 8px 13px; border: 1px solid var(--theme-surface-border); border-radius: 9px; background: var(--theme-surface); }
+    .icon-card:hover { background: var(--theme-surface-soft); }
+    .icon-card[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+    .icon-card .icon { width: 42px; height: 42px; color: var(--icon-ink); margin-bottom: 14px; }
+    .icon-card strong { font-size: 11px; font-weight: 500; }
+    .icon-card small { color: var(--muted); font-size: 8px; letter-spacing: .8px; margin-top: 3px; }
+    .grid-note { display: flex; flex-direction: column; justify-content: center; gap: 6px; padding: 13px; color: var(--muted); font-size: 10px; line-height: 1.7; }
+    .grid-note strong { color: var(--text); font-size: 11px; font-weight: 500; }
+    .detail { display: grid; grid-template-columns: 1fr auto; gap: 20px; margin-top: 23px; padding-top: 20px; border-top: 1px solid var(--theme-surface-border); }
+    .detail h3 { font-size: 12px; font-weight: 550; margin: 0 0 6px; }
+    .detail p { color: var(--muted); font-size: 11px; margin: 0; max-width: 330px; }
+    .sizes { display: flex; align-items: end; gap: 17px; color: var(--icon-ink); }
+    .size-sample { display: flex; flex-direction: column; align-items: center; gap: 9px; }
+    .size-sample span { color: var(--muted); font: 9px ui-monospace, monospace; }
+    .principles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; padding: 26px 1px 22px; }
+    .principles h3 { margin: 0 0 6px; font-size: 12px; font-weight: 550; }
+    .principles h3 span { color: var(--accent); font: 10px ui-monospace, monospace; margin-right: 8px; }
+    .principles p { color: var(--muted); font-size: 11px; margin: 0; }
+    .footer { border-top: 1px solid var(--theme-surface-border); padding-top: 15px; display: flex; justify-content: space-between; gap: 15px; color: var(--muted); font-size: 10px; }
+    .icon { display: block; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+    .defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+    @media (max-width: 900px) {
+      .page { padding: 24px; }
+      .spec { display: none; }
+      .workspace { grid-template-columns: 202px minmax(0, 1fr); }
+      .content { padding: 23px 20px; }
+      .icon-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .grid-note { grid-column: span 2; }
+      .detail { grid-template-columns: 1fr; }
+      .sizes { justify-content: start; }
+    }
+    @media (max-width: 620px) {
+      .page { padding: 19px 14px; }
+      .top-caption { display: none; }
+      .intro { padding-top: 25px; }
+      h1 { font-size: 29px; }
+      .lead { max-width: 300px; font-size: 12px; }
+      .toolbar { align-items: start; }
+      .workspace { grid-template-columns: 1fr; }
+      .sidebar { border-right: 0; border-bottom: 1px solid var(--theme-surface-border); padding: 15px 14px 18px; }
+      .sidebar-name { padding-bottom: 10px; }
+      .sidebar-context, .sidebar-divider, .sidebar-footer { display: none; }
+      .subnav { max-width: 270px; }
+      .content { padding: 21px 18px; }
+      .principles { grid-template-columns: 1fr; gap: 16px; }
+      .footer { flex-direction: column; gap: 5px; }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <svg class="defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <symbol id="icon-chat" viewBox="0 0 24 24">
+        <path d="M12 4.5H6A2.5 2.5 0 0 0 3.5 7v11.5L8 16h10A2.5 2.5 0 0 0 20.5 13.5V12"/>
+        <g data-nav-motion="compose"><path d="m12 9 6.5-6.5 3 3L15 12l-4 1Z"/><path d="m17 4 3 3"/></g>
+      </symbol>
+      <symbol id="icon-tasks" viewBox="0 0 24 24">
+        <path d="M13 3.5H6A2 2 0 0 0 4 5.5v14A1 1 0 0 0 5 20.5h14a1 1 0 0 0 1-1v-9Z"/>
+        <path d="M13 3.5v5a2 2 0 0 0 2 2h5"/>
+        <path data-nav-motion="tasks-check" pathLength="1" d="m8 14 2.5 2.5 5-5"/>
+      </symbol>
+      <symbol id="icon-works" viewBox="0 0 24 24">
+        <path data-nav-motion="portfolio-back" d="M7 3.5h10a2 2 0 0 1 2 2v1"/>
+        <path data-nav-motion="portfolio-middle" d="M5 7h13a2 2 0 0 1 2 2v1"/>
+        <g data-nav-motion="portfolio-front"><path d="M5 10.5h9l6.5 6.5v2.5a1 1 0 0 1-1 1h-15a1 1 0 0 1-1-1v-7a2 2 0 0 1 1.5-2Z"/><path d="M14 10.5v5a1.5 1.5 0 0 0 1.5 1.5h5"/></g>
+      </symbol>
+      <symbol id="icon-plugins" viewBox="0 0 24 24">
+        <path d="M10 4H5.5A2 2 0 0 0 3.5 6v13a1.5 1.5 0 0 0 1.5 1.5h13A2 2 0 0 0 20 18.5V14h-6V10h-4Z"/>
+        <path data-nav-motion="plugin" d="M15 3.5h5.5V9H15Z"/>
+      </symbol>
+      <symbol id="icon-extensions" viewBox="0 0 24 24">
+        <rect data-nav-motion="extensions-a" x="3.5" y="3.5" width="6.5" height="6.5" rx="1.5"/>
+        <rect data-nav-motion="extensions-b" x="3.5" y="14" width="6.5" height="6.5" rx="1.5"/>
+        <rect data-nav-motion="extensions-c" x="14" y="14" width="6.5" height="6.5" rx="1.5"/>
+        <path data-nav-motion="extensions-plus" d="M17.25 2.75v8.5M13 7h8.5"/>
+      </symbol>
+      <symbol id="icon-assistants" viewBox="0 0 24 24">
+        <path d="M7 4.5h7.5l6 6V17a2 2 0 0 1-2 2H7a3.5 3.5 0 0 1-3.5-3.5V8A3.5 3.5 0 0 1 7 4.5Z"/>
+        <path d="M14.5 4.5V8a2.5 2.5 0 0 0 2.5 2.5h3.5"/>
+        <path data-nav-motion="agent-eyes" d="M8 10.5v1.5M12 10.5v1.5"/>
+        <path data-nav-motion="agent-mouth" d="M8 15h6"/>
+      </symbol>
+      <symbol id="icon-knowledge" viewBox="0 0 24 24">
+        <path d="M12 6.5C9.5 5 6.5 4.5 3.5 5v13c3-.5 6 0 8.5 1.5"/>
+        <g data-nav-motion="knowledge-page"><path d="M12 19.5c2.5-1.5 5.5-2 8.5-1.5V9l-4-4C15 5.2 13.5 5.7 12 6.5"/><path d="M16.5 5v3a1 1 0 0 0 1 1h3"/></g>
+        <path d="M12 6.5v13M6.5 9.5l2.5.5m-2.5 3 2.5.5"/>
+      </symbol>
+    </defs>
+  </svg>
+  <main class="page">
+    <header class="topbar">
+      <div><span class="wordmark">Dsivio</span><span class="top-caption">SIDEBAR ICON STUDY</span></div>
+      <button class="theme-button" id="theme" type="button" aria-pressed="false">切换深色</button>
+    </header>
+    <section class="intro">
+      <div>
+        <p class="eyebrow">DIRECTION 01 / FOLDED FORMS</p>
+        <h1>折角，把能力展开。</h1>
+        <p class="lead">一套安静、有辨识度的侧栏图标。用开口、折角与插接，串起 Dsivio 的功能入口。</p>
+      </div>
+      <div class="spec"><span>24 × 24 网格</span><span>1.7 统一线宽</span><span>单色 · 圆角</span></div>
+    </section>
+    <div class="toolbar">
+      <p class="toolbar-note">悬停或用 Tab 聚焦，查看每个图标的专属动效；按下不缩放。</p>
+      <div class="size-control"><span>侧栏图标</span><div class="segments" aria-label="侧栏图标尺寸">
+        <button type="button" data-size="16" aria-pressed="false">16 px</button>
+        <button type="button" data-size="18" aria-pressed="true">18 px</button>
+        <button type="button" data-size="20" aria-pressed="false">20 px</button>
+      </div></div>
+    </div>
+    <section class="window" aria-label="侧栏实景与图标预览">
+      <div class="titlebar"><div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div><span class="titlebar-label">Dsivio / 图标设计预览</span></div>
+      <div class="workspace">
+        <aside class="sidebar" aria-label="侧栏实景">
+          <div class="sidebar-name">Dsivio<small>WORKSPACE</small></div>
+          <nav class="nav" id="navigation" aria-label="功能入口预览"></nav>
+          <div class="sidebar-divider"></div>
+          <div class="sidebar-context"><strong>设计范围</strong>只重画功能图标。<br>保留菜单文字、顺序与层级。</div>
+          <div class="sidebar-footer">单色轮廓 · 不使用应用 Logo</div>
+        </aside>
+        <section class="content" aria-label="图标构形">
+          <div class="content-head"><div><h2>七个入口，一套语言</h2><p>主入口有清楚的轮廓，子入口缩小后仍然可读。</p></div><span class="badge">全新 SVG 构形</span></div>
+          <div class="icon-grid" id="icon-grid"></div>
+          <section class="detail" aria-label="当前图标说明">
+            <div aria-live="polite"><h3 id="detail-title"></h3><p id="detail-copy"></p></div>
+            <div class="sizes" id="sizes" aria-label="当前图标实际尺寸"></div>
+          </section>
+        </section>
+      </div>
+    </section>
+    <section class="principles" aria-label="设计原则">
+      <div><h3><span>01</span>有共同的笔触</h3><p>统一线宽和圆角，以轻微折角建立家族感，不把所有入口画成同一种盒子。</p></div>
+      <div><h3><span>02</span>先让含义清楚</h3><p>聊天是发起，任务是完成，作品是产出，插件是插接，扩展是增加能力。</p></div>
+      <div><h3><span>03</span>放回真实尺寸</h3><p>保留主项和子项的大小层级，检查小尺寸轮廓与深浅背景，不依赖彩色区分。</p></div>
+    </section>
+    <footer class="footer"><span>独立设计提案 · 菜单点击只切换预览，不执行应用业务。</span><span>离线可用 / 不修改 Dsivio 设置</span></footer>
+  </main>
+  <script>
+    'use strict';
+    const items = [
+      { id: 'chat', label: '新建聊天', en: 'START A CONVERSATION', title: '新建聊天 · 笔尖书写', copy: '对话框保持不动，笔尖沿短轨迹轻写两笔，再回到原位。不是把整枚图标旋转或放大。' },
+      { id: 'tasks', label: '任务', en: 'PLAN & COMPLETE', title: '任务 · 完成勾选', copy: '任务页和折角保持不动，勾选短暂收笔后从左下到右上重新描出，表达把事情完成。' },
+      { id: 'works', label: '作品', en: 'COLLECT THE OUTPUT', title: '作品 · 叠页展开', copy: '三层作品页错峰轻展，前页随后落定；位移保持在一个网格单位以内，避免整枚图标跳动。' },
+      { id: 'plugins', label: '插件', en: 'PLUG IN A CAPABILITY', title: '插件 · 模块插接', copy: '接口保持不动，独立模块先轻退半格，再向左下插入接口，停顿后回位，表达接入一块能力。' },
+      { id: 'extensions', label: '扩展', en: 'OPEN MORE POSSIBILITIES', title: '扩展 · 模块展开', copy: '三个模块向外轻展，加号在自己的中心转动半圈，随后模块回位。每个部件保持原大小。' },
+      { id: 'assistants', label: '助手', en: 'A HELPFUL COMPANION', title: '助手 · 眨眼回应', copy: '卡片轮廓保持不动，眼睛眨一下，嘴角轻抬再放下；用表情回应，而不是让整张脸弹跳。' },
+      { id: 'knowledge', label: '知识库', en: 'KEEP WHAT YOU KNOW', title: '知识库 · 轻翻书页', copy: '左页和书脊保持不动，右页沿书脊轻倾，带着折角翻起再落下，表达可翻阅的知识积累。' }
+    ];
+    const byId = new Map(items.map(item => [item.id, item]));
+    const root = document.documentElement;
+    let selected = 'tasks';
+    const icon = (id, size) => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"${size ? ` width="${size}" height="${size}"` : ''}>${document.getElementById(`icon-${id}`).innerHTML}</svg>`;
+    const row = item => `<button type="button" class="nav-row kv-nav-motion" data-select="${item.id}" aria-pressed="false"><span class="icon-slot">${icon(item.id)}</span><span>${item.label}</span></button>`;
+    document.getElementById('navigation').innerHTML = items.slice(0, 4).map(row).join('') +
+      `<button type="button" class="nav-row kv-nav-motion" id="extensions-toggle" data-select="extensions" aria-pressed="false" aria-expanded="true" aria-controls="subnav"><span class="icon-slot">${icon('extensions')}</span><span>扩展</span><svg class="icon chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button><div class="subnav" id="subnav">${items.slice(5).map(row).join('')}</div>`;
+    document.getElementById('icon-grid').innerHTML = items.map(item => `<button type="button" class="icon-card kv-nav-motion" data-select="${item.id}" aria-pressed="false">${icon(item.id)}<strong>${item.label}</strong><small>${item.en}</small></button>`).join('') + '<div class="grid-note"><strong>只动内部部件。</strong><span>悬停或键盘聚焦播放一次，<br>按下不缩放，减少动态时静止。</span></div>';
+    function select(id) {
+      selected = id;
+      const item = byId.get(id);
+      document.querySelectorAll('[data-select]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.select === id)));
+      const subnav = document.getElementById('subnav');
+      if (id === 'assistants' || id === 'knowledge') {
+        subnav.hidden = false;
+        document.getElementById('extensions-toggle').setAttribute('aria-expanded', 'true');
+      }
+      document.getElementById('detail-title').textContent = item.title;
+      document.getElementById('detail-copy').textContent = item.copy;
+      document.getElementById('sizes').innerHTML = [16, 18, 24, 32].map(size => `<div class="size-sample">${icon(id, size)}<span>${size} px</span></div>`).join('');
+    }
+    document.addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      if (button.dataset.select) {
+        if (button.id === 'extensions-toggle') {
+          const subnav = document.getElementById('subnav');
+          subnav.hidden = !subnav.hidden;
+          button.setAttribute('aria-expanded', String(!subnav.hidden));
+        }
+        select(button.dataset.select);
+      }
+      if (button.dataset.size) {
+        const size = Number(button.dataset.size);
+        root.style.setProperty('--nav-size', `${size}px`);
+        root.style.setProperty('--sub-size', `${size - 3}px`);
+        document.querySelectorAll('[data-size]').forEach(option => option.setAttribute('aria-pressed', String(option === button)));
+      }
+    });
+    document.getElementById('theme').addEventListener('click', event => {
+      const dark = root.dataset.theme !== 'dark';
+      root.dataset.theme = dark ? 'dark' : 'light';
+      event.currentTarget.setAttribute('aria-pressed', String(dark));
+      event.currentTarget.textContent = dark ? '切换浅色' : '切换深色';
+    });
+    select(selected);
+  </script>
+</body>
+</html>
