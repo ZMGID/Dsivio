@@ -17,7 +17,7 @@ use crate::chat::storage::{assistant_snapshot, load_conversation, set_im_working
 use crate::chat::ChatMessage;
 use crate::state::AppState;
 
-use super::types::{ImAgentConfig, InboundMessage, OutboundMessage};
+use super::types::{ImAgentConfig, ImPlatform, InboundMessage, OutboundMessage};
 
 /// Parent sends the visible failure. Shutdown and pipeline errors must not both
 /// produce an IM message.
@@ -54,15 +54,25 @@ fn non_empty(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-fn configured_directory(config: &ImAgentConfig) -> Result<Option<String>, String> {
-    let directory = config.working_directory.trim();
-    if directory.is_empty() {
-        return Ok(None);
-    }
-    if !Path::new(directory).is_dir() {
-        return Err(format!("IM 工作目录不存在：{directory}"));
-    }
-    Ok(Some(directory.to_string()))
+fn platform_directory(root: &str, platform: ImPlatform) -> Result<String, String> {
+    let default_root;
+    let root = if root.trim().is_empty() {
+        default_root = crate::settings::default_chat_working_directory();
+        default_root.as_str()
+    } else {
+        root.trim()
+    };
+    let folder = match platform {
+        ImPlatform::Feishu => "Lark",
+        ImPlatform::Wecom => "WeCom",
+        ImPlatform::WecomCallback => "WeComApp",
+    };
+    let directory = crate::native_tools::resolve_read_path(root)?.join(folder);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("无法创建 {} 工作目录：{error}", platform.label()))?;
+    std::fs::canonicalize(&directory)
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| format!("无法读取 {} 工作目录：{error}", platform.label()))
 }
 
 pub(crate) fn im_stream_id(streaming: bool, message_id: &str) -> Option<String> {
@@ -289,13 +299,20 @@ pub async fn ensure_conversation(
     inbound: &InboundMessage,
     existing: Option<&str>,
 ) -> Result<String, String> {
-    let _ = inbound;
-    let directory = configured_directory(config)?;
+    let root = non_empty(&config.working_directory).unwrap_or_else(|| {
+        app.state::<AppState>()
+            .settings_read()
+            .chat_tools
+            .native_tools
+            .working_directory
+            .clone()
+    });
+    let directory = platform_directory(&root, inbound.platform)?;
     if let Some(id) = existing.map(str::trim).filter(|id| !id.is_empty()) {
         if let Ok(conversation) = load_conversation(app, id) {
             if !conversation.agent_runtime.is_external() {
                 align_conversation(app, config, id).await?;
-                set_im_working_directory(app, id, directory.as_deref())?;
+                set_im_working_directory(app, id, Some(&directory))?;
                 return Ok(id.to_string());
             }
         }
@@ -313,7 +330,7 @@ pub async fn ensure_conversation(
         false,
     )
     .await?;
-    set_im_working_directory(app, &conversation.id, directory.as_deref())?;
+    set_im_working_directory(app, &conversation.id, Some(&directory))?;
     Ok(conversation.id)
 }
 
@@ -617,6 +634,44 @@ mod tests {
         remember_output_file(&mut paths, dir.path());
         remember_output_file(&mut paths, &dir.path().join("missing.txt"));
         assert_eq!(paths, vec![file.to_string_lossy().into_owned()]);
+    }
+
+    #[test]
+    fn platform_directories_create_separate_workspaces_without_using_the_root() {
+        let scratch = tempfile::tempdir().unwrap();
+        let root = scratch.path().join("workspace");
+        for (platform, folder) in [
+            (ImPlatform::Feishu, "Lark"),
+            (ImPlatform::Wecom, "WeCom"),
+            (ImPlatform::WecomCallback, "WeComApp"),
+        ] {
+            let directory = platform_directory(root.to_str().unwrap(), platform).unwrap();
+            assert_eq!(
+                Path::new(&directory),
+                std::fs::canonicalize(&root).unwrap().join(folder)
+            );
+            std::fs::write(Path::new(&directory).join("output.txt"), platform.key()).unwrap();
+        }
+        for (folder, content) in [
+            ("Lark", "feishu"),
+            ("WeCom", "wecom"),
+            ("WeComApp", "wecom_callback"),
+        ] {
+            assert_eq!(
+                std::fs::read_to_string(root.join(folder).join("output.txt")).unwrap(),
+                content
+            );
+        }
+        assert!(!root.join("output.txt").exists());
+    }
+
+    #[test]
+    fn platform_directory_failure_does_not_redirect_tools_or_replace_existing_files() {
+        let scratch = tempfile::tempdir().unwrap();
+        let blocked = scratch.path().join("Lark");
+        std::fs::write(&blocked, "keep this file").unwrap();
+        assert!(platform_directory(scratch.path().to_str().unwrap(), ImPlatform::Feishu).is_err());
+        assert_eq!(std::fs::read_to_string(&blocked).unwrap(), "keep this file");
     }
 
     #[test]

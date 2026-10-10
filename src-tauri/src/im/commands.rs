@@ -15,20 +15,16 @@ pub async fn im_save_credentials(
     credentials: CredentialInput,
 ) -> Result<(), String> {
     let settings = app.clone();
+    let store = app.state::<ImRuntime>().credentials.clone();
     credentials::off_runtime(move || {
-        credentials::CredentialStore::system().save_if_current(
-            platform,
-            &expected_identity,
-            credentials,
-            || {
-                settings
-                    .state::<crate::state::AppState>()
-                    .settings_read()
-                    .im
-                    .identity(platform)
-                    .to_owned()
-            },
-        )
+        store.save_if_current(platform, &expected_identity, credentials, || {
+            settings
+                .state::<crate::state::AppState>()
+                .settings_read()
+                .im
+                .identity(platform)
+                .to_owned()
+        })
     })
     .await?;
     app.state::<ImRuntime>().reconnect(platform);
@@ -41,19 +37,16 @@ pub async fn im_clear_credentials(
     expected_identity: String,
 ) -> Result<(), String> {
     let settings = app.clone();
+    let store = app.state::<ImRuntime>().credentials.clone();
     credentials::off_runtime(move || {
-        credentials::CredentialStore::system().clear_if_current(
-            platform,
-            &expected_identity,
-            || {
-                settings
-                    .state::<crate::state::AppState>()
-                    .settings_read()
-                    .im
-                    .identity(platform)
-                    .to_owned()
-            },
-        )
+        store.clear_if_current(platform, &expected_identity, || {
+            settings
+                .state::<crate::state::AppState>()
+                .settings_read()
+                .im
+                .identity(platform)
+                .to_owned()
+        })
     })
     .await?;
     app.state::<ImRuntime>().reconnect(platform);
@@ -203,10 +196,9 @@ pub async fn im_commit_setup(
                 .to_owned()
         })
         .await?;
-    Ok(super::onboarding::activate_commit(
-        &app.state::<ImRuntime>(),
-        outcome,
-    ))
+    let session = super::onboarding::activate_commit(&app.state::<ImRuntime>(), outcome)?;
+    let _ = app.emit("im-pairing-changed", ());
+    Ok(session)
 }
 #[tauri::command]
 pub fn im_cancel_setup(app: AppHandle, id: String) -> Result<(), String> {

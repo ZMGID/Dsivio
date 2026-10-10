@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { Lang } from '../../components/i18n'
 import { saveImCredentials } from '../../api/im'
 import type { CredentialInput, FeishuConfig, FeishuDomain, ImConfig, WecomConfig } from '../../api/im'
 import { FieldBlock, Input, Select } from '../public/controls'
-import { Button } from '../../components/Button'
+import { Button, IconButton } from '../../components/Button'
+import { X } from 'lucide-react'
 
 type Platform = 'feishu' | 'wecom'
 type FeishuIdentity = Pick<FeishuConfig, 'appId' | 'domain' | 'connectionMode' | 'enabled'>
@@ -65,7 +66,7 @@ function manualCopy(lang: Lang, platform: Platform) {
   const name = platform === 'feishu' ? (zh ? '飞书' : 'Feishu') : (zh ? '企业微信' : 'WeCom')
   return {
     toggle: zh ? `手动配置 ${name}` : `Manual setup ${name}`,
-    hint: zh ? '扫码失败时，在这里填写机器人信息并连接。密钥只写入系统凭证库，不会进入设置。' : 'If the scan fails, enter the bot here and connect. The secret is stored in the system credential store and is not written into settings.',
+    hint: zh ? '扫码失败时，在这里填写机器人信息并连接。密钥保存在本机 credentials.json，不使用钥匙串。' : 'If the scan fails, enter the bot here and connect. The secret is saved locally in credentials.json, not in the system keychain.',
     appId: 'App ID',
     botId: 'Bot ID',
     domain: zh ? '飞书域' : 'Feishu domain',
@@ -76,6 +77,7 @@ function manualCopy(lang: Lang, platform: Platform) {
     connect: zh ? `保存并连接 ${name}` : `Save and connect ${name}`,
     connecting: zh ? '正在保存并连接…' : 'Saving and connecting…',
     cancel: zh ? `取消手动连接 ${name}` : `Cancel manual setup ${name}`,
+    close: zh ? '关闭手动配置' : 'Close manual setup',
     missing: zh ? '请填写机器人 ID 和密钥。' : 'Enter the bot ID and secret.',
     identityFailed: zh ? '机器人身份没有保存，密钥未写入。' : 'The bot identity was not saved, so the secret was not stored.',
     secretFailed: zh ? '密钥没有保存，连接未启用。' : 'The secret was not stored, so the connection was not enabled.',
@@ -117,7 +119,10 @@ export function ImManualConnect({
   onBusyChange: (busy: boolean) => void
 }) {
   const copy = manualCopy(lang, platform)
-  const panelId = `${platform}-manual-setup`
+  const panelId = useId()
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const [identity, setIdentity] = useState(configured)
   const [secret, setSecret] = useState('')
   const [busy, setBusy] = useState(false)
@@ -132,6 +137,23 @@ export function ImManualConnect({
   const pendingEnableRef = useRef<{ expected: string, enabled: boolean } | null>(null)
 
   useEffect(() => {
+    if (!open) {
+      setSecret('')
+      setError('')
+      return
+    }
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const trigger = triggerRef.current
+    dialog.showModal()
+    headingRef.current?.focus()
+    return () => {
+      dialog.close()
+      if (trigger?.isConnected) trigger.focus()
+    }
+  }, [open])
+
+  useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
@@ -142,7 +164,7 @@ export function ImManualConnect({
   useEffect(() => {
     if (phaseRef.current === 'running') return
     setIdentity(configured)
-  }, [configured, busy])
+  }, [configured, busy, open])
 
   const revert = async (restore: IdentityRestore, expected: string) => {
     if (!mountedRef.current) return
@@ -176,6 +198,12 @@ export function ImManualConnect({
     wasOpen.current = open
   }, [open])
 
+  const close = () => {
+    cancel()
+    setSecret('')
+    setError('')
+    onOpenChange(false)
+  }
   const connect = async () => {
     if (phaseRef.current === 'running') return
     const expected = identity.trim()
@@ -258,7 +286,10 @@ export function ImManualConnect({
         setError(copy.enableFailed)
         return
       }
-      if (mountedRef.current) setSecret('')
+      if (mountedRef.current) {
+        setSecret('')
+        onOpenChange(false)
+      }
       onSettled()
     } catch (caught) {
       if (!secretSaved && latest()) await revert(previous, expected)
@@ -274,56 +305,83 @@ export function ImManualConnect({
   }
 
   return (
-    <div className="im-form">
+    <>
       <Button
+        ref={triggerRef}
         size="sm"
+        aria-haspopup="dialog"
         aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => onOpenChange(!open)}
+        aria-controls={open ? panelId : undefined}
+        disabled={busy}
+        onClick={() => onOpenChange(true)}
       >
         {copy.toggle}
       </Button>
       {open ? (
-        <div id={panelId} className="im-form">
-          <p className="kv-row-desc">{copy.hint}</p>
-          <FieldBlock label={platform === 'feishu' ? copy.appId : copy.botId}>
-            <Input
-              aria-label={platform === 'feishu' ? copy.appId : copy.botId}
-              value={identity}
-              onChange={setIdentity}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </FieldBlock>
-          {platform === 'feishu' && showDomain ? (
-            <FieldBlock label={copy.domain}>
-              <Select
-                ariaLabel={copy.domain}
-                value={domain}
-                options={[{ value: 'feishu', label: copy.feishu }, { value: 'lark', label: copy.lark }]}
-                onChange={(value) => onDomainChange(value === 'lark' ? 'lark' : 'feishu')}
+        <dialog
+          id={panelId}
+          ref={dialogRef}
+          className="kv-modal im-config-dialog"
+          aria-labelledby={`${panelId}-title`}
+          aria-describedby={`${panelId}-hint`}
+          aria-modal="true"
+          data-tauri-drag-region="false"
+          onKeyDown={(event) => event.stopPropagation()}
+          onCancel={(event) => {
+            event.preventDefault()
+            close()
+          }}
+        >
+          <div className="im-config-dialog-header">
+            <h2 id={`${panelId}-title`} ref={headingRef} tabIndex={-1} className="im-heading">{copy.toggle}</h2>
+            <IconButton label={copy.close} variant="ghost" size="sm" onClick={close}>
+              <X size={16} aria-hidden="true" />
+            </IconButton>
+          </div>
+          <div className="im-config-dialog-body im-form custom-scrollbar">
+            <p id={`${panelId}-hint`} className="kv-row-desc">{copy.hint}</p>
+            <FieldBlock label={platform === 'feishu' ? copy.appId : copy.botId}>
+              <Input
+                aria-label={platform === 'feishu' ? copy.appId : copy.botId}
+                value={identity}
+                disabled={busy}
+                onChange={setIdentity}
+                autoComplete="off"
+                spellCheck={false}
               />
             </FieldBlock>
-          ) : null}
-          <FieldBlock label={copy.secret} description={copy.secretHint}>
-            <Input
-              aria-label={copy.secret}
-              type="password"
-              value={secret}
-              onChange={setSecret}
-              autoComplete="new-password"
-              spellCheck={false}
-            />
-          </FieldBlock>
-          {error ? <p role="alert">{error}</p> : null}
-          <div className="im-actions">
-            <Button variant="primary" size="sm" disabled={busy} onClick={() => void connect()}>
+            {platform === 'feishu' && showDomain ? (
+              <FieldBlock label={copy.domain}>
+                <Select
+                  ariaLabel={copy.domain}
+                  value={domain}
+                  disabled={busy}
+                  options={[{ value: 'feishu', label: copy.feishu }, { value: 'lark', label: copy.lark }]}
+                  onChange={(value) => onDomainChange(value === 'lark' ? 'lark' : 'feishu')}
+                />
+              </FieldBlock>
+            ) : null}
+            <FieldBlock label={copy.secret} description={copy.secretHint}>
+              <Input
+                aria-label={copy.secret}
+                type="password"
+                value={secret}
+                disabled={busy}
+                onChange={setSecret}
+                autoComplete="new-password"
+                spellCheck={false}
+              />
+            </FieldBlock>
+            {error ? <p role="alert">{error}</p> : null}
+          </div>
+          <div className="im-config-dialog-footer">
+            <Button onClick={close}>{copy.cancel}</Button>
+            <Button variant="primary" disabled={busy} onClick={() => void connect()}>
               {busy ? copy.connecting : copy.connect}
             </Button>
-            {busy ? <Button size="sm" onClick={() => cancel()}>{copy.cancel}</Button> : null}
           </div>
-        </div>
+        </dialog>
       ) : null}
-    </div>
+    </>
   )
 }

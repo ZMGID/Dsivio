@@ -99,12 +99,12 @@ function useSelectMenuOpen(
     const handleLayoutChange = () => updateMenuRect()
 
     document.addEventListener('pointerdown', handlePointerDown)
-    document.addEventListener('keydown', handleKeyDown)
+    document.addEventListener('keydown', handleKeyDown, true)
     window.addEventListener('resize', handleLayoutChange)
     window.addEventListener('scroll', handleLayoutChange, true)
     return () => {
       document.removeEventListener('pointerdown', handlePointerDown)
-      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('keydown', handleKeyDown, true)
       window.removeEventListener('resize', handleLayoutChange)
       window.removeEventListener('scroll', handleLayoutChange, true)
     }

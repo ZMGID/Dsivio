@@ -677,9 +677,10 @@ impl ConversationRepository {
             .map_err(Into::into);
         }
 
-        let target = crate::native_tools::conversation_workspace_directory(
+        let target = super::storage::resolve_conversation_working_directory(
+            app,
+            &latest,
             ordinary_working_root,
-            &latest.id,
         )?;
         let legacy = crate::native_tools::legacy_outputs_dir(&latest.id)?;
         if legacy.exists() {

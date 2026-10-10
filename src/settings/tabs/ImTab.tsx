@@ -220,6 +220,7 @@ function imCopy(lang: Lang) {
     scanAgain: zh ? '重新扫码' : 'Scan again',
     scanFailedManual: zh ? '扫码没有完成。请手动配置机器人。' : 'The scan did not finish. Configure the bot manually.',
     useManual: zh ? '改用手动配置' : 'Use manual setup',
+    advanced: zh ? '高级设置' : 'Advanced settings',
     domain: zh ? '飞书域' : 'Feishu domain',
     domainFeishu: zh ? '飞书' : 'Feishu',
     domainLark: 'Lark',
@@ -352,6 +353,7 @@ export function ImTab({ lang, config, onChange, onFlush }: {
   const [manualOpen, setManualOpen] = useState<{ feishu: boolean, wecom: boolean }>({ feishu: false, wecom: false })
   const [manualSuspend, setManualSuspend] = useState<{ feishu: number, wecom: number }>({ feishu: 0, wecom: 0 })
   const [manualBusy, setManualBusy] = useState({ feishu: false, wecom: false })
+  const [accessPlatform, setAccessPlatform] = useState<'feishu' | 'wecom' | null>(null)
 
   useEffect(() => {
     feishuDomainRef.current = configuredDomain
@@ -975,28 +977,45 @@ export function ImTab({ lang, config, onChange, onFlush }: {
               <Button size="sm" disabled={manualBusy[platform]} aria-label={`${copy.disable} ${copy.platform[platform]}`} onClick={() => void disablePlatform(platform)}>{copy.disable}</Button>
             ) : null}
           </div>
-          <ImManualConnect
-            platform={platform}
-            lang={lang}
-            open={manualOpen[platform]}
-            onOpenChange={(next) => setManualOpen((currentOpen) => ({ ...currentOpen, [platform]: next }))}
-            domain={feishuDomain}
-            onDomainChange={chooseDomain}
-            showDomain={setupPlatform !== 'feishu'}
-            suspendEpoch={manualSuspend[platform]}
-            configuredIdentity={platform === 'feishu' ? config.feishu.appId : config.wecom.botId}
-            readConfig={() => configRef.current}
-            onChange={(next) => update(next)}
-            onFlush={() => onFlushRef.current()}
-            onSettled={() => { void refreshStatus() }}
-            onBusyChange={(busy) => setManualBusy((currentBusy) => ({ ...currentBusy, [platform]: busy }))}
-          />
-          <ImAccessEditor
-            platform={platform}
-            lang={lang}
-            access={platform === 'feishu' ? config.feishu.access : config.wecom.access}
-            onSave={(next) => saveAccess(platform, next)}
-          />
+          <div className="im-actions">
+            <ImManualConnect
+              platform={platform}
+              lang={lang}
+              open={manualOpen[platform]}
+              onOpenChange={(next) => setManualOpen((currentOpen) => ({ ...currentOpen, [platform]: next }))}
+              domain={feishuDomain}
+              onDomainChange={chooseDomain}
+              showDomain={setupPlatform !== 'feishu'}
+              suspendEpoch={manualSuspend[platform]}
+              configuredIdentity={platform === 'feishu' ? config.feishu.appId : config.wecom.botId}
+              readConfig={() => configRef.current}
+              onChange={(next) => update(next)}
+              onFlush={() => onFlushRef.current()}
+              onSettled={() => { void refreshStatus() }}
+              onBusyChange={(busy) => setManualBusy((currentBusy) => ({ ...currentBusy, [platform]: busy }))}
+            />
+            <Button
+              size="sm"
+              aria-label={`${copy.advanced} ${copy.platform[platform]}`}
+              aria-haspopup="dialog"
+              disabled={setupBusy || savingSetup || manualBusy[platform]}
+              onClick={(event) => {
+                event.currentTarget.focus()
+                setAccessPlatform(platform)
+              }}
+            >
+              {copy.advanced}
+            </Button>
+          </div>
+          {accessPlatform === platform ? (
+            <ImAccessEditor
+              platform={platform}
+              lang={lang}
+              access={platform === 'feishu' ? config.feishu.access : config.wecom.access}
+              onSave={(next) => saveAccess(platform, next)}
+              onClose={() => setAccessPlatform(null)}
+            />
+          ) : null}
         </div>
       </section>
     )

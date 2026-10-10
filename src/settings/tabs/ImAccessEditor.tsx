@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { Lang } from '../../components/i18n'
 import type { DmPolicy, GroupPolicy, ImAccessConfig } from '../../api/im'
 import { FieldBlock, Select, TextArea } from '../public/controls'
-import { Button } from '../../components/Button'
+import { Button, IconButton } from '../../components/Button'
+import { X } from 'lucide-react'
 
 const DM_POLICIES: DmPolicy[] = ['pairing', 'allowlist', 'open', 'disabled']
 const GROUP_POLICIES: GroupPolicy[] = ['allowlist', 'open', 'disabled']
@@ -80,7 +81,9 @@ function accessCopy(lang: Lang, platform: 'feishu' | 'wecom') {
     disabled: zh ? '关闭' : 'Disabled',
   }
   return {
-    title: zh ? '群访问' : 'Group access',
+    dialogTitle: zh ? `${name} · 高级设置` : `${name} · Advanced settings`,
+    close: zh ? '关闭高级设置' : 'Close advanced settings',
+    cancel: zh ? '取消' : 'Cancel',
     dm: zh ? `${name}私聊策略` : `${name} direct message policy`,
     group: zh ? `${name}群策略` : `${name} group policy`,
     dmHint: zh ? '默认配对。允许列表只接受下面的用户。' : 'Pairing is the default. Allowlist accepts only the users below.',
@@ -107,17 +110,34 @@ export function ImAccessEditor({
   lang,
   access,
   onSave,
+  onClose,
 }: {
   platform: 'feishu' | 'wecom'
   lang: Lang
   access: ImAccessConfig
   onSave: (access: ImAccessConfig) => Promise<boolean>
+  onClose: () => void
 }) {
   const copy = accessCopy(lang, platform)
   const [draft, setDraft] = useState(() => accessDraft(access))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const dirty = useRef(false)
+  const titleId = useId()
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+
+  useEffect(() => {
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    dialog.showModal()
+    headingRef.current?.focus()
+    return () => {
+      dialog.close()
+      if (previous?.isConnected) previous.focus()
+    }
+  }, [])
   const accessKey = JSON.stringify(access)
 
   useEffect(() => {
@@ -143,8 +163,10 @@ export function ImAccessEditor({
     } finally {
       setSaving(false)
     }
-    if (ok) dirty.current = false
-    else setError(copy.failed)
+    if (ok) {
+      dirty.current = false
+      onClose()
+    } else setError(copy.failed)
   }
 
   const rows = parseImIdList(draft.allowedGroups)
@@ -152,40 +174,60 @@ export function ImAccessEditor({
   const dmOptions = DM_POLICIES.map((value) => ({ value, label: copy.policy[value] }))
   const groupOptions = GROUP_POLICIES.map((value) => ({ value, label: copy.policy[value] }))
   return (
-    <div className="im-form">
-      <div className="kv-group-title">{copy.title}</div>
-      <FieldBlock label={copy.dm} description={copy.dmHint}>
-        <Select ariaLabel={copy.dm} value={draft.dmPolicy} options={dmOptions} onChange={(value) => change({ dmPolicy: value as DmPolicy })} />
-      </FieldBlock>
-      <FieldBlock label={copy.group} description={copy.groupHint}>
-        <Select ariaLabel={copy.group} value={draft.groupPolicy} options={groupOptions} onChange={(value) => change({ groupPolicy: value as GroupPolicy })} />
-      </FieldBlock>
-      <FieldBlock label={copy.users} description={copy.usersHint}>
-        <TextArea aria-label={copy.users} rows={3} value={draft.allowedUsers} onChange={(value) => change({ allowedUsers: value })} spellCheck={false} />
-      </FieldBlock>
-      <FieldBlock label={copy.groups} description={copy.groupsHint}>
-        <TextArea aria-label={copy.groups} rows={3} value={draft.allowedGroups} onChange={(value) => change({ allowedGroups: value })} spellCheck={false} />
-      </FieldBlock>
-      {rows.map((id) => (
-        <FieldBlock key={id} label={copy.groupUsers(id)} description={copy.groupUsersHint}>
-          <TextArea
-            aria-label={copy.groupUsers(id)}
-            rows={2}
-            value={draft.groupUsers[id] ?? ''}
-            onChange={(value) => change({ groupUsers: { ...draft.groupUsers, [id]: value } })}
-            spellCheck={false}
-          />
-        </FieldBlock>
-      ))}
-      {open ? (
-        <div className="im-security-notice" role="region" aria-label={copy.openLabel}>
-          <p>{copy.openWarning}</p>
-        </div>
-      ) : null}
-      {error ? <p role="alert">{error}</p> : null}
-      <div className="im-actions">
-        <Button size="sm" disabled={saving} onClick={() => void save()}>{saving ? copy.saving : copy.save}</Button>
+    <dialog
+      ref={dialogRef}
+      className="kv-modal im-config-dialog"
+      aria-labelledby={titleId}
+      aria-modal="true"
+      data-tauri-drag-region="false"
+      onKeyDown={(event) => event.stopPropagation()}
+      onCancel={(event) => {
+        event.preventDefault()
+        if (!saving) onClose()
+      }}
+    >
+      <div className="im-config-dialog-header">
+        <h2 id={titleId} ref={headingRef} tabIndex={-1} className="im-heading">{copy.dialogTitle}</h2>
+        <IconButton label={copy.close} variant="ghost" size="sm" disabled={saving} onClick={onClose}>
+          <X size={16} aria-hidden="true" />
+        </IconButton>
       </div>
-    </div>
+      <div className="im-config-dialog-body im-form custom-scrollbar">
+        <FieldBlock label={copy.dm} description={copy.dmHint}>
+          <Select ariaLabel={copy.dm} disabled={saving} value={draft.dmPolicy} options={dmOptions} onChange={(value) => change({ dmPolicy: value as DmPolicy })} />
+        </FieldBlock>
+        <FieldBlock label={copy.group} description={copy.groupHint}>
+          <Select ariaLabel={copy.group} disabled={saving} value={draft.groupPolicy} options={groupOptions} onChange={(value) => change({ groupPolicy: value as GroupPolicy })} />
+        </FieldBlock>
+        <FieldBlock label={copy.users} description={copy.usersHint}>
+          <TextArea aria-label={copy.users} disabled={saving} rows={3} value={draft.allowedUsers} onChange={(value) => change({ allowedUsers: value })} spellCheck={false} />
+        </FieldBlock>
+        <FieldBlock label={copy.groups} description={copy.groupsHint}>
+          <TextArea aria-label={copy.groups} disabled={saving} rows={3} value={draft.allowedGroups} onChange={(value) => change({ allowedGroups: value })} spellCheck={false} />
+        </FieldBlock>
+        {rows.map((id) => (
+          <FieldBlock key={id} label={copy.groupUsers(id)} description={copy.groupUsersHint}>
+            <TextArea
+              aria-label={copy.groupUsers(id)}
+              disabled={saving}
+              rows={2}
+              value={draft.groupUsers[id] ?? ''}
+              onChange={(value) => change({ groupUsers: { ...draft.groupUsers, [id]: value } })}
+              spellCheck={false}
+            />
+          </FieldBlock>
+        ))}
+        {open ? (
+          <div className="im-security-notice" role="region" aria-label={copy.openLabel}>
+            <p>{copy.openWarning}</p>
+          </div>
+        ) : null}
+        {error ? <p role="alert">{error}</p> : null}
+      </div>
+      <div className="im-config-dialog-footer">
+        <Button disabled={saving} onClick={onClose}>{copy.cancel}</Button>
+        <Button variant="primary" disabled={saving} onClick={() => void save()}>{saving ? copy.saving : copy.save}</Button>
+      </div>
+    </dialog>
   )
 }

@@ -63,6 +63,7 @@ pub struct ImRuntime {
     stop: watch::Sender<bool>,
     runner: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     setup: onboarding::SetupFlows,
+    credentials: credentials::CredentialStore,
 }
 impl ImRuntime {
     pub fn load(dir: PathBuf) -> Result<Self, String> {
@@ -73,6 +74,7 @@ impl ImRuntime {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Store::default(),
             Err(_) => return Err("无法读取 IM 状态文件".into()),
         };
+        let credentials = credentials::CredentialStore::file(dir.join("credentials.json"));
         let (stop, _) = watch::channel(false);
         let status = PLATFORMS
             .into_iter()
@@ -103,7 +105,8 @@ impl ImRuntime {
             changed: Notify::new(),
             stop,
             runner: Mutex::new(None),
-            setup: Default::default(),
+            setup: onboarding::SetupFlows::new(credentials.clone()),
+            credentials,
         })
     }
     fn transact<T>(
@@ -561,11 +564,11 @@ pub fn start(app: tauri::AppHandle) {
                     stop_running(old).await;
                 }
                 let identity = config.identity(platform).to_owned();
-                let loaded = tauri::async_runtime::spawn_blocking(move || {
-                    credentials::load(platform, &identity)
-                })
-                .await
-                .unwrap_or_else(|_| Err("系统凭证库读取失败".into()));
+                let store = task_app.state::<ImRuntime>().credentials.clone();
+                let loaded =
+                    tauri::async_runtime::spawn_blocking(move || store.load(platform, &identity))
+                        .await
+                        .unwrap_or_else(|_| Err("IM 凭证文件读取失败".into()));
                 let configured = loaded.is_ok();
                 {
                     let runtime = task_app.state::<ImRuntime>();

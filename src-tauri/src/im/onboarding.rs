@@ -17,16 +17,6 @@ pub struct SetupFlows {
     #[cfg(test)]
     remote: Mutex<VecDeque<Result<Value, String>>>,
 }
-impl Default for SetupFlows {
-    fn default() -> Self {
-        Self {
-            flows: Mutex::new(HashMap::new()),
-            secrets: credentials::CredentialStore::system(),
-            #[cfg(test)]
-            remote: Mutex::new(VecDeque::new()),
-        }
-    }
-}
 struct SetupFlow {
     platform: ImPlatform,
     expires_at: i64,
@@ -49,11 +39,54 @@ pub(crate) struct SetupCommit {
     pub session: ImSetupSession,
     pub reconnect: bool,
 }
-pub(crate) fn activate_commit(runtime: &super::ImRuntime, outcome: SetupCommit) -> ImSetupSession {
+pub(crate) fn activate_commit(
+    runtime: &super::ImRuntime,
+    outcome: SetupCommit,
+) -> Result<ImSetupSession, String> {
+    if let Some(identity) = &outcome.session.identity {
+        let owner_id = identity.owner_id.trim();
+        if !owner_id.is_empty() {
+            let platform = outcome.session.platform;
+            let bot_id = canonical_identity(platform, identity);
+            let is_owner = |user: &ImApprovedUser| {
+                user.platform == platform && user.identity == bot_id && user.user_id == owner_id
+            };
+            let needs_pairing = {
+                let state = runtime.state.lock();
+                !state.store.approved.iter().any(is_owner)
+                    || state.store.pending.iter().any(|pair| {
+                        pair.request.platform == platform
+                            && pair.identity == bot_id
+                            && pair.request.user_id == owner_id
+                    })
+            };
+            if needs_pairing {
+                // The registration response authenticates this account. Persist its bot-scoped
+                // grant before starting transport; never trust the first incoming sender instead.
+                runtime.transact(|store| {
+                    if !store.approved.iter().any(is_owner) {
+                        store.approved.push(ImApprovedUser {
+                            platform,
+                            identity: bot_id.to_owned(),
+                            user_id: owner_id.to_owned(),
+                            user_name: String::new(),
+                            approved_at: super::now(),
+                        });
+                    }
+                    store.pending.retain(|pair| {
+                        !(pair.request.platform == platform
+                            && pair.identity == bot_id
+                            && pair.request.user_id == owner_id)
+                    });
+                    Ok(())
+                })?;
+            }
+        }
+    }
     if outcome.reconnect {
         runtime.reconnect(outcome.session.platform);
     }
-    outcome.session
+    Ok(outcome.session)
 }
 fn accounts(domain: FeishuDomain) -> &'static str {
     match domain {
@@ -126,11 +159,11 @@ fn blank_flow(
     })
 }
 impl SetupFlows {
-    #[cfg(test)]
-    fn with_secrets(secrets: credentials::CredentialStore) -> Self {
+    pub(crate) fn new(secrets: credentials::CredentialStore) -> Self {
         Self {
             flows: Mutex::new(HashMap::new()),
             secrets,
+            #[cfg(test)]
             remote: Mutex::new(VecDeque::new()),
         }
     }
@@ -468,7 +501,7 @@ impl SetupFlows {
         }
         state.secret = None;
         state.view.status = ImSetupState::Completed;
-        state.view.message = "机器人凭证已保存在系统凭证库；请核对访问规则再启用".into();
+        state.view.message = "机器人凭证已保存到本地 JSON".into();
         Ok(SetupCommit {
             session: state.view.clone(),
             reconnect: true,
@@ -618,6 +651,21 @@ mod tests {
             "user_info": { "open_id": "ou_owner", "tenant_brand": "feishu" }
         })
     }
+    fn owner_message() -> InboundMessage {
+        InboundMessage {
+            platform: ImPlatform::Feishu,
+            message_id: "first-message".into(),
+            chat_id: "owner-dm".into(),
+            user_id: "ou_owner".into(),
+            user_name: "Owner".into(),
+            is_group: false,
+            thread_id: None,
+            reply_token: None,
+            text: "hello".into(),
+            attachments: Vec::new(),
+            attachment_failures: Vec::new(),
+        }
+    }
     fn wecom(id: &str, secret: &str) -> Value {
         serde_json::json!({
             "data": {
@@ -633,20 +681,29 @@ mod tests {
         release: AtomicBool,
     }
     impl credentials::SecretVault for BlockingVault {
-        fn set_secret(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), String> {
+        fn set_secret(
+            &self,
+            platform: ImPlatform,
+            identity: &str,
+            input: CredentialInput,
+        ) -> Result<(), String> {
             if self.arm.load(Ordering::SeqCst) {
                 self.entered.store(true, Ordering::SeqCst);
                 while !self.release.load(Ordering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             }
-            self.inner.set_secret(service, account, secret)
+            self.inner.set_secret(platform, identity, input)
         }
-        fn get_secret(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
-            self.inner.get_secret(service, account)
+        fn get_secret(
+            &self,
+            platform: ImPlatform,
+            identity: &str,
+        ) -> Result<Option<CredentialInput>, String> {
+            self.inner.get_secret(platform, identity)
         }
-        fn delete_secret(&self, service: &str, account: &str) -> Result<(), String> {
-            self.inner.delete_secret(service, account)
+        fn delete_secret(&self, platform: ImPlatform, identity: &str) -> Result<(), String> {
+            self.inner.delete_secret(platform, identity)
         }
     }
 
@@ -657,7 +714,7 @@ mod tests {
             .save(ImPlatform::Feishu, "app-a", input(KEPT))
             .unwrap();
         let sets = vault.set_count();
-        let flows = SetupFlows::with_secrets(store.clone());
+        let flows = SetupFlows::new(store.clone());
         let id = flows.seed_pending(ImPlatform::Feishu, FeishuDomain::Feishu);
         flows.push_remote(Ok(feishu("app-b", STAGED)));
         let session = flows.poll(&id).await.unwrap();
@@ -688,16 +745,143 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn committed_scan_pairs_its_owner_without_approval_and_preserves_other_access_boundaries()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = super::super::ImRuntime::load(dir.path().to_owned()).unwrap();
+        runtime
+            .credentials
+            .save(ImPlatform::Wecom, "bot-kept", input(KEPT))
+            .unwrap();
+        let mut config = ImConfig::default();
+        config.feishu.app_id = "app-new".into();
+        let mut owner = owner_message();
+        let mut stranger = owner.clone();
+        stranger.user_id = "ou_stranger".into();
+        runtime.pair(&config, &owner).unwrap();
+        runtime.pair(&config, &stranger).unwrap();
+        let id = runtime
+            .setup
+            .seed_pending(ImPlatform::Feishu, FeishuDomain::Feishu);
+        runtime.setup.push_remote(Ok(feishu("app-new", STAGED)));
+        let authorized = runtime.setup.poll(&id).await.unwrap();
+        assert_eq!(authorized.status, ImSetupState::Authorized);
+        assert!(!runtime.authorize(&config, &owner));
+        let outcome = runtime
+            .setup
+            .commit(&id, "app-new", |_| "app-new".into())
+            .await
+            .unwrap();
+        let completed = activate_commit(&runtime, outcome).unwrap();
+        assert_eq!(completed.status, ImSetupState::Completed);
+        assert!(runtime.authorize(&config, &owner));
+        assert!(!runtime.authorize(&config, &stranger));
+        assert_eq!(
+            runtime
+                .state
+                .lock()
+                .store
+                .pending
+                .iter()
+                .map(|pair| pair.request.user_id.as_str())
+                .collect::<Vec<_>>(),
+            ["ou_stranger"]
+        );
+        let reloaded = super::super::ImRuntime::load(dir.path().to_owned()).unwrap();
+        assert!(reloaded.authorize(&config, &owner));
+        assert_eq!(
+            reloaded
+                .credentials
+                .load(ImPlatform::Feishu, "app-new")
+                .unwrap()
+                .secret,
+            STAGED
+        );
+        assert_eq!(
+            reloaded
+                .credentials
+                .load(ImPlatform::Wecom, "bot-kept")
+                .unwrap()
+                .secret,
+            KEPT
+        );
+        config.feishu.app_id = "another-app".into();
+        assert!(!reloaded.authorize(&config, &owner));
+        config.feishu.app_id = "app-new".into();
+        owner.is_group = true;
+        assert!(!reloaded.authorize(&config, &owner));
+    }
+
+    #[tokio::test]
+    async fn owner_pairing_write_failure_denies_access_and_retries_the_committed_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = credentials::CredentialStore::memory();
+        let mut runtime = super::super::ImRuntime::load(dir.path().to_owned()).unwrap();
+        runtime.setup = SetupFlows::new(store);
+        let mut config = ImConfig::default();
+        config.feishu.app_id = "app-new".into();
+        let id = runtime
+            .setup
+            .seed_pending(ImPlatform::Feishu, FeishuDomain::Feishu);
+        runtime.setup.push_remote(Ok(feishu("app-new", STAGED)));
+        runtime.setup.poll(&id).await.unwrap();
+        let outcome = runtime
+            .setup
+            .commit(&id, "app-new", |_| "app-new".into())
+            .await
+            .unwrap();
+        let state_path = dir.path().join("state.json");
+        std::fs::create_dir(&state_path).unwrap();
+        assert!(activate_commit(&runtime, outcome).is_err());
+        assert!(!runtime.authorize(&config, &owner_message()));
+        std::fs::remove_dir(&state_path).unwrap();
+        let retry = runtime
+            .setup
+            .commit(&id, "app-new", |_| "app-new".into())
+            .await
+            .unwrap();
+        activate_commit(&runtime, retry).unwrap();
+        assert!(runtime.authorize(&config, &owner_message()));
+        let reloaded = super::super::ImRuntime::load(dir.path().to_owned()).unwrap();
+        assert!(reloaded.authorize(&config, &owner_message()));
+    }
+
+    #[tokio::test]
+    async fn scan_without_authenticated_owner_does_not_trust_incoming_senders() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = credentials::CredentialStore::memory();
+        let mut runtime = super::super::ImRuntime::load(dir.path().to_owned()).unwrap();
+        runtime.setup = SetupFlows::new(store);
+        let mut config = ImConfig::default();
+        config.feishu.app_id = "app-new".into();
+        let id = runtime
+            .setup
+            .seed_pending(ImPlatform::Feishu, FeishuDomain::Feishu);
+        let mut remote = feishu("app-new", STAGED);
+        remote["user_info"] = serde_json::json!({});
+        runtime.setup.push_remote(Ok(remote));
+        runtime.setup.poll(&id).await.unwrap();
+        let outcome = runtime
+            .setup
+            .commit(&id, "app-new", |_| "app-new".into())
+            .await
+            .unwrap();
+        activate_commit(&runtime, outcome).unwrap();
+        let owner = owner_message();
+        assert!(!runtime.authorize(&config, &owner));
+        runtime.pair(&config, &owner).unwrap();
+        assert!(!runtime.authorize(&config, &owner));
+    }
+
+    #[tokio::test]
     async fn commit_accepts_only_the_staged_identity_and_reconnects_once() {
         let (store, vault) = credentials::CredentialStore::memory();
         store
             .save(ImPlatform::Feishu, "app-a", input(KEPT))
             .unwrap();
-        let mut runtime = super::super::ImRuntime::load(
-            std::env::temp_dir().join(format!("dsivio-im-setup-{}", uuid::Uuid::new_v4())),
-        )
-        .unwrap();
-        runtime.setup = SetupFlows::with_secrets(store.clone());
+        let dir = tempfile::tempdir().unwrap();
+        let mut runtime = super::super::ImRuntime::load(dir.path().to_owned()).unwrap();
+        runtime.setup = SetupFlows::new(store.clone());
         let id = runtime
             .setup
             .seed_pending(ImPlatform::Feishu, FeishuDomain::Feishu);
@@ -712,7 +896,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!err.contains(STAGED));
-        assert!(!err.contains("系统凭证库"));
         let err = runtime
             .setup
             .commit(&id, "app-a", |_| "app-a".into())
@@ -742,7 +925,7 @@ mod tests {
             .await
             .unwrap();
         assert!(outcome.reconnect);
-        let session = activate_commit(&runtime, outcome);
+        let session = activate_commit(&runtime, outcome).unwrap();
         assert_eq!(session.status, ImSetupState::Completed);
         hidden(&session, STAGED);
         assert_eq!(
@@ -770,7 +953,7 @@ mod tests {
             .await
             .unwrap();
         assert!(!outcome.reconnect);
-        activate_commit(&runtime, outcome);
+        activate_commit(&runtime, outcome).unwrap();
         assert_eq!(
             runtime
                 .state
@@ -789,11 +972,11 @@ mod tests {
 
     #[tokio::test]
     async fn wecom_commit_uses_bot_id_and_expired_commit_does_not_store() {
-        let (store, vault) = credentials::CredentialStore::memory();
+        let (store, _) = credentials::CredentialStore::memory();
         store
             .save(ImPlatform::Wecom, "bot-old", input(KEPT))
             .unwrap();
-        let flows = SetupFlows::with_secrets(store.clone());
+        let flows = SetupFlows::new(store.clone());
         let id = flows.seed_pending(ImPlatform::Wecom, FeishuDomain::Feishu);
         flows.push_remote(Ok(wecom("bot-new", STAGED)));
         let session = flows.poll(&id).await.unwrap();
@@ -831,11 +1014,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(!err.contains(STAGED));
-        assert_eq!(vault.raw("Dsivio.IM", "feishu"), None);
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn blocking_keyring_does_not_stall_cancel() {
+    async fn blocking_credential_write_does_not_stall_cancel() {
         let inner = Arc::new(credentials::MemoryVault::default());
         let blocking = Arc::new(BlockingVault {
             inner: inner.clone(),
@@ -847,12 +1029,12 @@ mod tests {
         store
             .save(ImPlatform::Feishu, "app-a", input(KEPT))
             .unwrap();
-        let flows = Arc::new(SetupFlows::with_secrets(store.clone()));
+        let flows = Arc::new(SetupFlows::new(store.clone()));
         let id = flows.seed_pending(ImPlatform::Feishu, FeishuDomain::Feishu);
         flows.push_remote(Ok(feishu("app-b", STAGED)));
         let session = tokio::time::timeout(Duration::from_secs(2), flows.poll(&id))
             .await
-            .expect("poll blocked on keyring")
+            .expect("poll blocked on credential storage")
             .unwrap();
         assert_eq!(session.status, ImSetupState::Authorized);
         assert!(!blocking.entered.load(Ordering::SeqCst));
@@ -873,14 +1055,14 @@ mod tests {
             }
         })
         .await
-        .expect("commit did not reach the keyring");
+        .expect("commit did not reach credential storage");
 
         let flows_cancel = Arc::clone(&flows);
         let cancel_id = id.clone();
         let cancel = tokio::spawn(async move { flows_cancel.cancel(&cancel_id).unwrap() });
         tokio::time::timeout(Duration::from_secs(2), cancel)
             .await
-            .expect("cancel stalled behind keyring")
+            .expect("cancel stalled behind credential storage")
             .unwrap();
         blocking.release.store(true, Ordering::SeqCst);
         let err = tokio::time::timeout(Duration::from_secs(2), commit)
@@ -889,7 +1071,6 @@ mod tests {
             .unwrap()
             .unwrap_err();
         assert!(!err.contains(STAGED));
-        assert!(!err.contains("系统凭证库"));
         let session = flows.poll(&id).await.unwrap();
         assert_eq!(session.status, ImSetupState::Cancelled);
         hidden(&session, STAGED);

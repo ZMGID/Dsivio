@@ -499,6 +499,37 @@
   line-height: 1.6;
 }
 .im-qr-dialog-body > img { max-width: 100%; height: auto; }
+.kv-modal.im-config-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-width: min(560px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  padding: 0;
+  overflow: hidden;
+}
+.im-config-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.im-config-dialog-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+  gap: 16px;
+}
+.im-config-dialog-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
 @container im-settings (min-width: 620px) {
   .im-connections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
