@@ -83,8 +83,10 @@ pub(super) async fn run_reply_fan_out(
                 run_id,
                 error: _,
             }) => {
-                if message.stream_outcome.as_deref() == Some("completed") {
-                    completed += 1;
+                match message.stream_outcome.as_deref() {
+                    Some("completed") => completed += 1,
+                    Some("cancelled") => cancelled += 1,
+                    _ => {}
                 }
                 if let Some(run_id) = run_id {
                     terminals.push((
@@ -245,7 +247,11 @@ pub(super) async fn run_reply_fan_out(
                 conversation,
             );
         }
-        return Ok(());
+        return if cancelled == arms.len() {
+            Err("cancelled".to_string())
+        } else {
+            Ok(())
+        };
     }
 
     for (run_id, outcome, content) in terminals {

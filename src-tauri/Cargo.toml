@@ -25,6 +25,11 @@ path = "src/bin/export_chat_protocol.rs"
 name = "bundled-resources"
 path = "build_support/resources.rs"
 
+[[test]]
+name = "scheduled_task_lifecycle"
+path = "src/scheduled_tasks/lifecycle_tests.rs"
+harness = false
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -185,6 +190,7 @@ windows = { version = "0.61.3", features = [
 custom-protocol = ["tauri/custom-protocol"]
 
 [dev-dependencies]
+chrono-tz = "0.10"
 tempfile = "3"
 # 测试用：test-util 提供 tokio 暂停时钟（start_paused），让重试退避 sleep 在单测中瞬时跳过。
 tokio = { version = "1", features = ["test-util", "macros", "rt", "rt-multi-thread", "time"] }

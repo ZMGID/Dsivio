@@ -125,8 +125,11 @@ fn disable_process_power_throttling() {
     }
 }
 
-pub(crate) fn application_context() -> tauri::Context<tauri::Wry> {
-    // Keep one macro expansion: on macOS it also emits the embedded Info.plist symbol.
+/// One expansion of `generate_context!`: on macOS a second call also emits
+/// another embedded Info.plist symbol. Tests reuse this context and then
+/// change the identifier so they do not write the real app data directory.
+#[doc(hidden)]
+pub fn application_context() -> tauri::Context<tauri::Wry> {
     tauri::generate_context!()
 }
 

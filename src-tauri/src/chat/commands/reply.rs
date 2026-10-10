@@ -65,7 +65,8 @@ pub(super) async fn complete_assistant_reply(
         None,
         false,
     )
-    .await;
+    .await
+    .and_then(|reply| reply.error.map_or(Ok(()), Err));
     while outcome.is_ok() {
         if !conversation
             .goal_state
@@ -93,7 +94,8 @@ pub(super) async fn complete_assistant_reply(
             None,
             false,
         )
-        .await;
+        .await
+        .and_then(|reply| reply.error.map_or(Ok(()), Err));
         outcome = next;
     }
     if let Err(error) = &outcome {
@@ -128,12 +130,12 @@ pub(super) async fn complete_assistant_reply(
             conversation,
         );
     }
-    outcome.map(|_| ())
+    outcome
 }
 
-/// 共享实现：`arm = None` 为单模型现状（直接落盘，返回 `Ok(())` 语义不变）；
-/// `arm = Some(..)` 为多模型臂（用臂的 provider/model、自动批准工具、**不落盘**，
-/// 把产出的 assistant 消息通过 `ArmReplyOutcome.message` 返回给协调者）。
+/// 共享实现：`arm = None` 为单模型现状（直接落盘），取消后的部分输出也保留，
+/// 其终态通过 `ArmReplyOutcome.error` 交给调用方，不能把已保存当成已完成。
+/// `arm = Some(..)` 构造带 `stream_outcome` 的消息，交协调者统一落盘。
 pub(super) async fn complete_assistant_reply_inner(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -983,7 +985,7 @@ pub(super) async fn complete_assistant_reply_inner(
     Ok(ArmReplyOutcome {
         message: None,
         run_id: None,
-        error: None,
+        error: (terminal_outcome == "cancelled").then_some(terminal_outcome),
     })
 }
 

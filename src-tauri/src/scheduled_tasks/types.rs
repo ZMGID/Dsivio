@@ -125,7 +125,7 @@ pub enum RunStatus {
     Failed,
     /// Not sent (missed while asleep/closed, or a previous run still queued).
     Skipped,
-    /// The app exited before the run finished.
+    /// The app exited or the user stopped generation before the run finished.
     Interrupted,
 }
 

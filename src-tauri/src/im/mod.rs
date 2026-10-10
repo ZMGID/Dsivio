@@ -270,9 +270,11 @@ pub async fn notify_task_finished(
     if channels.is_empty() {
         return;
     }
-    let text = if let Some(error) = &run.error {
+    let text = if run.status == crate::scheduled_tasks::types::RunStatus::Interrupted {
+        format!("定时任务「{name}」已中断：{}", run.error.as_deref().unwrap_or("运行未完成"))
+    } else if let Some(error) = &run.error {
         format!("定时任务「{name}」失败：{error}")
-    } else {
+    } else if run.status == crate::scheduled_tasks::types::RunStatus::Succeeded {
         let Some(id) = &run.conversation_id else {
             return;
         };
@@ -288,6 +290,8 @@ pub async fn notify_task_finished(
             return;
         };
         format!("定时任务「{name}」已完成：\n{}", message.content)
+    } else {
+        return;
     };
     for (platform, chat_id) in channels {
         let output = {

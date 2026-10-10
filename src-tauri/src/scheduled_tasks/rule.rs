@@ -72,28 +72,10 @@ pub fn next_after(rule: &ScheduleRule, after: i64) -> Result<Option<i64>, String
                 Some(anchor + ((after - anchor) / step + 1) * step)
             }
         }
-        ScheduleRule::Daily { hour, minute } => next_calendar(after, *hour, *minute, 8, |_| true),
-        ScheduleRule::Weekly {
-            weekdays,
-            hour,
-            minute,
-        } => next_calendar(after, *hour, *minute, 8, |date| {
-            let day = date.weekday().num_days_from_sunday() as u8;
-            weekdays.contains(&day)
-        }),
-        // Jan 31 → Mar 31 is the longest gap between two months that have a given day.
-        ScheduleRule::Monthly { days, hour, minute } => {
-            next_calendar(after, *hour, *minute, 64, |date| days.contains(&(date.day() as u8)))
-        }
-        // Feb 29 can be eight years away across a non-leap century.
-        ScheduleRule::Yearly {
-            month,
-            day,
-            hour,
-            minute,
-        } => next_calendar(after, *hour, *minute, 366 * 8 + 2, |date| {
-            date.month() == u32::from(*month) && date.day() == u32::from(*day)
-        }),
+        ScheduleRule::Daily { .. }
+        | ScheduleRule::Weekly { .. }
+        | ScheduleRule::Monthly { .. }
+        | ScheduleRule::Yearly { .. } => local(after).ok().and_then(|after| next_calendar(rule, after)),
         ScheduleRule::Cron { expr } => {
             let cron = parse_cron(expr)?;
             let start = local(after)?;
@@ -140,29 +122,40 @@ fn local(timestamp: i64) -> Result<DateTime<Local>, String> {
         .ok_or_else(|| "时间超出范围".to_string())
 }
 
-fn next_calendar(
-    after: i64,
-    hour: u8,
-    minute: u8,
-    horizon_days: i64,
-    day_matches: impl Fn(chrono::NaiveDate) -> bool,
-) -> Option<i64> {
-    let start = local(after).ok()?.date_naive();
+fn next_calendar<Tz: TimeZone>(rule: &ScheduleRule, after: DateTime<Tz>) -> Option<i64> {
+    // A DST gap can skip an entire matching period, not just one calendar day.
+    let (hour, minute, horizon_days) = match rule {
+        ScheduleRule::Daily { hour, minute } => (*hour, *minute, 8),
+        ScheduleRule::Weekly { hour, minute, .. } => (*hour, *minute, 15),
+        ScheduleRule::Monthly { hour, minute, .. } => (*hour, *minute, 128),
+        // Allow another leap-day cycle if the first matching date has no such local time.
+        ScheduleRule::Yearly { hour, minute, .. } => (*hour, *minute, 366 * 16 + 2),
+        _ => return None,
+    };
+    let start = after.date_naive();
+    let timezone = after.timezone();
+    let after_secs = after.timestamp();
     let time = NaiveTime::from_hms_opt(u32::from(hour), u32::from(minute), 0)?;
-    // The horizon covers the rule's longest gap plus one day for a DST gap.
     (0..horizon_days).find_map(|offset| {
-        let date = start + Duration::days(offset);
-        if !day_matches(date) {
+        let date = start.checked_add_signed(Duration::days(offset))?;
+        let matches = match rule {
+            ScheduleRule::Daily { .. } => true,
+            ScheduleRule::Weekly { weekdays, .. } => weekdays.contains(&(date.weekday().num_days_from_sunday() as u8)),
+            ScheduleRule::Monthly { days, .. } => days.contains(&(date.day() as u8)),
+            ScheduleRule::Yearly { month, day, .. } => date.month() == u32::from(*month) && date.day() == u32::from(*day),
+            _ => false,
+        };
+        if !matches {
             return None;
         }
-        let candidate = match Local.from_local_datetime(&date.and_time(time)) {
+        let candidate = match timezone.from_local_datetime(&date.and_time(time)) {
             LocalResult::Single(value) => value,
             LocalResult::Ambiguous(first, _) => first,
             // Skipped by a DST jump: this day has no such wall-clock time.
             LocalResult::None => return None,
         };
         let timestamp = candidate.timestamp();
-        (timestamp > after).then_some(timestamp)
+        (timestamp > after_secs).then_some(timestamp)
     })
 }
 
@@ -265,6 +258,24 @@ mod tests {
             next_after(&rule, at(2026, 3, 1, 0, 0)).unwrap(),
             Some(at(2028, 2, 29, 8, 0))
         );
+    }
+
+    #[test]
+    fn weekly_continues_after_a_dst_gap() {
+        let timezone = chrono_tz::America::New_York;
+        let after = timezone.with_ymd_and_hms(2026, 3, 1, 2, 30, 0).single().unwrap();
+        let expected = timezone.with_ymd_and_hms(2026, 3, 15, 2, 30, 0).single().unwrap();
+        let rule = ScheduleRule::Weekly { weekdays: vec![0], hour: 2, minute: 30 };
+        assert_eq!(next_calendar(&rule, after), Some(expected.timestamp()));
+    }
+
+    #[test]
+    fn monthly_continues_after_missing_dates_and_a_dst_gap() {
+        let timezone = chrono_tz::Europe::Paris;
+        let after = timezone.with_ymd_and_hms(2024, 1, 31, 2, 30, 0).single().unwrap();
+        let expected = timezone.with_ymd_and_hms(2024, 5, 31, 2, 30, 0).single().unwrap();
+        let rule = ScheduleRule::Monthly { days: vec![31], hour: 2, minute: 30 };
+        assert_eq!(next_calendar(&rule, after), Some(expected.timestamp()));
     }
 
     #[test]

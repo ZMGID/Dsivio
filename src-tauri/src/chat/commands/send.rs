@@ -108,12 +108,15 @@ pub(crate) async fn chat_send_message(
         None,
     )
     .await
+    .map(SendOutcome::into_frontend)
 }
 
 /// Backend-initiated user send (scheduled tasks). Unlike the command it does
 /// not reject a busy conversation: it waits until every reply has finished,
 /// then admits the owner before running the normal send transaction. Cancellation
 /// only interrupts waiting; an admitted transaction is never dropped mid-write.
+/// A stopped model reply remains `Err("cancelled")`; interactive command success
+/// is a separate transport result, not proof that the scheduled work completed.
 /// `on_user_message_saved` runs once the
 /// user message is committed, before the reply starts.
 pub(crate) async fn send_user_message_when_idle(
@@ -144,15 +147,7 @@ pub(crate) async fn send_user_message_when_idle(
         Some(on_user_message_saved),
     )
     .await?;
-    if outcome.get("success").and_then(|value| value.as_bool()) == Some(true) {
-        Ok(())
-    } else {
-        Err(outcome
-            .get("error")
-            .and_then(|value| value.as_str())
-            .unwrap_or("发送失败")
-            .to_string())
-    }
+    outcome.reply_outcome
 }
 
 struct FinishOnDrop<F: FnOnce()>(Option<F>);
@@ -241,6 +236,30 @@ where
         },
     )
     .await?
+    .map(SendOutcome::into_frontend)
+}
+
+/// The internal result retains model cancellation. Only interactive callers
+/// translate it to a successful command response so their committed message stays visible.
+struct SendOutcome {
+    conversation: crate::chat::Conversation,
+    reply_outcome: Result<(), String>,
+}
+
+impl SendOutcome {
+    fn into_frontend(mut self) -> serde_json::Value {
+        // Only interactive callers serialize the conversation, after the reply's final write.
+        strip_transcripts_for_frontend(&mut self.conversation);
+        match self.reply_outcome {
+            Ok(()) => serde_json::json!({ "success": true, "conversation": self.conversation }),
+            Err(error) if error == "cancelled" => {
+                serde_json::json!({ "success": true, "conversation": self.conversation })
+            }
+            Err(error) => serde_json::json!({
+                "success": false, "conversation": self.conversation, "error": error,
+            }),
+        }
+    }
 }
 
 /// The send transaction; the caller already holds the conversation's send reservation.
@@ -256,7 +275,7 @@ async fn send_reserved(
     plan_message_id: Option<String>,
     user_message_id: Option<String>,
     on_user_message_saved: Option<&(dyn Fn() + Send + Sync)>,
-) -> Result<serde_json::Value, String> {
+) -> Result<SendOutcome, String> {
     let user_message_id = match user_message_id {
         Some(id)
             if id
@@ -305,11 +324,7 @@ async fn send_reserved(
     };
 
     if content.trim() == "/goal" {
-        strip_transcripts_for_frontend(&mut conversation);
-        return Ok(serde_json::json!({
-            "success": true,
-            "conversation": conversation,
-        }));
+        return Ok(SendOutcome { conversation, reply_outcome: Ok(()) });
     }
 
     let goal_started = crate::chat::slash_commands::goal_objective(&content);
@@ -537,23 +552,7 @@ async fn send_reserved(
             forced_skill_id.as_deref(),
         )
         .await;
-        strip_transcripts_for_frontend(&mut conversation);
-        return match fan_out_outcome {
-            Ok(()) => Ok(serde_json::json!({
-                "success": true,
-                "conversation": conversation,
-            })),
-            // 全部臂都失败（非取消）才算硬失败；部分成功在 run_reply_fan_out 内已合并落盘并返回 Ok。
-            Err(err) if err == "cancelled" => Ok(serde_json::json!({
-                "success": true,
-                "conversation": conversation,
-            })),
-            Err(err) => Ok(serde_json::json!({
-                "success": false,
-                "conversation": conversation,
-                "error": err,
-            })),
-        };
+        return Ok(SendOutcome { conversation, reply_outcome: fan_out_outcome });
     }
 
     let reply_outcome = complete_assistant_reply(
@@ -567,36 +566,7 @@ async fn send_reserved(
         crate::chat::agent::AgentRunEntry::Send,
     )
     .await;
-    // 剥离按臂做、且在各臂最后一次写盘之后。发送前超上下文那条提前返回的分支会先 rollback
-    // 再持久化，若在 match 前统一剥，就会把剥光的对话写回磁盘、永久丢掉盘上转录。
-    match reply_outcome {
-        Ok(()) => {
-            strip_transcripts_for_frontend(&mut conversation);
-            Ok(serde_json::json!({
-                "success": true,
-                "conversation": conversation,
-            }))
-        }
-        Err(err) if err == "cancelled" => {
-            strip_transcripts_for_frontend(&mut conversation);
-            Ok(serde_json::json!({
-                "success": true,
-                "conversation": conversation,
-            }))
-        }
-        Err(err) => {
-            // 生成中途硬失败（403 / 空响应 等）发生在用户消息已落盘之后。**不要回滚**——
-            // 把问题留在线程里，用户可一键重试而无需重打（与 chat_regenerate_message 的
-            // 错误路径一致：那条路径报错时也保留用户消息）。盘上已是「用户消息、无 assistant」
-            // 的干净状态（run_agent_loop 的 Err 在 push_assistant_message 之前冒泡），直接返回即可。
-            strip_transcripts_for_frontend(&mut conversation);
-            Ok(serde_json::json!({
-                "success": false,
-                "conversation": conversation,
-                "error": err,
-            }))
-        }
-    }
+    Ok(SendOutcome { conversation, reply_outcome })
 }
 
 #[cfg(test)]

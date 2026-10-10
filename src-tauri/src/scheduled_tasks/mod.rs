@@ -360,6 +360,29 @@ impl ScheduledTasks {
         }
     }
 
+    fn finish_run(&self, run: &mut TaskRun, outcome: Result<(), RunError>) {
+        let disable = match outcome {
+            Ok(()) => {
+                run.status = RunStatus::Succeeded;
+                run.error = None;
+                false
+            }
+            Err(RunError { message, disable }) => {
+                if message == "cancelled" {
+                    run.status = RunStatus::Interrupted;
+                    run.error = Some("用户停止了本次运行".into());
+                } else {
+                    run.status = RunStatus::Failed;
+                    run.error = Some(message);
+                }
+                disable
+            }
+        };
+        self.record_run(run);
+        let error = (run.status == RunStatus::Failed).then(|| run.error.clone()).flatten();
+        self.note_outcome(&run.task_id, error, disable);
+    }
+
     /// True while `conversation_id` is handling (or waiting to handle) a scheduled prompt.
     pub fn is_scheduled_conversation_busy(&self, conversation_id: &str) -> bool {
         self.lock_busy().contains_key(conversation_id)
@@ -503,6 +526,10 @@ fn validate_input(input: &ScheduledTaskInput, now: i64) -> Result<ValidInput, St
 
 /// Editor/command entry: resolves the target to one concrete conversation
 /// (creating it for `NewConversation`), then saves the task bound to it.
+///
+/// A failed save rolls back only the conversation this call created. An
+/// existing conversation is left in place, and a successful save keeps the
+/// new one.
 pub async fn save_task(
     app: &AppHandle,
     mut input: ScheduledTaskInput,
@@ -510,7 +537,7 @@ pub async fn save_task(
 ) -> Result<ScheduledTask, String> {
     let now = now_secs();
     let valid = validate_input(&input, now)?;
-    let conversation_id = match &input.target {
+    let (conversation_id, created_for_this_save) = match &input.target {
         TaskTarget::NewConversation {
             provider_id,
             model,
@@ -535,7 +562,7 @@ pub async fn save_task(
             {
                 return Err("思考等级无效".into());
             }
-            create_task_conversation(
+            let conversation_id = create_task_conversation(
                 app,
                 &valid.name,
                 provider_id,
@@ -543,18 +570,27 @@ pub async fn save_task(
                 clean(project_id),
                 thinking_level,
             )
-            .await?
+            .await?;
+            (conversation_id, true)
         }
         TaskTarget::Conversation { conversation_id } => {
             let conversation_id = conversation_id.trim().to_string();
             if crate::chat::storage::load_conversation(app, &conversation_id).is_err() {
                 return Err("选择的对话不存在".into());
             }
-            conversation_id
+            (conversation_id, false)
         }
     };
-    input.target = TaskTarget::Conversation { conversation_id };
-    service(app).save(input, source, now)
+    input.target = TaskTarget::Conversation {
+        conversation_id: conversation_id.clone(),
+    };
+    match service(app).save(input, source, now) {
+        Ok(task) => Ok(task),
+        Err(error) if created_for_this_save => {
+            Err(discard_created_conversation(app, &conversation_id, error).await)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn normalize_schedule(schedule: ScheduleRule, now: i64) -> Result<ScheduleRule, String> {
@@ -687,19 +723,7 @@ pub fn start_run(
             value => Some(value),
         };
         run.finished_at = Some(now_secs());
-        let (error, disable) = match outcome {
-            Ok(()) => {
-                run.status = RunStatus::Succeeded;
-                (None, false)
-            }
-            Err(RunError { message, disable }) => {
-                run.status = RunStatus::Failed;
-                run.error = Some(message.clone());
-                (Some(message), disable)
-            }
-        };
-        svc.record_run(&run);
-        svc.note_outcome(&task.id, error, disable);
+        svc.finish_run(&mut run, outcome);
         emit_changed(&app, &task.id, Some(&run));
         crate::im::notify_task_finished(&app, &task.name, &run).await;
     });
@@ -809,9 +833,10 @@ async fn create_task_conversation(
         false,
     )
     .await?;
+    let conversation_id = conversation.id.clone();
     let title = name.to_string();
-    crate::chat::repository::repository(app)
-        .mutate(app, &conversation.id, move |latest| {
+    let updated = crate::chat::repository::repository(app)
+        .mutate(app, &conversation_id, move |latest| {
             latest.title = title;
             latest.thinking_level = thinking_level;
             if pinned_model {
@@ -819,10 +844,42 @@ async fn create_task_conversation(
             }
             Ok(())
         })
-        .await
-        .map_err(crate::chat::repository::repository_error)?;
-    Ok(conversation.id)
+        .await;
+    if let Err(error) = updated {
+        return Err(discard_created_conversation(
+            app,
+            &conversation_id,
+            crate::chat::repository::repository_error(error),
+        )
+        .await);
+    }
+    Ok(conversation_id)
 }
+
+/// Removes the conversation created by this save. The original failure stays
+/// the prefix; a failed delete is appended with the conversation id instead of
+/// being dropped.
+async fn discard_created_conversation(
+    app: &AppHandle,
+    conversation_id: &str,
+    error: String,
+) -> String {
+    match crate::chat::repository::repository(app)
+        .delete(app, conversation_id)
+        .await
+    {
+        Ok(warnings) if warnings.is_empty() => error,
+        Ok(warnings) => format!(
+            "{error}；新建对话已删除（{conversation_id}），仍有未清理项：{}",
+            warnings.join("；")
+        ),
+        Err(cleanup) => format!(
+            "{error}；清理新建对话失败（{conversation_id}）：{}",
+            crate::chat::repository::repository_error(cleanup)
+        ),
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -1115,6 +1172,35 @@ mod tests {
         svc.record_run(&run);
         assert!(svc.runs(&task.id).is_empty());
         assert!(!svc.claim_queue(&task.id, "late_fire"));
+    }
+
+    #[test]
+    fn cancelled_run_is_persisted_as_interrupted_without_disabling_the_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service_in(dir.path());
+        let task = svc.save(input(ScheduleRule::Daily { hour: 9, minute: 0 }), TaskSource::User, 1000).unwrap();
+        svc.note_outcome(&task.id, Some("previous model failure".into()), false);
+        let mut run = TaskRun {
+            id: "cancelled_run".into(),
+            task_id: task.id.clone(),
+            trigger: RunTrigger::Manual,
+            scheduled_at: None,
+            status: RunStatus::Running,
+            conversation_id: Some(task.conversation_id),
+            error: None,
+            created_at: 1000,
+            started_at: Some(1001),
+            finished_at: Some(1002),
+        };
+        svc.record_run(&run);
+        svc.finish_run(&mut run, Err("cancelled".to_string().into()));
+        let reloaded = service_in(dir.path());
+        assert_eq!(reloaded.runs(&task.id)[0].status, RunStatus::Interrupted);
+        assert_eq!(reloaded.runs(&task.id)[0].finished_at, Some(1002));
+        let task = reloaded.get(&task.id).unwrap();
+        assert!(task.enabled);
+        assert_eq!(task.last_error, None);
+        assert!(run.error.is_some());
     }
 
     #[test]
