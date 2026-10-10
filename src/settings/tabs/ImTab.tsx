@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { open } from '@tauri-apps/plugin-dialog'
-import { confirmDialog } from '../../components/dialogQueue'
-import { Button } from '../../components/Button'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { QrCode, ShieldAlert, X } from 'lucide-react'
+import { Button, IconButton } from '../../components/Button'
 import type { Lang } from '../../components/i18n'
 import {
   approveImPairing,
   beginImSetup,
   cancelImSetup,
-  clearImCredentials,
   commitImSetup,
   denyImPairing,
   getImStatus,
@@ -16,18 +14,13 @@ import {
   pollImSetup,
   reconnectIm,
   revokeImUser,
-  saveImCredentials,
   subscribeImPairing,
   subscribeImStatus,
 } from '../../api/im'
 import type {
-  ConnectionState, CredentialInput, DmPolicy, FeishuConfig, FeishuConnectionMode, FeishuDomain, GroupPolicy,
-  ImAccessConfig, ImAgentConfig, ImApprovedUser, ImConfig, ImPairingRequest, ImPlatform, ImSetupSession,
-  ImStatus, ImWebhookConfig, WecomCallbackConfig, WecomConfig,
+  ConnectionState, FeishuConfig, ImApprovedUser, ImConfig, ImPairingRequest, ImPlatform,
+  ImSetupSession, ImStatus, WecomConfig,
 } from '../../api/im'
-import type { ModelProvider } from '../../api/tauri'
-import { ModelPairSelect } from '../ModelPairSelect'
-import { FieldBlock, Input, Select, SettingRow, SettingsGroup, TextArea, Toggle } from '../components'
 import { authorizationQrDataUrl } from './imQr'
 
 export const IM_SETUP_POLL_MS = 1000
@@ -36,13 +29,7 @@ const TERMINAL_SETUP: Record<string, true> = {
   completed: true, denied: true, expired: true, cancelled: true, error: true,
 }
 
-type SecretDraft = CredentialInput
-type Copy = ReturnType<typeof imCopy>
 type PlatformGen = Record<ImPlatform, number>
-
-function emptySecrets(): SecretDraft {
-  return { secret: '', encryptKey: '', verificationToken: '', token: '', encodingAesKey: '' }
-}
 
 function emptyPlatformGen(): PlatformGen {
   return { feishu: 0, wecom: 0, wecom_callback: 0 }
@@ -51,11 +38,6 @@ function emptyPlatformGen(): PlatformGen {
 function unixMs(value: number): number {
   if (!Number.isFinite(value)) return 0
   return value > 0 && value < 1_000_000_000_000 ? value * 1000 : value
-}
-
-function sameSecrets(a: SecretDraft, b: SecretDraft): boolean {
-  return a.secret === b.secret && a.encryptKey === b.encryptKey && a.verificationToken === b.verificationToken
-    && a.token === b.token && a.encodingAesKey === b.encodingAesKey
 }
 
 function errorText(error: unknown, fallback: string): string {
@@ -80,27 +62,6 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
       reject(new DOMException('aborted', 'AbortError'))
     }, { once: true })
   })
-}
-
-function parseIdList(value: string): string[] {
-  const seen = new Set<string>()
-  const ids: string[] = []
-  for (const part of value.split(/[\n,]/)) {
-    const id = part.trim()
-    if (!id || seen.has(id)) continue
-    seen.add(id)
-    ids.push(id)
-  }
-  return ids
-}
-
-function isHttpUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url)
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
-  } catch {
-    return false
-  }
 }
 
 function isSecureSetupUrl(url: string): boolean {
@@ -242,104 +203,39 @@ function imCopy(lang: Lang) {
     zh,
     pageWarnings: [
       zh ? '通过即时通讯调用的所有工具都会自动批准，不再弹出桌面确认。' : 'Every tool invoked from IM is approved automatically. Desktop confirmation is not shown.',
-      zh ? 'Dsivio 需要在这台电脑上保持运行，关闭应用后机器人会离线。' : 'Dsivio must stay running on this computer. The bot goes offline when the app quits.',
-      zh ? '同一个机器人不要同时连接 Hermes 和 Dsivio，以免抢占连接或分流消息。' : 'Do not connect the same bot to Hermes and Dsivio together: connections may be displaced or messages split between them.',
+      zh ? '连接后，在对应应用中向机器人发消息即可使用。请保持 Dsivio 运行。' : 'Once connected, send a message to the bot in the app. Keep Dsivio running.',
     ],
-    missing: zh ? '后端未返回 IM 配置，此页不会自行补默认值。' : 'The backend did not return IM settings. This page will not invent defaults.',
-    advanced: zh ? '高级设置' : 'Advanced settings',
-    agentTitle: zh ? '共享助手' : 'Shared assistant',
-    agentHint: zh ? '模型留空则使用桌面对话的默认模型。工作目录和通知频道按这里保存。' : 'An empty model uses the desktop chat default. The working directory and home channels are saved here.',
-    assistant: zh ? '助手 ID' : 'Assistant ID',
-    model: zh ? '模型' : 'Model',
-    inheritModel: zh ? '跟随桌面对话默认模型' : 'Use the desktop default model',
-    workdir: zh ? '工作目录' : 'Working directory',
-    workdirHint: zh ? '留空表示沿用后端默认目录。' : 'Empty keeps the backend default directory.',
-    chooseDir: zh ? '选择工作目录' : 'Choose working directory',
-    clearDir: zh ? '清空工作目录' : 'Clear working directory',
-    groupSessions: zh ? '群聊按用户分开会话' : 'Separate group sessions per user',
-    streaming: zh ? '流式回复' : 'Streaming replies',
-    homeFeishu: zh ? '飞书通知频道' : 'Feishu home channel',
-    homeWecom: zh ? '企业微信通知频道' : 'WeCom home channel',
-    homeCallback: zh ? '自建应用通知频道' : 'Self-built app home channel',
+    missing: zh ? '无法读取连接配置，请重新打开设置。' : 'Could not load connection settings. Please reopen settings.',
     feishu: zh ? '飞书 / Lark' : 'Feishu / Lark',
     wecom: zh ? '企业微信机器人' : 'WeCom bot',
-    callback: zh ? '企业微信自建应用' : 'WeCom self-built app',
-    enabledFeishu: zh ? '启用飞书' : 'Enable Feishu',
-    enabledWecom: zh ? '启用企业微信机器人' : 'Enable WeCom bot',
-    enabledCallback: zh ? '启用企业微信自建应用' : 'Enable WeCom self-built app',
-    appId: zh ? '飞书 App ID' : 'Feishu App ID',
-    domain: zh ? '飞书域名' : 'Feishu domain',
-    connection: zh ? '飞书连接方式' : 'Feishu connection',
-    botId: zh ? '企业微信 Bot ID' : 'WeCom bot ID',
-    websocketUrl: zh ? '企业微信 WebSocket 地址' : 'WeCom WebSocket URL',
-    corpId: zh ? '企业 ID' : 'Corp ID',
-    agentId: zh ? '应用 Agent ID' : 'Agent ID',
-    host: zh ? 'Webhook 主机' : 'Webhook host',
-    port: zh ? 'Webhook 端口' : 'Webhook port',
-    path: zh ? 'Webhook 路径' : 'Webhook path',
-    dm: zh ? '私聊策略' : 'Direct-message policy',
-    group: zh ? '群策略' : 'Group policy',
-    users: zh ? '允许的用户' : 'Allowed users',
-    usersHint: zh ? '每行一个，也接受逗号分隔。这是配置允许列表，不是配对存储。' : 'One per line, or comma-separated. This is the settings allowlist, not the pairing store.',
-    groups: zh ? '允许的群' : 'Allowed groups',
-    groupsHint: zh ? '每行一个群 ID。' : 'One group ID per line.',
-    groupUsers: zh ? '群内用户' : 'Users inside a group',
-    addGroupUsers: zh ? '添加群用户规则' : 'Add group-user rule',
-    groupId: zh ? '群 ID' : 'Group ID',
-    groupUserIds: zh ? '该群允许的用户' : 'Users allowed in this group',
-    removeGroup: zh ? '移除群用户规则' : 'Remove group-user rule',
-    mention: zh ? '群消息需要 @ 机器人' : 'Require @ in groups',
-    secretFeishu: zh ? '飞书 App Secret' : 'Feishu App Secret',
-    encryptKey: zh ? '飞书 Encrypt Key' : 'Feishu Encrypt Key',
-    verification: zh ? '飞书 Verification Token' : 'Feishu Verification Token',
-    secretWecom: zh ? '企业微信机器人 Secret' : 'WeCom bot secret',
-    secretCallback: zh ? '自建应用 Secret' : 'Self-built app secret',
-    callbackToken: zh ? '回调 Token' : 'Callback token',
-    aes: zh ? 'EncodingAESKey' : 'EncodingAESKey',
-    save: zh ? '保存凭证' : 'Save credentials',
-    clear: zh ? '清除凭证' : 'Clear credentials',
-    clearConfirm: zh ? '清除后机器人会因缺少凭证而连接失败。确定清除已保存的凭证？' : 'The bot will fail to connect without credentials. Clear the saved credentials?',
-    credentialHint: zh ? '密钥按已保存的机器人 ID 写入系统钥匙串。保存凭证会先把设置写入后端，成功后才提交密钥。密钥不会进入设置草稿，也不会从状态接口读回。' : 'Secrets are stored in the OS keyring for the saved bot ID. Saving credentials writes settings first, then submits the secret only if that succeeds. Secrets are not part of the settings draft and are not returned by status.',
-    flushFailed: zh ? '设置没有保存，凭证没有写入。' : 'Settings were not saved, so the credentials were not stored.',
-    enableNotSaved: zh ? '授权已保存，但启用没有写入。可以重试，当前还不是已连接。' : 'The authorization was saved, but enabling it was not. Retry is available; this is not connected yet.',
-    identityRequired: zh ? '请先填写机器人 ID。凭证按这个 ID 保存。' : 'Enter the bot ID first. Credentials are stored for that ID.',
-    identityChanged: zh ? '机器人 ID 已变化，凭证没有写入。' : 'The bot ID changed, so the credentials were not stored.',
-    boundId: zh ? '绑定 ID' : 'Bound ID',
-    configured: zh ? '凭证已配置' : 'Credentials configured',
-    notConfigured: zh ? '凭证未配置' : 'Credentials not configured',
-    enabledMissing: zh ? '已启用但未配置凭证，连接会失败。' : 'Enabled without credentials. The connection will fail.',
-    saveOk: zh ? '凭证已保存' : 'Credentials saved',
-    saveKept: zh ? '刚才提交的凭证已保存。输入框里后来改过的内容还没保存。' : 'The credentials you submitted were saved. Later edits in the fields are not saved yet.',
-    clearOk: zh ? '凭证已清除' : 'Credentials cleared',
+    flushFailed: zh ? '无法保存连接，请重试。' : 'Could not save the connection. Please retry.',
+    enableNotSaved: zh ? '授权已保存，但连接未能启动。请重试。' : 'Authorization was saved, but the connection could not start. Please retry.',
+    identityRequired: zh ? '机器人信息已丢失，请重新扫码。' : 'Bot information is missing. Please scan again.',
+    identityChanged: zh ? '机器人配置已变化，请重新扫码。' : 'The bot configuration changed. Please scan again.',
     requestFailed: zh ? '请求失败' : 'Request failed',
     scanConnect: zh ? '扫码连接' : 'Connect with QR',
+    scanAgain: zh ? '重新扫码' : 'Scan again',
     scanHint: {
       feishu: zh ? '打开飞书或 Lark，扫描二维码并在客户端里确认授权。' : 'Open Feishu or Lark, scan this QR code, and confirm the authorization in the app.',
       wecom: zh ? '打开企业微信，扫描二维码并在客户端里确认授权。' : 'Open WeCom, scan this QR code, and confirm the authorization in the app.',
     } satisfies Record<'feishu' | 'wecom', string>,
-    setup: zh ? '扫码授权' : 'QR authorization',
     qrAlt: zh ? '授权二维码' : 'Authorization QR code',
-    cancelSetup: zh ? '取消扫码' : 'Cancel setup',
+    close: zh ? '关闭扫码窗口' : 'Close QR setup',
+    preparingQr: zh ? '正在生成二维码…' : 'Preparing the QR code…',
     retrySave: zh ? '重试保存授权' : 'Retry saving authorization',
-    savingAuth: zh ? '正在保存授权，连接状态以服务端为准。' : 'Saving the authorization. The connection state comes from the server.',
-    missingUrl: zh ? '后端没有返回授权链接。' : 'The backend did not return an authorization link.',
+    savingAuth: zh ? '正在完成连接…' : 'Finishing the connection…',
+    missingUrl: zh ? '无法获取授权二维码，请重试。' : 'Could not get the authorization QR code. Please retry.',
     badUrl: zh ? '授权链接不是 https，已停止展示。' : 'The authorization link is not https, so it is not shown.',
-    identityMissing: zh ? '扫码结果没有身份，设置没有改。' : 'The scan finished without an identity, so settings were left unchanged.',
+    identityMissing: zh ? '未获取到机器人信息，请重新扫码。' : 'Could not get the bot information. Please scan again.',
     scanNotSubmitted: zh ? '这次扫码没有提交。' : 'This scan was not submitted.',
     timeout: zh ? '扫码已超时。' : 'QR setup timed out.',
-    cancelled: zh ? '扫码已取消。' : 'QR setup was cancelled.',
-    owner: zh ? '所有者' : 'Owner',
-    botName: zh ? '机器人名称' : 'Bot name',
     reconnect: zh ? '重新连接' : 'Reconnect',
-    disable: zh ? '停用' : 'Disable',
-    copyUrl: zh ? '复制回调地址' : 'Copy callback URL',
-    copied: zh ? '回调地址已复制' : 'Callback URL copied',
-    lastMessage: zh ? '最近一条消息 (UTC)' : 'Last message (UTC)',
-    noStatus: zh ? '尚未收到该平台状态。' : 'No status has arrived for this platform.',
+    disable: zh ? '断开连接' : 'Disconnect',
+    noStatus: zh ? '连接状态暂不可用' : 'Connection status is unavailable',
     statusFailed: zh ? '状态刷新失败' : 'Status refresh failed',
     retryStatus: zh ? '重试刷新状态' : 'Retry status refresh',
     pairing: zh ? '配对' : 'Pairing',
-    pairingHint: zh ? '待处理请求来自配对存储。批准或拒绝后列表以服务端结果为准。已批准用户可撤销。' : 'Pending requests come from the pairing store. After approve or deny, the list shows the server result. Approved users can be revoked.',
+    pairingHint: zh ? '仅批准你认识的人。批准后，对方即可通过机器人使用助手。' : 'Only approve people you recognize. Approved users can use the assistant through the bot.',
     approve: zh ? '批准' : 'Approve',
     deny: zh ? '拒绝' : 'Deny',
     revoke: zh ? '撤销' : 'Revoke',
@@ -348,9 +244,8 @@ function imCopy(lang: Lang) {
     refreshFailed: zh ? '操作已提交，但列表刷新失败。' : 'The action was submitted, but refreshing the list failed.',
     pairingFailed: zh ? '配对列表刷新失败' : 'Pairing list refresh failed',
     retryPairing: zh ? '重试刷新配对' : 'Retry pairing refresh',
-    dirFailed: zh ? '无法选择目录' : 'Could not choose a directory',
     state: {
-      disabled: zh ? '未启用' : 'Disabled',
+      disabled: zh ? '未连接' : 'Not connected',
       connecting: zh ? '连接中' : 'Connecting',
       connected: zh ? '已连接' : 'Connected',
       retrying: zh ? '重连中' : 'Retrying',
@@ -370,206 +265,7 @@ function imCopy(lang: Lang) {
       wecom: zh ? '企业微信' : 'WeCom',
       wecom_callback: zh ? '企业微信自建应用' : 'WeCom self-built app',
     } satisfies Record<ImPlatform, string>,
-    dmOptions: [
-      { value: 'pairing', label: zh ? '配对' : 'Pairing' },
-      { value: 'allowlist', label: zh ? '允许列表' : 'Allowlist' },
-      { value: 'open', label: zh ? '开放' : 'Open' },
-      { value: 'disabled', label: zh ? '关闭' : 'Disabled' },
-    ] satisfies { value: DmPolicy, label: string }[],
-    groupOptions: [
-      { value: 'allowlist', label: zh ? '允许列表' : 'Allowlist' },
-      { value: 'open', label: zh ? '开放' : 'Open' },
-      { value: 'disabled', label: zh ? '关闭' : 'Disabled' },
-    ] satisfies { value: GroupPolicy, label: string }[],
-    domainOptions: [
-      { value: 'feishu', label: zh ? '飞书' : 'Feishu' },
-      { value: 'lark', label: 'Lark' },
-    ] satisfies { value: FeishuDomain, label: string }[],
-    connectionOptions: [
-      { value: 'websocket', label: 'WebSocket' },
-      { value: 'webhook', label: 'Webhook' },
-    ] satisfies { value: FeishuConnectionMode, label: string }[],
   }
-}
-
-function setupLabel(copy: Copy, status: ImSetupSession['status']): string {
-  return copy.setupState[status]
-}
-
-function formatUtc(value: number, lang: Lang): string {
-  const date = new Date(unixMs(value))
-  if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat(lang === 'zh' ? 'zh-CN' : 'en-US', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-    timeZone: 'UTC',
-  }).format(date)
-}
-
-function IdListField({ id, label, description, value, onChange }: {
-  id: string
-  label: string
-  description?: string
-  value: string[]
-  onChange: (value: string[]) => void
-}) {
-  const [text, setText] = useState(value.join('\n'))
-  const focused = useRef(false)
-  const serialized = value.join('\n')
-  useEffect(() => {
-    if (!focused.current) setText(serialized)
-  }, [serialized])
-  return (
-    <FieldBlock label={label} description={description} htmlFor={id}>
-      <TextArea
-        id={id}
-        rows={3}
-        value={text}
-        onFocus={() => { focused.current = true }}
-        onBlur={() => { focused.current = false; setText(value.join('\n')) }}
-        onChange={(next) => {
-          setText(next)
-          onChange(parseIdList(next))
-        }}
-      />
-    </FieldBlock>
-  )
-}
-
-function GroupUsersEditor({ idPrefix, label, addLabel, groupLabel, usersLabel, removeLabel, value, onChange }: {
-  idPrefix: string
-  label: string
-  addLabel: string
-  groupLabel: string
-  usersLabel: string
-  removeLabel: string
-  value: Record<string, string[]>
-  onChange: (value: Record<string, string[]>) => void
-}) {
-  const toRows = (map: Record<string, string[]>) => Object.entries(map).map(([groupId, users]) => ({ groupId, users: users.join('\n') }))
-  const [rows, setRows] = useState(() => toRows(value))
-  const emitted = useRef(JSON.stringify(value))
-  useEffect(() => {
-    const next = JSON.stringify(value)
-    if (next !== emitted.current) {
-      emitted.current = next
-      setRows(toRows(value))
-    }
-  }, [value])
-
-  const commit = (nextRows: { groupId: string, users: string }[]) => {
-    setRows(nextRows)
-    const map: Record<string, string[]> = {}
-    for (const row of nextRows) {
-      const groupId = row.groupId.trim()
-      if (!groupId) continue
-      map[groupId] = parseIdList(row.users)
-    }
-    emitted.current = JSON.stringify(map)
-    onChange(map)
-  }
-
-  return (
-    <FieldBlock label={label}>
-      <div className="flex flex-col gap-2">
-        {rows.map((row, index) => (
-          <div key={`${idPrefix}-${index}`} className="flex flex-col gap-2">
-            <Input
-              aria-label={`${groupLabel} ${index + 1}`}
-              value={row.groupId}
-              onChange={(groupId) => commit(rows.map((item, itemIndex) => itemIndex === index ? { ...item, groupId } : item))}
-            />
-            <TextArea
-              aria-label={`${usersLabel} ${index + 1}`}
-              rows={2}
-              value={row.users}
-              onChange={(users) => commit(rows.map((item, itemIndex) => itemIndex === index ? { ...item, users } : item))}
-            />
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => commit(rows.filter((_, itemIndex) => itemIndex !== index))}
-            >
-              {removeLabel} {index + 1}
-            </Button>
-          </div>
-        ))}
-        <Button size="sm" onClick={() => commit([...rows, { groupId: '', users: '' }])}>{addLabel}</Button>
-      </div>
-    </FieldBlock>
-  )
-}
-
-function AccessEditor({ idPrefix, copy, access, onChange }: {
-  idPrefix: string
-  copy: Copy
-  access: ImAccessConfig
-  onChange: (access: ImAccessConfig) => void
-}) {
-  return (
-    <>
-      <FieldBlock label={`${idPrefix} ${copy.dm}`}>
-        <Select ariaLabel={`${idPrefix} ${copy.dm}`} value={access.dmPolicy} options={copy.dmOptions} onChange={(dmPolicy) => onChange({ ...access, dmPolicy: dmPolicy as DmPolicy })} />
-      </FieldBlock>
-      <FieldBlock label={`${idPrefix} ${copy.group}`}>
-        <Select ariaLabel={`${idPrefix} ${copy.group}`} value={access.groupPolicy} options={copy.groupOptions} onChange={(groupPolicy) => onChange({ ...access, groupPolicy: groupPolicy as GroupPolicy })} />
-      </FieldBlock>
-      <IdListField id={`${idPrefix}-users`} label={`${idPrefix} ${copy.users}`} description={copy.usersHint} value={access.allowedUsers} onChange={(allowedUsers) => onChange({ ...access, allowedUsers })} />
-      <IdListField id={`${idPrefix}-groups`} label={`${idPrefix} ${copy.groups}`} description={copy.groupsHint} value={access.allowedGroups} onChange={(allowedGroups) => onChange({ ...access, allowedGroups })} />
-      <GroupUsersEditor
-        idPrefix={idPrefix}
-        label={`${idPrefix} ${copy.groupUsers}`}
-        addLabel={`${idPrefix} ${copy.addGroupUsers}`}
-        groupLabel={`${idPrefix} ${copy.groupId}`}
-        usersLabel={`${idPrefix} ${copy.groupUserIds}`}
-        removeLabel={`${idPrefix} ${copy.removeGroup}`}
-        value={access.groupUsers}
-        onChange={(groupUsers) => onChange({ ...access, groupUsers })}
-      />
-    </>
-  )
-}
-
-function WebhookEditor({ idPrefix, copy, webhook, onChange }: {
-  idPrefix: string
-  copy: Copy
-  webhook: ImWebhookConfig
-  onChange: (webhook: ImWebhookConfig) => void
-}) {
-  const [portText, setPortText] = useState(String(webhook.port))
-  const focused = useRef(false)
-  useEffect(() => {
-    if (!focused.current) setPortText(String(webhook.port))
-  }, [webhook.port])
-  return (
-    <>
-      <FieldBlock label={`${idPrefix} ${copy.host}`} htmlFor={`${idPrefix}-host`}>
-        <Input id={`${idPrefix}-host`} value={webhook.host} onChange={(host) => onChange({ ...webhook, host })} />
-      </FieldBlock>
-      <FieldBlock label={`${idPrefix} ${copy.port}`} htmlFor={`${idPrefix}-port`}>
-        <Input
-          id={`${idPrefix}-port`}
-          inputMode="numeric"
-          value={portText}
-          onFocus={() => { focused.current = true }}
-          onBlur={() => { focused.current = false; setPortText(String(webhook.port)) }}
-          onChange={(next) => {
-            setPortText(next)
-            if (!/^\d{1,5}$/.test(next)) return
-            const port = Number(next)
-            if (port >= 1 && port <= 65535) onChange({ ...webhook, port })
-          }}
-        />
-      </FieldBlock>
-      <FieldBlock label={`${idPrefix} ${copy.path}`} htmlFor={`${idPrefix}-path`}>
-        <Input id={`${idPrefix}-path`} value={webhook.path} onChange={(path) => onChange({ ...webhook, path })} />
-      </FieldBlock>
-    </>
-  )
 }
 
 function PlatformMark({ platform }: { platform: 'feishu' | 'wecom' }) {
@@ -590,22 +286,16 @@ function PlatformMark({ platform }: { platform: 'feishu' | 'wecom' }) {
   )
 }
 
-function SecretInput({ label, value, onChange }: { label: string, value: string, onChange: (value: string) => void }) {
-  return (
-    <FieldBlock label={label} htmlFor={label}>
-      <Input id={label} type="password" autoComplete="off" value={value} onChange={onChange} />
-    </FieldBlock>
-  )
-}
-
-export function ImTab({ lang, config, providers, onChange, onFlush }: {
+export function ImTab({ lang, config, onChange, onFlush }: {
   lang: Lang
   config: ImConfig | null
-  providers: ModelProvider[]
   onChange: (config: ImConfig) => void
   onFlush: () => Promise<boolean>
 }) {
   const copy = imCopy(lang)
+  const requestFailedRef = useRef(copy.requestFailed)
+  requestFailedRef.current = copy.requestFailed
+  const setupTitleId = useId()
   const configRef = useRef(config)
   configRef.current = config
   const onChangeRef = useRef(onChange)
@@ -614,9 +304,9 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
   onFlushRef.current = onFlush
   const mountedRef = useRef(true)
   const setupGen = useRef(0)
+  const cancelledThroughGen = useRef(0)
   const statusGen = useRef(0)
   const pairingGen = useRef(0)
-  const credentialGen = useRef<PlatformGen>(emptyPlatformGen())
   const controlGen = useRef<PlatformGen>(emptyPlatformGen())
   const sessionRef = useRef<string | null>(null)
   const pollAbortRef = useRef<AbortController | null>(null)
@@ -626,27 +316,17 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
   const flowRestoreRef = useRef<FlowRestore | null>(null)
   const restoreQueue = useRef(Promise.resolve())
   const restoreOnLeaveRef = useRef<(id: string) => Promise<void>>(async () => {})
-  const secretsRef = useRef<Record<ImPlatform, SecretDraft>>({
-    feishu: emptySecrets(),
-    wecom: emptySecrets(),
-    wecom_callback: emptySecrets(),
-  })
+  const setupHeadingRef = useRef<HTMLHeadingElement>(null)
+  const setupDialogRef = useRef<HTMLDialogElement>(null)
+  const feishuButtonRef = useRef<HTMLButtonElement>(null)
+  const wecomButtonRef = useRef<HTMLButtonElement>(null)
+  const returnPlatformRef = useRef<'feishu' | 'wecom' | null>(null)
 
   const [status, setStatus] = useState<ImStatus[] | null>(null)
   const [statusError, setStatusError] = useState('')
   const [requests, setRequests] = useState<ImPairingRequest[] | null>(null)
   const [approved, setApproved] = useState<ImApprovedUser[] | null>(null)
   const [pairingError, setPairingError] = useState('')
-  const [secrets, setSecrets] = useState<Record<ImPlatform, SecretDraft>>(secretsRef.current)
-  const [credentialNote, setCredentialNote] = useState<Record<ImPlatform, string>>({
-    feishu: '', wecom: '', wecom_callback: '',
-  })
-  const [credentialError, setCredentialError] = useState<Record<ImPlatform, string>>({
-    feishu: '', wecom: '', wecom_callback: '',
-  })
-  const [credentialBusy, setCredentialBusy] = useState<Record<ImPlatform, boolean>>({
-    feishu: false, wecom: false, wecom_callback: false,
-  })
   const [setupSession, setSetupSession] = useState<ImSetupSession | null>(null)
   const [setupPlatform, setSetupPlatform] = useState<'feishu' | 'wecom' | null>(null)
   const [setupError, setSetupError] = useState('')
@@ -655,20 +335,20 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
   const [retrySession, setRetrySession] = useState<ImSetupSession | null>(null)
   const [qrUrl, setQrUrl] = useState('')
   const [qrError, setQrError] = useState('')
-  const [copied, setCopied] = useState('')
-  const [dirError, setDirError] = useState('')
   const [actionError, setActionError] = useState('')
   const [busyAction, setBusyAction] = useState('')
-  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   useEffect(() => {
-    secretsRef.current = secrets
-  }, [secrets])
-
-  const patchNote = (platform: ImPlatform, note: string, error: string) => {
-    setCredentialNote((current) => ({ ...current, [platform]: note }))
-    setCredentialError((current) => ({ ...current, [platform]: error }))
-  }
+    const dialog = setupDialogRef.current
+    if (!setupPlatform || !dialog) return
+    if (!dialog.open) dialog.showModal()
+    setupHeadingRef.current?.focus()
+    return () => {
+      dialog.close()
+      const target = returnPlatformRef.current === 'feishu' ? feishuButtonRef : wecomButtonRef
+      target.current?.focus()
+    }
+  }, [setupPlatform])
 
   const refreshStatus = useCallback(async () => {
     const gen = ++statusGen.current
@@ -679,9 +359,9 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
       setStatusError('')
     } catch (error) {
       if (!mountedRef.current || gen !== statusGen.current) return
-      setStatusError(errorText(error, copy.requestFailed))
+      setStatusError(errorText(error, requestFailedRef.current))
     }
-  }, [copy.requestFailed])
+  }, [])
 
   const refreshPairing = useCallback(async () => {
     const gen = ++pairingGen.current
@@ -697,10 +377,10 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
       return 'applied' as const
     } catch (error) {
       if (!mountedRef.current || gen !== pairingGen.current) return 'stale' as const
-      setPairingError(errorText(error, copy.requestFailed))
+      setPairingError(errorText(error, requestFailedRef.current))
       return 'error' as const
     }
-  }, [copy.requestFailed])
+  }, [])
 
   const clearExpiryTimer = () => {
     if (expiryTimerRef.current != null) {
@@ -880,7 +560,7 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
           await queueRestore(session.id)
           if (!live(gen)) return
           setSetupSession(committed)
-          setSetupError(committed.message || setupLabel(copy, setupStatus(committed)) || copy.scanNotSubmitted)
+          setSetupError(committed.message || copy.setupState[setupStatus(committed)] || copy.scanNotSubmitted)
           if (setupStatus(committed) !== 'cancelled' && setupStatus(committed) !== 'expired' && setupStatus(committed) !== 'denied') {
             setRetrySession(session)
           }
@@ -891,6 +571,8 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
         if (flowRestoreRef.current?.id === session.id) flowRestoreRef.current = null
         if (live(gen)) setSetupSession(committed)
       }
+      // A completed credential commit survives navigation, but explicit close revokes activation.
+      if (gen <= cancelledThroughGen.current) return
       const ready = configRef.current
       if (!ready || platformIdentity(ready, session.platform) !== expected) {
         if (live(gen)) {
@@ -922,7 +604,8 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
       setRetrySession(null)
       setSetupSession(null)
       setSetupError('')
-      await refreshStatus()
+      setSetupPlatform(null)
+      void refreshStatus()
     } catch (error) {
       if (!stored) {
         await queueRestore(session.id)
@@ -1006,11 +689,14 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
     if (previousId) void cancelImSetup(previousId).catch(() => {})
     if (!saving && previousId) void queueRestore(previousId)
     const gen = setupGen.current
+    returnPlatformRef.current = platform
     setSetupPlatform(platform)
+    setSetupSession(null)
     setSetupError('')
     setQrError('')
     setQrUrl('')
     setSetupBusy(true)
+    setupHeadingRef.current?.focus()
     try {
       const domain = platform === 'feishu' ? current.feishu.domain : null
       const session = await beginImSetup(platform, domain)
@@ -1062,27 +748,29 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
 
   const cancelSetup = async () => {
     const saving = phaseRef.current === 'saving'
-    setupGen.current += 1
+    cancelledThroughGen.current = setupGen.current
+    const gen = ++setupGen.current
     pollAbortRef.current?.abort()
     clearExpiryTimer()
     phaseRef.current = 'idle'
+    setSetupBusy(false)
     setSavingSetup(false)
     setRetrySession(null)
+    setSetupSession(null)
+    setSetupPlatform(null)
+    setSetupError('')
+    setQrUrl('')
+    setQrError('')
+    setActionError('')
     const id = sessionRef.current
     sessionRef.current = null
     if (!saving && id) void queueRestore(id)
     if (id) {
       try {
         await cancelImSetup(id)
-        if (mountedRef.current) {
-          setSetupSession((current) => current && current.id === id ? { ...current, status: 'cancelled', message: copy.cancelled } : current)
-          setSetupError('')
-        }
       } catch (error) {
-        if (mountedRef.current) setSetupError(errorText(error, copy.requestFailed))
+        if (live(gen)) setActionError(errorText(error, copy.requestFailed))
       }
-    } else if (mountedRef.current) {
-      setSetupSession((current) => current ? { ...current, status: 'cancelled', message: copy.cancelled } : current)
     }
   }
 
@@ -1102,7 +790,7 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
     void authorizationQrDataUrl(url).then((dataUrl) => {
       if (!alive || gen !== setupGen.current || !mountedRef.current) return
       if (!dataUrl.startsWith('data:image/')) {
-        setQrError(copy.requestFailed)
+        setQrError(requestFailedRef.current)
         setQrUrl('')
         return
       }
@@ -1110,85 +798,10 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
     }).catch((error) => {
       if (!alive || gen !== setupGen.current || !mountedRef.current) return
       setQrUrl('')
-      setQrError(errorText(error, copy.requestFailed))
+      setQrError(errorText(error, requestFailedRef.current))
     })
     return () => { alive = false }
-  }, [copy.requestFailed, pendingQrKey])
-
-  const saveCredentials = async (platform: ImPlatform) => {
-    const submitted = { ...secretsRef.current[platform] }
-    if (!submitted.secret.trim()) {
-      patchNote(platform, '', copy.requestFailed)
-      return
-    }
-    const expectedIdentity = configRef.current ? platformIdentity(configRef.current, platform) : ''
-    const gen = ++credentialGen.current[platform]
-    setCredentialBusy((current) => ({ ...current, [platform]: true }))
-    patchNote(platform, '', '')
-    try {
-      const flushed = await onFlushRef.current()
-      if (!mountedRef.current || gen !== credentialGen.current[platform]) return
-      if (!flushed) {
-        patchNote(platform, '', copy.flushFailed)
-        return
-      }
-      const now = configRef.current ? platformIdentity(configRef.current, platform) : ''
-      if (!expectedIdentity || now !== expectedIdentity) {
-        patchNote(platform, '', !expectedIdentity || !now ? copy.identityRequired : copy.identityChanged)
-        return
-      }
-      await saveImCredentials(platform, expectedIdentity, submitted)
-      if (!mountedRef.current || gen !== credentialGen.current[platform]) return
-      const landed = configRef.current ? platformIdentity(configRef.current, platform) : ''
-      if (landed !== expectedIdentity) {
-        patchNote(platform, '', !expectedIdentity || !landed ? copy.identityRequired : copy.identityChanged)
-        return
-      }
-      const unchanged = sameSecrets(secretsRef.current[platform], submitted)
-      if (unchanged) {
-        setSecrets((current) => sameSecrets(current[platform], submitted)
-          ? { ...current, [platform]: emptySecrets() }
-          : current)
-      }
-      patchNote(platform, unchanged ? copy.saveOk : copy.saveKept, '')
-      await refreshStatus()
-    } catch (error) {
-      if (!mountedRef.current || gen !== credentialGen.current[platform]) return
-      patchNote(platform, '', errorText(error, copy.requestFailed))
-    } finally {
-      if (mountedRef.current && gen === credentialGen.current[platform]) {
-        setCredentialBusy((current) => ({ ...current, [platform]: false }))
-      }
-    }
-  }
-
-  const clearCredentials = async (platform: ImPlatform) => {
-    const expectedIdentity = configRef.current ? platformIdentity(configRef.current, platform) : ''
-    const accepted = await confirmDialog({ message: copy.clearConfirm, confirmLabel: copy.clear, danger: true })
-    if (!accepted || !mountedRef.current) return
-    const now = configRef.current ? platformIdentity(configRef.current, platform) : ''
-    if (!expectedIdentity || now !== expectedIdentity) {
-      patchNote(platform, '', !expectedIdentity || !now ? copy.identityRequired : copy.identityChanged)
-      return
-    }
-    const gen = ++credentialGen.current[platform]
-    setCredentialBusy((current) => ({ ...current, [platform]: true }))
-    patchNote(platform, '', '')
-    try {
-      await clearImCredentials(platform, expectedIdentity)
-      if (!mountedRef.current || gen !== credentialGen.current[platform]) return
-      setSecrets((current) => ({ ...current, [platform]: emptySecrets() }))
-      patchNote(platform, copy.clearOk, '')
-      await refreshStatus()
-    } catch (error) {
-      if (!mountedRef.current || gen !== credentialGen.current[platform]) return
-      patchNote(platform, '', errorText(error, copy.requestFailed))
-    } finally {
-      if (mountedRef.current && gen === credentialGen.current[platform]) {
-        setCredentialBusy((current) => ({ ...current, [platform]: false }))
-      }
-    }
-  }
+  }, [pendingQrKey])
 
   const runPairingAction = async (key: string, action: () => Promise<void>) => {
     setBusyAction(key)
@@ -1247,18 +860,9 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
     }
   }
 
-  const copyWebhook = async (url: string) => {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopied(url)
-    } catch (error) {
-      setActionError(errorText(error, copy.requestFailed))
-    }
-  }
-
   if (!config) {
     return (
-      <section aria-label={copy.agentTitle}>
+      <section>
         <p role="alert">{copy.missing}</p>
       </section>
     )
@@ -1266,138 +870,72 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
 
   const statusOf = (platform: ImPlatform) => status?.find((row) => row.platform === platform) ?? null
 
-  const renderStatus = (platform: ImPlatform, enabled: boolean) => {
+  const renderStatus = (platform: ImPlatform) => {
     const row = statusOf(platform)
     return (
-      <div className="flex flex-col gap-2 py-2">
-        <p role="status">{row ? `${copy.state[row.state]}${row.message ? ` · ${row.message}` : ''}` : copy.noStatus}</p>
-        {row ? <p>{row.credentialsConfigured ? copy.configured : copy.notConfigured}</p> : null}
-        {enabled && row && !row.credentialsConfigured ? <p role="alert">{copy.enabledMissing}</p> : null}
-        {row?.webhookUrl ? (
-          <div className="flex flex-col gap-2">
-            {isHttpUrl(row.webhookUrl) ? <a href={row.webhookUrl}>{row.webhookUrl}</a> : <p>{row.webhookUrl}</p>}
-            <Button size="sm" onClick={() => void copyWebhook(row.webhookUrl)}>{copy.copyUrl}</Button>
-            {copied === row.webhookUrl ? <p>{copy.copied}</p> : null}
-          </div>
-        ) : null}
-        {row?.lastMessageAt != null ? <p>{copy.lastMessage}: {formatUtc(row.lastMessageAt, lang)}</p> : null}
-      </div>
-    )
-  }
-
-  const renderSecrets = (platform: ImPlatform, fields: { key: keyof SecretDraft, label: string }[]) => {
-    const draft = secrets[platform]
-    return (
-      <div className="flex flex-col gap-2">
-        <p className="kv-row-desc">{copy.credentialHint}</p>
-        {fields.map((field) => (
-          <SecretInput
-            key={field.key}
-            label={field.label}
-            value={draft[field.key]}
-            onChange={(value) => setSecrets((current) => ({ ...current, [platform]: { ...current[platform], [field.key]: value } }))}
-          />
-        ))}
-        <div className="flex gap-2">
-          <Button size="sm" variant="primary" aria-label={`${copy.save} ${copy.platform[platform]}`} disabled={credentialBusy[platform]} onClick={() => void saveCredentials(platform)}>{copy.save}</Button>
-          <Button size="sm" variant="danger" aria-label={`${copy.clear} ${copy.platform[platform]}`} disabled={credentialBusy[platform]} onClick={() => void clearCredentials(platform)}>{copy.clear}</Button>
+      <div className="im-connection-status">
+        <div role="status" className="im-status-line">
+          {row ? (
+            <span className={`kv-tag status ${row.state === 'connected' ? 'ok' : row.state === 'error' ? 'danger' : row.state === 'connecting' || row.state === 'retrying' ? 'accent' : ''}`}>
+              {copy.state[row.state]}
+            </span>
+          ) : <span className="kv-row-desc">{copy.noStatus}</span>}
+          {row?.state === 'error' && row.message ? <span className="im-status-message">{row.message}</span> : null}
         </div>
-        {credentialNote[platform] ? <p>{credentialNote[platform]}</p> : null}
-        {credentialError[platform] ? <p role="alert">{credentialError[platform]}</p> : null}
       </div>
     )
   }
 
-  const chooseDirectory = async () => {
-    setDirError('')
-    try {
-      const selected = await open({ directory: true, multiple: false })
-      if (typeof selected !== 'string' || !configRef.current) return
-      update({ ...configRef.current, agent: { ...configRef.current.agent, workingDirectory: selected } })
-    } catch (error) {
-      setDirError(errorText(error, copy.dirFailed))
-    }
-  }
-
-  const patchAgent = (patch: Partial<ImAgentConfig>) => {
-    if (!configRef.current) return
-    update({ ...configRef.current, agent: { ...configRef.current.agent, ...patch } })
-  }
-  const patchFeishu = (patch: Partial<FeishuConfig>) => {
-    if (!configRef.current) return
-    update({ ...configRef.current, feishu: { ...configRef.current.feishu, ...patch } })
-  }
-  const patchWecom = (patch: Partial<WecomConfig>) => {
-    if (!configRef.current) return
-    update({ ...configRef.current, wecom: { ...configRef.current.wecom, ...patch } })
-  }
-  const patchCallback = (patch: Partial<WecomCallbackConfig>) => {
-    if (!configRef.current) return
-    update({ ...configRef.current, wecomCallback: { ...configRef.current.wecomCallback, ...patch } })
-  }
-
-  const renderQr = (platform: 'feishu' | 'wecom') => {
-    const sessionForCard = setupSession && setupSession.platform === platform ? setupSession : null
-    const showError = Boolean(setupError) && (sessionForCard != null || (setupSession == null && setupPlatform === platform))
-    if (!sessionForCard && !showError) return null
-    const statusName = sessionForCard ? setupStatus(sessionForCard) : ''
-    const showQr = statusName === 'pending' && qrUrl
+  const renderCard = (platform: 'feishu' | 'wecom', title: string, enabled: boolean) => {
+    const row = statusOf(platform)
+    const connected = row?.state === 'connected'
+    const scanLabel = connected ? copy.scanAgain : copy.scanConnect
     return (
-      <section aria-label={copy.setup} className="flex flex-col gap-2 py-2">
-        {sessionForCard ? (
-          <p>{savingSetup ? copy.savingAuth : `${setupLabel(copy, setupStatus(sessionForCard))}${sessionForCard.message ? ` · ${sessionForCard.message}` : ''}`}</p>
-        ) : null}
-        {showError ? <p role="alert">{setupError}</p> : null}
-        {statusName === 'pending' ? <p className="kv-row-desc">{copy.scanHint[platform]}</p> : null}
-        {sessionForCard && statusName === 'pending' && isSecureSetupUrl(sessionForCard.url) ? <a href={sessionForCard.url} target="_blank" rel="noreferrer">{sessionForCard.url}</a> : null}
-        {showQr ? <img alt={copy.qrAlt} src={qrUrl} width={220} height={220} /> : null}
-        {qrError && sessionForCard ? <p role="alert">{qrError}</p> : null}
-        {sessionForCard?.identity ? (
-          <p>{copy.botName}: {sessionForCard.identity.botName || '—'} · {copy.owner}: {sessionForCard.identity.ownerId || '—'}</p>
-        ) : null}
-        {sessionForCard && (statusName === 'pending' || savingSetup) ? <Button size="sm" onClick={() => void cancelSetup()}>{copy.cancelSetup}</Button> : null}
-        {retrySession && retrySession.platform === platform ? (
-          <Button size="sm" disabled={savingSetup} onClick={() => void commitAuthorized(retrySession, setupGen.current)}>{copy.retrySave}</Button>
-        ) : null}
+      <section aria-label={title} className="kv-group">
+        <div className="im-connection-content">
+          <div className="im-connection-heading">
+            <PlatformMark platform={platform} />
+            <h2 className="im-heading">{title}</h2>
+          </div>
+          {renderStatus(platform)}
+          <div className="im-actions">
+            <Button
+              ref={platform === 'feishu' ? feishuButtonRef : wecomButtonRef}
+              variant={connected ? 'default' : 'primary'}
+              aria-label={`${scanLabel} ${copy.platform[platform]}`}
+              disabled={setupBusy || savingSetup}
+              onClick={() => void startSetup(platform)}
+            >
+              <QrCode size={14} aria-hidden="true" />
+              {scanLabel}
+            </Button>
+            {enabled && row?.state === 'error' && row.credentialsConfigured ? (
+              <Button size="sm" aria-label={`${copy.reconnect} ${copy.platform[platform]}`} onClick={() => void reconnect(platform)}>{copy.reconnect}</Button>
+            ) : null}
+            {enabled ? (
+              <Button size="sm" aria-label={`${copy.disable} ${copy.platform[platform]}`} onClick={() => void disablePlatform(platform)}>{copy.disable}</Button>
+            ) : null}
+          </div>
+        </div>
       </section>
     )
   }
 
-  const renderCard = (platform: 'feishu' | 'wecom', title: string, enabled: boolean) => (
-    <section aria-label={title} className="kv-group">
-      <div className="flex items-center gap-3">
-        <PlatformMark platform={platform} />
-        <div className="kv-group-title">{title}</div>
-      </div>
-      {renderStatus(platform, enabled)}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          variant="primary"
-          aria-label={`${copy.scanConnect} ${copy.platform[platform]}`}
-          disabled={setupBusy || savingSetup}
-          onClick={() => void startSetup(platform)}
-        >
-          {copy.scanConnect}
-        </Button>
-        {enabled ? (
-          <Button size="sm" aria-label={`${copy.reconnect} ${copy.platform[platform]}`} onClick={() => void reconnect(platform)}>{copy.reconnect}</Button>
-        ) : null}
-        {enabled ? (
-          <Button size="sm" aria-label={`${copy.disable} ${copy.platform[platform]}`} onClick={() => void disablePlatform(platform)}>{copy.disable}</Button>
-        ) : null}
-      </div>
-      {renderQr(platform)}
-    </section>
-  )
-
+  const session = setupSession?.platform === setupPlatform ? setupSession : null
+  const setupState = session ? setupStatus(session) : ''
+  const pendingSetup = setupState === 'pending'
+  const loadingQr = setupBusy || (pendingSetup && !qrUrl && !qrError)
   const pending = requests ?? []
   const approvedUsers = approved ?? []
 
   return (
-    <div className="flex flex-col gap-4">
-      <div>
-        {copy.pageWarnings.map((warning) => <p key={warning} className="kv-row-desc">{warning}</p>)}
+    <div className="im-settings">
+      <div className="im-security-notice">
+        <ShieldAlert size={17} aria-hidden="true" />
+        <p>{copy.pageWarnings[0]}</p>
+      </div>
+      <div className="im-operating-notes">
+        {copy.pageWarnings.slice(1).map((warning) => <p key={warning}>{warning}</p>)}
       </div>
       {statusError ? <p role="alert">{copy.statusFailed}: {statusError}</p> : null}
       {statusError ? <Button size="sm" onClick={() => void refreshStatus()}>{copy.retryStatus}</Button> : null}
@@ -1405,9 +943,10 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
       {pairingError ? <Button size="sm" onClick={() => void refreshPairing()}>{copy.retryPairing}</Button> : null}
       {actionError ? <p role="alert">{actionError}</p> : null}
 
-      {renderCard('feishu', copy.feishu, config.feishu.enabled)}
-      {renderCard('wecom', copy.wecom, config.wecom.enabled)}
-
+      <div className="im-connections">
+        {renderCard('feishu', copy.feishu, config.feishu.enabled)}
+        {renderCard('wecom', copy.wecom, config.wecom.enabled)}
+      </div>
       {pending.length > 0 || approvedUsers.length > 0 ? (
         <section aria-label={copy.pairing} className="kv-group">
           <div className="kv-group-title">{copy.pairing}</div>
@@ -1417,7 +956,7 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
             const key = `${request.platform}:${request.code}`
             return (
               <div key={key} className="flex flex-col gap-2 py-2">
-                <p>{copy.platform[request.platform]} · {request.userName || request.userId} · {request.userId} · {request.code}</p>
+                <p>{copy.platform[request.platform]} · {request.userName || request.userId} · {request.code}</p>
                 <div className="flex gap-2">
                   <Button size="sm" disabled={busyAction === key} onClick={() => void runPairingAction(key, () => approveImPairing(request.platform, request.code))}>{copy.approve}</Button>
                   <Button size="sm" disabled={busyAction === key} onClick={() => void runPairingAction(key, () => denyImPairing(request.platform, request.code))}>{copy.deny}</Button>
@@ -1430,132 +969,61 @@ export function ImTab({ lang, config, providers, onChange, onFlush }: {
             const key = `revoke:${user.platform}:${user.identity}:${user.userId}`
             return (
               <div key={key} className="flex flex-col gap-2 py-2">
-                <p>{copy.platform[user.platform]} · {user.userName || user.userId} · {user.userId} · {copy.boundId}: {user.identity || '—'}{user.approvedAt ? ` · ${formatUtc(user.approvedAt, lang)}` : ''}</p>
+                <p>{copy.platform[user.platform]} · {user.userName || user.userId}</p>
                 <Button size="sm" variant="danger" disabled={busyAction === key} onClick={() => void runPairingAction(key, () => revokeImUser(user.platform, user.userId))}>{copy.revoke}</Button>
               </div>
             )
           })}
         </section>
       ) : null}
-
-      <details className="kv-group" open={advancedOpen}>
-        <summary
-          className="kv-group-title cursor-pointer select-none"
-          onClick={(event) => {
+      {setupPlatform ? (
+        <dialog
+          ref={setupDialogRef}
+          className="kv-modal im-qr-dialog custom-scrollbar"
+          aria-modal="true"
+          aria-labelledby={setupTitleId}
+          aria-describedby={`${setupTitleId}-hint`}
+          data-tauri-drag-region="false"
+          onKeyDown={(event) => event.stopPropagation()}
+          onCancel={(event) => {
             event.preventDefault()
-            setAdvancedOpen((open) => !open)
+            void cancelSetup()
           }}
         >
-          {copy.advanced}
-        </summary>
-        {advancedOpen ? (
-          <div className="mt-1 flex flex-col gap-2">
-            <SettingsGroup title={copy.agentTitle}>
-              <p className="kv-row-desc">{copy.agentHint}</p>
-              <FieldBlock label={copy.assistant} htmlFor="im-assistant-id">
-                <Input id="im-assistant-id" value={config.agent.assistantId} onChange={(assistantId) => patchAgent({ assistantId })} />
-              </FieldBlock>
-              <FieldBlock label={copy.model}>
-                <ModelPairSelect
-                  ariaLabel={copy.model}
-                  providerId={config.agent.providerId}
-                  model={config.agent.model}
-                  providers={providers}
-                  inheritLabel={copy.inheritModel}
-                  onChange={(providerId, model) => patchAgent({ providerId, model })}
-                />
-              </FieldBlock>
-              <FieldBlock label={copy.workdir} description={copy.workdirHint} htmlFor="im-working-directory">
-                <div className="flex gap-2">
-                  <Input id="im-working-directory" className="min-w-0 flex-1" value={config.agent.workingDirectory} onChange={(workingDirectory) => patchAgent({ workingDirectory })} />
-                  <Button size="sm" onClick={() => void chooseDirectory()}>{copy.chooseDir}</Button>
-                  <Button size="sm" onClick={() => patchAgent({ workingDirectory: '' })}>{copy.clearDir}</Button>
-                </div>
-              </FieldBlock>
-              {dirError ? <p role="alert">{dirError}</p> : null}
-              <SettingRow label={copy.groupSessions}>
-                <Toggle ariaLabel={copy.groupSessions} checked={config.agent.groupSessionsPerUser} onChange={(groupSessionsPerUser) => patchAgent({ groupSessionsPerUser })} />
-              </SettingRow>
-              <SettingRow label={copy.streaming}>
-                <Toggle ariaLabel={copy.streaming} checked={config.agent.streaming} onChange={(streaming) => patchAgent({ streaming })} />
-              </SettingRow>
-              <FieldBlock label={copy.homeFeishu} htmlFor="im-home-feishu">
-                <Input id="im-home-feishu" value={config.feishu.homeChannel} onChange={(homeChannel) => patchFeishu({ homeChannel })} />
-              </FieldBlock>
-              <FieldBlock label={copy.homeWecom} htmlFor="im-home-wecom">
-                <Input id="im-home-wecom" value={config.wecom.homeChannel} onChange={(homeChannel) => patchWecom({ homeChannel })} />
-              </FieldBlock>
-              <FieldBlock label={copy.homeCallback} htmlFor="im-home-callback">
-                <Input id="im-home-callback" value={config.wecomCallback.homeChannel} onChange={(homeChannel) => patchCallback({ homeChannel })} />
-              </FieldBlock>
-            </SettingsGroup>
-
-            <div>
-              <SettingRow label={copy.enabledFeishu}>
-                <Toggle ariaLabel={copy.enabledFeishu} checked={config.feishu.enabled} onChange={(enabled) => patchFeishu({ enabled })} />
-              </SettingRow>
-              <FieldBlock label={copy.appId} htmlFor="im-feishu-app-id">
-                <Input id="im-feishu-app-id" value={config.feishu.appId} onChange={(appId) => patchFeishu({ appId })} />
-              </FieldBlock>
-              <FieldBlock label={copy.domain}>
-                <Select ariaLabel={copy.domain} value={config.feishu.domain} options={copy.domainOptions} onChange={(domain) => patchFeishu({ domain: domain as FeishuDomain })} />
-              </FieldBlock>
-              <FieldBlock label={copy.connection}>
-                <Select ariaLabel={copy.connection} value={config.feishu.connectionMode} options={copy.connectionOptions} onChange={(connectionMode) => patchFeishu({ connectionMode: connectionMode as FeishuConnectionMode })} />
-              </FieldBlock>
-              {config.feishu.connectionMode === 'webhook' ? (
-                <WebhookEditor idPrefix={copy.feishu} copy={copy} webhook={config.feishu.webhook} onChange={(webhook) => patchFeishu({ webhook })} />
-              ) : null}
-              <AccessEditor idPrefix={copy.feishu} copy={copy} access={config.feishu.access} onChange={(access) => patchFeishu({ access })} />
-              <SettingRow label={copy.mention}>
-                <Toggle ariaLabel={copy.mention} checked={config.feishu.requireMention} onChange={(requireMention) => patchFeishu({ requireMention })} />
-              </SettingRow>
-              {renderSecrets('feishu', [
-                { key: 'secret', label: copy.secretFeishu },
-                ...(config.feishu.connectionMode === 'webhook' ? [
-                  { key: 'encryptKey' as const, label: copy.encryptKey },
-                  { key: 'verificationToken' as const, label: copy.verification },
-                ] : []),
-              ])}
+          <div className="im-qr-dialog-header">
+            <div className="im-connection-heading">
+              <PlatformMark platform={setupPlatform} />
+              <h2 id={setupTitleId} ref={setupHeadingRef} tabIndex={-1} className="im-heading">
+                {setupPlatform === 'feishu' ? copy.feishu : copy.wecom}
+              </h2>
             </div>
-
-            <div>
-              <SettingRow label={copy.enabledWecom}>
-                <Toggle ariaLabel={copy.enabledWecom} checked={config.wecom.enabled} onChange={(enabled) => patchWecom({ enabled })} />
-              </SettingRow>
-              <FieldBlock label={copy.botId} htmlFor="im-wecom-bot-id">
-                <Input id="im-wecom-bot-id" value={config.wecom.botId} onChange={(botId) => patchWecom({ botId })} />
-              </FieldBlock>
-              <FieldBlock label={copy.websocketUrl} htmlFor="im-wecom-ws">
-                <Input id="im-wecom-ws" value={config.wecom.websocketUrl} onChange={(websocketUrl) => patchWecom({ websocketUrl })} />
-              </FieldBlock>
-              <AccessEditor idPrefix={copy.wecom} copy={copy} access={config.wecom.access} onChange={(access) => patchWecom({ access })} />
-              {renderSecrets('wecom', [{ key: 'secret', label: copy.secretWecom }])}
-            </div>
-
-            <section aria-label={copy.callback}>
-              <SettingRow label={copy.enabledCallback}>
-                <Toggle ariaLabel={copy.enabledCallback} checked={config.wecomCallback.enabled} onChange={(enabled) => patchCallback({ enabled })} />
-              </SettingRow>
-              {renderStatus('wecom_callback', config.wecomCallback.enabled)}
-              <FieldBlock label={copy.corpId} htmlFor="im-corp-id">
-                <Input id="im-corp-id" value={config.wecomCallback.corpId} onChange={(corpId) => patchCallback({ corpId })} />
-              </FieldBlock>
-              <FieldBlock label={copy.agentId} htmlFor="im-agent-id">
-                <Input id="im-agent-id" value={config.wecomCallback.agentId} onChange={(agentId) => patchCallback({ agentId })} />
-              </FieldBlock>
-              <WebhookEditor idPrefix={copy.callback} copy={copy} webhook={config.wecomCallback.webhook} onChange={(webhook) => patchCallback({ webhook })} />
-              <AccessEditor idPrefix={copy.callback} copy={copy} access={config.wecomCallback.access} onChange={(access) => patchCallback({ access })} />
-              {renderSecrets('wecom_callback', [
-                { key: 'secret', label: copy.secretCallback },
-                { key: 'token', label: copy.callbackToken },
-                { key: 'encodingAesKey', label: copy.aes },
-              ])}
-              <Button size="sm" aria-label={`${copy.reconnect} ${copy.platform.wecom_callback}`} onClick={() => void reconnect('wecom_callback')}>{copy.reconnect}</Button>
-            </section>
+            <IconButton label={copy.close} variant="ghost" size="sm" onClick={() => void cancelSetup()}>
+              <X size={16} aria-hidden="true" />
+            </IconButton>
           </div>
-        ) : null}
-      </details>
+          <div className="im-qr-dialog-body">
+            <p id={`${setupTitleId}-hint`} className="kv-row-desc">{copy.scanHint[setupPlatform]}</p>
+            {pendingSetup && qrUrl ? <img alt={copy.qrAlt} src={qrUrl} width={260} height={260} /> : null}
+            {savingSetup || loadingQr || session ? (
+              <p role="status">
+                {savingSetup ? copy.savingAuth : loadingQr ? copy.preparingQr : session ? copy.setupState[setupStatus(session)] : null}
+              </p>
+            ) : null}
+            {(setupState === 'error' || setupState === 'denied') && session?.message ? <p role="alert">{session.message}</p> : null}
+            {setupError ? <p role="alert">{setupError}</p> : null}
+            {qrError ? <p role="alert">{qrError}</p> : null}
+            {session?.identity?.botName ? <p>{session.identity.botName}</p> : null}
+            {pendingSetup && session && isSecureSetupUrl(session.url) ? (
+              <a href={session.url} target="_blank" rel="noreferrer">{copy.zh ? '打开授权页面' : 'Open authorization page'}</a>
+            ) : null}
+            {retrySession ? (
+              <Button variant="primary" disabled={savingSetup} onClick={() => void commitAuthorized(retrySession, setupGen.current)}>{copy.retrySave}</Button>
+            ) : !setupBusy && !savingSetup && (setupError || qrError || (session && !pendingSetup)) ? (
+              <Button variant="primary" aria-label={`${copy.scanAgain} ${copy.platform[setupPlatform]}`} onClick={() => void startSetup(setupPlatform)}>{copy.scanAgain}</Button>
+            ) : null}
+          </div>
+        </dialog>
+      ) : null}
     </div>
   )
 }

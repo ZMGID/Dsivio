@@ -1,13 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Lang } from '../../components/i18n'
-import { open } from '@tauri-apps/plugin-dialog'
 import {
   approveImPairing,
   beginImSetup,
   cancelImSetup,
-  clearImCredentials,
   commitImSetup,
   denyImPairing,
   getImStatus,
@@ -16,18 +14,14 @@ import {
   pollImSetup,
   reconnectIm,
   revokeImUser,
-  saveImCredentials,
   subscribeImPairing,
   subscribeImStatus,
 } from '../../api/im'
 import { IM_SETUP_POLL_MS, ImTab } from './ImTab'
 import type { ImConfig, ImSetupSession, ImStatus } from '../../api/im'
-import { makeProvider } from './testFixtures'
 
 vi.mock('../../api/im', () => ({
   getImStatus: vi.fn(),
-  saveImCredentials: vi.fn(),
-  clearImCredentials: vi.fn(),
   reconnectIm: vi.fn(),
   listImPairingRequests: vi.fn(),
   listImApprovedUsers: vi.fn(),
@@ -42,11 +36,18 @@ vi.mock('../../api/im', () => ({
   subscribeImPairing: vi.fn(async () => () => {}),
 }))
 
-vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }))
-
 vi.mock('./imQr', () => ({
   authorizationQrDataUrl: vi.fn(async () => 'data:image/png;base64,local-qr'),
 }))
+
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal ??= function showModal(this: HTMLDialogElement) {
+    this.setAttribute('open', '')
+  }
+  HTMLDialogElement.prototype.close ??= function close(this: HTMLDialogElement) {
+    this.removeAttribute('open')
+  }
+})
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => {}
@@ -136,15 +137,19 @@ function identity(partial: Partial<NonNullable<ImSetupSession['identity']>> = {}
 
 function renderIm(initial: ImConfig | null = backendConfig(), lang: Lang = 'zh', onFlush: () => Promise<boolean> = async () => true) {
   let current = initial
+  let currentLang = lang
   let mounted = true
-  const providers = [makeProvider({ id: 'provider-2', name: 'Fixture', availableModels: ['model-2'], enabledModels: ['model-2'] })]
   const onChange = (next: ImConfig) => {
     current = next
-    if (mounted) view.rerender(<ImTab lang={lang} config={current} providers={providers} onChange={onChange} onFlush={onFlush} />)
+    if (mounted) view.rerender(<ImTab lang={currentLang} config={current} onChange={onChange} onFlush={onFlush} />)
   }
-  const view = render(<ImTab lang={lang} config={current} providers={providers} onChange={onChange} onFlush={onFlush} />)
+  const view = render(<ImTab lang={currentLang} config={current} onChange={onChange} onFlush={onFlush} />)
   return {
     onChange,
+    setLang: (next: Lang) => {
+      currentLang = next
+      if (mounted) view.rerender(<ImTab lang={currentLang} config={current} onChange={onChange} onFlush={onFlush} />)
+    },
     config: () => {
       if (current == null) throw new Error('Fixture has no IM configuration')
       return current
@@ -154,10 +159,6 @@ function renderIm(initial: ImConfig | null = backendConfig(), lang: Lang = 'zh',
       view.unmount()
     },
   }
-}
-
-function openAdvanced() {
-  fireEvent.click(screen.getByText('高级设置'))
 }
 
 let statusListener: (() => void) | null = null
@@ -192,317 +193,27 @@ describe('ImTab', () => {
     installListeners()
   })
 
-  it('shows two connection cards and hides manual configuration until advanced settings are opened', async () => {
+  it('shows backend connection states, retries failed connections, and disconnects', async () => {
     const user = userEvent.setup()
-    renderIm()
-    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
-    const wecom = within(screen.getByRole('region', { name: '企业微信机器人' }))
-    expect(feishu.getByRole('button', { name: '扫码连接 飞书' })).toBeInTheDocument()
-    expect(wecom.getByRole('button', { name: '扫码连接 企业微信' })).toBeInTheDocument()
-    expect(screen.queryAllByRole('textbox')).toHaveLength(0)
-    expect(screen.queryAllByRole('switch')).toHaveLength(0)
-    expect(screen.queryByRole('region', { name: '企业微信自建应用' })).toBeNull()
-    expect(screen.queryByRole('region', { name: '配对' })).toBeNull()
-    expect(screen.queryByLabelText('飞书 App ID')).toBeNull()
-    expect(screen.queryByLabelText('助手 ID')).toBeNull()
-
-    await user.click(screen.getByText('高级设置'))
-    expect(screen.getByLabelText('飞书 App ID')).toBeInTheDocument()
-    expect(screen.getByLabelText('助手 ID')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '模型' })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '企业微信自建应用' })).toBeInTheDocument()
-  })
-
-  it('edits access, webhook, and the shared model from advanced settings without storing secrets', async () => {
-    const user = userEvent.setup()
-    const view = renderIm()
-    openAdvanced()
-
-    fireEvent.change(screen.getByLabelText('飞书 App ID'), { target: { value: 'cli_new' } })
-    await user.click(screen.getByRole('button', { name: '飞书域名' }))
-    await user.click(screen.getByRole('option', { name: 'Lark' }))
-    await user.click(screen.getByRole('button', { name: '飞书连接方式' }))
-    await user.click(screen.getByRole('option', { name: 'Webhook' }))
-    fireEvent.change(screen.getByLabelText('飞书 / Lark Webhook 主机'), { target: { value: '0.0.0.0' } })
-    fireEvent.change(screen.getByLabelText('飞书 / Lark Webhook 端口'), { target: { value: '8788' } })
-    fireEvent.change(screen.getByLabelText('飞书 / Lark Webhook 路径'), { target: { value: '/hook' } })
-    await user.click(screen.getByRole('button', { name: '飞书 / Lark 私聊策略' }))
-    await user.click(screen.getByRole('option', { name: '开放' }))
-    await user.click(screen.getByRole('button', { name: '飞书 / Lark 群策略' }))
-    await user.click(screen.getByRole('option', { name: '关闭' }))
-    fireEvent.change(screen.getByLabelText('飞书 / Lark 允许的用户'), { target: { value: 'ou_a, ou_b' } })
-    fireEvent.change(screen.getByLabelText('飞书 / Lark 允许的群'), { target: { value: 'oc_a\noc_b' } })
-    await user.click(screen.getByRole('button', { name: '飞书 / Lark 添加群用户规则' }))
-    fireEvent.change(screen.getByLabelText('飞书 / Lark 群 ID 2'), { target: { value: 'oc_room' } })
-    fireEvent.change(screen.getByLabelText('飞书 / Lark 该群允许的用户 2'), { target: { value: 'ou_room' } })
-    await user.click(screen.getByRole('switch', { name: '群消息需要 @ 机器人' }))
-    await user.click(screen.getByRole('switch', { name: '启用飞书' }))
-
-    fireEvent.change(screen.getByLabelText('企业微信 Bot ID'), { target: { value: 'bot_new' } })
-    fireEvent.change(screen.getByLabelText('企业微信 WebSocket 地址'), { target: { value: 'wss://example.test/wecom' } })
-    fireEvent.change(screen.getByLabelText('企业 ID'), { target: { value: 'ww_new' } })
-    fireEvent.change(screen.getByLabelText('应用 Agent ID'), { target: { value: '42' } })
-    fireEvent.change(screen.getByLabelText('企业微信自建应用 Webhook 端口'), { target: { value: '8650' } })
-
-    fireEvent.change(screen.getByLabelText('助手 ID'), { target: { value: 'assistant-2' } })
-    await user.click(screen.getByRole('button', { name: '模型' }))
-    await user.click(screen.getByRole('option', { name: '跟随桌面对话默认模型' }))
-    fireEvent.change(screen.getByLabelText('工作目录'), { target: { value: '/work/im' } })
-    await user.click(screen.getByRole('switch', { name: '群聊按用户分开会话' }))
-    await user.click(screen.getByRole('switch', { name: '流式回复' }))
-    fireEvent.change(screen.getByLabelText('飞书通知频道'), { target: { value: 'oc_notify' } })
-    vi.mocked(open).mockResolvedValue('/picked/im')
-    await user.click(screen.getByRole('button', { name: '选择工作目录' }))
-
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'super-secret' } })
-    fireEvent.change(screen.getByLabelText('飞书 Encrypt Key'), { target: { value: 'encrypt-key' } })
-
-    const config = view.config()
-    expect(config.feishu).toMatchObject({
-      enabled: true,
-      appId: 'cli_new',
-      domain: 'lark',
-      connectionMode: 'webhook',
-      requireMention: false,
-      homeChannel: 'oc_notify',
-      webhook: { host: '0.0.0.0', port: 8788, path: '/hook' },
-      access: {
-        dmPolicy: 'open',
-        groupPolicy: 'disabled',
-        allowedUsers: ['ou_a', 'ou_b'],
-        allowedGroups: ['oc_a', 'oc_b'],
-        groupUsers: { oc_old: ['ou_old'], oc_room: ['ou_room'] },
-      },
-    })
-    expect(config.wecom).toMatchObject({ botId: 'bot_new', websocketUrl: 'wss://example.test/wecom' })
-    expect(config.wecomCallback).toMatchObject({ corpId: 'ww_new', agentId: '42', webhook: { port: 8650 } })
-    expect(config.agent).toMatchObject({
-      assistantId: 'assistant-2',
-      providerId: '',
-      model: '',
-      workingDirectory: '/picked/im',
-      groupSessionsPerUser: false,
-      streaming: false,
-    })
-    expect(JSON.stringify(config)).not.toContain('super-secret')
-    expect(JSON.stringify(config)).not.toContain('encrypt-key')
-    expect(screen.getByLabelText('飞书 App Secret')).toHaveValue('super-secret')
-  })
-
-  it('keeps a failed credential save visible and does not report success', async () => {
-    const user = userEvent.setup()
-    const view = renderIm()
-    openAdvanced()
-    vi.mocked(saveImCredentials).mockRejectedValue(new Error('keyring down'))
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'super-secret' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 飞书' }))
-    expect(await screen.findByText('keyring down')).toBeInTheDocument()
-    expect(screen.queryByText('凭证已保存')).toBeNull()
-    expect(screen.getByLabelText('飞书 App Secret')).toHaveValue('super-secret')
-    expect(JSON.stringify(view.config())).not.toContain('super-secret')
-    expect(saveImCredentials).toHaveBeenCalledWith('feishu', 'cli_existing', expect.objectContaining({ secret: 'super-secret' }))
-  })
-
-  it('clears the password only after the keyring accepts it and shows backend status', async () => {
-    const user = userEvent.setup()
-    renderIm()
-    openAdvanced()
-    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
-    vi.mocked(saveImCredentials).mockResolvedValue(undefined)
-    vi.mocked(getImStatus).mockResolvedValue([
-      status({ platform: 'feishu', state: 'connected', message: 'socket-up', credentialsConfigured: true }),
-    ])
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'super-secret' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 飞书' }))
-    expect(await screen.findByText('凭证已配置')).toBeInTheDocument()
-    expect(screen.getByText('凭证已保存')).toBeInTheDocument()
-    expect(screen.getByLabelText('飞书 App Secret')).toHaveValue('')
-    expect(feishu.getByText(/socket-up/)).toBeInTheDocument()
-    expect(feishu.getByRole('status')).toHaveTextContent('已连接')
-    expect(screen.queryByText('super-secret')).toBeNull()
-  })
-
-  it('writes settings before storing a secret and skips the keyring when that write fails', async () => {
-    const user = userEvent.setup()
-    const flushed = deferred<boolean>()
-    const order: string[] = []
-    const onFlush = vi.fn(async () => {
-      order.push('flush')
-      return flushed.promise
-    })
-    vi.mocked(saveImCredentials).mockImplementation(async () => { order.push('save') })
-    renderIm(backendConfig(), 'zh', onFlush)
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'super-secret' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 飞书' }))
-    expect(saveImCredentials).not.toHaveBeenCalled()
-    flushed.resolve(false)
-    expect(await screen.findByText('设置没有保存，凭证没有写入。')).toBeInTheDocument()
-    expect(saveImCredentials).not.toHaveBeenCalled()
-    expect(screen.getByLabelText('飞书 App Secret')).toHaveValue('super-secret')
-    expect(order).toEqual(['flush'])
-  })
-
-  it('stores the secret captured at click only when the saved id is unchanged', async () => {
-    const user = userEvent.setup()
-    const flushed = deferred<boolean>()
-    const order: string[] = []
-    vi.mocked(saveImCredentials).mockImplementation(async () => { order.push('save') })
-    renderIm(backendConfig(), 'zh', async () => {
-      order.push('flush')
-      return flushed.promise
-    })
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'super-secret' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 飞书' }))
-    expect(order).toEqual(['flush'])
-    flushed.resolve(true)
-    expect(await screen.findByText('凭证已保存')).toBeInTheDocument()
-    expect(order).toEqual(['flush', 'save'])
-    expect(saveImCredentials).toHaveBeenCalledWith('feishu', 'cli_existing', expect.objectContaining({ secret: 'super-secret' }))
-  })
-
-  it('does not store a secret when the bot id is empty or changes while settings are saving', async () => {
-    const user = userEvent.setup()
-    const empty = backendConfig()
-    empty.feishu.appId = '   '
-    const onFlush = vi.fn(async () => true)
-    const view = renderIm(empty, 'zh', onFlush)
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'super-secret' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 飞书' }))
-    expect(await screen.findByText(/请先填写机器人 ID/)).toBeInTheDocument()
-    expect(onFlush).toHaveBeenCalledOnce()
-    expect(saveImCredentials).not.toHaveBeenCalled()
-
-    const changed = deferred<boolean>()
-    view.unmount()
-    renderIm(backendConfig(), 'zh', () => changed.promise)
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'super-secret' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 飞书' }))
-    fireEvent.change(screen.getByLabelText('飞书 App ID'), { target: { value: 'cli_other' } })
-    changed.resolve(true)
-    expect(await screen.findByText('机器人 ID 已变化，凭证没有写入。')).toBeInTheDocument()
-    expect(saveImCredentials).not.toHaveBeenCalled()
-    expect(screen.getByLabelText('飞书 App Secret')).toHaveValue('super-secret')
-  })
-
-  it('saves two platforms at the same time and does not clear a newer secret when an older save finishes', async () => {
-    const user = userEvent.setup()
-    const first = deferred<void>()
-    const second = deferred<void>()
-    vi.mocked(saveImCredentials).mockImplementation((platform) => platform === 'feishu' ? first.promise : second.promise)
-    renderIm()
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'secret-a' } })
-    fireEvent.change(screen.getByLabelText('企业微信机器人 Secret'), { target: { value: 'wecom-secret' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 飞书' }))
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'secret-b' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 企业微信' }))
-    expect(saveImCredentials).toHaveBeenCalledWith('feishu', 'cli_existing', expect.objectContaining({ secret: 'secret-a' }))
-    expect(saveImCredentials).toHaveBeenCalledWith('wecom', 'bot_existing', expect.objectContaining({ secret: 'wecom-secret' }))
-    first.resolve()
-    await waitFor(() => expect(screen.getByRole('button', { name: '保存凭证 飞书' })).toBeEnabled())
-    expect(screen.getByLabelText('飞书 App Secret')).toHaveValue('secret-b')
-    expect(screen.getByText('刚才提交的凭证已保存。输入框里后来改过的内容还没保存。')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '保存凭证 企业微信' })).toBeDisabled()
-    second.resolve()
-    await waitFor(() => expect(screen.getByRole('button', { name: '保存凭证 企业微信' })).toBeEnabled())
-  })
-
-  it('does not clear a secret typed for a new id while the previous save is finishing', async () => {
-    const user = userEvent.setup()
-    const landed = deferred<void>()
-    vi.mocked(saveImCredentials).mockImplementation(() => landed.promise)
-    renderIm()
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'secret-a' } })
-    await user.click(screen.getByRole('button', { name: '保存凭证 飞书' }))
-    expect(saveImCredentials).toHaveBeenCalledWith('feishu', 'cli_existing', expect.objectContaining({ secret: 'secret-a' }))
-    fireEvent.change(screen.getByLabelText('飞书 App ID'), { target: { value: 'cli_other' } })
-    fireEvent.change(screen.getByLabelText('飞书 App Secret'), { target: { value: 'secret-b' } })
-    landed.resolve()
-    expect(await screen.findByText('机器人 ID 已变化，凭证没有写入。')).toBeInTheDocument()
-    expect(screen.getByLabelText('飞书 App Secret')).toHaveValue('secret-b')
-    expect(screen.queryByText('凭证已保存')).toBeNull()
-  })
-
-  it('clears only the identity captured before confirmation', async () => {
-    const user = userEvent.setup()
-    vi.mocked(getImStatus).mockResolvedValue([
-      status({ platform: 'feishu', state: 'error', message: 'missing secret', credentialsConfigured: true }),
-    ])
-    renderIm()
-    const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
-    expect(await feishu.findByText('凭证已配置')).toBeInTheDocument()
-    openAdvanced()
-    await user.click(screen.getByRole('button', { name: '清除凭证 飞书' }))
-    expect(clearImCredentials).not.toHaveBeenCalled()
-    expect(feishu.getByText('凭证已配置')).toBeInTheDocument()
-
-    window.confirm = vi.fn(() => {
-      fireEvent.change(screen.getByLabelText('飞书 App ID'), { target: { value: 'cli_other' } })
-      return true
-    })
-    await user.click(screen.getByRole('button', { name: '清除凭证 飞书' }))
-    expect(await screen.findByText('机器人 ID 已变化，凭证没有写入。')).toBeInTheDocument()
-    expect(clearImCredentials).not.toHaveBeenCalled()
-
-    window.confirm = vi.fn(() => true)
-    vi.mocked(clearImCredentials).mockRejectedValue(new Error('clear failed'))
-    await user.click(screen.getByRole('button', { name: '清除凭证 飞书' }))
-    expect(await screen.findByText('clear failed')).toBeInTheDocument()
-    expect(clearImCredentials).toHaveBeenCalledWith('feishu', 'cli_other')
-    expect(screen.queryByText('凭证已清除')).toBeNull()
-
-    vi.mocked(clearImCredentials).mockResolvedValue(undefined)
-    vi.mocked(getImStatus).mockResolvedValue([
-      status({ platform: 'feishu', state: 'error', message: 'missing secret', credentialsConfigured: false }),
-    ])
-    await user.click(screen.getByRole('button', { name: '清除凭证 飞书' }))
-    expect(await screen.findByText('凭证未配置')).toBeInTheDocument()
-    expect(screen.getByText('凭证已清除')).toBeInTheDocument()
-  })
-
-  it('shows backend connection states, reconnects, disables, and copies the callback url', async () => {
-    const user = userEvent.setup()
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(writeText)
     const config = backendConfig()
     config.feishu.enabled = true
     config.wecom.enabled = true
     const onFlush = vi.fn(async () => true)
     vi.mocked(getImStatus).mockResolvedValue([
       status({ platform: 'feishu', state: 'connected', message: 'socket-up', credentialsConfigured: true, lastMessageAt: 1_700_000_000_000 }),
-      status({ platform: 'wecom', state: 'retrying', message: 'backoff', credentialsConfigured: false }),
-      status({ platform: 'wecom_callback', state: 'error', message: 'callback down', credentialsConfigured: true, webhookUrl: 'http://127.0.0.1:8645/wecom/callback' }),
+      status({ platform: 'wecom', state: 'error', message: 'connection failed', credentialsConfigured: true }),
     ])
     const view = renderIm(config, 'zh', onFlush)
     const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
     const wecom = within(screen.getByRole('region', { name: '企业微信机器人' }))
     expect(await feishu.findByRole('status')).toHaveTextContent('已连接')
-    expect(wecom.getByRole('alert')).toHaveTextContent('已启用但未配置凭证')
-    expect(feishu.getByText(/2023/)).toBeInTheDocument()
-    expect(wecom.getByRole('status')).toHaveTextContent('重连中')
-    expect(screen.queryByRole('link', { name: 'http://127.0.0.1:8645/wecom/callback' })).toBeNull()
-    openAdvanced()
-    const callback = within(screen.getByRole('region', { name: '企业微信自建应用' }))
-    expect(callback.getByRole('status')).toHaveTextContent('错误')
-    expect(callback.getByRole('link', { name: 'http://127.0.0.1:8645/wecom/callback' })).toHaveAttribute('href', 'http://127.0.0.1:8645/wecom/callback')
-    await user.click(callback.getByRole('button', { name: '复制回调地址' }))
-    expect(writeText).toHaveBeenCalledWith('http://127.0.0.1:8645/wecom/callback')
-    expect(await screen.findByText('回调地址已复制')).toBeInTheDocument()
-    vi.mocked(reconnectIm).mockResolvedValue(undefined)
-    await user.click(callback.getByRole('button', { name: '重新连接 企业微信自建应用' }))
-    expect(reconnectIm).toHaveBeenCalledWith('wecom_callback')
     vi.mocked(reconnectIm).mockRejectedValue(new Error('reconnect refused'))
     await user.click(wecom.getByRole('button', { name: '重新连接 企业微信' }))
     expect(await screen.findByText('reconnect refused')).toBeInTheDocument()
-    await user.click(feishu.getByRole('button', { name: '停用 飞书' }))
+    await user.click(feishu.getByRole('button', { name: '断开连接 飞书' }))
     await waitFor(() => expect(view.config().feishu.enabled).toBe(false))
     expect(onFlush).toHaveBeenCalled()
-    expect(within(screen.getByRole('region', { name: '飞书 / Lark' })).queryByRole('button', { name: '停用 飞书' })).toBeNull()
+    expect(within(screen.getByRole('region', { name: '飞书 / Lark' })).queryByRole('button', { name: '断开连接 飞书' })).toBeNull()
   })
 
   it('restores the platform when disabling cannot be saved', async () => {
@@ -511,8 +222,8 @@ describe('ImTab', () => {
     config.feishu.enabled = true
     const view = renderIm(config, 'zh', async () => false)
     const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
-    await user.click(feishu.getByRole('button', { name: '停用 飞书' }))
-    expect(await screen.findByText('设置没有保存，凭证没有写入。')).toBeInTheDocument()
+    await user.click(feishu.getByRole('button', { name: '断开连接 飞书' }))
+    expect(await screen.findByRole('alert')).toBeVisible()
     expect(view.config().feishu.enabled).toBe(true)
   })
 
@@ -525,11 +236,11 @@ describe('ImTab', () => {
     await waitFor(() => expect(statusListener).toEqual(expect.any(Function)))
     statusListener?.()
     const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
-    expect(await feishu.findByText(/socket-up/)).toBeInTheDocument()
+    expect(await feishu.findByText('已连接')).toBeInTheDocument()
     first.resolve([status({ platform: 'feishu', state: 'error', message: 'stale-broker', credentialsConfigured: false })])
     await act(async () => { await Promise.resolve() })
     expect(screen.queryByText(/stale-broker/)).toBeNull()
-    expect(feishu.getByText(/socket-up/)).toBeInTheDocument()
+    expect(feishu.getByRole('status')).toHaveTextContent('已连接')
   })
 
   it('approves, denies, and revokes pairing only when a request is present', async () => {
@@ -541,7 +252,6 @@ describe('ImTab', () => {
     renderIm()
     expect(await screen.findByText(/Ada/)).toBeInTheDocument()
     expect(screen.getByText(/Zhang/)).toBeInTheDocument()
-    expect(screen.getByText(/绑定 ID: bot_existing/)).toBeInTheDocument()
 
     vi.mocked(approveImPairing).mockRejectedValue(new Error('bad code'))
     await user.click(screen.getByRole('button', { name: '批准' }))
@@ -605,10 +315,9 @@ describe('ImTab', () => {
 
   it('does not invent a config when the backend omits IM settings', async () => {
     renderIm(null)
-    expect(screen.getByRole('alert')).toHaveTextContent('后端未返回 IM 配置')
+    expect(screen.getByRole('alert')).toBeVisible()
     await act(async () => { await Promise.resolve() })
     expect(getImStatus).not.toHaveBeenCalled()
-    expect(screen.queryByLabelText('飞书 App ID')).toBeNull()
     expect(screen.queryByRole('button', { name: '扫码连接 飞书' })).toBeNull()
   })
 })
@@ -631,6 +340,34 @@ describe('ImTab setup session', () => {
     })
   }
 
+  it('closes during QR generation, restores focus, and rejects a late session without blocking the next platform', async () => {
+    const started = deferred<ImSetupSession>()
+    vi.mocked(beginImSetup)
+      .mockImplementationOnce(() => started.promise)
+      .mockResolvedValueOnce(setupSession({
+        id: 'setup-wecom', platform: 'wecom', url: 'https://work.weixin.qq.com/auth?code=1',
+      }))
+    renderIm()
+    fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
+    const dialog = screen.getByRole('dialog', { name: '飞书 / Lark' })
+    expect(within(dialog).getByRole('heading', { name: '飞书 / Lark' })).toHaveFocus()
+    expect(screen.getByRole('region', { name: '企业微信机器人' })).toBeVisible()
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    fireEvent(dialog, new Event('cancel', { cancelable: true }))
+    await settle()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: '扫码连接 飞书' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: '扫码连接 企业微信' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '扫码连接 企业微信' }))
+    await settle()
+    started.resolve(setupSession())
+    await settle()
+    expect(cancelImSetup).toHaveBeenCalledWith('setup-1')
+    expect(commitImSetup).not.toHaveBeenCalled()
+    expect(within(screen.getByRole('dialog', { name: '企业微信机器人' })).getByRole('heading', { name: '企业微信机器人' })).toHaveFocus()
+    expect(screen.getByRole('img', { name: '授权二维码' })).toBeInTheDocument()
+  })
+
   it('replaces a valid authorization QR with an error when the next link is insecure', async () => {
     vi.mocked(beginImSetup).mockResolvedValueOnce(setupSession())
     renderIm()
@@ -639,7 +376,8 @@ describe('ImTab setup session', () => {
     expect(screen.getByRole('img', { name: '授权二维码' })).toBeInTheDocument()
     expect(screen.getByText(/打开飞书或 Lark/)).toBeInTheDocument()
 
-    vi.mocked(beginImSetup).mockResolvedValueOnce(setupSession({ id: 'setup-http', url: 'http://accounts.feishu.cn/oauth' }))
+    fireEvent.click(screen.getByRole('button', { name: '关闭扫码窗口' }))
+    vi.mocked(beginImSetup).mockResolvedValueOnce(setupSession({ id: 'setup-http', platform: 'wecom', url: 'http://accounts.feishu.cn/oauth' }))
     fireEvent.click(screen.getByRole('button', { name: '扫码连接 企业微信' }))
     await settle()
     expect(screen.getByText('授权链接不是 https，已停止展示。')).toBeInTheDocument()
@@ -685,6 +423,8 @@ describe('ImTab setup session', () => {
     const feishu = within(screen.getByRole('region', { name: '飞书 / Lark' }))
     expect(feishu.getByRole('status')).toHaveTextContent('连接中')
     expect(feishu.queryByRole('img', { name: '授权二维码' })).toBeNull()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(feishu.getByRole('button', { name: '扫码连接 飞书' })).toHaveFocus()
     expect(screen.queryByText('已连接')).toBeNull()
     vi.mocked(getImStatus).mockResolvedValue([
       status({ platform: 'feishu', state: 'connected', message: 'socket-up', credentialsConfigured: true }),
@@ -747,10 +487,12 @@ describe('ImTab setup session', () => {
     await settle()
     await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
     await settle()
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('企业微信 Bot ID'), { target: { value: 'bot_later' } })
-    fireEvent.change(screen.getByLabelText('工作目录'), { target: { value: '/later' } })
-    fireEvent.change(screen.getByLabelText('飞书通知频道'), { target: { value: 'oc_later' } })
+    act(() => view.onChange({
+      ...view.config(),
+      wecom: { ...view.config().wecom, botId: 'bot_later' },
+      agent: { ...view.config().agent, workingDirectory: '/later' },
+      feishu: { ...view.config().feishu, homeChannel: 'oc_later' },
+    }))
     gate.resolve(false)
     await settle()
     expect(commitImSetup).not.toHaveBeenCalled()
@@ -765,7 +507,6 @@ describe('ImTab setup session', () => {
     expect(view.config().agent.workingDirectory).toBe('/later')
     expect(seen.at(-1)?.feishu.appId).toBe('cli_existing')
     expect(seen.at(-1)?.wecom.botId).toBe('bot_later')
-    expect(screen.getByText('设置没有保存，凭证没有写入。')).toBeInTheDocument()
     expect(screen.queryByText('已连接')).toBeNull()
   })
 
@@ -781,14 +522,91 @@ describe('ImTab setup session', () => {
     await settle()
     await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
     await settle()
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('企业微信 Bot ID'), { target: { value: 'bot_later' } })
-    fireEvent.click(screen.getByRole('button', { name: '取消扫码' }))
+    act(() => view.onChange({
+      ...view.config(), wecom: { ...view.config().wecom, botId: 'bot_later' },
+    }))
+    fireEvent.click(screen.getByRole('button', { name: '关闭扫码窗口' }))
     commit.resolve(setupSession({ status: 'cancelled', identity: identity() }))
     await settle()
     expect(view.config().feishu).toMatchObject({ appId: 'cli_existing', enabled: true, connectionMode: 'websocket' })
     expect(view.config().wecom.botId).toBe('bot_later')
     expect(screen.queryByText('已连接')).toBeNull()
+  })
+
+  it.each(['button', 'escape'] as const)('does not enable a late committed scan after explicit %s cancellation or disturb the next platform', async (control) => {
+    const committed = deferred<ImSetupSession>()
+    const saved: ImConfig[] = []
+    const view = renderIm(backendConfig(), 'zh', async () => {
+      saved.push(structuredClone(view.config()))
+      return true
+    })
+    vi.mocked(beginImSetup)
+      .mockResolvedValueOnce(setupSession())
+      .mockResolvedValueOnce(setupSession({
+        id: 'setup-wecom', platform: 'wecom', url: 'https://work.weixin.qq.com/auth?code=1',
+      }))
+    vi.mocked(pollImSetup).mockResolvedValue(withStatus('authorized', { identity: identity() }))
+    vi.mocked(commitImSetup).mockImplementationOnce(() => committed.promise)
+    fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
+    await settle()
+    await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
+    await settle()
+    expect(view.config().feishu).toMatchObject({ appId: 'cli_from_scan', enabled: false })
+    if (control === 'button') {
+      fireEvent.click(screen.getByRole('button', { name: '关闭扫码窗口' }))
+    } else {
+      fireEvent(screen.getByRole('dialog'), new Event('cancel', { cancelable: true }))
+    }
+    await settle()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '扫码连接 企业微信' }))
+    await settle()
+    committed.resolve(setupSession({ status: 'completed', identity: identity() }))
+    await settle()
+    expect(view.config().feishu).toMatchObject({ appId: 'cli_from_scan', enabled: false })
+    expect(saved.at(-1)?.feishu).toMatchObject({ appId: 'cli_from_scan', enabled: false })
+    expect(view.config().wecom).toMatchObject({ botId: 'bot_existing', enabled: false })
+    expect(within(screen.getByRole('dialog', { name: '企业微信机器人' })).getByRole('img', { name: '授权二维码' })).toBeVisible()
+  })
+
+  it('keeps an active scan working when the language changes', async () => {
+    const view = renderIm()
+    vi.mocked(beginImSetup).mockResolvedValue(setupSession())
+    vi.mocked(pollImSetup).mockResolvedValue(withStatus('authorized', { identity: identity() }))
+    vi.mocked(commitImSetup).mockResolvedValue(setupSession({ status: 'completed', identity: identity() }))
+    fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
+    await settle()
+    act(() => view.setLang('en'))
+    await settle()
+    expect(within(screen.getByRole('dialog')).getByRole('img')).toBeVisible()
+    await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
+    await settle()
+    expect(view.config().feishu).toMatchObject({ appId: 'cli_from_scan', enabled: true })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('closes after persistence without waiting for status and reports a background refresh failure without undoing authorization', async () => {
+    const refreshed = deferred<ImStatus[]>()
+    const saved: ImConfig[] = []
+    vi.mocked(getImStatus).mockResolvedValueOnce([]).mockImplementationOnce(() => refreshed.promise)
+    const view = renderIm(backendConfig(), 'zh', async () => {
+      saved.push(structuredClone(view.config()))
+      return true
+    })
+    vi.mocked(beginImSetup).mockResolvedValue(setupSession())
+    vi.mocked(pollImSetup).mockResolvedValue(withStatus('authorized', { identity: identity() }))
+    vi.mocked(commitImSetup).mockResolvedValue(setupSession({ status: 'completed', identity: identity() }))
+    fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
+    await settle()
+    await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
+    await settle()
+    expect(saved.at(-1)?.feishu).toMatchObject({ appId: 'cli_from_scan', enabled: true })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: '扫码连接 飞书' })).toHaveFocus()
+    refreshed.reject(new Error('status unavailable'))
+    await settle()
+    expect(screen.getByRole('alert')).toHaveTextContent('status unavailable')
+    expect(view.config().feishu).toMatchObject({ appId: 'cli_from_scan', enabled: true })
   })
 
   it('keeps a saved authorization retryable when enabling it cannot be saved', async () => {
@@ -804,7 +622,6 @@ describe('ImTab setup session', () => {
     await settle()
     await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
     await settle()
-    expect(screen.getByText('授权已保存，但启用没有写入。可以重试，当前还不是已连接。')).toBeInTheDocument()
     expect(view.config().feishu).toMatchObject({ appId: 'cli_from_scan', enabled: false, connectionMode: 'websocket' })
     expect(screen.queryByText('已连接')).toBeNull()
     expect(commitImSetup).toHaveBeenCalledTimes(1)
@@ -828,12 +645,12 @@ describe('ImTab setup session', () => {
     await settle()
     await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
     await settle()
-    openAdvanced()
-    fireEvent.change(screen.getByLabelText('飞书 App ID'), { target: { value: 'cli_typed' } })
+    act(() => view.onChange({
+      ...view.config(), feishu: { ...view.config().feishu, appId: 'cli_typed' },
+    }))
     flushed.resolve(true)
     await settle()
     expect(commitImSetup).not.toHaveBeenCalled()
-    expect(screen.getByText('机器人 ID 已变化，凭证没有写入。')).toBeInTheDocument()
     expect(view.config().feishu.appId).toBe('cli_typed')
     expect(view.config().feishu.enabled).toBe(false)
   })
@@ -853,6 +670,7 @@ describe('ImTab setup session', () => {
     fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
     await settle()
     await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
+    fireEvent.click(screen.getByRole('button', { name: '关闭扫码窗口' }))
     fireEvent.click(screen.getByRole('button', { name: '扫码连接 企业微信' }))
     await settle()
     expect(cancelImSetup).toHaveBeenCalledWith('setup-1')
@@ -862,7 +680,7 @@ describe('ImTab setup session', () => {
     await settle()
     expect(commitImSetup).not.toHaveBeenCalled()
     expect(view.config().feishu.appId).toBe('cli_existing')
-    expect(within(screen.getByRole('region', { name: '企业微信机器人' })).getByText(/扫码被拒绝/)).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog', { name: '企业微信机器人' })).getByText(/扫码被拒绝/)).toBeInTheDocument()
   })
 
   it('ignores a completed poll that arrives after cancel', async () => {
@@ -873,7 +691,7 @@ describe('ImTab setup session', () => {
     fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
     await settle()
     await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
-    fireEvent.click(screen.getByRole('button', { name: '取消扫码' }))
+    fireEvent.click(screen.getByRole('button', { name: '关闭扫码窗口' }))
     await settle()
     polled.resolve(withStatus('authorized', { identity: identity({ appId: 'cli_late' }) }))
     await settle()
@@ -975,7 +793,7 @@ describe('ImTab setup session', () => {
     expect(view.config().feishu.appId).toBe('cli_existing')
 
     vi.mocked(pollImSetup).mockRejectedValueOnce(new Error('poll broke'))
-    fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
+    fireEvent.click(screen.getByRole('button', { name: '重新扫码 飞书' }))
     await settle()
     await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
     await settle()
@@ -983,7 +801,7 @@ describe('ImTab setup session', () => {
     expect(view.config().feishu.appId).toBe('cli_existing')
 
     vi.mocked(pollImSetup).mockResolvedValueOnce(setupSession({ status: 'completed', identity: identity() }))
-    fireEvent.click(screen.getByRole('button', { name: '扫码连接 飞书' }))
+    fireEvent.click(screen.getByRole('button', { name: '重新扫码 飞书' }))
     await settle()
     await act(async () => { await vi.advanceTimersByTimeAsync(IM_SETUP_POLL_MS) })
     await settle()

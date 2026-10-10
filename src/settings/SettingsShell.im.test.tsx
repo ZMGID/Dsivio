@@ -41,8 +41,6 @@ vi.mock('../api/tauri', async (importOriginal) => {
 
 vi.mock('../api/im', () => ({
   getImStatus: vi.fn(),
-  saveImCredentials: vi.fn(),
-  clearImCredentials: vi.fn(),
   reconnectIm: vi.fn(),
   listImPairingRequests: vi.fn(),
   listImApprovedUsers: vi.fn(),
@@ -73,7 +71,6 @@ describe('Settings messaging page', () => {
     )
     expect(await screen.findByRole('button', { name: '即时通讯' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '即时通讯' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('后端未返回 IM 配置')
-    expect(screen.queryByLabelText('飞书 App ID')).toBeNull()
+    expect(await screen.findByRole('alert')).toBeVisible()
   })
 })

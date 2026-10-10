@@ -896,8 +896,8 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
     im: {
       title: lang === 'zh' ? '即时通讯' : 'Messaging',
       subtitle: lang === 'zh'
-        ? '飞书、企业微信机器人和自建应用。'
-        : 'Feishu, WeCom bot, and the self-built app.',
+        ? '扫码连接飞书或企业微信，在聊天中使用助手。'
+        : 'Connect Feishu or WeCom with a QR code to use the assistant in chat.',
     },
     memory: {
       title: t.tabMemory,
@@ -1250,7 +1250,6 @@ export const SettingsShell = forwardRef<SettingsShellHandle, SettingsShellProps>
               <ImTab
                 lang={lang}
                 config={readImConfig(settings)}
-                providers={settings?.providers ?? []}
                 onChange={(im) => setSettings((prev) => prev ? { ...prev, im } : prev)}
                 onFlush={() => editorController.flush()}
               />
